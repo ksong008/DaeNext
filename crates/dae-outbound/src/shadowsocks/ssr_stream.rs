@@ -48,6 +48,15 @@ impl ShadowsocksRStreamEncoder {
         out.extend_from_slice(&self.cipher.apply(plaintext)?);
         Ok(out)
     }
+
+    pub fn encode_payload_in_place(&mut self, payload: &mut [u8]) -> Result<(), OutboundError> {
+        if !self.iv_written {
+            return Err(OutboundError::BadShadowsocks(
+                "SSR in-place stream payload requires the IV prefix to be written first".to_owned(),
+            ));
+        }
+        self.cipher.apply_in_place(payload)
+    }
 }
 
 impl ShadowsocksRStreamDecoder {
@@ -62,8 +71,23 @@ impl ShadowsocksRStreamDecoder {
     }
 
     pub fn decode(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, OutboundError> {
+        let mut plain = ciphertext.to_vec();
+        let offset = self.decode_in_place_offset(&mut plain)?;
+        plain.drain(..offset);
+        Ok(plain)
+    }
+
+    pub fn decode_in_place<'a>(
+        &mut self,
+        ciphertext: &'a mut [u8],
+    ) -> Result<&'a [u8], OutboundError> {
+        let offset = self.decode_in_place_offset(ciphertext)?;
+        Ok(&ciphertext[offset..])
+    }
+
+    fn decode_in_place_offset(&mut self, ciphertext: &mut [u8]) -> Result<usize, OutboundError> {
         if ciphertext.is_empty() {
-            return Ok(Vec::new());
+            return Ok(0);
         }
         let mut offset = 0;
         if self.cipher.is_none() {
@@ -72,7 +96,7 @@ impl ShadowsocksRStreamDecoder {
             self.iv_prefix.extend_from_slice(&ciphertext[..take]);
             offset += take;
             if self.iv_prefix.len() < AES_128_CFB_IV_LEN {
-                return Ok(Vec::new());
+                return Ok(ciphertext.len());
             }
             let mut iv = [0_u8; AES_128_CFB_IV_LEN];
             iv.copy_from_slice(&self.iv_prefix);
@@ -81,7 +105,8 @@ impl ShadowsocksRStreamDecoder {
         self.cipher
             .as_mut()
             .expect("SSR stream decoder initialized")
-            .apply(&ciphertext[offset..])
+            .apply_in_place(&mut ciphertext[offset..])?;
+        Ok(offset)
     }
 }
 
@@ -191,18 +216,23 @@ impl AesCfbEncryptor {
     }
 
     fn apply(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
-        let mut out = Vec::with_capacity(plaintext.len());
+        let mut out = plaintext.to_vec();
+        self.apply_in_place(&mut out)?;
+        Ok(out)
+    }
+
+    fn apply_in_place(&mut self, plaintext: &mut [u8]) -> Result<(), OutboundError> {
         for byte in plaintext {
             if self.offset == AES_128_CFB_IV_LEN {
                 self.block = encrypted_feedback(&self.cipher, &self.feedback);
                 self.offset = 0;
             }
-            let encrypted = byte ^ self.block[self.offset];
+            let encrypted = *byte ^ self.block[self.offset];
             self.feedback[self.offset] = encrypted;
             self.offset += 1;
-            out.push(encrypted);
+            *byte = encrypted;
         }
-        Ok(out)
+        Ok(())
     }
 }
 
@@ -216,19 +246,19 @@ impl AesCfbDecryptor {
         })
     }
 
-    fn apply(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, OutboundError> {
-        let mut out = Vec::with_capacity(ciphertext.len());
+    fn apply_in_place(&mut self, ciphertext: &mut [u8]) -> Result<(), OutboundError> {
         for byte in ciphertext {
             if self.offset == AES_128_CFB_IV_LEN {
                 self.block = encrypted_feedback(&self.cipher, &self.feedback);
                 self.offset = 0;
             }
-            let decrypted = byte ^ self.block[self.offset];
-            self.feedback[self.offset] = *byte;
+            let encrypted = *byte;
+            let decrypted = encrypted ^ self.block[self.offset];
+            self.feedback[self.offset] = encrypted;
             self.offset += 1;
-            out.push(decrypted);
+            *byte = decrypted;
         }
-        Ok(out)
+        Ok(())
     }
 }
 
@@ -313,4 +343,43 @@ fn percent_encode(input: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_place_stream_cipher_matches_allocating_wire_for_every_cipher() {
+        let iv = [0x5a; AES_128_CFB_IV_LEN];
+        for spec in shadowsocksr_stream_cipher_specs() {
+            let mut allocating = ShadowsocksRStreamEncoder::new(spec.cipher, "secret", iv).unwrap();
+            let mut in_place = ShadowsocksRStreamEncoder::new(spec.cipher, "secret", iv).unwrap();
+            assert_eq!(
+                allocating.encode(b"initial").unwrap(),
+                in_place.encode(b"initial").unwrap(),
+                "{}",
+                spec.cipher
+            );
+
+            for payload_len in [1, 4097, 16 * 1024] {
+                let payload = vec![payload_len as u8; payload_len];
+                let expected = allocating.encode(&payload).unwrap();
+                let mut actual = payload;
+                in_place.encode_payload_in_place(&mut actual).unwrap();
+                assert_eq!(actual, expected, "{}", spec.cipher);
+            }
+
+            let mut sender = ShadowsocksRStreamEncoder::new(spec.cipher, "secret", iv).unwrap();
+            let wire = sender.encode(b"response payload").unwrap();
+            let mut allocating_decoder =
+                ShadowsocksRStreamDecoder::new(spec.cipher, "secret").unwrap();
+            let expected = allocating_decoder.decode(&wire).unwrap();
+            let mut in_place_decoder =
+                ShadowsocksRStreamDecoder::new(spec.cipher, "secret").unwrap();
+            let mut actual = wire;
+            let actual = in_place_decoder.decode_in_place(&mut actual).unwrap();
+            assert_eq!(actual, expected, "{}", spec.cipher);
+        }
+    }
 }

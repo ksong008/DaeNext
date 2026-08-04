@@ -30,6 +30,26 @@ impl Ss2022StreamCodec {
         increment_nonce_le(&mut self.nonce);
         Ok(plain)
     }
+
+    pub(super) fn encrypt_next_in_place(
+        &mut self,
+        plaintext: &mut [u8],
+        tag: &mut [u8],
+    ) -> Result<(), OutboundError> {
+        self.cipher.encrypt_in_place(&self.nonce, plaintext, tag)?;
+        increment_nonce_le(&mut self.nonce);
+        Ok(())
+    }
+
+    pub(super) fn decrypt_next_in_place(
+        &mut self,
+        ciphertext: &mut [u8],
+        tag: &[u8],
+    ) -> Result<(), OutboundError> {
+        self.cipher.decrypt_in_place(&self.nonce, ciphertext, tag)?;
+        increment_nonce_le(&mut self.nonce);
+        Ok(())
+    }
 }
 
 pub(super) enum Ss2022AeadCipher {
@@ -92,5 +112,71 @@ impl Ss2022AeadCipher {
                 .decrypt(chacha20poly1305::Nonce::from_slice(nonce), ciphertext)
                 .map_err(|_| OutboundError::BadShadowsocks("SS2022 decrypt failed".to_owned())),
         }
+    }
+
+    fn encrypt_in_place(
+        &self,
+        nonce: &[u8],
+        plaintext: &mut [u8],
+        tag_out: &mut [u8],
+    ) -> Result<(), OutboundError> {
+        if tag_out.len() != 16 {
+            return Err(OutboundError::BadShadowsocks(format!(
+                "SS2022 tag length must be 16, got {}",
+                tag_out.len()
+            )));
+        }
+        let tag = match self {
+            Self::Aes128(cipher) => {
+                cipher.encrypt_in_place_detached(aes_gcm::Nonce::from_slice(nonce), &[], plaintext)
+            }
+            Self::Aes256(cipher) => {
+                cipher.encrypt_in_place_detached(aes_gcm::Nonce::from_slice(nonce), &[], plaintext)
+            }
+            Self::ChaCha(cipher) => cipher.encrypt_in_place_detached(
+                chacha20poly1305::Nonce::from_slice(nonce),
+                &[],
+                plaintext,
+            ),
+        }
+        .map_err(|_| OutboundError::BadShadowsocks("SS2022 encrypt failed".to_owned()))?;
+        tag_out.copy_from_slice(&tag);
+        Ok(())
+    }
+
+    fn decrypt_in_place(
+        &self,
+        nonce: &[u8],
+        ciphertext: &mut [u8],
+        tag: &[u8],
+    ) -> Result<(), OutboundError> {
+        if tag.len() != 16 {
+            return Err(OutboundError::BadShadowsocks(format!(
+                "SS2022 tag length must be 16, got {}",
+                tag.len()
+            )));
+        }
+        let tag = GenericArray::from_slice(tag);
+        match self {
+            Self::Aes128(cipher) => cipher.decrypt_in_place_detached(
+                aes_gcm::Nonce::from_slice(nonce),
+                &[],
+                ciphertext,
+                tag,
+            ),
+            Self::Aes256(cipher) => cipher.decrypt_in_place_detached(
+                aes_gcm::Nonce::from_slice(nonce),
+                &[],
+                ciphertext,
+                tag,
+            ),
+            Self::ChaCha(cipher) => cipher.decrypt_in_place_detached(
+                chacha20poly1305::Nonce::from_slice(nonce),
+                &[],
+                ciphertext,
+                tag,
+            ),
+        }
+        .map_err(|_| OutboundError::BadShadowsocks("SS2022 decrypt failed".to_owned()))
     }
 }

@@ -14,6 +14,7 @@ pub const OPTION_DATA: u8 = 0x01;
 pub const OPTION_ERROR: u8 = 0x02;
 pub const MUX_MAX_METADATA_BYTES: usize = 512;
 pub const MUX_MAX_PAYLOAD_BYTES: usize = u16::MAX as usize;
+pub const MUX_DATA_FRAME_HEADER_BYTES: usize = 8;
 pub const MUX_MAX_FRAME_BYTES: usize = 2 + MUX_MAX_METADATA_BYTES + 2 + MUX_MAX_PAYLOAD_BYTES;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,19 +96,33 @@ pub fn mux_new_frame(options: &MuxFrameOptions) -> Result<Vec<u8>, OutboundError
 }
 
 pub fn mux_data_frame(id: [u8; 2], payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
-    if payload.len() > u16::MAX as usize {
+    let header = mux_data_frame_header(id, payload.len())?;
+    let mut frame = Vec::with_capacity(payload.len() + header.len());
+    frame.extend_from_slice(&header);
+    frame.extend_from_slice(payload);
+    Ok(frame)
+}
+
+pub fn mux_data_frame_header(
+    id: [u8; 2],
+    payload_len: usize,
+) -> Result<[u8; MUX_DATA_FRAME_HEADER_BYTES], OutboundError> {
+    if payload_len > u16::MAX as usize {
         return Err(OutboundError::BadSharedTransport(
             "mux payload too large".to_owned(),
         ));
     }
-    let mut frame = Vec::with_capacity(payload.len() + 8);
-    frame.extend_from_slice(&4_u16.to_be_bytes());
-    frame.extend_from_slice(&id);
-    frame.push(SESSION_STATUS_KEEP);
-    frame.push(OPTION_DATA);
-    frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
-    frame.extend_from_slice(payload);
-    Ok(frame)
+    let [payload_high, payload_low] = (payload_len as u16).to_be_bytes();
+    Ok([
+        0,
+        4,
+        id[0],
+        id[1],
+        SESSION_STATUS_KEEP,
+        OPTION_DATA,
+        payload_high,
+        payload_low,
+    ])
 }
 
 pub fn mux_end_frame(id: [u8; 2]) -> Vec<u8> {
@@ -314,6 +329,18 @@ fn set_timeout(stream: &TcpStream, timeout: Duration) -> Result<(), OutboundErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_frame_header_matches_allocating_frame() {
+        let id = 0x1234_u16.to_be_bytes();
+        let payload = vec![0x5a; 16 * 1024];
+        let frame = mux_data_frame(id, &payload).unwrap();
+        assert_eq!(
+            &frame[..MUX_DATA_FRAME_HEADER_BYTES],
+            &mux_data_frame_header(id, payload.len()).unwrap()
+        );
+        assert_eq!(&frame[MUX_DATA_FRAME_HEADER_BYTES..], payload.as_slice());
+    }
 
     #[test]
     fn streaming_decoder_preserves_partial_and_coalesced_frames() {

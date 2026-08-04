@@ -2,7 +2,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::{Aead, AeadInPlace, KeyInit};
+use aes_gcm::aes::cipher::generic_array::GenericArray;
 use aes_gcm::{Aes128Gcm, Aes256Gcm};
 use chacha20poly1305::ChaCha20Poly1305;
 use hkdf::Hkdf;
@@ -20,6 +21,8 @@ pub const SUBKEY_INFO: &[u8] = b"ss-subkey";
 pub const TAG_LEN: usize = 16;
 pub const NONCE_LEN: usize = 12;
 pub const MAX_CHUNK_LEN: usize = 0x3fff;
+pub const SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE: usize = 2 + TAG_LEN + MAX_CHUNK_LEN + TAG_LEN;
+pub const SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE: usize = MAX_CHUNK_LEN + TAG_LEN;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AeadCipherSpec {
@@ -244,6 +247,39 @@ where
     decoder.decrypt_next(&encrypted_payload)
 }
 
+pub async fn read_encrypted_chunk_in_place_from_async_stream<S>(
+    stream: &mut S,
+    decoder: &mut AeadStreamCodec,
+    buffer: &mut [u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE],
+) -> Result<usize, OutboundError>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut encrypted_len = [0_u8; 2 + TAG_LEN];
+    stream
+        .read_exact(&mut encrypted_len)
+        .await
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    let len_plain = decoder.decrypt_next_in_place(&mut encrypted_len)?;
+    if len_plain != 2 {
+        return Err(OutboundError::BadShadowsocks(
+            "bad decrypted chunk length".to_owned(),
+        ));
+    }
+    let payload_len = u16::from_be_bytes([encrypted_len[0], encrypted_len[1]]) as usize;
+    stream
+        .read_exact(&mut buffer[..payload_len + TAG_LEN])
+        .await
+        .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+    let plain_len = decoder.decrypt_next_in_place(&mut buffer[..payload_len + TAG_LEN])?;
+    if plain_len != payload_len {
+        return Err(OutboundError::BadShadowsocks(
+            "bad decrypted chunk payload length".to_owned(),
+        ));
+    }
+    Ok(plain_len)
+}
+
 pub fn encode_server_payload(
     cipher: &str,
     password: &str,
@@ -357,6 +393,41 @@ impl AeadStreamCodec {
         Ok(out)
     }
 
+    pub fn chunk_payload_buffer<'a>(&self, buffer: &'a mut [u8]) -> &'a mut [u8] {
+        let payload_offset = 2 + TAG_LEN;
+        let payload_capacity = buffer
+            .len()
+            .saturating_sub(payload_offset + TAG_LEN)
+            .min(MAX_CHUNK_LEN);
+        &mut buffer[payload_offset..payload_offset + payload_capacity]
+    }
+
+    pub fn encrypt_chunk_in_place(
+        &mut self,
+        buffer: &mut [u8],
+        payload_len: usize,
+    ) -> Result<usize, OutboundError> {
+        if payload_len > MAX_CHUNK_LEN {
+            return Err(OutboundError::BadShadowsocks(format!(
+                "chunk too large: {payload_len}"
+            )));
+        }
+        let payload_start = 2 + TAG_LEN;
+        let payload_end = payload_start + payload_len;
+        if payload_end + TAG_LEN > buffer.len() {
+            return Err(OutboundError::BadShadowsocks(format!(
+                "chunk length {payload_len} exceeds in-place buffer capacity"
+            )));
+        }
+        buffer[..2].copy_from_slice(&(payload_len as u16).to_be_bytes());
+        let len_tag = self.encrypt_next_in_place(&mut buffer[..2])?;
+        buffer[2..2 + TAG_LEN].copy_from_slice(&len_tag);
+
+        let payload_tag = self.encrypt_next_in_place(&mut buffer[payload_start..payload_end])?;
+        buffer[payload_end..payload_end + TAG_LEN].copy_from_slice(&payload_tag);
+        Ok(payload_end + TAG_LEN)
+    }
+
     pub fn decrypt_chunk(&mut self, input: &[u8]) -> Result<Vec<u8>, OutboundError> {
         if input.len() < 2 + TAG_LEN {
             return Err(OutboundError::BadShadowsocks(
@@ -390,6 +461,21 @@ impl AeadStreamCodec {
         let nonce = nonce_from_counter(self.nonce_counter);
         self.nonce_counter += 1;
         self.cipher.decrypt(&nonce, ciphertext)
+    }
+
+    fn encrypt_next_in_place(
+        &mut self,
+        plaintext: &mut [u8],
+    ) -> Result<[u8; TAG_LEN], OutboundError> {
+        let nonce = nonce_from_counter(self.nonce_counter);
+        self.nonce_counter += 1;
+        self.cipher.encrypt_in_place(&nonce, plaintext)
+    }
+
+    fn decrypt_next_in_place(&mut self, ciphertext: &mut [u8]) -> Result<usize, OutboundError> {
+        let nonce = nonce_from_counter(self.nonce_counter);
+        self.nonce_counter += 1;
+        self.cipher.decrypt_in_place(&nonce, ciphertext)
     }
 }
 
@@ -515,6 +601,88 @@ impl AeadCipher {
             Self::ChaCha(cipher) => cipher
                 .decrypt(chacha20poly1305::Nonce::from_slice(nonce), ciphertext)
                 .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned())),
+        }
+    }
+
+    fn encrypt_in_place(
+        &self,
+        nonce: &[u8; NONCE_LEN],
+        plaintext: &mut [u8],
+    ) -> Result<[u8; TAG_LEN], OutboundError> {
+        let tag = match self {
+            Self::Aes128(cipher) => {
+                cipher.encrypt_in_place_detached(aes_gcm::Nonce::from_slice(nonce), &[], plaintext)
+            }
+            Self::Aes256(cipher) => {
+                cipher.encrypt_in_place_detached(aes_gcm::Nonce::from_slice(nonce), &[], plaintext)
+            }
+            Self::ChaCha(cipher) => cipher.encrypt_in_place_detached(
+                chacha20poly1305::Nonce::from_slice(nonce),
+                &[],
+                plaintext,
+            ),
+        }
+        .map_err(|_| OutboundError::BadShadowsocks("aead encrypt failed".to_owned()))?;
+        Ok(tag.into())
+    }
+
+    fn decrypt_in_place(
+        &self,
+        nonce: &[u8; NONCE_LEN],
+        ciphertext: &mut [u8],
+    ) -> Result<usize, OutboundError> {
+        let plain_len = ciphertext.len().checked_sub(TAG_LEN).ok_or_else(|| {
+            OutboundError::BadShadowsocks("aead ciphertext is shorter than its tag".to_owned())
+        })?;
+        let (plaintext, tag) = ciphertext.split_at_mut(plain_len);
+        let tag = GenericArray::clone_from_slice(tag);
+        match self {
+            Self::Aes128(cipher) => cipher.decrypt_in_place_detached(
+                aes_gcm::Nonce::from_slice(nonce),
+                &[],
+                plaintext,
+                &tag,
+            ),
+            Self::Aes256(cipher) => cipher.decrypt_in_place_detached(
+                aes_gcm::Nonce::from_slice(nonce),
+                &[],
+                plaintext,
+                &tag,
+            ),
+            Self::ChaCha(cipher) => cipher.decrypt_in_place_detached(
+                chacha20poly1305::Nonce::from_slice(nonce),
+                &[],
+                plaintext,
+                &tag,
+            ),
+        }
+        .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned()))?;
+        Ok(plain_len)
+    }
+}
+
+#[cfg(test)]
+mod in_place_tests {
+    use super::*;
+
+    #[test]
+    fn in_place_stream_chunks_match_allocating_wire_for_every_cipher() {
+        for cipher in ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"] {
+            let spec = cipher_spec(cipher).unwrap();
+            let salt = vec![0x35; spec.salt_len];
+            let mut allocating = AeadStreamCodec::new(cipher, "password", &salt).unwrap();
+            let mut in_place = AeadStreamCodec::new(cipher, "password", &salt).unwrap();
+            let mut buffer = [0_u8; SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE];
+
+            for payload_len in [1, 4097, MAX_CHUNK_LEN] {
+                let payload = vec![payload_len as u8; payload_len];
+                let expected = allocating.encrypt_chunk(&payload).unwrap();
+                in_place.chunk_payload_buffer(&mut buffer)[..payload_len].copy_from_slice(&payload);
+                let wire_len = in_place
+                    .encrypt_chunk_in_place(&mut buffer, payload_len)
+                    .unwrap();
+                assert_eq!(&buffer[..wire_len], expected);
+            }
         }
     }
 }

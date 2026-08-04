@@ -6,6 +6,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::tcp) struct VmessAea
     request: dae_outbound::vmess::VMessAeadTcpRequest,
     reader: Option<dae_outbound::vmess::VMessAeadTcpResponseReader>,
     bytes: Vec<u8>,
+    offset: usize,
 }
 
 impl VmessAeadResponseBuffer {
@@ -16,6 +17,7 @@ impl VmessAeadResponseBuffer {
             request,
             reader: None,
             bytes: Vec::new(),
+            offset: 0,
         }
     }
 
@@ -25,11 +27,16 @@ impl VmessAeadResponseBuffer {
         self.reader.is_some()
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane::tcp) fn push(
+    pub(in crate::production_runtime_owner::resident_dataplane::tcp) fn extend_from_slice(
         &mut self,
         input: &[u8],
-    ) -> Result<Vec<Vec<u8>>, String> {
-        let buffered = self.bytes.len().saturating_add(input.len());
+    ) -> Result<(), String> {
+        self.compact_if_worthwhile();
+        let buffered = self
+            .bytes
+            .len()
+            .saturating_sub(self.offset)
+            .saturating_add(input.len());
         if buffered > RESIDENT_VMESS_RESPONSE_BUFFER_LIMIT {
             return Err(format!(
                 "VMess response buffer exceeded {} bytes",
@@ -38,20 +45,39 @@ impl VmessAeadResponseBuffer {
         }
         self.bytes.extend_from_slice(input);
         if self.reader.is_none() {
+            debug_assert_eq!(self.offset, 0);
             self.reader = aead_tcp_response_reader_from_buffer(&mut self.bytes, &self.request)
                 .map_err(|err| format!("decode VMess AEAD response header: {err}"))?;
         }
+        Ok(())
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane::tcp) fn next_chunk(
+        &mut self,
+    ) -> Result<Option<&[u8]>, String> {
         let Some(reader) = self.reader.as_mut() else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
-        let mut chunks = Vec::new();
-        while let Some(chunk) = reader
-            .try_read_chunk_from_buffer(&mut self.bytes)
-            .map_err(|err| format!("decode VMess AEAD response chunk: {err}"))?
-        {
-            chunks.push(chunk);
+        reader
+            .try_read_chunk_in_place_from_buffer(&mut self.bytes, &mut self.offset)
+            .map_err(|err| format!("decode VMess AEAD response chunk: {err}"))
+    }
+
+    fn compact_if_worthwhile(&mut self) {
+        if self.offset == 0 {
+            return;
         }
-        Ok(chunks)
+        if self.offset >= self.bytes.len() {
+            self.bytes.clear();
+            self.offset = 0;
+            return;
+        }
+        if self.offset >= 8 * 1024 && self.offset * 2 >= self.bytes.len() {
+            let remaining = self.bytes.len() - self.offset;
+            self.bytes.copy_within(self.offset.., 0);
+            self.bytes.truncate(remaining);
+            self.offset = 0;
+        }
     }
 }
 
@@ -76,7 +102,10 @@ mod tests {
         let mut decoded = Vec::new();
 
         for byte in response {
-            decoded.extend(decoder.push(&[byte]).unwrap());
+            decoder.extend_from_slice(&[byte]).unwrap();
+            while let Some(chunk) = decoder.next_chunk().unwrap() {
+                decoded.push(chunk.to_vec());
+            }
         }
 
         assert!(decoder.response_header_received());
@@ -87,5 +116,23 @@ mod tests {
                 .map(|payload| payload.to_vec())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn buffered_response_decodes_multiple_chunks_without_returning_owned_chunk_vectors() {
+        let session = aead_tcp_client_session_start(TEST_UUID, "example.com:443", &[]).unwrap();
+        let payloads = [vec![0x11; 16 * 1024], vec![0x22; 4097], b"tail".to_vec()];
+        let response = dae_outbound::vmess::aead_tcp_response_packet_chunks(
+            &session.request,
+            &payloads.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let mut decoder = VmessAeadResponseBuffer::new(session.request);
+        decoder.extend_from_slice(&response).unwrap();
+
+        for expected in &payloads {
+            assert_eq!(decoder.next_chunk().unwrap().unwrap(), expected);
+        }
+        assert!(decoder.next_chunk().unwrap().is_none());
     }
 }

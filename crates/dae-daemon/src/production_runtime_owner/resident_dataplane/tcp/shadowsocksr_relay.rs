@@ -126,11 +126,11 @@ pub(crate) async fn relay_tcp_shadowsocksr_stream_async(
                     return Err(format!("read inbound TCP for ShadowsocksR relay: {err}"));
                 }
             };
-            let encoded = encoder
-                .encode(&buffer[..read])
+            encoder
+                .encode_payload_in_place(&mut buffer[..read])
                 .map_err(|err| format!("encode ShadowsocksR upload payload: {err}"))?;
             proxy_write
-                .write_all(&encoded)
+                .write_all(&buffer[..read])
                 .await
                 .map_err(|err| format!("write ShadowsocksR upload payload: {err}"))?;
             upload_progress.record_upload(read);
@@ -156,12 +156,12 @@ pub(crate) async fn relay_tcp_shadowsocksr_stream_async(
                 Err(err) => return Err(format!("read ShadowsocksR proxy TCP: {err}")),
             };
             let decoded = decoder
-                .decode(&buffer[..read])
+                .decode_in_place(&mut buffer[..read])
                 .map_err(|err| format!("decode ShadowsocksR download payload: {err}"))?;
             if decoded.is_empty() {
                 continue;
             }
-            match inbound_write.write_all(&decoded).await {
+            match inbound_write.write_all(decoded).await {
                 Ok(()) => {}
                 Err(err) if is_graceful_stream_close_error(&err) => return Ok(()),
                 Err(err) => {

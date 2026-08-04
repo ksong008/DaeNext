@@ -1,9 +1,10 @@
 use super::*;
 
+type GrpcH2ResponseFuture =
+    Pin<Box<dyn Future<Output = Result<http::Response<h2::RecvStream>, h2::Error>> + Send>>;
+
 pub(crate) struct GrpcH2Response {
-    response: Option<
-        Pin<Box<dyn Future<Output = Result<http::Response<h2::RecvStream>, h2::Error>> + Send>>,
-    >,
+    response: Option<GrpcH2ResponseFuture>,
     recv_stream: Option<h2::RecvStream>,
     header_deadline: Pin<Box<time::Sleep>>,
     grpc_status_seen: bool,
@@ -118,7 +119,7 @@ pub(crate) async fn open_grpc_h2_stream(
 }
 
 #[cfg(test)]
-pub(super) async fn open_grpc_h2_stream_on_io<T>(
+pub(crate) async fn open_grpc_h2_stream_on_io<T>(
     client: T,
     request: http::Request<()>,
     first_payload: &[u8],

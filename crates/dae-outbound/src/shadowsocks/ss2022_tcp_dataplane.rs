@@ -4,7 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
 use aes::{Aes128, Aes256};
-use aes_gcm::aead::Aead;
+use aes_gcm::aead::{Aead, AeadInPlace};
+use aes_gcm::aes::cipher::generic_array::GenericArray;
 use aes_gcm::{Aes128Gcm, Aes256Gcm};
 use chacha20poly1305::ChaCha20Poly1305;
 

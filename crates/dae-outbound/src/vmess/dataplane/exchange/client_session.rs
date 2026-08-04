@@ -106,6 +106,35 @@ impl VMessAeadTcpUploadCodec {
     pub fn seal_chunk(&mut self, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
         self.codec.seal_chunk(payload)
     }
+
+    pub fn chunk_payload_buffer<'a>(
+        &self,
+        buffer: &'a mut [u8; VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE],
+    ) -> &'a mut [u8] {
+        self.codec.chunk_payload_buffer(buffer)
+    }
+
+    pub fn seal_chunk_in_place(
+        &mut self,
+        buffer: &mut [u8; VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE],
+        payload_len: usize,
+    ) -> Result<usize, OutboundError> {
+        self.codec.seal_chunk_in_place(buffer, payload_len)
+    }
+
+    pub fn new_owned_chunk_buffer(&self, prefix_len: usize) -> Vec<u8> {
+        self.codec.new_owned_chunk_buffer(prefix_len)
+    }
+
+    pub fn seal_owned_chunk_in_place(
+        &mut self,
+        buffer: &mut Vec<u8>,
+        prefix_len: usize,
+        payload_len: usize,
+    ) -> Result<usize, OutboundError> {
+        self.codec
+            .seal_owned_chunk_in_place(buffer, prefix_len, payload_len)
+    }
 }
 
 impl VMessAeadTcpResponseReader {
@@ -135,6 +164,19 @@ impl VMessAeadTcpResponseReader {
     ) -> Result<Option<Vec<u8>>, OutboundError> {
         self.codec
             .try_open_chunk_from_buffer(input, &mut self.pending_chunk)
+    }
+
+    pub fn try_read_chunk_in_place_from_buffer<'a>(
+        &mut self,
+        input: &'a mut [u8],
+        cursor: &mut usize,
+    ) -> Result<Option<&'a [u8]>, OutboundError> {
+        let payload = self.codec.try_open_chunk_in_place_from_buffer(
+            input,
+            cursor,
+            &mut self.pending_chunk,
+        )?;
+        Ok(payload.map(|payload| &input[payload]))
     }
 }
 

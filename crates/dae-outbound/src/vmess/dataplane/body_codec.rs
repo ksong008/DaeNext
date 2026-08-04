@@ -235,6 +235,12 @@ impl BodyCodec {
     }
 }
 
+#[cfg(test)]
+mod tests;
+
+mod open_in_place;
+mod seal_in_place;
+
 fn chacha20_poly1305_key(key: &[u8; 16]) -> [u8; 32] {
     let first = Md5::digest(key);
     let second = Md5::digest(first);

@@ -49,6 +49,59 @@ pub(crate) async fn send_grpc_hunk(
     send_h2_data(send_stream, Bytes::from(hunk), end_stream).await
 }
 
+#[cfg(test)]
+pub(crate) const GRPC_HUNK_IN_PLACE_PREFIX_BYTES: usize = 16;
+
+#[cfg(test)]
+pub(crate) fn grpc_hunk_from_prefixed_payload(
+    mut buffer: Vec<u8>,
+    payload_start: usize,
+) -> Result<Bytes, String> {
+    if payload_start > buffer.len() {
+        return Err("gRPC payload start exceeds owned buffer".to_owned());
+    }
+    let payload_len = buffer.len() - payload_start;
+    let mut encoded_len = [0_u8; 10];
+    let encoded_len_bytes = encode_grpc_varint(payload_len as u64, &mut encoded_len);
+    let message_header_len = 1 + encoded_len_bytes;
+    let message_start = payload_start
+        .checked_sub(message_header_len)
+        .ok_or_else(|| "gRPC owned buffer has no protobuf prefix room".to_owned())?;
+    let message_len = message_header_len
+        .checked_add(payload_len)
+        .ok_or_else(|| "gRPC message length overflow".to_owned())?;
+    let message_len = u32::try_from(message_len)
+        .map_err(|_| "gRPC message length exceeds the HTTP/2 frame contract".to_owned())?;
+    let frame_start = message_start
+        .checked_sub(5)
+        .ok_or_else(|| "gRPC owned buffer has no frame prefix room".to_owned())?;
+
+    buffer[message_start] = 0x0a;
+    buffer[message_start + 1..message_start + message_header_len]
+        .copy_from_slice(&encoded_len[..encoded_len_bytes]);
+    buffer[frame_start] = 0;
+    buffer[frame_start + 1..frame_start + 5].copy_from_slice(&message_len.to_be_bytes());
+    let end = buffer.len();
+    Ok(Bytes::from(buffer).slice(frame_start..end))
+}
+
+#[cfg(test)]
+fn encode_grpc_varint(mut value: u64, output: &mut [u8; 10]) -> usize {
+    let mut written = 0;
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        output[written] = byte;
+        written += 1;
+        if value == 0 {
+            return written;
+        }
+    }
+}
+
 pub(crate) async fn send_h2_data(
     send_stream: &mut h2::SendStream<Bytes>,
     data: Bytes,
@@ -114,41 +167,45 @@ impl GrpcHunkReadBuffer {
     }
 
     pub(crate) fn pop_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
-        let buffer = self.as_slice();
-        if buffer.len() < 5 {
+        self.next_payload()
+            .map(|payload| payload.map(<[u8]>::to_vec))
+    }
+
+    pub(crate) fn next_payload(&mut self) -> Result<Option<&[u8]>, String> {
+        let Some((payload_start, payload_len, consumed)) = (|| {
+            let buffer = self.as_slice();
+            if buffer.len() < 5 {
+                return Ok(None);
+            }
+            if buffer[0] != 0 {
+                return Err("compressed gRPC hunk is not admitted by resident relay".to_owned());
+            }
+            let len = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
+            if len > RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES {
+                return Err(format!(
+                    "gRPC hunk exceeds {} bytes",
+                    RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES
+                ));
+            }
+            if buffer.len() < 5 + len {
+                return Ok(None);
+            }
+            let payload = grpc_hunk_payload_ref(&buffer[5..5 + len])
+                .map_err(|err| format!("decode gRPC Hunk protobuf payload: {err}"))?;
+            let payload_start = payload.as_ptr() as usize - self.bytes.as_ptr() as usize;
+            Ok(Some((payload_start, payload.len(), 5 + len)))
+        })()?
+        else {
             return Ok(None);
-        }
-        if buffer[0] != 0 {
-            return Err("compressed gRPC hunk is not admitted by resident relay".to_owned());
-        }
-        let len = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
-        if len > RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES {
-            return Err(format!(
-                "gRPC hunk exceeds {} bytes",
-                RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES
-            ));
-        }
-        if buffer.len() < 5 + len {
-            return Ok(None);
-        }
-        let payload = grpc_hunk_payload(&buffer[5..5 + len])
-            .map_err(|err| format!("decode gRPC Hunk protobuf payload: {err}"))?;
-        self.consume(5 + len);
-        Ok(Some(payload))
+        };
+        self.offset += consumed;
+        Ok(Some(
+            &self.bytes[payload_start..payload_start + payload_len],
+        ))
     }
 
     fn as_slice(&self) -> &[u8] {
         &self.bytes[self.offset..]
-    }
-
-    fn consume(&mut self, len: usize) {
-        self.offset += len;
-        if self.offset >= self.bytes.len() {
-            self.bytes.clear();
-            self.offset = 0;
-        } else {
-            self.compact_if_worthwhile();
-        }
     }
 
     fn compact_if_worthwhile(&mut self) {

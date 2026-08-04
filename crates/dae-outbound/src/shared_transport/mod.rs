@@ -33,7 +33,7 @@ pub use grpc::{
     GRPC_ENCODING_HEADER, GRPC_IDENTITY_ENCODING, GRPC_TE_HEADER, GRPC_TE_TRAILERS,
     GrpcCacheReport, GrpcLifecycleCache, GrpcLifecycleOptions, GrpcLifecycleReport,
     grpc_hunk_exchange, grpc_hunk_frame, grpc_hunk_frame_len, grpc_hunk_message, grpc_hunk_payload,
-    grpc_stream_preface, read_grpc_hunk_frame,
+    grpc_hunk_payload_ref, grpc_stream_preface, read_grpc_hunk_frame,
 };
 pub use grpc_cache::{
     GrpcCacheCancellationStressReport, GrpcDetachedStreamCancellationReport,
@@ -50,9 +50,10 @@ pub use meek::{
     MeekRoundTripOptions, MeekRoundTripReport, meek_http_request, meek_polling_exchange,
 };
 pub use mux::{
-    MUX_MAX_FRAME_BYTES, MUX_MAX_METADATA_BYTES, MUX_MAX_PAYLOAD_BYTES, MuxFrame, MuxFrameDecoder,
-    MuxFrameOptions, MuxLifecycleReport, mux_data_frame, mux_end_frame, mux_error_frame,
-    mux_frame_exchange, mux_new_frame,
+    MUX_DATA_FRAME_HEADER_BYTES, MUX_MAX_FRAME_BYTES, MUX_MAX_METADATA_BYTES,
+    MUX_MAX_PAYLOAD_BYTES, MuxFrame, MuxFrameDecoder, MuxFrameOptions, MuxLifecycleReport,
+    mux_data_frame, mux_data_frame_header, mux_end_frame, mux_error_frame, mux_frame_exchange,
+    mux_new_frame,
 };
 pub use quic_h3::{
     QuicH3HarnessOptions, QuicH3HarnessReport, parse_quic_h3_datagram, quic_h3_datagram_exchange,

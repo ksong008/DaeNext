@@ -159,7 +159,7 @@ pub(crate) async fn relay_tcp_over_deferred_h2_body(
             let payload = if let Some(stripper) = vless_response_stripper.as_mut() {
                 stripper.consume(&bytes)?
             } else {
-                bytes.to_vec()
+                std::borrow::Cow::Borrowed(bytes.as_ref())
             };
             if !payload.is_empty() {
                 inbound_write
@@ -217,9 +217,13 @@ pub(crate) async fn relay_tcp_over_vmess_h2_body(
     let upload_progress = progress.clone();
     let upload = async move {
         let mut inbound_read = inbound_read;
-        let mut buffer = [0_u8; 16 * 1024];
         loop {
-            let read = match inbound_read.read(&mut buffer).await {
+            let mut buffer = upload_codec.new_owned_chunk_buffer(0);
+            let read = match (&mut inbound_read)
+                .take(VMESS_AEAD_TCP_MAX_PAYLOAD_SIZE as u64)
+                .read_buf(&mut buffer)
+                .await
+            {
                 Ok(0) => {
                     send_h2_data_with_context(send_stream, Bytes::new(), true, "VMess H2").await?;
                     return Ok(());
@@ -231,11 +235,11 @@ pub(crate) async fn relay_tcp_over_vmess_h2_body(
                 }
                 Err(err) => return Err(format!("read inbound TCP for VMess H2 relay: {err}")),
             };
-            let encrypted = upload_codec
-                .seal_chunk(&buffer[..read])
+            let wire_len = upload_codec
+                .seal_owned_chunk_in_place(&mut buffer, 0, read)
                 .map_err(|err| format!("encode VMess H2 upload chunk: {err}"))?;
-            send_h2_data_with_context(send_stream, Bytes::from(encrypted), false, "VMess H2")
-                .await?;
+            buffer.truncate(wire_len);
+            send_h2_data_with_context(send_stream, Bytes::from(buffer), false, "VMess H2").await?;
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }
@@ -256,12 +260,13 @@ pub(crate) async fn relay_tcp_over_vmess_h2_body(
                 .flow_control()
                 .release_capacity(bytes.len())
                 .map_err(|err| format!("release VMess H2 response capacity: {err}"))?;
-            for plain in response.push(&bytes)? {
+            response.extend_from_slice(&bytes)?;
+            while let Some(plain) = response.next_chunk()? {
                 if plain.is_empty() {
                     continue;
                 }
                 inbound_write
-                    .write_all(&plain)
+                    .write_all(plain)
                     .await
                     .map_err(|err| format!("write VMess H2 response to inbound: {err}"))?;
                 download_progress.record_download(plain.len());

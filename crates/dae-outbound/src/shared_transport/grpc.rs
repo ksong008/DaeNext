@@ -159,6 +159,10 @@ pub fn grpc_hunk_message(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
 }
 
 pub fn grpc_hunk_payload(message: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    grpc_hunk_payload_ref(message).map(<[u8]>::to_vec)
+}
+
+pub fn grpc_hunk_payload_ref(message: &[u8]) -> Result<&[u8], OutboundError> {
     let mut cursor = 0;
     let mut data = None;
     while cursor < message.len() {
@@ -176,7 +180,7 @@ pub fn grpc_hunk_payload(message: &[u8]) -> Result<Vec<u8>, OutboundError> {
                         "grpc Hunk data is truncated".to_owned(),
                     ));
                 }
-                data = Some(message[cursor..end].to_vec());
+                data = Some(&message[cursor..end]);
                 cursor = end;
             }
             (_, 0) => {
