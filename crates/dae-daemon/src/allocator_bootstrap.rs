@@ -49,7 +49,7 @@ fn jemalloc_bootstrap_decision(
 ) -> JemallocBootstrapDecision {
     if effective_configuration
         .as_ref()
-        .is_some_and(|configuration| jemalloc_configuration_is_valid(configuration))
+        .is_some_and(jemalloc_configuration_is_valid)
     {
         return JemallocBootstrapDecision {
             source: JemallocConfigurationSource::EffectiveEnvironment,

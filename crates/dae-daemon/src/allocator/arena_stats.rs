@@ -8,7 +8,7 @@ pub(super) fn allocator_reclaimable_page_bytes() -> Option<u64> {
     let mut pages = 0_u64;
     for arena in 0..narenas {
         let initialized_key = format!("arena.{arena}.initialized\0");
-        if mallctl::read_bool(initialized_key.as_bytes()).ok()? != true {
+        if !mallctl::read_bool(initialized_key.as_bytes()).ok()? {
             continue;
         }
         for field in ["pdirty", "pmuzzy"] {
