@@ -783,6 +783,9 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 }
 
 #[derive(Clone)]
+// Keeping the transport registries inline avoids a per-forwarder heap allocation on the
+// proxied DNS-over-TCP hot path. The direct variant is intentionally only a marker.
+#[allow(clippy::large_enum_variant)]
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsTcpConnectionKind {
     Direct,
     Proxy {

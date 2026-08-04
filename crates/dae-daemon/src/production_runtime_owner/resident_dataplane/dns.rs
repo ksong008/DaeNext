@@ -75,6 +75,7 @@ mod routing;
 mod tcp_wire;
 mod trace_summary;
 mod transport;
+mod udp_response;
 mod upstream_model;
 mod upstream_router;
 use self::cache::{
@@ -127,6 +128,7 @@ use self::transport::{
     ResidentDnsTcpMultiplexHandle, forward_dns_tcp_asis_async, forward_dns_to_upstream_async,
     forward_dns_udp_async,
 };
+pub(super) use self::udp_response::fit_dns_response_to_udp_request;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::upstream_model::ResidentDnsTransportOwnerObservation;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use self::upstream_model::{
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
@@ -576,13 +578,14 @@ pub(super) async fn handle_resident_dns_udp_async(
     original_dst: SocketAddr,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
-    handle_resident_dns_request_async(
+    let response = handle_resident_dns_request_async(
         plan,
         original_dst,
         payload,
         Some(ResidentDnsAsisTransport::Udp),
     )
-    .await
+    .await?;
+    fit_dns_response_to_udp_request(payload, response)
 }
 
 pub(super) async fn handle_resident_dns_tcp_async(
