@@ -14,10 +14,11 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use super::{
-    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease, H2CarrierResponseFuture,
-    Hysteria2OwnerRegistryHandle, Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle,
-    ResidentStopSignal, ResidentTaskSetShutdown, ResidentTransportOwnerRegistries,
-    SharedResidentStopSignal, TuicOwnerRegistryHandle, acquire_h2_carrier, acquire_meek_transport,
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
+    H2CarrierOwnerResourceProfile, H2CarrierResponseFuture, Hysteria2OwnerRegistryHandle,
+    Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle, ResidentStopSignal,
+    ResidentTaskSetShutdown, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
+    TuicOwnerRegistryHandle, acquire_h2_carrier, acquire_meek_transport,
     record_resident_task_completion, reset_resident_relay_idle_deadline,
     resident_relay_idle_deadline, run_until_resident_stop, shutdown_resident_task_set,
 };
@@ -43,19 +44,23 @@ use dae_outbound::{
     },
     juicity::{build_juicity_runtime_client_config, write_juicity_tcp_request},
     shadowsocks::{
-        AeadStreamCodec, ShadowsocksMetadata, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
-        Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions, Ss2022TcpClientStreamEncoder,
-        Ss2022TcpServerStreamDecoder, cipher_spec, read_encrypted_chunk_from_async_stream,
-        shadowsocksr_http_simple_origin_request, simple_obfs_http_request_with_body,
-        simple_obfs_tls_client_hello_with_body, ss2022_tcp_client_stream_encoder,
-        ss2022_tcp_server_stream_decoder_async, ss2022_tcp_unix_timestamp_now,
+        AeadStreamCodec, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
+        SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE, SS2022_TCP_RELAY_PAYLOAD_SIZE,
+        SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE, ShadowsocksMetadata, ShadowsocksRStreamDecoder,
+        ShadowsocksRStreamEncoder, Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions,
+        Ss2022TcpClientStreamEncoder, Ss2022TcpServerStreamDecoder, cipher_spec,
+        read_encrypted_chunk_in_place_from_async_stream, shadowsocksr_http_simple_origin_request,
+        simple_obfs_http_request_with_body, simple_obfs_tls_client_hello_with_body,
+        ss2022_tcp_client_stream_encoder, ss2022_tcp_server_stream_decoder_async,
+        ss2022_tcp_unix_timestamp_now,
     },
     shared_transport::mux::MuxFrameOptions,
     shared_transport::{
         GRPC_ACCEPT_ENCODING_HEADER, GRPC_CONTENT_TYPE_APPLICATION, GRPC_ENCODING_HEADER,
         GRPC_IDENTITY_ENCODING, GRPC_TE_HEADER, GRPC_TE_TRAILERS, HttpUpgradeOptions,
-        MeekRoundTripOptions, grpc_hunk_frame, grpc_hunk_payload, ir, meek_http_request,
-        mux_data_frame, mux_end_frame, mux_new_frame, validate_http_status,
+        MUX_DATA_FRAME_HEADER_BYTES, MeekRoundTripOptions, grpc_hunk_frame, grpc_hunk_payload_ref,
+        ir, meek_http_request, mux_data_frame, mux_data_frame_header, mux_end_frame, mux_new_frame,
+        validate_http_status,
     },
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
@@ -66,8 +71,8 @@ use dae_outbound::{
     vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,
     vmess::{
-        VMessAeadTcpClientSessionStart, aead_tcp_response_reader_from_async_stream,
-        aead_tcp_response_reader_from_buffer,
+        VMESS_AEAD_TCP_MAX_PAYLOAD_SIZE, VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE,
+        VMessAeadTcpClientSessionStart, aead_tcp_response_reader_from_buffer,
     },
 };
 use dae_routing::{Query, RoutingMatcher};
@@ -140,19 +145,21 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::websocket:
     write_websocket_binary_frame_to_async_stream as native_write_websocket_binary_frame_to_async_stream,
 };
 use shadowsocks_stream::{
-    AsyncV2rayPluginMuxPayloadState, read_shadowsocks_aead_chunk_from_v2ray_plugin_mux,
-    read_shadowsocks_aead_chunk_from_websocket_tls,
+    AsyncV2rayPluginMuxPayloadState, ShadowsocksAeadResponseParameters,
+    read_shadowsocks_aead_chunk_in_place_from_v2ray_plugin_mux,
+    read_shadowsocks_aead_chunk_in_place_from_websocket_tls,
 };
 #[cfg(test)]
 pub(crate) use websocket::{AsyncWebSocketPayloadChannelReader, AsyncWebSocketPayloadChannelState};
 pub(crate) use websocket::{
     AsyncWebSocketPayloadReader, AsyncWebSocketPayloadState, RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES,
+    RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE,
 };
 use websocket::{
     WebSocketBinaryFrameDecoder, httpupgrade_handshake_over_async_stream,
     queue_websocket_control_responses, websocket_control_channel,
-    websocket_handshake_over_async_stream, write_websocket_binary_frame_to_async_stream,
-    write_websocket_control_response,
+    websocket_handshake_over_async_stream, write_websocket_binary_frame_in_place_to_async_stream,
+    write_websocket_binary_frame_to_async_stream, write_websocket_control_response,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use websocket::{
     httpupgrade_handshake_over_resident_tls_async, websocket_handshake_over_resident_tls_async,

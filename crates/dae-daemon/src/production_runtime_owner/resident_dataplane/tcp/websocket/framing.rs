@@ -23,7 +23,9 @@ pub(crate) const RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Default)]
 pub(crate) struct WebSocketBinaryFrameDecoder {
     pending: Vec<u8>,
+    consumed: usize,
     fragmented: Option<Vec<u8>>,
+    ready_fragmented: Option<Vec<u8>>,
     control_responses: VecDeque<Vec<u8>>,
     control_response_bytes: usize,
     closed: bool,
@@ -31,9 +33,20 @@ pub(crate) struct WebSocketBinaryFrameDecoder {
 
 impl WebSocketBinaryFrameDecoder {
     pub(crate) fn push(&mut self, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-        if self.closed {
-            return Ok(Vec::new());
+        self.extend(input)?;
+        let mut messages = Vec::new();
+        while let Some(message) = self.next_message()? {
+            messages.push(message.to_vec());
         }
+        Ok(messages)
+    }
+
+    pub(crate) fn extend(&mut self, input: &[u8]) -> Result<(), String> {
+        if self.closed {
+            return Ok(());
+        }
+        self.ready_fragmented = None;
+        self.compact_pending();
         let pending_len = self
             .pending
             .len()
@@ -46,22 +59,92 @@ impl WebSocketBinaryFrameDecoder {
             ));
         }
         self.pending.extend_from_slice(input);
+        Ok(())
+    }
 
-        let mut messages = Vec::new();
-        let mut consumed = 0_usize;
+    pub(crate) fn next_message(&mut self) -> Result<Option<&[u8]>, String> {
+        self.ready_fragmented = None;
         while !self.closed {
-            let Some(frame) = parse_frame(&self.pending[consumed..])? else {
-                break;
+            let Some(frame) = parse_frame(&self.pending[self.consumed..])? else {
+                return Ok(None);
             };
-            consumed = consumed
+            let frame_start = self.consumed;
+            let next_consumed = self
+                .consumed
                 .checked_add(frame.encoded_len)
                 .ok_or_else(|| "websocket consumed length overflow".to_owned())?;
-            self.consume_frame(frame, &mut messages)?;
+            let payload_start = frame_start
+                .checked_add(frame.payload_offset)
+                .ok_or_else(|| "websocket payload offset overflow".to_owned())?;
+            let payload_end = payload_start
+                .checked_add(frame.payload_len)
+                .ok_or_else(|| "websocket payload length overflow".to_owned())?;
+            if let Some(mask_key) = frame.mask_key {
+                for (index, byte) in self.pending[payload_start..payload_end]
+                    .iter_mut()
+                    .enumerate()
+                {
+                    *byte ^= mask_key[index % mask_key.len()];
+                }
+            }
+
+            match frame.opcode {
+                WEBSOCKET_OPCODE_BINARY => {
+                    if self.fragmented.is_some() {
+                        return Err(
+                            "websocket binary frame started before fragmented message completed"
+                                .to_owned(),
+                        );
+                    }
+                    self.consumed = next_consumed;
+                    if frame.fin {
+                        return Ok(Some(&self.pending[payload_start..payload_end]));
+                    }
+                    self.fragmented = Some(self.pending[payload_start..payload_end].to_vec());
+                }
+                WEBSOCKET_OPCODE_CONTINUATION => {
+                    let fragmented = self.fragmented.as_mut().ok_or_else(|| {
+                        "websocket continuation without fragmented message".to_owned()
+                    })?;
+                    let next_len = fragmented
+                        .len()
+                        .checked_add(frame.payload_len)
+                        .ok_or_else(|| "websocket fragmented message length overflow".to_owned())?;
+                    if next_len > RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES {
+                        return Err(format!(
+                            "websocket fragmented message exceeds {} bytes",
+                            RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES
+                        ));
+                    }
+                    fragmented.extend_from_slice(&self.pending[payload_start..payload_end]);
+                    self.consumed = next_consumed;
+                    if frame.fin {
+                        self.ready_fragmented = self.fragmented.take();
+                        return Ok(self.ready_fragmented.as_deref());
+                    }
+                }
+                WEBSOCKET_OPCODE_PING => {
+                    let payload = self.pending[payload_start..payload_end].to_vec();
+                    self.queue_control_response(WEBSOCKET_OPCODE_PONG, &payload)?;
+                    self.consumed = next_consumed;
+                }
+                WEBSOCKET_OPCODE_PONG => self.consumed = next_consumed,
+                WEBSOCKET_OPCODE_CLOSE => {
+                    let payload = self.pending[payload_start..payload_end].to_vec();
+                    self.queue_control_response(WEBSOCKET_OPCODE_CLOSE, &payload)?;
+                    self.consumed = next_consumed;
+                    self.closed = true;
+                    self.fragmented = None;
+                }
+                WEBSOCKET_OPCODE_TEXT => {
+                    return Err(
+                        "text websocket frame is invalid for binary proxy transport".to_owned()
+                    );
+                }
+                opcode => return Err(format!("unsupported websocket opcode {opcode}")),
+            }
         }
-        if consumed != 0 {
-            self.pending.drain(..consumed);
-        }
-        Ok(messages)
+        Ok(None)
     }
 
     pub(crate) fn take_control_responses(&mut self) -> Vec<Vec<u8>> {
@@ -73,59 +156,11 @@ impl WebSocketBinaryFrameDecoder {
         self.closed
     }
 
-    fn consume_frame(
-        &mut self,
-        frame: ParsedWebSocketFrame,
-        messages: &mut Vec<Vec<u8>>,
-    ) -> Result<(), String> {
-        match frame.opcode {
-            WEBSOCKET_OPCODE_BINARY => {
-                if self.fragmented.is_some() {
-                    return Err(
-                        "websocket binary frame started before fragmented message completed"
-                            .to_owned(),
-                    );
-                }
-                if frame.fin {
-                    messages.push(frame.payload);
-                } else {
-                    self.fragmented = Some(frame.payload);
-                }
-            }
-            WEBSOCKET_OPCODE_CONTINUATION => {
-                let fragmented = self.fragmented.as_mut().ok_or_else(|| {
-                    "websocket continuation without fragmented message".to_owned()
-                })?;
-                let next_len = fragmented
-                    .len()
-                    .checked_add(frame.payload.len())
-                    .ok_or_else(|| "websocket fragmented message length overflow".to_owned())?;
-                if next_len > RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES {
-                    return Err(format!(
-                        "websocket fragmented message exceeds {} bytes",
-                        RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES
-                    ));
-                }
-                fragmented.extend_from_slice(&frame.payload);
-                if frame.fin {
-                    messages.push(self.fragmented.take().unwrap_or_default());
-                }
-            }
-            WEBSOCKET_OPCODE_PING => {
-                self.queue_control_response(WEBSOCKET_OPCODE_PONG, &frame.payload)?
-            }
-            WEBSOCKET_OPCODE_PONG => {}
-            WEBSOCKET_OPCODE_CLOSE => {
-                self.queue_control_response(WEBSOCKET_OPCODE_CLOSE, &frame.payload)?;
-                self.closed = true;
-                self.fragmented = None;
-            }
-            WEBSOCKET_OPCODE_TEXT => {
-                return Err("text websocket frame is invalid for binary proxy transport".to_owned());
-            }
-            opcode => return Err(format!("unsupported websocket opcode {opcode}")),
+    fn compact_pending(&mut self) {
+        if self.consumed != 0 {
+            self.pending.drain(..self.consumed);
+            self.consumed = 0;
         }
-        Ok(())
     }
 
     fn queue_control_response(&mut self, opcode: u8, payload: &[u8]) -> Result<(), String> {
@@ -149,7 +184,9 @@ impl WebSocketBinaryFrameDecoder {
 struct ParsedWebSocketFrame {
     fin: bool,
     opcode: u8,
-    payload: Vec<u8>,
+    payload_offset: usize,
+    payload_len: usize,
+    mask_key: Option<[u8; 4]>,
     encoded_len: usize,
 }
 
@@ -228,16 +265,12 @@ fn parse_frame(input: &[u8]) -> Result<Option<ParsedWebSocketFrame>, String> {
         return Ok(None);
     }
 
-    let mut payload = input[header_len..encoded_len].to_vec();
-    if let Some(mask_key) = mask_key {
-        for (index, byte) in payload.iter_mut().enumerate() {
-            *byte ^= mask_key[index % mask_key.len()];
-        }
-    }
     Ok(Some(ParsedWebSocketFrame {
         fin,
         opcode,
-        payload,
+        payload_offset: header_len,
+        payload_len,
+        mask_key,
         encoded_len,
     }))
 }

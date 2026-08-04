@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use tokio::sync::watch;
 
@@ -27,6 +27,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentDuple
 struct ResidentDuplexProgressInner {
     upload_bytes: AtomicUsize,
     download_bytes: AtomicUsize,
+    activity_pending: AtomicBool,
     activity: watch::Sender<u64>,
 }
 
@@ -38,6 +39,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) fn resident_duplex_p
             inner: Arc::new(ResidentDuplexProgressInner {
                 upload_bytes: AtomicUsize::new(0),
                 download_bytes: AtomicUsize::new(0),
+                activity_pending: AtomicBool::new(false),
                 activity,
             }),
         },
@@ -74,9 +76,21 @@ impl ResidentDuplexProgress {
     }
 
     fn note_activity(&self) {
-        self.inner
-            .activity
-            .send_modify(|sequence| *sequence = sequence.wrapping_add(1));
+        if !self.inner.activity_pending.load(Ordering::Acquire)
+            && self
+                .inner
+                .activity_pending
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            self.inner
+                .activity
+                .send_modify(|sequence| *sequence = sequence.wrapping_add(1));
+        }
+    }
+
+    fn acknowledge_activity(&self) {
+        self.inner.activity_pending.store(false, Ordering::Release);
     }
 }
 
@@ -138,10 +152,19 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn run_residen
             }
             changed = activity.receiver.changed() => {
                 if changed.is_ok() {
+                    progress.acknowledge_activity();
                     reset_resident_relay_idle_deadline(
                         idle_deadline.as_mut(),
                         RESIDENT_TCP_IDLE_TIMEOUT,
                     );
+                    if upload_done
+                        && let Some(timeout) = half_close_drain_timeout
+                    {
+                        reset_resident_relay_idle_deadline(
+                            close_drain_deadline.as_mut(),
+                            timeout,
+                        );
+                    }
                 }
             }
             _ = &mut close_drain_deadline, if upload_done && half_close_drain_timeout.is_some() => {
@@ -149,5 +172,56 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn run_residen
             }
             _ = &mut idle_deadline => return Err(idle_error.to_owned()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplex_activity_coalesces_until_the_relay_acknowledges_it() {
+        let (progress, mut activity) = resident_duplex_progress();
+
+        for _ in 0..64 {
+            progress.record_upload(1);
+        }
+        assert!(activity.receiver.has_changed().unwrap());
+        assert_eq!(*activity.receiver.borrow_and_update(), 1);
+        assert_eq!(progress.snapshot().client_to_direct, 64);
+
+        progress.acknowledge_activity();
+        progress.record_download(7);
+        assert!(activity.receiver.has_changed().unwrap());
+        assert_eq!(*activity.receiver.borrow_and_update(), 2);
+        assert_eq!(progress.snapshot().direct_to_client, 7);
+    }
+
+    #[tokio::test]
+    async fn half_close_drain_deadline_tracks_continuing_download_progress() {
+        let (progress, activity) = resident_duplex_progress();
+        let download_progress = progress.clone();
+        let upload = async { Ok(()) };
+        let download = async move {
+            for _ in 0..4 {
+                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                download_progress.record_download(1);
+            }
+            Ok(())
+        };
+
+        let stats = run_resident_duplex_relay(
+            Box::pin(upload),
+            Box::pin(download),
+            ResidentStopSignal::shared(),
+            &progress,
+            activity,
+            "test relay idle timeout",
+            Some(std::time::Duration::from_millis(100)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(stats.direct_to_client, 4);
     }
 }

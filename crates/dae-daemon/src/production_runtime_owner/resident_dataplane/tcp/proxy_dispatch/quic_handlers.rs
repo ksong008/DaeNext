@@ -144,9 +144,6 @@ pub(crate) async fn handle_hysteria2_quic_tcp_connection_async(
         send.write_all(&initial_payload)
             .await
             .map_err(|err| format!("write Hysteria2 initial payload: {err}"))?;
-        send.flush()
-            .await
-            .map_err(|err| format!("flush Hysteria2 initial payload: {err}"))?;
         initial_stats.client_to_direct += initial_payload_len;
         metrics.add_upload(initial_payload_len);
     }
@@ -243,9 +240,6 @@ pub(crate) async fn handle_tuic_quic_tcp_connection_async(
         send.write_all(&initial_payload)
             .await
             .map_err(|err| format!("write TUIC initial payload: {err}"))?;
-        send.flush()
-            .await
-            .map_err(|err| format!("flush TUIC initial payload: {err}"))?;
         initial_stats.client_to_direct += initial_payload_len;
         metrics.add_upload(initial_payload_len);
     }

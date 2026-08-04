@@ -1,7 +1,7 @@
 use dae_outbound::shared_transport::{
     HttpUpgradeOptions, http_upgrade_request, validate_http_status,
     validate_websocket_handshake_response, websocket_client_binary_frame_with_random_mask,
-    websocket_client_handshake,
+    websocket_client_handshake, websocket_client_mask_key,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
@@ -19,6 +19,8 @@ pub(crate) use async_payload::{
 pub(crate) use duplex_control::*;
 pub(crate) use framing::RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES;
 pub(crate) use framing::WebSocketBinaryFrameDecoder;
+
+pub(crate) const RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE: usize = 16 * 1024;
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn websocket_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
@@ -101,7 +103,57 @@ where
     stream
         .write_all(&frame)
         .await
-        .map_err(|err| format!("{label}: {err}"))
+        .map_err(|err| format!("{label}: {err}"))?;
+    stream
+        .flush()
+        .await
+        .map_err(|err| format!("flush {label}: {err}"))
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane) async fn write_websocket_binary_frame_in_place_to_async_stream<
+    S,
+>(
+    stream: &mut S,
+    payload: &mut [u8],
+    label: &str,
+) -> Result<(), String>
+where
+    S: AsyncWrite + Unpin,
+{
+    let mask = websocket_client_mask_key().map_err(|err| format!("{label}: {err}"))?;
+    let (header, header_len) =
+        websocket_binary_header(payload.len(), mask).map_err(|err| format!("{label}: {err}"))?;
+    for (index, byte) in payload.iter_mut().enumerate() {
+        *byte ^= mask[index % mask.len()];
+    }
+    super::write_all_vectored_header_payload(stream, &header[..header_len], payload)
+        .await
+        .map_err(|err| format!("{label}: {err}"))?;
+    stream
+        .flush()
+        .await
+        .map_err(|err| format!("flush {label}: {err}"))
+}
+
+fn websocket_binary_header(payload_len: usize, mask: [u8; 4]) -> Result<([u8; 8], usize), String> {
+    let mut header = [0_u8; 8];
+    header[0] = 0x82;
+    let header_len = if payload_len < 126 {
+        header[1] = 0x80 | payload_len as u8;
+        header[2..6].copy_from_slice(&mask);
+        6
+    } else if payload_len <= u16::MAX as usize {
+        header[1] = 0x80 | 126;
+        header[2..4].copy_from_slice(&(payload_len as u16).to_be_bytes());
+        header[4..8].copy_from_slice(&mask);
+        8
+    } else {
+        return Err(format!(
+            "resident websocket upload frame exceeds {} bytes",
+            u16::MAX
+        ));
+    };
+    Ok((header, header_len))
 }
 
 async fn read_http_head_over_resident_tls_async(
@@ -160,4 +212,37 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn write_webso
     let frame = websocket_client_binary_frame_with_random_mask(payload)
         .map_err(|err| format!("{label}: {err}"))?;
     client.write_plain_all(&frame, label).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn in_place_websocket_writer_preserves_binary_payload() {
+        let original = vec![0x5a; 16 * 1024];
+        let mut payload = original.clone();
+        let (mut writer, mut reader) = tokio::io::duplex(32 * 1024);
+
+        let write = async {
+            write_websocket_binary_frame_in_place_to_async_stream(
+                &mut writer,
+                &mut payload,
+                "test websocket frame",
+            )
+            .await
+            .unwrap();
+            writer.shutdown().await.unwrap();
+        };
+        let read = async {
+            let mut wire = Vec::new();
+            reader.read_to_end(&mut wire).await.unwrap();
+            wire
+        };
+        let ((), wire) = tokio::join!(write, read);
+
+        let mut decoder = WebSocketBinaryFrameDecoder::default();
+        let messages = decoder.push(&wire).unwrap();
+        assert_eq!(messages, vec![original]);
+    }
 }
