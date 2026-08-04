@@ -145,6 +145,10 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                 upload_sender.xmux_lease.as_ref(),
             )
             .await?;
+            let download_xmux_lease = upload_sender
+                .xmux_lease
+                .as_ref()
+                .map(XhttpXmuxClientLease::independent_lease);
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H2 {
@@ -163,7 +167,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                     recv,
                     _keepalive_sender: None,
                     connection_task: None,
-                    xmux_lease: None,
+                    xmux_lease: download_xmux_lease,
                 },
                 upload_underlay,
                 upload_http_version,
@@ -321,6 +325,10 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                 upload_client.xmux_lease.as_ref(),
             )
             .await?;
+            let download_xmux_lease = upload_client
+                .xmux_lease
+                .as_ref()
+                .map(XhttpXmuxClientLease::independent_lease);
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H3 {
@@ -337,7 +345,7 @@ pub(crate) async fn open_xhttp_packet_up_parts(
                 download: XhttpDownloadClient::H3 {
                     recv,
                     connection: None,
-                    xmux_lease: None,
+                    xmux_lease: download_xmux_lease,
                 },
                 upload_underlay,
                 upload_http_version,

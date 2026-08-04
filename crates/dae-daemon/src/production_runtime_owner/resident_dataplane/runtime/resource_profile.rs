@@ -13,7 +13,7 @@ const LOW_MEMORY_TCP_RUNTIME_WORKERS_MAX: usize = 2;
 const BALANCED_TCP_RUNTIME_WORKERS_MAX: usize = 4;
 const HIGH_PERFORMANCE_TCP_RUNTIME_WORKERS_MAX: usize = 8;
 const LOW_MEMORY_TCP_CONNECTION_LIMIT: usize = 256;
-const BALANCED_TCP_CONNECTION_LIMIT: usize = 1_024;
+const BALANCED_TCP_CONNECTION_LIMIT: usize = 2_048;
 const HIGH_PERFORMANCE_TCP_CONNECTION_LIMIT: usize = 4_096;
 const LOW_MEMORY_WEBSOCKET_CONTROL_QUEUE_DEPTH: usize = 2;
 const BALANCED_WEBSOCKET_CONTROL_QUEUE_DEPTH: usize = 4;
@@ -147,6 +147,12 @@ const HIGH_PERFORMANCE_H2_CARRIER_OWNER_LIMIT: usize = 128;
 const LOW_MEMORY_H2_PENDING_OPEN_LIMIT: usize = 64;
 const BALANCED_H2_PENDING_OPEN_LIMIT: usize = 256;
 const HIGH_PERFORMANCE_H2_PENDING_OPEN_LIMIT: usize = 1_024;
+const LOW_MEMORY_H2_STREAM_RECEIVE_WINDOW_BYTES: u32 = 256 * 1024;
+const BALANCED_H2_STREAM_RECEIVE_WINDOW_BYTES: u32 = 1024 * 1024;
+const HIGH_PERFORMANCE_H2_STREAM_RECEIVE_WINDOW_BYTES: u32 = 2 * 1024 * 1024;
+const LOW_MEMORY_H2_CONNECTION_RECEIVE_WINDOW_BYTES: u32 = 1024 * 1024;
+const BALANCED_H2_CONNECTION_RECEIVE_WINDOW_BYTES: u32 = 4 * 1024 * 1024;
+const HIGH_PERFORMANCE_H2_CONNECTION_RECEIVE_WINDOW_BYTES: u32 = 16 * 1024 * 1024;
 const LOW_MEMORY_MEEK_RESPONSE_HEADER_BYTES: usize = 8 * 1024;
 const BALANCED_MEEK_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const HIGH_PERFORMANCE_MEEK_RESPONSE_HEADER_BYTES: usize = 32 * 1024;
@@ -664,6 +670,8 @@ pub(crate) struct AnyTlsOwnerResourceProfile {
 pub(crate) struct H2CarrierOwnerResourceProfile {
     owner_limit: usize,
     pending_open_limit: usize,
+    stream_receive_window_bytes: u32,
+    connection_receive_window_bytes: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -917,23 +925,36 @@ impl MeekTransportResourceProfile {
 
 impl H2CarrierOwnerResourceProfile {
     pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
-        let (owner_limit, pending_open_limit) = match profile {
+        let (
+            owner_limit,
+            pending_open_limit,
+            stream_receive_window_bytes,
+            connection_receive_window_bytes,
+        ) = match profile {
             ResidentRuntimeProfile::LowMemory => (
                 LOW_MEMORY_H2_CARRIER_OWNER_LIMIT,
                 LOW_MEMORY_H2_PENDING_OPEN_LIMIT,
+                LOW_MEMORY_H2_STREAM_RECEIVE_WINDOW_BYTES,
+                LOW_MEMORY_H2_CONNECTION_RECEIVE_WINDOW_BYTES,
             ),
             ResidentRuntimeProfile::Balanced => (
                 BALANCED_H2_CARRIER_OWNER_LIMIT,
                 BALANCED_H2_PENDING_OPEN_LIMIT,
+                BALANCED_H2_STREAM_RECEIVE_WINDOW_BYTES,
+                BALANCED_H2_CONNECTION_RECEIVE_WINDOW_BYTES,
             ),
             ResidentRuntimeProfile::HighPerformance => (
                 HIGH_PERFORMANCE_H2_CARRIER_OWNER_LIMIT,
                 HIGH_PERFORMANCE_H2_PENDING_OPEN_LIMIT,
+                HIGH_PERFORMANCE_H2_STREAM_RECEIVE_WINDOW_BYTES,
+                HIGH_PERFORMANCE_H2_CONNECTION_RECEIVE_WINDOW_BYTES,
             ),
         };
         Self {
             owner_limit,
             pending_open_limit,
+            stream_receive_window_bytes,
+            connection_receive_window_bytes,
         }
     }
 
@@ -955,6 +976,20 @@ impl H2CarrierOwnerResourceProfile {
 
     pub(crate) const fn pending_open_limit(self) -> usize {
         self.pending_open_limit
+    }
+
+    pub(crate) const fn stream_receive_window_bytes(self) -> u32 {
+        self.stream_receive_window_bytes
+    }
+
+    pub(crate) const fn connection_receive_window_bytes(self) -> u32 {
+        self.connection_receive_window_bytes
+    }
+
+    pub(crate) fn configure_client_builder(self, builder: &mut h2::client::Builder) {
+        builder
+            .initial_window_size(self.stream_receive_window_bytes)
+            .initial_connection_window_size(self.connection_receive_window_bytes);
     }
 }
 
@@ -2244,6 +2279,29 @@ mod tests {
         assert_eq!(invalid.profile, ResidentRuntimeProfile::Balanced);
         assert_eq!(invalid.source, "invalid-env-fallback");
         assert_eq!(invalid.invalid_value.as_deref(), Some("unknown"));
+    }
+
+    #[test]
+    fn h2_receive_windows_are_profile_bounded_and_monotonic() {
+        let low =
+            H2CarrierOwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
+        let balanced =
+            H2CarrierOwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::Balanced);
+        let high = H2CarrierOwnerResourceProfile::from_runtime_profile(
+            ResidentRuntimeProfile::HighPerformance,
+        );
+
+        assert!(low.stream_receive_window_bytes() < balanced.stream_receive_window_bytes());
+        assert!(balanced.stream_receive_window_bytes() < high.stream_receive_window_bytes());
+        assert!(low.connection_receive_window_bytes() < balanced.connection_receive_window_bytes());
+        assert!(
+            balanced.connection_receive_window_bytes() < high.connection_receive_window_bytes()
+        );
+        for profile in [low, balanced, high] {
+            assert!(
+                profile.connection_receive_window_bytes() >= profile.stream_receive_window_bytes()
+            );
+        }
     }
 
     #[test]

@@ -92,19 +92,6 @@ async fn open_xhttp_h1_download_stream_with_client(
     ))
 }
 
-pub(super) async fn send_xhttp_h1_packet_up_request(
-    binding: &ResidentProxyBinding,
-    endpoint: &ResidentXhttpEndpointPlan,
-    mptcp: bool,
-    session_id: &str,
-    seq: u64,
-    payload: Bytes,
-) -> Result<(), String> {
-    begin_xhttp_h1_packet_up_request(binding, endpoint, mptcp, session_id, seq, payload)
-        .await?
-        .await
-}
-
 pub(super) async fn begin_xhttp_h1_packet_up_request(
     binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,

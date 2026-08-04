@@ -286,6 +286,8 @@ impl H2CarrierGenerationOwnerHandle {
                 "logicalConcurrencySource": "peer-http2-settings",
                 "pendingOpensPerPhysical": self.owner.resources.pending_open_limit(),
                 "pendingOpenQueueing": false,
+                "streamReceiveWindowBytes": self.owner.resources.stream_receive_window_bytes(),
+                "connectionReceiveWindowBytes": self.owner.resources.connection_receive_window_bytes(),
             },
         })
     }
@@ -936,7 +938,9 @@ async fn build_h2_carrier(
     let remaining = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "HTTP/2 carrier handshake deadline elapsed".to_owned())?;
-    let (sender, connection) = time::timeout(remaining, h2::client::handshake(client))
+    let mut h2_builder = h2::client::Builder::new();
+    owner.resources.configure_client_builder(&mut h2_builder);
+    let (sender, connection) = time::timeout(remaining, h2_builder.handshake(client))
         .await
         .map_err(|_| "HTTP/2 carrier handshake deadline elapsed".to_owned())?
         .map_err(|error| format!("HTTP/2 carrier client handshake: {error}"))?;
@@ -1102,9 +1106,9 @@ mod tests {
             .split_once("#[cfg(test)]\nmod tests")
             .map_or(owner, |(production, _)| production);
         let grpc_production = grpc
-            .split_once("#[cfg(test)]\npub(super) async fn open_grpc_h2_stream_on_io")
+            .split_once("#[cfg(test)]\npub(crate) async fn open_grpc_h2_stream_on_io")
             .map_or(grpc, |(production, _)| production);
-        assert!(production.contains("h2::client::handshake(client)"));
+        assert!(production.contains("h2_builder.handshake(client)"));
         assert!(!grpc_production.contains("h2::client::handshake(client)"));
         assert!(!body.contains("h2::client::handshake(client)"));
     }

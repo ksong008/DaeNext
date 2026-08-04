@@ -37,6 +37,29 @@ fn stop_test_owner(
     shutdown_xhttp_xmux_generation_owner(owner, thread, Duration::from_secs(1))
 }
 
+async fn open_test_h2_sender() -> Result<XhttpH2EndpointSender, String> {
+    let (client_io, server_io) = tokio::io::duplex(16 * 1024);
+    tokio::spawn(async move {
+        let Ok(mut server) = h2::server::handshake(server_io).await else {
+            return;
+        };
+        while let Some(Ok((_request, mut response))) = server.accept().await {
+            let _ = response.send_response(http::Response::new(()), true);
+        }
+    });
+    let (sender, connection) = h2::client::handshake(client_io)
+        .await
+        .map_err(|err| format!("test H2 client handshake: {err}"))?;
+    let connection_task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    Ok(XhttpH2EndpointSender {
+        sender,
+        connection_task: Some(connection_task),
+        xmux_lease: None,
+    })
+}
+
 fn registered_download_manager(
     owner: &XhttpXmuxGenerationOwnerHandle,
     key: XhttpXmuxKey,
@@ -196,6 +219,61 @@ async fn physical_open_executes_on_the_generation_owner_runtime() {
     assert_eq!(err, "test open completed");
     let report = stop_test_owner(&owner, thread);
     assert_eq!(report.h2.managers, 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retiring_h2_owner_does_not_deadlock_its_replacement_slot() {
+    let generation = fastrand::u64(..);
+    let (owner, thread) = start_test_owner(generation);
+    let key = cancellation_test_key(generation);
+    let first = select_xhttp_h2_xmux_client(
+        key.clone(),
+        cancellation_test_plan(generation),
+        open_test_h2_sender,
+    )
+    .await
+    .unwrap();
+    let download_lease = first.lease.independent_lease();
+    first.lease.retire_physical();
+    drop(first);
+
+    let second = tokio::time::timeout(
+        Duration::from_secs(1),
+        select_xhttp_h2_xmux_client(
+            key.clone(),
+            cancellation_test_plan(generation),
+            open_test_h2_sender,
+        ),
+    )
+    .await
+    .expect("retiring physical consumed the only reusable replacement slot")
+    .unwrap();
+
+    let manager = owner
+        .owner
+        .h2
+        .managers
+        .lock()
+        .unwrap()
+        .get(&key)
+        .unwrap()
+        .clone();
+    assert_eq!(manager.manager.lock().await.clients.len(), 2);
+    drop(download_lease);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if manager.manager.lock().await.clients.len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("last retired lease did not trigger physical owner reaping");
+
+    drop(second);
+    let report = stop_test_owner(&owner, thread);
+    assert_eq!(report.h2.clients, 1);
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -14,16 +14,16 @@ impl XhttpXmuxConnectionCapacity {
         }
     }
 
-    pub(super) fn should_fill_preferred(self, live: usize, opening: usize) -> bool {
-        self.preferred > 0 && live.saturating_add(opening) < self.preferred
+    pub(super) fn should_fill_preferred(self, reusable: usize, opening: usize) -> bool {
+        self.preferred > 0 && reusable.saturating_add(opening) < self.preferred
     }
 
-    pub(super) fn can_open(self, live: usize, opening: usize) -> bool {
-        live.saturating_add(opening) < self.limit
+    pub(super) fn can_open(self, reusable: usize, opening: usize) -> bool {
+        reusable.saturating_add(opening) < self.limit
     }
 
-    pub(super) fn can_start_opening(self, live: usize, opening: usize) -> bool {
-        self.can_open(live, opening) && (opening == 0 || self.preferred > 0)
+    pub(super) fn can_start_opening(self, reusable: usize, opening: usize) -> bool {
+        self.can_open(reusable, opening) && (opening == 0 || self.preferred > 0)
     }
 }
 
@@ -58,7 +58,7 @@ mod tests {
     }
 
     #[test]
-    fn live_retiring_and_opening_owners_all_consume_capacity() {
+    fn reusable_and_opening_owners_consume_capacity() {
         let capacity = XhttpXmuxConnectionCapacity::from_plan(&plan(3, None));
 
         assert!(capacity.can_open(1, 1));

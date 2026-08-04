@@ -33,7 +33,15 @@ struct AnyTlsServerObservation {
 }
 
 enum AnyTlsServerCommand {
-    Frame { cmd: u8, sid: u32, data: Vec<u8> },
+    Frame {
+        cmd: u8,
+        sid: u32,
+        data: Vec<u8>,
+    },
+    SetReadPaused {
+        paused: bool,
+        applied: oneshot::Sender<()>,
+    },
     Close,
 }
 
@@ -66,6 +74,22 @@ impl AnyTlsServerObservation {
             .cloned()
             .expect("AnyTLS test connection sender is registered");
         sender.send(AnyTlsServerCommand::Close).unwrap();
+    }
+
+    async fn set_latest_read_paused(&self, paused: bool) {
+        let connection_id = self.latest_connection_id.load(Ordering::Acquire);
+        let sender = self
+            .connection_senders
+            .lock()
+            .unwrap()
+            .get(&connection_id)
+            .cloned()
+            .expect("AnyTLS test connection sender is registered");
+        let (applied, observed) = oneshot::channel();
+        sender
+            .send(AnyTlsServerCommand::SetReadPaused { paused, applied })
+            .unwrap();
+        observed.await.unwrap();
     }
 }
 
@@ -212,6 +236,7 @@ async fn run_anytls_test_connection<S>(
         .unwrap()
         .insert(connection_id, command_sender);
     let mut logical = HashMap::<u32, AnyTlsTestStreamState>::new();
+    let mut read_paused = false;
     loop {
         tokio::select! {
             command = commands.recv() => match command {
@@ -220,9 +245,13 @@ async fn run_anytls_test_connection<S>(
                         break;
                     }
                 }
+                Some(AnyTlsServerCommand::SetReadPaused { paused, applied }) => {
+                    read_paused = paused;
+                    let _ = applied.send(());
+                }
                 Some(AnyTlsServerCommand::Close) | None => break,
             },
-            frame = read_anytls_test_frame(&mut stream) => {
+            frame = read_anytls_test_frame(&mut stream), if !read_paused => {
                 let Ok(frame) = frame else {
                     break;
                 };
@@ -497,6 +526,81 @@ fn assert_anytls_owner_resources_released(registry: &AnyTlsOwnerRegistryHandle) 
     assert_eq!(owner["ownerPaddingSchemeBytes"], 0);
     assert_eq!(owner["activeBuilds"], 0);
     assert_eq!(owner["shutdownTimedOut"], false);
+}
+
+#[test]
+fn anytls_physical_upload_backpressure_does_not_block_download_frames() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            const UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
+            const UPLOAD_CHUNKS: usize = 1024;
+            const RESPONSE: &[u8] = b"response while AnyTLS physical upload is blocked";
+
+            let server = AnyTlsTestServer::start(true).await;
+            let generation = 9_105;
+            let proxy = anytls_proxy(server.addr, generation);
+            let stop = ResidentStopSignal::shared();
+            let resources = anytls_owner_resources(
+                Duration::from_secs(5),
+                Duration::from_secs(2),
+                Duration::from_millis(100),
+            );
+            let (registry, owner_thread) = start_anytls_owner_registry_with_resources(
+                generation,
+                Arc::clone(&stop),
+                RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+                resources,
+            )
+            .unwrap();
+
+            let lease = registry
+                .acquire(proxy, TEST_TARGET.to_owned(), anytls_owner_deadline())
+                .await
+                .unwrap();
+            let sid = lease.sid();
+            server.observation.set_latest_read_paused(true).await;
+            let (mut logical_read, mut logical_write) = tokio::io::split(lease);
+            let upload = tokio::spawn(async move {
+                let payload = vec![0x5a; UPLOAD_CHUNK_BYTES];
+                for _ in 0..UPLOAD_CHUNKS {
+                    logical_write.write_all(&payload).await?;
+                }
+                Ok::<(), std::io::Error>(())
+            });
+
+            time::sleep(Duration::from_millis(100)).await;
+            assert!(
+                !upload.is_finished(),
+                "AnyTLS fixture did not establish physical upload backpressure"
+            );
+            server
+                .observation
+                .inject_latest_frame(anytls_contract::CMD_PSH, sid, RESPONSE);
+
+            let mut response = vec![0_u8; RESPONSE.len()];
+            time::timeout(
+                Duration::from_secs(1),
+                logical_read.read_exact(&mut response),
+            )
+            .await
+            .expect("AnyTLS download stalled behind physical upload backpressure")
+            .unwrap();
+            assert_eq!(response, RESPONSE);
+
+            upload.abort();
+            let _ = upload.await;
+            drop(logical_read);
+            server.observation.set_latest_read_paused(false).await;
+            wait_until(|| registry.metrics_snapshot()["activeLogicalStreams"] == 0).await;
+
+            stop_anytls_owner_registry(stop, owner_thread).await;
+            assert_anytls_owner_resources_released(&registry);
+            server.stop().await;
+        });
 }
 
 #[test]

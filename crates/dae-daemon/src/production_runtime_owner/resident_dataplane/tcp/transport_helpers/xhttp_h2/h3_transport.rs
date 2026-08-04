@@ -447,19 +447,6 @@ pub(crate) async fn open_xhttp_h3_download_stream(
     Ok(stream)
 }
 
-pub(crate) async fn send_xhttp_h3_packet_up_request(
-    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
-    endpoint: &impl ResidentXhttpEndpointView,
-    session_id: &str,
-    seq: u64,
-    payload: Bytes,
-    xmux_request: Option<&XhttpXmuxRequestHandle>,
-) -> Result<(), String> {
-    begin_xhttp_h3_packet_up_request(client, endpoint, session_id, seq, payload, xmux_request)
-        .await?
-        .await
-}
-
 pub(crate) async fn begin_xhttp_h3_packet_up_request(
     client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     endpoint: &impl ResidentXhttpEndpointView,
@@ -511,35 +498,53 @@ pub(crate) async fn begin_xhttp_h3_packet_up_request(
     }))
 }
 
-pub(super) async fn refresh_xhttp_h3_packet_up_client_if_needed(
+pub(super) async fn replace_xhttp_h3_packet_up_client(
     binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
     client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     connection: &mut Option<XhttpH3Connection>,
+    xmux_lease: &mut Option<XhttpXmuxClientLease>,
     xmux_request: &mut Option<XhttpXmuxRequestHandle>,
 ) -> Result<(), String> {
-    let Some(request) = xmux_request.as_ref() else {
-        return Ok(());
-    };
-    if request.use_for_packet_up_post() {
+    if xmux_request.is_none() {
         return Ok(());
     }
 
+    xmux_request.take();
+    drop(xmux_lease.take());
     let replacement = open_xhttp_h3_proxy_client(binding, endpoint).await?;
-    *client = replacement.client;
-    if let Some(new_connection) = replacement.connection
-        && let Some(old_connection) = connection.replace(new_connection)
-    {
+    let old_connection = install_xhttp_h3_packet_up_replacement(
+        client,
+        connection,
+        xmux_lease,
+        xmux_request,
+        replacement,
+    );
+    if let Some(old_connection) = old_connection {
         old_connection
             .close(b"resident xhttp h3 packet-up client replaced")
             .await;
     }
+    Ok(())
+}
+
+fn install_xhttp_h3_packet_up_replacement(
+    client: &mut h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
+    connection: &mut Option<XhttpH3Connection>,
+    xmux_lease: &mut Option<XhttpXmuxClientLease>,
+    xmux_request: &mut Option<XhttpXmuxRequestHandle>,
+    replacement: XhttpH3EndpointClient,
+) -> Option<XhttpH3Connection> {
+    *client = replacement.client;
+    let old_connection = replacement
+        .connection
+        .and_then(|new_connection| connection.replace(new_connection));
     *xmux_request = replacement
         .xmux_lease
         .as_ref()
         .map(XhttpXmuxClientLease::request_handle);
-    drop(replacement.xmux_lease);
-    Ok(())
+    *xmux_lease = replacement.xmux_lease;
+    old_connection
 }
 
 async fn drain_xhttp_h3_response_body(
