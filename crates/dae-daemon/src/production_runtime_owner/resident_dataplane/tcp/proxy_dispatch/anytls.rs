@@ -176,7 +176,7 @@ pub(crate) async fn relay_tcp_over_anytls_async(
 }
 
 pub(crate) async fn read_anytls_frame(
-    client: &mut AsyncResidentTlsClient,
+    client: &mut (impl AsyncRead + Unpin),
 ) -> Result<AnyTlsFrame, String> {
     let mut header = [0_u8; anytls_contract::HEADER_OVERHEAD_SIZE];
     read_resident_tls_plain_exact(client, &mut header, "read AnyTLS frame header").await?;
@@ -191,19 +191,16 @@ pub(crate) async fn read_anytls_frame(
 }
 
 pub(crate) async fn read_resident_tls_plain_exact(
-    client: &mut AsyncResidentTlsClient,
+    client: &mut (impl AsyncRead + Unpin),
     buf: &mut [u8],
     label: &str,
 ) -> Result<(), String> {
     let mut offset = 0_usize;
     while offset < buf.len() {
-        let read = time::timeout(
-            RESIDENT_TCP_IDLE_TIMEOUT,
-            client.read_plain(&mut buf[offset..]),
-        )
-        .await
-        .map_err(|_| format!("{label}: timeout"))?
-        .map_err(|err| format!("{label}: {err}"))?;
+        let read = time::timeout(RESIDENT_TCP_IDLE_TIMEOUT, client.read(&mut buf[offset..]))
+            .await
+            .map_err(|_| format!("{label}: timeout"))?
+            .map_err(|err| format!("{label}: {err}"))?;
         if read == 0 {
             return Err(format!("{label}: early eof"));
         }

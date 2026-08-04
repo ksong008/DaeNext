@@ -5,7 +5,10 @@ use quinn::crypto::rustls::QuicServerConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 use tokio::sync::{mpsc, oneshot};
+
+use crate::production_runtime_owner::resident_dataplane::tcp::transport_helpers::xhttp_h2::xmux::xhttp_xmux_test_lease;
 
 fn server_config() -> quinn::ServerConfig {
     let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
@@ -151,5 +154,87 @@ async fn delayed_h3_responses_do_not_serialize_packet_up_requests() {
     driver_task.abort();
     client_endpoint.wait_idle().await;
     server_endpoint.close(0_u32.into(), b"xhttp h3 packet-up test complete");
+    server_endpoint.wait_idle().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn low_request_budget_h3_rotation_keeps_the_replacement_lease() {
+    let server_endpoint =
+        quinn::Endpoint::server(server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+    let server_address = server_endpoint.local_addr().unwrap();
+    let accepting_endpoint = server_endpoint.clone();
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        let connection = accepting_endpoint.accept().await.unwrap().await.unwrap();
+        let h3_connection = h3_quinn::Connection::new(connection);
+        let mut incoming: server::Connection<h3_quinn::Connection, Bytes> =
+            server::Connection::new(h3_connection).await.unwrap();
+        accepted_tx.send(()).unwrap();
+        let _ = incoming.accept().await;
+    });
+
+    let endpoint = packet_up_endpoint(server_address);
+    let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+    client_endpoint.set_default_client_config(
+        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Rustls).unwrap(),
+    );
+    let connection = client_endpoint
+        .connect(server_address, "localhost")
+        .unwrap()
+        .await
+        .unwrap();
+    let h3_connection = h3_quinn::Connection::new(connection.clone());
+    let (mut driver, client) = h3::client::new(h3_connection).await.unwrap();
+    let driver_task = tokio::spawn(async move {
+        let _ = std::future::poll_fn(|context| driver.poll_close(context)).await;
+    });
+    accepted_rx.await.unwrap();
+
+    let (old_lease, old_usage) = xhttp_xmux_test_lease(1);
+    let old_request = old_lease.request_handle();
+    assert!(
+        !old_request.use_for_packet_up_post(),
+        "the first POST must exhaust a one-request physical budget"
+    );
+
+    let (new_lease, new_usage) = xhttp_xmux_test_lease(2);
+    let replacement = XhttpH3EndpointClient {
+        client: client.clone(),
+        connection: None,
+        xmux_lease: Some(new_lease),
+    };
+    let mut active_client = client;
+    let mut active_connection = None;
+    let mut active_lease = Some(old_lease);
+    let mut active_request = Some(old_request);
+    assert!(
+        install_xhttp_h3_packet_up_replacement(
+            &mut active_client,
+            &mut active_connection,
+            &mut active_lease,
+            &mut active_request,
+            replacement,
+        )
+        .is_none()
+    );
+
+    assert_eq!(old_usage.open_usage.load(Ordering::Acquire), 0);
+    assert_eq!(new_usage.open_usage.load(Ordering::Acquire), 1);
+    let active_request = active_request.as_ref().unwrap();
+    assert!(active_request.use_for_packet_up_post());
+    assert!(
+        !active_request.use_for_packet_up_post(),
+        "each H3 POST must consume exactly one request-budget unit"
+    );
+    assert_eq!(new_usage.left_requests.load(Ordering::Acquire), 0);
+
+    drop(active_lease.take());
+    assert_eq!(new_usage.open_usage.load(Ordering::Acquire), 0);
+    drop(active_client);
+    connection.close(0_u32.into(), b"xhttp h3 packet-up rotation test complete");
+    server_task.await.unwrap();
+    driver_task.abort();
+    client_endpoint.wait_idle().await;
+    server_endpoint.close(0_u32.into(), b"xhttp h3 packet-up rotation test complete");
     server_endpoint.wait_idle().await;
 }

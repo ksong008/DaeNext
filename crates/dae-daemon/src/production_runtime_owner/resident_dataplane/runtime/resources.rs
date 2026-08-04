@@ -346,6 +346,8 @@ impl ResidentRuntimeResourceConfig {
                 "physicalConnectionLimit": h2_carriers.physical_connection_limit(),
                 "reusablePhysicalConnectionsPerOwner": 1,
                 "drainingConnectionsCountTowardPhysicalBudget": true,
+                "streamReceiveWindowBytes": h2_carriers.stream_receive_window_bytes(),
+                "connectionReceiveWindowBytes": h2_carriers.connection_receive_window_bytes(),
                 "runtimeWorkerThreads": self.tcp_runtime_workers.json(),
                 "scope": "one generation and complete TLS HTTP/2 carrier identity; server SETTINGS controls logical stream concurrency",
             },

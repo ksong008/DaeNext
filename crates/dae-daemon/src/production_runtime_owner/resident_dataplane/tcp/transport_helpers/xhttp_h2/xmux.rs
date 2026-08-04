@@ -272,7 +272,10 @@ pub(super) struct XhttpXmuxUsage {
     accepting_requests: AtomicBool,
     pub(super) unreusable_at: Option<Instant>,
     state_signal: XhttpXmuxStateSignal,
+    release_reaper: OnceLock<XhttpXmuxReleaseReaper>,
 }
+
+type XhttpXmuxReleaseReaper = Arc<dyn Fn() + Send + Sync + 'static>;
 
 pub(crate) struct XhttpXmuxClientLease {
     pub(super) usage: Arc<XhttpXmuxUsage>,
@@ -305,9 +308,20 @@ impl XhttpXmuxClientLease {
         }
     }
 
+    pub(super) fn independent_lease(&self) -> Self {
+        Self::open(Arc::clone(&self.usage))
+    }
+
+    pub(super) fn install_release_reaper(&self, reaper: XhttpXmuxReleaseReaper) {
+        let _ = self.usage.release_reaper.set(reaper);
+    }
+
     pub(super) fn note_request(&self) -> i32 {
         let left = self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1;
         self.usage.state_signal.notify();
+        if left <= 0 {
+            self.usage.retire_physical();
+        }
         left
     }
 
@@ -320,12 +334,16 @@ impl XhttpXmuxRequestHandle {
     pub(super) fn use_for_packet_up_post(&self) -> bool {
         let left = self.usage.left_requests.fetch_sub(1, Ordering::AcqRel) - 1;
         self.usage.state_signal.notify();
-        self.usage.accepting_requests.load(Ordering::Acquire)
+        let reusable = self.usage.accepting_requests.load(Ordering::Acquire)
             && left > 0
             && self
                 .usage
                 .unreusable_at
-                .is_none_or(|deadline| Instant::now() <= deadline)
+                .is_none_or(|deadline| Instant::now() <= deadline);
+        if !reusable {
+            self.usage.retire_physical();
+        }
+        reusable
     }
 
     pub(super) fn retire_physical(&self) {
@@ -338,7 +356,40 @@ impl XhttpXmuxUsage {
         if self.accepting_requests.swap(false, Ordering::AcqRel) {
             self.state_signal.notify();
         }
+        self.reap_if_released();
     }
+
+    fn reap_if_released(&self) {
+        if self.open_usage.load(Ordering::Acquire) <= 0
+            && let Some(reaper) = self.release_reaper.get()
+        {
+            reaper();
+        }
+    }
+
+    fn reap_after_last_lease_if_retiring(&self) {
+        let expired = self
+            .unreusable_at
+            .is_some_and(|deadline| Instant::now() > deadline);
+        if !self.accepting_requests.load(Ordering::Acquire) || expired {
+            self.reap_if_released();
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) fn xhttp_xmux_test_lease(
+    left_requests: i32,
+) -> (XhttpXmuxClientLease, Arc<XhttpXmuxUsage>) {
+    let usage = Arc::new(XhttpXmuxUsage {
+        open_usage: AtomicI32::new(0),
+        left_requests: AtomicI32::new(left_requests),
+        accepting_requests: AtomicBool::new(true),
+        unreusable_at: None,
+        state_signal: XhttpXmuxStateSignal::new(),
+        release_reaper: OnceLock::new(),
+    });
+    (XhttpXmuxClientLease::open(Arc::clone(&usage)), usage)
 }
 
 impl Drop for XhttpXmuxClientLease {
@@ -346,6 +397,9 @@ impl Drop for XhttpXmuxClientLease {
         let previous = self.usage.open_usage.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0, "xHTTP xmux lease accounting underflow");
         self.usage.state_signal.notify();
+        if previous == 1 {
+            self.usage.reap_after_last_lease_if_retiring();
+        }
     }
 }
 
@@ -434,6 +488,7 @@ mod tests {
             accepting_requests: AtomicBool::new(true),
             unreusable_at,
             state_signal: XhttpXmuxStateSignal::new(),
+            release_reaper: OnceLock::new(),
         })
     }
 
@@ -480,7 +535,7 @@ mod tests {
     fn xhttp_xmux_independent_leases_balance_open_usage() {
         let usage = xmux_usage(4, None);
         let first = XhttpXmuxClientLease::open(Arc::clone(&usage));
-        let second = XhttpXmuxClientLease::open(Arc::clone(&usage));
+        let second = first.independent_lease();
 
         assert_eq!(usage.open_usage.load(Ordering::Acquire), 2);
         assert!(!can_release_retiring_owner(
@@ -509,6 +564,23 @@ mod tests {
         assert!(!usage.accepting_requests.load(Ordering::Acquire));
         assert!(!request.use_for_packet_up_post());
         assert_eq!(usage.left_requests.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    fn xhttp_xmux_retired_physical_reaps_after_its_last_lease() {
+        let usage = xmux_usage(1, None);
+        let lease = XhttpXmuxClientLease::open(Arc::clone(&usage));
+        let request = lease.request_handle();
+        let reaped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reaped_by_callback = Arc::clone(&reaped);
+        lease.install_release_reaper(Arc::new(move || {
+            reaped_by_callback.fetch_add(1, Ordering::AcqRel);
+        }));
+
+        assert!(!request.use_for_packet_up_post());
+        assert_eq!(reaped.load(Ordering::Acquire), 0);
+        drop(lease);
+        assert_eq!(reaped.load(Ordering::Acquire), 1);
     }
 
     #[test]

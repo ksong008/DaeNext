@@ -106,8 +106,10 @@ pub(super) async fn open_xhttp_h2_endpoint_sender(
 async fn open_xhttp_h2_sender(
     client: AsyncResidentTlsClient,
 ) -> Result<(h2::client::SendRequest<Bytes>, tokio::task::JoinHandle<()>), String> {
+    let mut h2_builder = h2::client::Builder::new();
+    H2CarrierOwnerResourceProfile::selected().configure_client_builder(&mut h2_builder);
     let (sender, connection) =
-        time::timeout(RESIDENT_CONNECT_TIMEOUT, h2::client::handshake(client))
+        time::timeout(RESIDENT_CONNECT_TIMEOUT, h2_builder.handshake(client))
             .await
             .map_err(|_| "xHTTP HTTP/2 handshake timeout".to_owned())?
             .map_err(|err| format!("xHTTP HTTP/2 client handshake: {err}"))?;
@@ -144,18 +146,6 @@ pub(super) async fn open_xhttp_h2_download_stream(
         ));
     }
     Ok(response.into_body())
-}
-
-pub(super) async fn send_xhttp_h2_packet_up_request(
-    sender: &mut h2::client::SendRequest<Bytes>,
-    endpoint: &impl ResidentXhttpEndpointView,
-    session_id: &str,
-    seq: u64,
-    payload: Bytes,
-) -> Result<(), String> {
-    begin_xhttp_h2_packet_up_request(sender, endpoint, session_id, seq, payload)
-        .await?
-        .await
 }
 
 pub(super) async fn begin_xhttp_h2_packet_up_request(
@@ -195,24 +185,24 @@ pub(super) async fn begin_xhttp_h2_packet_up_request(
     }))
 }
 
-pub(super) async fn refresh_xhttp_h2_packet_up_client_if_needed(
+pub(super) async fn replace_xhttp_h2_packet_up_client(
     binding: &ResidentProxyBinding,
     endpoint: &ResidentXhttpEndpointPlan,
     mptcp: bool,
     sender: &mut h2::client::SendRequest<Bytes>,
     connection_task: &mut Option<tokio::task::JoinHandle<()>>,
+    xmux_lease: &mut Option<XhttpXmuxClientLease>,
     xmux_request: &mut Option<XhttpXmuxRequestHandle>,
 ) -> Result<(), String> {
-    let Some(request) = xmux_request.as_ref() else {
-        return Ok(());
-    };
-    if request.use_for_packet_up_post() {
+    if xmux_request.is_none() {
         return Ok(());
     }
 
     if let Some(task) = connection_task.take() {
         task.abort();
     }
+    xmux_request.take();
+    drop(xmux_lease.take());
     let replacement = open_xhttp_h2_proxy_sender(binding, endpoint, mptcp).await?;
     *sender = replacement.sender;
     *connection_task = replacement.connection_task;
@@ -220,7 +210,7 @@ pub(super) async fn refresh_xhttp_h2_packet_up_client_if_needed(
         .xmux_lease
         .as_ref()
         .map(XhttpXmuxClientLease::request_handle);
-    drop(replacement.xmux_lease);
+    *xmux_lease = replacement.xmux_lease;
     Ok(())
 }
 

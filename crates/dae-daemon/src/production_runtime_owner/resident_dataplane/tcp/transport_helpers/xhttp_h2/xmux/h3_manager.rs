@@ -3,7 +3,7 @@ use super::*;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 pub(super) struct XhttpH3GenerationManagers {
@@ -22,12 +22,16 @@ impl XhttpH3GenerationManagers {
             return json!({
                 "managers": Value::Null,
                 "clients": Value::Null,
+                "reusableClients": Value::Null,
+                "retiringClients": Value::Null,
                 "opening": Value::Null,
                 "leases": Value::Null,
                 "lockedManagers": 1,
             });
         };
         let mut clients = 0_usize;
+        let mut reusable_clients = 0_usize;
+        let mut retiring_clients = 0_usize;
         let mut opening = 0_usize;
         let mut leases = 0_usize;
         let mut locked_managers = 0_usize;
@@ -36,6 +40,13 @@ impl XhttpH3GenerationManagers {
             match manager.manager.try_lock() {
                 Ok(state) => {
                     clients = clients.saturating_add(state.clients.len());
+                    for client in &state.clients {
+                        if state.client_reusable(client) {
+                            reusable_clients = reusable_clients.saturating_add(1);
+                        } else {
+                            retiring_clients = retiring_clients.saturating_add(1);
+                        }
+                    }
                     leases = state.clients.iter().fold(leases, |leases, client| {
                         leases.saturating_add(
                             client
@@ -52,6 +63,8 @@ impl XhttpH3GenerationManagers {
         json!({
             "managers": managers.len(),
             "clients": clients,
+            "reusableClients": reusable_clients,
+            "retiringClients": retiring_clients,
             "opening": opening,
             "leases": leases,
             "lockedManagers": locked_managers,
@@ -101,15 +114,14 @@ impl XhttpXmuxH3Manager {
         }
         self.prune();
 
-        let live_len = self.clients.len();
         let reusable_len = self.reusable_len();
         if reusable_len == 0 {
-            return self.reserve_new_or_wait(live_len);
+            return self.reserve_new_or_wait(reusable_len);
         }
 
         if self
             .connection_capacity
-            .should_fill_preferred(live_len, self.lifecycle.opening())
+            .should_fill_preferred(reusable_len, self.lifecycle.opening())
         {
             return self.reserve_opening();
         }
@@ -131,13 +143,16 @@ impl XhttpXmuxH3Manager {
             .collect::<Vec<_>>();
 
         if candidates.is_empty() {
-            return self.reserve_new_or_wait(live_len);
+            return self.reserve_new_or_wait(reusable_len);
         }
 
         let index = candidates[fastrand::usize(..candidates.len())];
         let client = &mut self.clients[index];
         if client.left_usage > 0 {
             client.left_usage -= 1;
+            if client.left_usage == 0 {
+                client.usage.retire_physical();
+            }
         }
         let selected = XhttpXmuxH3SelectedClient {
             client: client.client.clone(),
@@ -201,6 +216,7 @@ impl XhttpXmuxH3Manager {
             accepting_requests: AtomicBool::new(true),
             unreusable_at,
             state_signal: self.lifecycle.signal(),
+            release_reaper: OnceLock::new(),
         });
         self.clients.push(XhttpXmuxH3ClientEntry {
             client: client.client.clone(),
@@ -297,6 +313,32 @@ impl XhttpXmuxH3Manager {
         }
         closed
     }
+}
+
+fn install_h3_release_reaper(
+    generation: &XhttpXmuxGenerationOwner,
+    manager: &XhttpXmuxManagerHandle<XhttpXmuxH3Manager>,
+    lease: &XhttpXmuxClientLease,
+) {
+    let runtime = generation.runtime.clone();
+    let lifecycle = Arc::downgrade(&manager.lifecycle);
+    let manager = Arc::downgrade(&manager.manager);
+    lease.install_release_reaper(Arc::new(move || {
+        let manager = Weak::clone(&manager);
+        let lifecycle = Weak::clone(&lifecycle);
+        if lifecycle
+            .upgrade()
+            .is_none_or(|lifecycle| lifecycle.is_closing())
+        {
+            return;
+        }
+        runtime.spawn(async move {
+            let Some(manager) = manager.upgrade() else {
+                return;
+            };
+            manager.lock().await.prune();
+        });
+    }));
 }
 
 impl Drop for XhttpXmuxH3Manager {
@@ -439,7 +481,10 @@ where
                 })
                 .await??;
                 let mut state = manager.manager.lock().await;
-                return state.complete_new_client(client.take(), &opening);
+                let selected = state.complete_new_client(client.take(), &opening)?;
+                drop(state);
+                install_h3_release_reaper(&generation, &manager, &selected.lease);
+                return Ok(selected);
             }
             XhttpXmuxH3SelectAction::WaitForState(waiter) => waiter.wait().await,
             XhttpXmuxH3SelectAction::Closed => {

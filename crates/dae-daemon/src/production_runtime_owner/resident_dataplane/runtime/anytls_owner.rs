@@ -23,7 +23,9 @@ use crate::production_runtime_owner::resident_dataplane::client::{
 use crate::production_runtime_owner::resident_dataplane::plan::{
     ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan,
 };
-use crate::production_runtime_owner::resident_dataplane::tcp::read_anytls_frame;
+use crate::production_runtime_owner::resident_dataplane::tcp::{
+    ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, read_anytls_frame,
+};
 
 const ANYTLS_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/anytls-owner/v1";
 
@@ -674,6 +676,36 @@ struct AnyTlsPhysicalPadding {
     metrics: Arc<AnyTlsOwnerMetrics>,
 }
 
+#[derive(Clone)]
+struct AnyTlsPaddingUpdateObserver {
+    key: AnyTlsOwnerKey,
+    instance_id: u64,
+    events: mpsc::Sender<AnyTlsPhysicalEvent>,
+    metrics: Arc<AnyTlsOwnerMetrics>,
+}
+
+impl AnyTlsPaddingUpdateObserver {
+    async fn observe(&self, raw: &[u8]) {
+        match AnyTlsPaddingScheme::parse(raw) {
+            Ok(scheme) => {
+                let _ = self
+                    .events
+                    .send(AnyTlsPhysicalEvent::PaddingUpdated {
+                        key: self.key,
+                        instance_id: self.instance_id,
+                        scheme: Arc::new(scheme),
+                    })
+                    .await;
+            }
+            Err(_) => {
+                self.metrics
+                    .cumulative_padding_update_rejections
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 impl AnyTlsPhysicalPadding {
     fn new(
         scheme: Arc<AnyTlsPaddingScheme>,
@@ -699,35 +731,31 @@ impl AnyTlsPhysicalPadding {
         self.scheme.settings_bytes()
     }
 
-    async fn observe_update(&self, raw: &[u8]) {
-        match AnyTlsPaddingScheme::parse(raw) {
-            Ok(scheme) => {
-                let _ = self
-                    .events
-                    .send(AnyTlsPhysicalEvent::PaddingUpdated {
-                        key: self.key,
-                        instance_id: self.instance_id,
-                        scheme: Arc::new(scheme),
-                    })
-                    .await;
-            }
-            Err(_) => {
-                self.metrics
-                    .cumulative_padding_update_rejections
-                    .fetch_add(1, Ordering::Relaxed);
-            }
+    fn update_observer(&self) -> AnyTlsPaddingUpdateObserver {
+        AnyTlsPaddingUpdateObserver {
+            key: self.key,
+            instance_id: self.instance_id,
+            events: self.events.clone(),
+            metrics: Arc::clone(&self.metrics),
         }
     }
 
-    async fn write_frame(
+    async fn observe_update(&self, raw: &[u8]) {
+        self.update_observer().observe(raw).await;
+    }
+
+    async fn write_frame<W>(
         &mut self,
-        client: &mut AsyncResidentTlsClient,
+        client: &mut W,
         cmd: u8,
         sid: u32,
         data: &[u8],
         label: &str,
         deadline: Option<AbsoluteDeadline>,
-    ) -> Result<(), String> {
+    ) -> Result<(), String>
+    where
+        W: AsyncWrite + Unpin,
+    {
         if data.len() > usize::from(u16::MAX) {
             return Err(format!(
                 "{label}: AnyTLS frame payload exceeds {} bytes",
@@ -738,13 +766,16 @@ impl AnyTlsPhysicalPadding {
         self.write_bytes(client, &frame, label, deadline).await
     }
 
-    async fn write_bytes(
+    async fn write_bytes<W>(
         &mut self,
-        client: &mut AsyncResidentTlsClient,
+        client: &mut W,
         frame: &[u8],
         label: &str,
         deadline: Option<AbsoluteDeadline>,
-    ) -> Result<(), String> {
+    ) -> Result<(), String>
+    where
+        W: AsyncWrite + Unpin,
+    {
         let mut remaining = frame;
         if self.enabled {
             self.packet_counter = self.packet_counter.wrapping_add(1);
@@ -823,21 +854,34 @@ fn append_anytls_waste_frame(output: &mut Vec<u8>, padding_bytes: usize) {
     output.resize(output.len().saturating_add(padding_bytes), 0);
 }
 
-async fn write_anytls_physical_plain(
-    client: &mut AsyncResidentTlsClient,
+async fn write_anytls_physical_plain<W>(
+    client: &mut W,
     payload: &[u8],
     label: &str,
     deadline: Option<AbsoluteDeadline>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    let write = async {
+        client
+            .write_all(payload)
+            .await
+            .map_err(|error| format!("{label}: {error}"))?;
+        client
+            .flush()
+            .await
+            .map_err(|error| format!("flush {label}: {error}"))
+    };
     if let Some(deadline) = deadline {
         let remaining = deadline
             .remaining_at(Instant::now())
             .ok_or_else(|| format!("{label}: absolute deadline elapsed"))?;
-        time::timeout(remaining, client.write_plain_all(payload, label))
+        time::timeout(remaining, write)
             .await
             .map_err(|_| format!("{label}: absolute deadline elapsed"))?
     } else {
-        client.write_plain_all(payload, label).await
+        write.await
     }
 }
 
@@ -1634,92 +1678,141 @@ async fn run_anytls_active_stream(
     resources: AnyTlsOwnerResourceProfile,
     metrics: &AnyTlsOwnerMetrics,
 ) -> Result<(), String> {
-    let mut buffer = vec![0_u8; 16 * 1024];
+    enum WriterCommand {
+        HeartbeatResponse { sid: u32 },
+    }
+
+    let padding_updates = padding.update_observer();
+    let (mut client_read, mut client_write) = tokio::io::split(&mut *client);
+    let (mut logical_read, mut logical_write) = tokio::io::split(&mut *logical);
+    let (writer_commands, mut writer_command_receiver) =
+        mpsc::channel(resources.physical_control_queue_depth().max(1));
+
+    let writer = async {
+        let mut buffer = vec![0_u8; 16 * 1024];
+        loop {
+            tokio::select! {
+                biased;
+                command = writer_command_receiver.recv() => match command {
+                    Some(WriterCommand::HeartbeatResponse { sid }) => {
+                        padding.write_frame(
+                            &mut client_write,
+                            anytls_contract::CMD_HEART_RESPONSE,
+                            sid,
+                            &[],
+                            "write AnyTLS heartbeat response",
+                            None,
+                        ).await?;
+                    }
+                    None => return Ok::<(), String>(()),
+                },
+                read = logical_read.read(&mut buffer) => match read {
+                    Ok(0) => {
+                        padding.write_frame(
+                            &mut client_write,
+                            anytls_contract::CMD_FIN,
+                            sid,
+                            &[],
+                            "write AnyTLS FIN",
+                            None,
+                        ).await?;
+                        return Ok(());
+                    }
+                    Ok(read) => {
+                        padding.write_frame(
+                            &mut client_write,
+                            anytls_contract::CMD_PSH,
+                            sid,
+                            &buffer[..read],
+                            "write AnyTLS logical payload",
+                            None,
+                        ).await?;
+                    }
+                    Err(error) => return Err(format!("read AnyTLS logical stream: {error}")),
+                }
+            }
+        }
+    };
+
+    let reader = async {
+        loop {
+            let frame = read_anytls_frame(&mut client_read).await?;
+            match frame.cmd {
+                anytls_contract::CMD_PSH if frame.sid == sid => {
+                    if !frame.data.is_empty() {
+                        logical_write
+                            .write_all(&frame.data)
+                            .await
+                            .map_err(|error| format!("write AnyTLS logical response: {error}"))?;
+                    }
+                }
+                anytls_contract::CMD_FIN if frame.sid == sid => {
+                    let _ = logical_write.shutdown().await;
+                    return Ok::<(), String>(());
+                }
+                anytls_contract::CMD_HEART_REQUEST => {
+                    writer_commands
+                        .send(WriterCommand::HeartbeatResponse { sid: frame.sid })
+                        .await
+                        .map_err(|_| {
+                            "AnyTLS physical writer closed before heartbeat response".to_owned()
+                        })?;
+                }
+                anytls_contract::CMD_SERVER_SETTINGS => {
+                    observe_anytls_server_settings(&frame.data, metrics);
+                }
+                anytls_contract::CMD_UPDATE_PADDING if !frame.data.is_empty() => {
+                    padding_updates.observe(&frame.data).await;
+                }
+                anytls_contract::CMD_WASTE
+                | anytls_contract::CMD_UPDATE_PADDING
+                | anytls_contract::CMD_HEART_RESPONSE => {}
+                anytls_contract::CMD_PSH | anytls_contract::CMD_FIN
+                    if allocator.is_quarantined(frame.sid, resources) =>
+                {
+                    metrics.late_frames.fetch_add(1, Ordering::Relaxed);
+                }
+                anytls_contract::CMD_ALERT => {
+                    return Err(format!(
+                        "AnyTLS alert frame: sid={} len={}",
+                        frame.sid,
+                        frame.data.len()
+                    ));
+                }
+                anytls_contract::CMD_PSH | anytls_contract::CMD_FIN => {
+                    metrics.unknown_frames.fetch_add(1, Ordering::Relaxed);
+                }
+                anytls_contract::CMD_SYNACK => {}
+                command => return Err(format!("invalid AnyTLS command: {command}")),
+            }
+        }
+    };
+
+    tokio::pin!(writer);
+    tokio::pin!(reader);
+    let close_deadline = time::sleep(ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT);
+    tokio::pin!(close_deadline);
+    let mut writer_done = false;
     loop {
         tokio::select! {
             command = commands.recv() => match command {
-                Some(AnyTlsPhysicalCommand::Close) | None => {
-                    let _ = logical.shutdown().await;
-                    return Err("AnyTLS physical owner is closing".to_owned());
-                }
+                Some(AnyTlsPhysicalCommand::Close) | None =>
+                    return Err("AnyTLS physical owner is closing".to_owned()),
                 Some(AnyTlsPhysicalCommand::Open { response, .. }) => {
                     let _ = response.send(Err(AnyTlsAcquireFailure::Retry(
                         "AnyTLS physical session is already active".to_owned(),
                     )));
                 }
             },
-            read = logical.read(&mut buffer) => match read {
-                Ok(0) => {
-                    let _ = padding.write_frame(
-                        client,
-                        anytls_contract::CMD_FIN,
-                        sid,
-                        &[],
-                        "write AnyTLS FIN",
-                        None,
-                    ).await;
-                    return Ok(());
-                }
-                Ok(read) => {
-                    padding.write_frame(
-                        client,
-                        anytls_contract::CMD_PSH,
-                        sid,
-                        &buffer[..read],
-                        "write AnyTLS logical payload",
-                        None,
-                    ).await?;
-                }
-                Err(error) => return Err(format!("read AnyTLS logical stream: {error}")),
-            },
-            frame = read_anytls_frame(client) => {
-                let frame = frame?;
-                match frame.cmd {
-                    anytls_contract::CMD_PSH if frame.sid == sid => {
-                        if !frame.data.is_empty() {
-                            logical.write_all(&frame.data).await.map_err(|error| {
-                                format!("write AnyTLS logical response: {error}")
-                            })?;
-                        }
-                    }
-                    anytls_contract::CMD_FIN if frame.sid == sid => {
-                        let _ = logical.shutdown().await;
-                        return Ok(());
-                    }
-                    anytls_contract::CMD_HEART_REQUEST => {
-                        padding.write_frame(
-                            client,
-                            anytls_contract::CMD_HEART_RESPONSE,
-                            frame.sid,
-                            &[],
-                            "write AnyTLS heartbeat response",
-                            None,
-                        ).await?;
-                    }
-                    anytls_contract::CMD_SERVER_SETTINGS => {
-                        observe_anytls_server_settings(&frame.data, metrics);
-                    }
-                    anytls_contract::CMD_UPDATE_PADDING if !frame.data.is_empty() => {
-                        padding.observe_update(&frame.data).await;
-                    }
-                    anytls_contract::CMD_WASTE
-                    | anytls_contract::CMD_UPDATE_PADDING
-                    | anytls_contract::CMD_HEART_RESPONSE => {}
-                    anytls_contract::CMD_PSH | anytls_contract::CMD_FIN
-                        if allocator.is_quarantined(frame.sid, resources) =>
-                    {
-                        metrics.late_frames.fetch_add(1, Ordering::Relaxed);
-                    }
-                    anytls_contract::CMD_ALERT => {
-                        return Err(format!("AnyTLS alert frame: sid={} len={}", frame.sid, frame.data.len()));
-                    }
-                    anytls_contract::CMD_PSH | anytls_contract::CMD_FIN => {
-                        metrics.unknown_frames.fetch_add(1, Ordering::Relaxed);
-                    }
-                    anytls_contract::CMD_SYNACK => {}
-                    command => return Err(format!("invalid AnyTLS command: {command}")),
-                }
+            result = &mut writer, if !writer_done => {
+                result?;
+                writer_done = true;
+                close_deadline.as_mut().reset(
+                    time::Instant::now() + ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT,
+                );
             }
+            result = &mut reader => return result,
+            _ = &mut close_deadline, if writer_done => return Ok(()),
         }
     }
 }

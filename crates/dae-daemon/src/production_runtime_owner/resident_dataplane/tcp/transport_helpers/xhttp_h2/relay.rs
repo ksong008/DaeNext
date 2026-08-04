@@ -72,7 +72,7 @@ pub(crate) async fn relay_tcp_over_xhttp_packet_up(
         &progress,
         activity,
         "resident xHTTP relay idle timeout",
-        None,
+        Some(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT),
     )
     .await
 }

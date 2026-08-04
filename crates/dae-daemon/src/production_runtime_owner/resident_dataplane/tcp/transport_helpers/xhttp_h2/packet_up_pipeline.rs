@@ -1,4 +1,6 @@
-use super::client_io::{begin_xhttp_packet_up_request, xhttp_packet_up_client_requires_refresh};
+use super::client_io::{
+    begin_xhttp_packet_up_request, replace_xhttp_packet_up_client, reserve_xhttp_packet_up_post,
+};
 use super::*;
 use futures_util::{FutureExt, StreamExt, stream::FuturesUnordered};
 
@@ -64,8 +66,9 @@ impl XhttpPacketUpPipeline {
         payload: Bytes,
     ) -> Result<(), String> {
         self.poll_ready()?;
-        if xhttp_packet_up_client_requires_refresh(upload) {
+        if reserve_xhttp_packet_up_post(upload) {
             self.finish().await?;
+            replace_xhttp_packet_up_client(upload).await?;
         }
         self.wait_for_capacity().await?;
         self.wait_post_interval().await;
