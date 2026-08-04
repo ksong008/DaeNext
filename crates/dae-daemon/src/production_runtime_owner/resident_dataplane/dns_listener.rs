@@ -15,7 +15,7 @@ use tokio::time;
 
 use super::dns::{
     DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsQueryResult, ResidentDnsTraceSummary,
-    ResidentDnsTransportTrace, build_dns_server_failure_response,
+    ResidentDnsTransportTrace, build_dns_server_failure_response, fit_dns_response_to_udp_request,
     handle_resident_dns_local_trace_async, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
 #[cfg(test)]
@@ -417,7 +417,12 @@ async fn handle_resident_dns_udp_bind_packet_async(
 ) {
     let _udp_guard = ResidentUdpActivityGuard::new(Arc::clone(&metrics));
     metrics.add_upload(request.len());
-    let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request).await;
+    let result = handle_resident_dns_local_trace_async(&dns, local_addr, &request)
+        .await
+        .and_then(|mut result| {
+            result.response = fit_dns_response_to_udp_request(&request, result.response)?;
+            Ok(result)
+        });
     match result {
         Ok(result) => {
             let response = result.response;
