@@ -59,16 +59,16 @@ pub(crate) struct VlessResponseStripper {
 }
 
 impl VlessResponseStripper {
-    pub(in crate::production_runtime_owner::resident_dataplane::tcp) fn consume(
+    pub(in crate::production_runtime_owner::resident_dataplane::tcp) fn consume<'a>(
         &mut self,
-        input: &[u8],
-    ) -> Result<Vec<u8>, String> {
+        input: &'a [u8],
+    ) -> Result<std::borrow::Cow<'a, [u8]>, String> {
         if self.done {
-            return Ok(input.to_vec());
+            return Ok(std::borrow::Cow::Borrowed(input));
         }
         self.header.extend_from_slice(input);
         if self.header.len() < 2 {
-            return Ok(Vec::new());
+            return Ok(std::borrow::Cow::Borrowed(&[]));
         }
         if self.header[0] != VLESS_RESPONSE_VERSION {
             return Err(format!(
@@ -78,9 +78,9 @@ impl VlessResponseStripper {
         }
         let header_len = 2 + self.header[1] as usize;
         if self.header.len() < header_len {
-            return Ok(Vec::new());
+            return Ok(std::borrow::Cow::Borrowed(&[]));
         }
         self.done = true;
-        Ok(self.header.split_off(header_len))
+        Ok(std::borrow::Cow::Owned(self.header.split_off(header_len)))
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use std::io::IoSlice;
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_plain_proxy_tcp_stream_async(
     selection: &TcpProxySelection,
 ) -> Result<TokioTcpStream, String> {
@@ -70,18 +71,55 @@ where
     Ok(payload)
 }
 
+#[cfg(test)]
 pub(super) fn simple_obfs_tls_application_data_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
-    let len = u16::try_from(payload.len()).map_err(|_| {
-        format!(
-            "simple-obfs TLS application data too large: {}",
-            payload.len()
-        )
-    })?;
-    let mut out = Vec::with_capacity(5 + payload.len());
-    out.extend_from_slice(&[0x17, 0x03, 0x03]);
-    out.extend_from_slice(&len.to_be_bytes());
+    let header = simple_obfs_tls_application_data_header(payload.len())?;
+    let mut out = Vec::with_capacity(header.len() + payload.len());
+    out.extend_from_slice(&header);
     out.extend_from_slice(payload);
     Ok(out)
+}
+
+pub(super) fn simple_obfs_tls_application_data_header(
+    payload_len: usize,
+) -> Result<[u8; 5], String> {
+    let len = u16::try_from(payload_len).map_err(|_| {
+        format!(
+            "simple-obfs TLS application data too large: {}",
+            payload_len
+        )
+    })?;
+    let [len_high, len_low] = len.to_be_bytes();
+    Ok([0x17, 0x03, 0x03, len_high, len_low])
+}
+
+pub(super) async fn write_all_vectored_header_payload(
+    stream: &mut (impl AsyncWrite + Unpin),
+    header: &[u8],
+    payload: &[u8],
+) -> std::io::Result<()> {
+    let mut header_offset = 0;
+    let mut payload_offset = 0;
+    while header_offset < header.len() || payload_offset < payload.len() {
+        let written = if header_offset < header.len() {
+            stream
+                .write_vectored(&[
+                    IoSlice::new(&header[header_offset..]),
+                    IoSlice::new(&payload[payload_offset..]),
+                ])
+                .await?
+        } else {
+            stream.write(&payload[payload_offset..]).await?
+        };
+        if written == 0 {
+            return Err(std::io::Error::from(ErrorKind::WriteZero));
+        }
+        let header_remaining = header.len() - header_offset;
+        let header_written = written.min(header_remaining);
+        header_offset += header_written;
+        payload_offset += written - header_written;
+    }
+    Ok(())
 }
 
 pub(super) struct AsyncPrefixTcpReader<'a, S> {

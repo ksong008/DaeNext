@@ -19,6 +19,7 @@ use blake2::{
 use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
 
 const HYSTERIA2_SALAMANDER_HASH_LEN: usize = 32;
+const QUIC_STREAM_RELAY_BUFFER_SIZE: usize = 16 * 1024;
 pub(crate) async fn relay_tcp_over_quic_stream_async(
     inbound: &mut TokioTcpStream,
     send: &mut quinn::SendStream,
@@ -48,7 +49,7 @@ async fn relay_quic_stream_upload(
     progress: ResidentDuplexProgress,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<(), String> {
-    let mut buffer = [0_u8; 16 * 1024];
+    let mut buffer = [0_u8; QUIC_STREAM_RELAY_BUFFER_SIZE];
     loop {
         let read = match inbound.read(&mut buffer).await {
             Ok(0) => {
@@ -65,9 +66,8 @@ async fn relay_quic_stream_upload(
         send.write_all(&buffer[..read])
             .await
             .map_err(|err| format!("write client payload to QUIC stream: {err}"))?;
-        send.flush()
-            .await
-            .map_err(|err| format!("flush QUIC stream: {err}"))?;
+        // Quinn queues stream data from poll_write; its AsyncWrite poll_flush is an immediate
+        // no-op. Avoid constructing and polling that redundant future for every relay chunk.
         progress.record_upload(read);
         metrics.add_upload(read);
     }
@@ -79,7 +79,7 @@ async fn relay_quic_stream_download(
     progress: ResidentDuplexProgress,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<(), String> {
-    let mut buffer = [0_u8; 16 * 1024];
+    let mut buffer = [0_u8; QUIC_STREAM_RELAY_BUFFER_SIZE];
     loop {
         let Some(read) = recv
             .read(&mut buffer)

@@ -1,5 +1,6 @@
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::acquire_vless_mux_logical_stream;
+use std::borrow::Cow;
 pub(crate) async fn handle_proxy_tcp_connection_async(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
@@ -458,37 +459,42 @@ pub(crate) async fn handle_vless_meek_tcp_connection_async(
     let mut inbound_closed = false;
     let mut last_activity = Instant::now();
     let mut empty_poll_count = 0_usize;
+    let mut inbound_buffer = [0_u8; 16 * 1024];
 
     while !stop.load(Ordering::Relaxed) {
-        let body = if let Some(body) = next_body.take() {
-            body
+        let body: Cow<'_, [u8]> = if let Some(body) = next_body.take() {
+            Cow::Owned(body)
         } else {
-            let mut buf = [0_u8; 16 * 1024];
-            match time::timeout(Duration::from_millis(150), inbound.read(&mut buf)).await {
+            match time::timeout(
+                Duration::from_millis(150),
+                inbound.read(&mut inbound_buffer),
+            )
+            .await
+            {
                 Ok(Ok(0)) => {
                     inbound_closed = true;
-                    Vec::new()
+                    Cow::Borrowed(&[])
                 }
                 Ok(Ok(read)) => {
                     stats.client_to_direct += read;
                     metrics.add_upload(read);
                     last_activity = Instant::now();
                     empty_poll_count = 0;
-                    buf[..read].to_vec()
+                    Cow::Borrowed(&inbound_buffer[..read])
                 }
                 Ok(Err(err)) if is_graceful_stream_close_error(&err) => {
                     inbound_closed = true;
-                    Vec::new()
+                    Cow::Borrowed(&[])
                 }
                 Ok(Err(err)) => return Err(format!("read inbound TCP for Meek relay: {err}")),
-                Err(_) => Vec::new(),
+                Err(_) => Cow::Borrowed(&[]),
             }
         };
 
         if body.is_empty() {
             empty_poll_count = empty_poll_count.saturating_add(1);
         }
-        let response = meek_round_trip_async(&selection.proxy, &options, &body).await?;
+        let response = meek_round_trip_async(&selection.proxy, &options, body.as_ref()).await?;
         let response_payload = stripper.consume(&response)?;
         if !response_payload.is_empty() {
             inbound

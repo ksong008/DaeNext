@@ -445,9 +445,9 @@ fn resident_vless_response_stripper_handles_split_header() {
     let mut stripper = VlessResponseStripper::default();
     assert!(stripper.consume(&[0]).unwrap().is_empty());
     assert!(stripper.consume(&[3, b'a']).unwrap().is_empty());
-    assert_eq!(stripper.consume(b"bcOK").unwrap(), b"OK");
+    assert_eq!(&*stripper.consume(b"bcOK").unwrap(), b"OK");
     assert!(stripper.done);
-    assert_eq!(stripper.consume(b"NEXT").unwrap(), b"NEXT");
+    assert_eq!(&*stripper.consume(b"NEXT").unwrap(), b"NEXT");
 }
 
 #[test]
@@ -522,6 +522,26 @@ fn resident_websocket_decoder_accepts_control_frames_between_fragments() {
         decoder.push(&[0x80, 0x03, b't', b'w', b'o']).unwrap(),
         vec![b"onetwo".to_vec()]
     );
+    let responses = decoder.take_control_responses();
+    assert_eq!(responses.len(), 1);
+    assert_eq!(
+        decode_client_websocket_control_frame(&responses[0]),
+        (10, b"ping".to_vec())
+    );
+}
+
+#[test]
+fn resident_websocket_decoder_borrows_complete_messages_and_processes_control_frames() {
+    let mut decoder = WebSocketBinaryFrameDecoder::default();
+    decoder
+        .extend(&[
+            0x82, 0x03, b'o', b'n', b'e', 0x89, 0x04, b'p', b'i', b'n', b'g', 0x82, 0x03, b't',
+            b'w', b'o',
+        ])
+        .unwrap();
+    assert_eq!(decoder.next_message().unwrap(), Some(b"one".as_slice()));
+    assert_eq!(decoder.next_message().unwrap(), Some(b"two".as_slice()));
+    assert_eq!(decoder.next_message().unwrap(), None);
     let responses = decoder.take_control_responses();
     assert_eq!(responses.len(), 1);
     assert_eq!(

@@ -20,7 +20,7 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
     let upload = async move {
         let mut inbound_read = inbound_read;
         let mut client_write = client_write;
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
         loop {
             tokio::select! {
                 biased;
@@ -37,19 +37,17 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
                 read = inbound_read.read(&mut buffer) => {
                     let read = match read {
                         Ok(0) => {
-                            let _ = client_write.shutdown().await;
                             return Ok(());
                         }
                         Ok(read) => read,
                         Err(err) if is_graceful_stream_close_error(&err) => {
-                            let _ = client_write.shutdown().await;
                             return Ok(());
                         }
                         Err(err) => return Err(format!("read inbound TCP: {err}")),
                     };
-                    write_websocket_binary_frame_to_async_stream(
+                    write_websocket_binary_frame_in_place_to_async_stream(
                         &mut client_write,
-                        &buffer[..read],
+                        &mut buffer[..read],
                         "write client payload websocket frame",
                     ).await?;
                     upload_progress.record_upload(read);
@@ -65,7 +63,7 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
         let mut client_read = client_read;
         let mut stripper = VlessResponseStripper::default();
         let mut decoder = WebSocketBinaryFrameDecoder::default();
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
         loop {
             let read = match client_read.read(&mut buffer).await {
                 Ok(0) => {
@@ -88,10 +86,9 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
                     return Err(format!("read websocket TLS plaintext: {err}"));
                 }
             };
-            let frames = decoder.push(&buffer[..read])?;
-            queue_websocket_control_responses(&mut decoder, &control_tx, "VLESS websocket").await?;
-            for frame in frames {
-                let payload = stripper.consume(&frame)?;
+            decoder.extend(&buffer[..read])?;
+            while let Some(frame) = decoder.next_message()? {
+                let payload = stripper.consume(frame)?;
                 download_header_state.store(stripper.done, Ordering::Release);
                 if !payload.is_empty() {
                     inbound_write
@@ -102,6 +99,7 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
                     metrics.add_download(payload.len());
                 }
             }
+            queue_websocket_control_responses(&mut decoder, &control_tx, "VLESS websocket").await?;
             if decoder.is_closed() {
                 let _ = inbound_write.shutdown().await;
                 return Ok(());
@@ -144,7 +142,7 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
     let upload = async move {
         let mut inbound_read = inbound_read;
         let mut client_write = client_write;
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
         loop {
             tokio::select! {
                 biased;
@@ -161,19 +159,17 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
                 read = inbound_read.read(&mut buffer) => {
                     let read = match read {
                         Ok(0) => {
-                            let _ = client_write.shutdown().await;
                             return Ok(());
                         }
                         Ok(read) => read,
                         Err(err) if is_graceful_stream_close_error(&err) => {
-                            let _ = client_write.shutdown().await;
                             return Ok(());
                         }
                         Err(err) => return Err(format!("read inbound TCP for Trojan websocket relay: {err}")),
                     };
-                    write_websocket_binary_frame_to_async_stream(
+                    write_websocket_binary_frame_in_place_to_async_stream(
                         &mut client_write,
-                        &buffer[..read],
+                        &mut buffer[..read],
                         "write client payload websocket frame",
                     ).await?;
                     upload_progress.record_upload(read);
@@ -187,7 +183,7 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
         let mut inbound_write = inbound_write;
         let mut client_read = client_read;
         let mut decoder = WebSocketBinaryFrameDecoder::default();
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
         loop {
             let read = client_read
                 .read(&mut buffer)
@@ -197,16 +193,17 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
                 let _ = inbound_write.shutdown().await;
                 return Ok(());
             }
-            let frames = decoder
-                .push(&buffer[..read])
+            decoder
+                .extend(&buffer[..read])
                 .map_err(|err| format!("decode Trojan websocket frame: {err}"))?;
-            queue_websocket_control_responses(&mut decoder, &control_tx, "Trojan websocket")
-                .await?;
-            for payload in frames {
+            while let Some(payload) = decoder
+                .next_message()
+                .map_err(|err| format!("decode Trojan websocket frame: {err}"))?
+            {
                 if payload.is_empty() {
                     continue;
                 }
-                if let Err(err) = inbound_write.write_all(&payload).await {
+                if let Err(err) = inbound_write.write_all(payload).await {
                     if is_graceful_stream_close_error(&err) {
                         return Ok(());
                     }
@@ -215,6 +212,8 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
                 download_progress.record_download(payload.len());
                 metrics.add_download(payload.len());
             }
+            queue_websocket_control_responses(&mut decoder, &control_tx, "Trojan websocket")
+                .await?;
             if decoder.is_closed() {
                 let _ = inbound_write.shutdown().await;
                 return Ok(());

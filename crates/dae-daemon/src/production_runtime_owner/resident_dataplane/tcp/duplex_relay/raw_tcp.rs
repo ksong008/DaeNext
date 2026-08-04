@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 
 use super::*;
 
-const RAW_TCP_RELAY_BUFFER_SIZE: usize = 16 * 1024;
+const RAW_TCP_RELAY_BUFFER_SIZE: usize = 32 * 1024;
 const RAW_TCP_RELAY_COOPERATIVE_BUDGET: usize = 32;
 
 struct RawTcpRelayDirection {

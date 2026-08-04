@@ -57,7 +57,8 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
     let upload = async move {
         let mut inbound_read = inbound_read;
         let mut client_write = client_write;
-        let mut inbound_buf = [0_u8; 16 * 1024];
+        let mut upload_buffer =
+            Box::new([0_u8; MUX_DATA_FRAME_HEADER_BYTES + SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
         loop {
             tokio::select! {
                 biased;
@@ -71,23 +72,25 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
                         "Shadowsocks v2ray-plugin websocket",
                     ).await?;
                 }
-                inbound_read = inbound_read.read(&mut inbound_buf) => {
+                inbound_read = inbound_read.read(upload_encoder.chunk_payload_buffer(
+                    &mut upload_buffer[MUX_DATA_FRAME_HEADER_BYTES..],
+                )) => {
                     let read = match inbound_read {
                         Ok(0) => {
-                            let end_frame = mux_end_frame(mux_id);
-                            write_websocket_binary_frame_to_async_stream(
+                            let mut end_frame = mux_end_frame(mux_id);
+                            write_websocket_binary_frame_in_place_to_async_stream(
                                 &mut client_write,
-                                &end_frame,
+                                &mut end_frame,
                                 "write Shadowsocks v2ray-plugin mux end frame",
                             ).await?;
                             return Ok(());
                         }
                         Ok(read) => read,
                         Err(err) if is_graceful_stream_close_error(&err) => {
-                            let end_frame = mux_end_frame(mux_id);
-                            write_websocket_binary_frame_to_async_stream(
+                            let mut end_frame = mux_end_frame(mux_id);
+                            write_websocket_binary_frame_in_place_to_async_stream(
                                 &mut client_write,
-                                &end_frame,
+                                &mut end_frame,
                                 "write Shadowsocks v2ray-plugin mux end frame",
                             ).await?;
                             return Ok(());
@@ -96,17 +99,22 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
                             "read inbound TCP for Shadowsocks v2ray-plugin upload: {err}"
                         )),
                     };
-                    let encrypted = upload_encoder
-                        .encrypt_chunk(&inbound_buf[..read])
+                    let encrypted_len = upload_encoder
+                        .encrypt_chunk_in_place(
+                            &mut upload_buffer[MUX_DATA_FRAME_HEADER_BYTES..],
+                            read,
+                        )
                         .map_err(|err| format!(
                             "encrypt Shadowsocks v2ray-plugin upload chunk: {err}"
                         ))?;
-                    let mux_frame = mux_data_frame(mux_id, &encrypted).map_err(|err| {
+                    let mux_header = mux_data_frame_header(mux_id, encrypted_len).map_err(|err| {
                         format!("build Shadowsocks v2ray-plugin upload mux frame: {err}")
                     })?;
-                    write_websocket_binary_frame_to_async_stream(
+                    upload_buffer[..MUX_DATA_FRAME_HEADER_BYTES].copy_from_slice(&mux_header);
+                    let mux_frame_len = MUX_DATA_FRAME_HEADER_BYTES + encrypted_len;
+                    write_websocket_binary_frame_in_place_to_async_stream(
                         &mut client_write,
-                        &mux_frame,
+                        &mut upload_buffer[..mux_frame_len],
                         "write Shadowsocks v2ray-plugin upload frame",
                     ).await?;
                     upload_progress.record_upload(read);
@@ -121,25 +129,32 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
         let mut inbound_write = inbound_write;
         let mut mux_state = AsyncV2rayPluginMuxPayloadState::new(control_tx);
         let mut download_decoder = None;
+        let mut response_buffer = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE]);
         loop {
-            match read_shadowsocks_aead_chunk_from_v2ray_plugin_mux(
+            match read_shadowsocks_aead_chunk_in_place_from_v2ray_plugin_mux(
                 &mut client_read,
                 &mut mux_state,
                 mux_id,
                 &mut download_decoder,
-                cipher,
-                password,
-                salt_len,
+                ShadowsocksAeadResponseParameters {
+                    cipher,
+                    password,
+                    salt_len,
+                },
+                response_buffer.as_mut(),
             )
             .await
             {
-                Ok(plain) => {
-                    if !plain.is_empty() {
-                        inbound_write.write_all(&plain).await.map_err(|err| {
-                            format!("write Shadowsocks v2ray-plugin response to inbound: {err}")
-                        })?;
-                        download_progress.record_download(plain.len());
-                        metrics.add_download(plain.len());
+                Ok(plain_len) => {
+                    if plain_len != 0 {
+                        inbound_write
+                            .write_all(&response_buffer[..plain_len])
+                            .await
+                            .map_err(|err| {
+                                format!("write Shadowsocks v2ray-plugin response to inbound: {err}")
+                            })?;
+                        download_progress.record_download(plain_len);
+                        metrics.add_download(plain_len);
                     }
                 }
                 Err(err) if is_graceful_shadowsocks_response_message(&err) => {
@@ -211,7 +226,7 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
     let upload = async move {
         let mut inbound_read = inbound_read;
         let mut client_write = client_write;
-        let mut inbound_buf = [0_u8; 16 * 1024];
+        let mut upload_buffer = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
         loop {
             tokio::select! {
                 biased;
@@ -225,29 +240,29 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
                         "Trojan inner Shadowsocks websocket",
                     ).await?;
                 }
-                inbound_read = inbound_read.read(&mut inbound_buf) => {
+                inbound_read = inbound_read.read(upload_encoder.chunk_payload_buffer(
+                    upload_buffer.as_mut(),
+                )) => {
                     let read = match inbound_read {
                         Ok(0) => {
-                            let _ = client_write.shutdown().await;
                             return Ok(());
                         }
                         Ok(read) => read,
                         Err(err) if is_graceful_stream_close_error(&err) => {
-                            let _ = client_write.shutdown().await;
                             return Ok(());
                         }
                         Err(err) => return Err(format!(
                             "read inbound TCP for Trojan inner Shadowsocks upload: {err}"
                         )),
                     };
-                    let encrypted = upload_encoder
-                        .encrypt_chunk(&inbound_buf[..read])
+                    let wire_len = upload_encoder
+                        .encrypt_chunk_in_place(upload_buffer.as_mut(), read)
                         .map_err(|err| format!(
                             "encrypt Trojan inner Shadowsocks upload chunk: {err}"
                         ))?;
-                    write_websocket_binary_frame_to_async_stream(
+                    write_websocket_binary_frame_in_place_to_async_stream(
                         &mut client_write,
-                        &encrypted,
+                        &mut upload_buffer[..wire_len],
                         "write Trojan inner Shadowsocks upload frame",
                     ).await?;
                     upload_progress.record_upload(read);
@@ -262,24 +277,31 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
         let mut inbound_write = inbound_write;
         let mut ws_state = AsyncWebSocketPayloadChannelState::new(control_tx);
         let mut download_decoder = None;
+        let mut response_buffer = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE]);
         loop {
-            match read_shadowsocks_aead_chunk_from_websocket_tls(
+            match read_shadowsocks_aead_chunk_in_place_from_websocket_tls(
                 &mut client_read,
                 &mut ws_state,
                 &mut download_decoder,
-                inner_cipher,
-                inner_password,
-                spec.salt_len,
+                ShadowsocksAeadResponseParameters {
+                    cipher: inner_cipher,
+                    password: inner_password,
+                    salt_len: spec.salt_len,
+                },
+                response_buffer.as_mut(),
             )
             .await
             {
-                Ok(plain) => {
-                    if !plain.is_empty() {
-                        inbound_write.write_all(&plain).await.map_err(|err| {
-                            format!("write Trojan inner Shadowsocks response to inbound: {err}")
-                        })?;
-                        download_progress.record_download(plain.len());
-                        metrics.add_download(plain.len());
+                Ok(plain_len) => {
+                    if plain_len != 0 {
+                        inbound_write
+                            .write_all(&response_buffer[..plain_len])
+                            .await
+                            .map_err(|err| {
+                                format!("write Trojan inner Shadowsocks response to inbound: {err}")
+                            })?;
+                        download_progress.record_download(plain_len);
+                        metrics.add_download(plain_len);
                     }
                 }
                 Err(err) if is_graceful_shadowsocks_response_message(&err) => {

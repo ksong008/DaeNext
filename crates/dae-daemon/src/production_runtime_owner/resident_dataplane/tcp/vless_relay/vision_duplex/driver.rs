@@ -119,6 +119,7 @@ pub(super) struct VisionDuplexDriver {
     uplink_write_offset: usize,
     uplink_flush_pending: bool,
     pending_downlink: Vec<u8>,
+    direct_downlink_len: usize,
     downlink_write_offset: usize,
     inbound_buffer: [u8; VISION_RELAY_BUFFER_SIZE],
     proxy_buffer: [u8; VISION_RELAY_BUFFER_SIZE],
@@ -151,6 +152,7 @@ impl VisionDuplexDriver {
             uplink_write_offset: 0,
             uplink_flush_pending: false,
             pending_downlink: Vec::new(),
+            direct_downlink_len: 0,
             downlink_write_offset: 0,
             inbound_buffer: [0; VISION_RELAY_BUFFER_SIZE],
             proxy_buffer: [0; VISION_RELAY_BUFFER_SIZE],
@@ -228,7 +230,7 @@ impl VisionDuplexDriver {
             progressed = true;
         }
 
-        if self.proxy_closed && self.pending_downlink.is_empty() {
+        if self.proxy_closed && self.pending_downlink_len() == 0 {
             match Pin::new(&mut *inbound).poll_shutdown(cx) {
                 Poll::Ready(Ok(())) => {
                     return Poll::Ready(Ok(VisionDriverEvent::Complete));
@@ -245,7 +247,7 @@ impl VisionDuplexDriver {
             }
         }
 
-        if !self.proxy_closed && self.pending_downlink.is_empty() {
+        if !self.proxy_closed && self.pending_downlink_len() == 0 {
             match self.poll_proxy_read(cx, client) {
                 Ok(Poll::Ready(0)) => {
                     self.proxy_closed = true;
@@ -345,7 +347,16 @@ impl VisionDuplexDriver {
             };
             match result {
                 Poll::Ready(Ok(())) => {
-                    self.pending_uplink_writes.pop_front();
+                    let mut completed = self
+                        .pending_uplink_writes
+                        .pop_front()
+                        .expect("completed Vision upload remains queued");
+                    completed.payload.clear();
+                    if self.pending_uplink_input.is_empty()
+                        && completed.payload.capacity() > self.pending_uplink_input.capacity()
+                    {
+                        self.pending_uplink_input = completed.payload;
+                    }
                     self.uplink_write_offset = 0;
                     self.uplink_flush_pending = false;
                     return Ok(true);
@@ -369,18 +380,24 @@ impl VisionDuplexDriver {
     where
         IO: AsyncWrite + Unpin + ?Sized,
     {
-        if self.downlink_write_offset >= self.pending_downlink.len() {
+        let pending_len = self.pending_downlink_len();
+        if self.downlink_write_offset >= pending_len {
             return Ok(false);
         }
-        match Pin::new(inbound).poll_write(cx, &self.pending_downlink[self.downlink_write_offset..])
-        {
+        let pending = if self.direct_downlink_len != 0 {
+            &self.proxy_buffer[..self.direct_downlink_len]
+        } else {
+            &self.pending_downlink
+        };
+        match Pin::new(inbound).poll_write(cx, &pending[self.downlink_write_offset..]) {
             Poll::Ready(Ok(0)) => Err(io::Error::from(io::ErrorKind::WriteZero).to_string()),
             Poll::Ready(Ok(written)) => {
                 self.downlink_write_offset += written;
-                if self.downlink_write_offset == self.pending_downlink.len() {
-                    self.stats.proxy_to_client += self.pending_downlink.len();
-                    metrics.add_download(self.pending_downlink.len());
+                if self.downlink_write_offset == pending_len {
+                    self.stats.proxy_to_client += pending_len;
+                    metrics.add_download(pending_len);
                     self.pending_downlink.clear();
+                    self.direct_downlink_len = 0;
                     self.downlink_write_offset = 0;
                 }
                 Ok(true)
@@ -388,6 +405,7 @@ impl VisionDuplexDriver {
             Poll::Ready(Err(error)) if is_graceful_stream_close_error(&error) => {
                 self.proxy_closed = true;
                 self.pending_downlink.clear();
+                self.direct_downlink_len = 0;
                 self.downlink_write_offset = 0;
                 Ok(true)
             }
@@ -417,13 +435,13 @@ impl VisionDuplexDriver {
                 if read == 0 {
                     return Ok(Poll::Ready(0));
                 }
-                let payload = match self.downlink_state {
+                match self.downlink_state {
                     VisionDownlinkState::Overlay => {
                         let stripped =
                             self.response_stripper.consume(&self.proxy_buffer[..read])?;
                         self.stats.response_header_stripped = self.response_stripper.done;
                         if stripped.is_empty() {
-                            Vec::new()
+                            self.pending_downlink.clear();
                         } else {
                             let payload = self.unpadder.consume(&stripped)?;
                             self.inner_tls.observe_server_payload(&payload)?;
@@ -435,29 +453,36 @@ impl VisionDuplexDriver {
                                 self.stats.vision_downlink_direct_active = true;
                             }
                             self.queue_uplink()?;
-                            payload
+                            self.pending_downlink = payload;
                         }
                     }
-                    VisionDownlinkState::DirectPass => self.proxy_buffer[..read].to_vec(),
-                };
-                self.pending_downlink = payload;
+                    VisionDownlinkState::DirectPass => self.direct_downlink_len = read,
+                }
                 self.downlink_write_offset = 0;
                 Ok(Poll::Ready(read))
             }
             Poll::Ready(Err(error)) => {
-                if self.downlink_state == VisionDownlinkState::Overlay
-                    && is_graceful_vless_response_tls_plain_close_error(&error, &self.stats)
-                {
-                    Ok(Poll::Ready(0))
-                } else if self.downlink_state == VisionDownlinkState::DirectPass
-                    && is_graceful_stream_close_error(&error)
-                {
+                let graceful_close = match self.downlink_state {
+                    VisionDownlinkState::Overlay => {
+                        is_graceful_vless_response_tls_plain_close_error(&error, &self.stats)
+                    }
+                    VisionDownlinkState::DirectPass => is_graceful_stream_close_error(&error),
+                };
+                if graceful_close {
                     Ok(Poll::Ready(0))
                 } else {
                     Err(format!("read VLESS Vision proxy response: {error}"))
                 }
             }
             Poll::Pending => Ok(Poll::Pending),
+        }
+    }
+
+    fn pending_downlink_len(&self) -> usize {
+        if self.direct_downlink_len != 0 {
+            self.direct_downlink_len
+        } else {
+            self.pending_downlink.len()
         }
     }
 
