@@ -89,13 +89,13 @@ impl PendingAllocatorReclaimRequests {
         if self.requested_at.is_none() {
             self.requested_at = Some(requested_at);
         }
-        if let Some(publication_id) = publication_id {
-            if !self.publication_ids.contains(&publication_id) {
-                if self.publication_ids.len() < MAX_PENDING_PUBLICATION_IDS {
-                    self.publication_ids.push(publication_id);
-                } else {
-                    self.publication_overflow = self.publication_overflow.saturating_add(1);
-                }
+        if let Some(publication_id) = publication_id
+            && !self.publication_ids.contains(&publication_id)
+        {
+            if self.publication_ids.len() < MAX_PENDING_PUBLICATION_IDS {
+                self.publication_ids.push(publication_id);
+            } else {
+                self.publication_overflow = self.publication_overflow.saturating_add(1);
             }
         }
     }
