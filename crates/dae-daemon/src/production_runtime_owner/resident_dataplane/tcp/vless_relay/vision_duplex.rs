@@ -15,6 +15,10 @@ pub(super) async fn relay_tcp_over_vless_vision_duplex(
     initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
+    // Only the TCP Vision duplex driver can safely consume record-boundary
+    // handoffs and switch to the raw transport. Vision XUDP uses the same TLS
+    // client but remains framed for the lifetime of the UDP session.
+    client.enable_vision_record_handoff();
     let initial_payload_len = initial_payload.len();
     let mut driver = VisionDuplexDriver::new(user_uuid, initial_payload)
         .map_err(|error| RelayError::new(error, &RelayStats::default()))?;
