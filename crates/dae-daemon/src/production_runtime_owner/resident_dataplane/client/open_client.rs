@@ -44,6 +44,17 @@ async fn open_async_resident_tls_client_over_stream(
     }
 }
 
+pub(super) fn async_resident_tcp_stream_for_proxy(
+    proxy: &ResidentProxyPlan,
+    tcp: TokioTcpStream,
+) -> AsyncResidentTcpStream {
+    if proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision {
+        AsyncResidentTcpStream::new_vision(tcp, proxy.tls_fragment.clone())
+    } else {
+        AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone())
+    }
+}
+
 pub(crate) async fn open_async_xhttp_endpoint_tls_client(
     endpoint: &ResidentXhttpEndpointPlan,
     mark: u32,
@@ -258,7 +269,7 @@ pub(crate) async fn open_async_rustls_resident_tls_client(
     let server_name = ServerName::try_from(proxy.server_name.clone())
         .map_err(|err| format!("invalid VLESS TLS server name {}: {err}", proxy.server_name))?;
     let connector = tokio_rustls::TlsConnector::from(config);
-    let tcp = AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
+    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
         connector.connect(server_name, tcp),
@@ -283,7 +294,7 @@ pub(crate) async fn open_async_reality_rustls_resident_tls_client(
         )
     })?;
     let connector = tokio_rustls::TlsConnector::from(config);
-    let tcp = AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
+    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
         connector.connect(server_name, tcp),
@@ -305,7 +316,7 @@ pub(crate) async fn open_async_boring_resident_tls_client(
         .configure()
         .map_err(|err| format!("configure VLESS BoringSSL client: {err}"))?;
     configure_utls_template_boring_ssl(&mut config, proxy)?;
-    let tcp = AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
+    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
         tokio_boring::connect(config, &proxy.server_name, tcp),

@@ -2,6 +2,7 @@ use super::*;
 use dae_outbound::shared_transport::fragment_tls_write;
 use std::task::{RawWaker, RawWakerVTable, Waker};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Default)]
 struct ReadyWriter {
@@ -244,6 +245,70 @@ async fn async_tls_fragmenting_writer_flushes_incomplete_input_without_loss() {
         .await
         .unwrap();
     assert_eq!(stream.inner.bytes, input);
+}
+
+#[tokio::test]
+async fn tls_record_bounded_reader_does_not_consume_raw_tail() {
+    let (mut writer, reader) = tokio::io::duplex(64);
+    let record = [23, 3, 3, 0, 4, 0xaa, 0xbb, 0xcc, 0xdd];
+    let raw_tail = b"raw-direct-tail";
+    writer.write_all(&record).await.unwrap();
+    writer.write_all(raw_tail).await.unwrap();
+
+    let mut reader = TlsRecordBoundedReader::new(reader);
+    let mut output = [0_u8; 32];
+
+    let header_read = reader.read(&mut output).await.unwrap();
+    assert_eq!(header_read, TLS_RECORD_HEADER_BYTES);
+    assert_eq!(&output[..header_read], &record[..TLS_RECORD_HEADER_BYTES]);
+    assert!(!reader.at_record_boundary());
+
+    let payload_read = reader.read(&mut output[header_read..]).await.unwrap();
+    assert_eq!(payload_read, record.len() - TLS_RECORD_HEADER_BYTES);
+    assert_eq!(
+        &output[header_read..header_read + payload_read],
+        &record[TLS_RECORD_HEADER_BYTES..]
+    );
+    assert!(reader.at_record_boundary());
+
+    let mut blocked = [0_u8; 32];
+    let mut blocked_read = ReadBuf::new(&mut blocked);
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    assert!(
+        Pin::new(&mut reader)
+            .poll_read(&mut cx, &mut blocked_read)
+            .is_pending()
+    );
+    assert!(blocked_read.filled().is_empty());
+
+    let mut recovered_tail = vec![0_u8; raw_tail.len()];
+    reader
+        .inner_mut()
+        .read_exact(&mut recovered_tail)
+        .await
+        .unwrap();
+    assert_eq!(recovered_tail, raw_tail);
+}
+
+#[tokio::test]
+async fn tls_record_bounded_reader_tracks_partial_header_and_payload() {
+    let (mut writer, reader) = tokio::io::duplex(64);
+    let record = [23, 3, 3, 0, 5, 1, 2, 3, 4, 5];
+    writer.write_all(&record).await.unwrap();
+
+    let mut reader = TlsRecordBoundedReader::new(reader);
+    let mut output = [0_u8; 10];
+
+    assert_eq!(reader.read(&mut output[..2]).await.unwrap(), 2);
+    assert!(!reader.at_record_boundary());
+    assert_eq!(reader.read(&mut output[2..5]).await.unwrap(), 3);
+    assert!(!reader.at_record_boundary());
+    assert_eq!(reader.read(&mut output[5..7]).await.unwrap(), 2);
+    assert!(!reader.at_record_boundary());
+    assert_eq!(reader.read(&mut output[7..]).await.unwrap(), 3);
+    assert!(reader.at_record_boundary());
+    assert_eq!(output, record);
 }
 
 #[tokio::test]
