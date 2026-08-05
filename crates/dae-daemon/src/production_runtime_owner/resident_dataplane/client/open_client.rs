@@ -28,7 +28,7 @@ async fn open_async_resident_tls_client_over_stream(
     proxy: &ResidentProxyPlan,
     tcp: TokioTcpStream,
 ) -> Result<AsyncResidentTlsClient, String> {
-    let mut client = match ResidentTlsProvider::from_proxy(proxy)? {
+    match ResidentTlsProvider::from_proxy(proxy)? {
         ResidentTlsProvider::FingerprintAwareBoring => {
             open_async_boring_resident_tls_client(proxy, tcp).await
         }
@@ -41,11 +41,7 @@ async fn open_async_resident_tls_client_over_stream(
         ResidentTlsProvider::StandardRustls => {
             open_async_rustls_resident_tls_client(proxy, tcp).await
         }
-    }?;
-    if proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision {
-        client.enable_vision_record_handoff();
     }
-    Ok(client)
 }
 
 pub(super) fn async_resident_tcp_stream_for_proxy(

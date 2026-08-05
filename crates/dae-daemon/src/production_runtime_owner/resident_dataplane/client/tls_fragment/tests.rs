@@ -346,6 +346,24 @@ async fn tls_record_handoff_gate_requires_explicit_release_for_each_record() {
 }
 
 #[tokio::test]
+async fn tls_record_reader_without_tcp_handoff_gate_allows_xudp_records() {
+    let (mut writer, reader) = tokio::io::duplex(128);
+    let first = [23, 3, 3, 0, 3, 0xaa, 0xbb, 0xcc];
+    let second = [23, 3, 3, 0, 2, 0xdd, 0xee];
+    writer.write_all(&first).await.unwrap();
+    writer.write_all(&second).await.unwrap();
+
+    let mut reader = TlsRecordBoundedReader::new(reader);
+    let mut output = [0_u8; 15];
+    reader.read_exact(&mut output).await.unwrap();
+
+    assert_eq!(&output[..first.len()], first);
+    assert_eq!(&output[first.len()..], second);
+    assert!(reader.at_record_boundary());
+    assert!(!reader.record_handoff_ready());
+}
+
+#[tokio::test]
 async fn tls_record_bounded_reader_tracks_partial_header_and_payload() {
     let (mut writer, reader) = tokio::io::duplex(64);
     let record = [23, 3, 3, 0, 5, 1, 2, 3, 4, 5];
