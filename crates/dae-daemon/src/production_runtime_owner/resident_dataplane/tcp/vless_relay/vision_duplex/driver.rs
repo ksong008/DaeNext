@@ -431,73 +431,76 @@ impl VisionDuplexDriver {
     where
         Proxy: VisionProxyIo + ?Sized,
     {
-        let mut read_buffer = tokio::io::ReadBuf::new(&mut self.proxy_buffer);
-        let result = match self.downlink_state {
-            VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
-                client.poll_vision_plain_read(cx, &mut read_buffer)
-            }
-            VisionDownlinkState::DirectPass => client.poll_vision_raw_read(cx, &mut read_buffer),
-        };
-        match result {
-            Poll::Ready(Ok(())) => {
-                let read = read_buffer.filled().len();
-                if read == 0 {
-                    return Ok(Poll::Ready(0));
+        loop {
+            let mut read_buffer = tokio::io::ReadBuf::new(&mut self.proxy_buffer);
+            let result = match self.downlink_state {
+                VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
+                    client.poll_vision_plain_read(cx, &mut read_buffer)
                 }
-                match self.downlink_state {
-                    VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
-                        let stripped =
-                            self.response_stripper.consume(&self.proxy_buffer[..read])?;
-                        self.stats.response_header_stripped = self.response_stripper.done;
-                        if stripped.is_empty() {
-                            self.pending_downlink.clear();
-                        } else {
-                            let payload = self.unpadder.consume(&stripped)?;
-                            self.inner_tls.observe_server_payload(&payload)?;
-                            self.stats.vision_unpadding_blocks = self.unpadder.completed_blocks;
-                            self.stats.vision_direct_command_seen =
-                                self.unpadder.direct_command_seen;
-                            if self.unpadder.direct_command_seen
-                                && self.downlink_state == VisionDownlinkState::Overlay
-                            {
-                                self.downlink_state = VisionDownlinkState::DirectPending;
-                            }
-                            self.queue_uplink()?;
-                            self.pending_downlink = payload;
-                        }
+                VisionDownlinkState::DirectPass => {
+                    client.poll_vision_raw_read(cx, &mut read_buffer)
+                }
+            };
+            match result {
+                Poll::Ready(Ok(())) => {
+                    let read = read_buffer.filled().len();
+                    if read == 0 {
+                        return Ok(Poll::Ready(0));
                     }
-                    VisionDownlinkState::DirectPass => self.direct_downlink_len = read,
-                }
-                self.downlink_write_offset = 0;
-                Ok(Poll::Ready(read))
-            }
-            Poll::Ready(Err(error)) => {
-                let graceful_close = match self.downlink_state {
-                    VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
-                        is_graceful_vless_response_tls_plain_close_error(&error, &self.stats)
-                    }
-                    VisionDownlinkState::DirectPass => is_graceful_stream_close_error(&error),
-                };
-                if graceful_close {
-                    Ok(Poll::Ready(0))
-                } else {
-                    Err(format!("read VLESS Vision proxy response: {error}"))
-                }
-            }
-            Poll::Pending => {
-                if client.take_vision_outer_record_handoff() {
                     match self.downlink_state {
-                        VisionDownlinkState::Overlay => cx.waker().wake_by_ref(),
-                        VisionDownlinkState::DirectPending => {
+                        VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
+                            let stripped =
+                                self.response_stripper.consume(&self.proxy_buffer[..read])?;
+                            self.stats.response_header_stripped = self.response_stripper.done;
+                            if stripped.is_empty() {
+                                self.pending_downlink.clear();
+                            } else {
+                                let payload = self.unpadder.consume(&stripped)?;
+                                self.inner_tls.observe_server_payload(&payload)?;
+                                self.stats.vision_unpadding_blocks = self.unpadder.completed_blocks;
+                                self.stats.vision_direct_command_seen =
+                                    self.unpadder.direct_command_seen;
+                                if self.unpadder.direct_command_seen
+                                    && self.downlink_state == VisionDownlinkState::Overlay
+                                {
+                                    self.downlink_state = VisionDownlinkState::DirectPending;
+                                }
+                                self.queue_uplink()?;
+                                self.pending_downlink = payload;
+                            }
+                        }
+                        VisionDownlinkState::DirectPass => self.direct_downlink_len = read,
+                    }
+                    self.downlink_write_offset = 0;
+                    return Ok(Poll::Ready(read));
+                }
+                Poll::Ready(Err(error)) => {
+                    let graceful_close = match self.downlink_state {
+                        VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
+                            is_graceful_vless_response_tls_plain_close_error(&error, &self.stats)
+                        }
+                        VisionDownlinkState::DirectPass => is_graceful_stream_close_error(&error),
+                    };
+                    return if graceful_close {
+                        Ok(Poll::Ready(0))
+                    } else {
+                        Err(format!("read VLESS Vision proxy response: {error}"))
+                    };
+                }
+                Poll::Pending => {
+                    if client.take_vision_outer_record_handoff() {
+                        if self.downlink_state == VisionDownlinkState::DirectPending {
                             self.downlink_state = VisionDownlinkState::DirectPass;
                             self.stats.vision_raw_direct_recovered = true;
                             self.stats.vision_downlink_direct_active = true;
-                            cx.waker().wake_by_ref();
                         }
-                        VisionDownlinkState::DirectPass => {}
+                        // Repoll immediately after consuming the one-shot gate.
+                        // This either registers the underlying socket waker or
+                        // makes real I/O progress, without scheduling ourselves.
+                        continue;
                     }
+                    return Ok(Poll::Pending);
                 }
-                Ok(Poll::Pending)
             }
         }
     }
