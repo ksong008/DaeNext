@@ -46,6 +46,8 @@ pub(super) trait VisionProxyIo {
     fn poll_vision_raw_flush(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
     fn poll_vision_raw_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
+
+    fn vision_raw_direct_ready(&self) -> bool;
 }
 
 impl VisionProxyIo for AsyncVlessTlsClient {
@@ -95,6 +97,10 @@ impl VisionProxyIo for AsyncVlessTlsClient {
 
     fn poll_vision_raw_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.poll_raw_shutdown(cx)
+    }
+
+    fn vision_raw_direct_ready(&self) -> bool {
+        AsyncVlessTlsClient::vision_raw_direct_ready(self)
     }
 }
 
@@ -449,7 +455,14 @@ impl VisionDuplexDriver {
                             self.stats.vision_direct_command_seen =
                                 self.unpadder.direct_command_seen;
                             if self.unpadder.direct_command_seen {
+                                if !client.vision_raw_direct_ready() {
+                                    return Err(
+                                        "VLESS Vision direct command arrived before the outer TLS record boundary"
+                                            .to_owned(),
+                                    );
+                                }
                                 self.downlink_state = VisionDownlinkState::DirectPass;
+                                self.stats.vision_raw_direct_recovered = true;
                                 self.stats.vision_downlink_direct_active = true;
                             }
                             self.queue_uplink()?;

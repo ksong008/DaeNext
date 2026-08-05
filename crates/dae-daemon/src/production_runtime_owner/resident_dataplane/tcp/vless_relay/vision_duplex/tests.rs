@@ -88,6 +88,7 @@ struct ScriptedProxy {
     plain_writes: Vec<u8>,
     raw_writes: Vec<u8>,
     raw_read_polls: usize,
+    raw_direct_ready: Option<bool>,
     events: Vec<ProxyPollEvent>,
 }
 
@@ -177,6 +178,10 @@ impl VisionProxyIo for ScriptedProxy {
 
     fn poll_vision_raw_shutdown(&mut self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
+    }
+
+    fn vision_raw_direct_ready(&self) -> bool {
+        self.raw_direct_ready.unwrap_or(true)
     }
 }
 
@@ -285,9 +290,35 @@ fn downlink_direct_switch_does_not_force_uplink_direct() {
     }
 
     assert!(driver.downlink_direct());
+    assert!(driver.stats().vision_raw_direct_recovered);
+    assert!(driver.stats().vision_downlink_direct_active);
     assert_eq!(driver.uplink_state(), VisionUplinkState::Padding);
     assert!(proxy.raw_read_polls > 0);
     assert_eq!(inbound.writes, b"framedraw");
+}
+
+#[test]
+fn downlink_direct_switch_rejects_unfinished_outer_tls_record() {
+    let user_uuid = [0x54; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_DIRECT, b"framed")]),
+        raw_direct_ready: Some(false),
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+
+    let result = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    assert!(matches!(
+        result,
+        Poll::Ready(Err(error))
+            if error.contains("before the outer TLS record boundary")
+    ));
+    assert!(!driver.downlink_direct());
+    assert!(!driver.stats().vision_raw_direct_recovered);
+    assert!(!driver.stats().vision_downlink_direct_active);
+    assert_eq!(proxy.raw_read_polls, 0);
 }
 
 #[test]
