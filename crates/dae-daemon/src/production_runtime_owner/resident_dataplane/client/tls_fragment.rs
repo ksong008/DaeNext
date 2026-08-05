@@ -44,14 +44,6 @@ impl AsyncResidentTcpStream {
         }
     }
 
-    pub(super) fn vision_record_boundary_ready(&self) -> bool {
-        match self {
-            Self::VisionPlain(stream) => stream.at_record_boundary(),
-            Self::VisionFragmenting(stream) => stream.at_record_boundary(),
-            Self::Plain(_) | Self::Fragmenting(_) => false,
-        }
-    }
-
     pub(super) fn vision_record_handoff_ready(&self) -> bool {
         match self {
             Self::VisionPlain(stream) => stream.record_handoff_ready(),

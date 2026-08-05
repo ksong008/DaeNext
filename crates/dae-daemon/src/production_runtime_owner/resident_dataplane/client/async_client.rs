@@ -1,5 +1,18 @@
 use super::*;
 impl AsyncVlessTlsClient {
+    pub(in crate::production_runtime_owner::resident_dataplane) fn enable_vision_record_handoff(
+        &mut self,
+    ) {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                tls.get_mut().0.enable_vision_record_handoff();
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                tls.get_mut().enable_vision_record_handoff();
+            }
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn poll_plain_read(
         &mut self,
         cx: &mut Context<'_>,
@@ -73,15 +86,28 @@ impl AsyncVlessTlsClient {
         Pin::new(raw).poll_read(cx, buf)
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn vision_raw_direct_ready(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn vision_record_handoff_ready(
         &self,
     ) -> bool {
         match &self.engine {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                tls.get_ref().0.vision_record_boundary_ready()
+                tls.get_ref().0.vision_record_handoff_ready()
             }
             AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                tls.get_ref().vision_record_boundary_ready()
+                tls.get_ref().vision_record_handoff_ready()
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn allow_next_vision_record(
+        &mut self,
+    ) {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                tls.get_mut().0.allow_next_vision_record();
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                tls.get_mut().allow_next_vision_record();
             }
         }
     }
