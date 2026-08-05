@@ -88,7 +88,8 @@ struct ScriptedProxy {
     plain_writes: Vec<u8>,
     raw_writes: Vec<u8>,
     raw_read_polls: usize,
-    raw_direct_ready: Option<bool>,
+    outer_record_handoff_ready: bool,
+    allow_next_outer_record_calls: usize,
     events: Vec<ProxyPollEvent>,
 }
 
@@ -180,8 +181,14 @@ impl VisionProxyIo for ScriptedProxy {
         Poll::Ready(Ok(()))
     }
 
-    fn vision_raw_direct_ready(&self) -> bool {
-        self.raw_direct_ready.unwrap_or(true)
+    fn vision_outer_record_handoff_ready(&self) -> bool {
+        self.outer_record_handoff_ready
+    }
+
+    fn allow_next_vision_outer_record(&mut self) {
+        assert!(self.outer_record_handoff_ready);
+        self.outer_record_handoff_ready = false;
+        self.allow_next_outer_record_calls += 1;
     }
 }
 
@@ -281,6 +288,7 @@ fn downlink_direct_switch_does_not_force_uplink_direct() {
     let mut proxy = ScriptedProxy {
         plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_DIRECT, b"framed")]),
         raw_reads: VecDeque::from([b"raw".to_vec()]),
+        outer_record_handoff_ready: true,
         ..ScriptedProxy::default()
     };
     let metrics = ResidentDataplaneMetrics::default();
@@ -298,27 +306,89 @@ fn downlink_direct_switch_does_not_force_uplink_direct() {
 }
 
 #[test]
-fn downlink_direct_switch_rejects_unfinished_outer_tls_record() {
+fn downlink_direct_switch_waits_for_outer_record_handoff() {
     let user_uuid = [0x54; 16];
     let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
     let mut inbound = ScriptedInbound::default();
     let mut proxy = ScriptedProxy {
         plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_DIRECT, b"framed")]),
-        raw_direct_ready: Some(false),
+        raw_reads: VecDeque::from([b"raw".to_vec()]),
         ..ScriptedProxy::default()
     };
     let metrics = ResidentDataplaneMetrics::default();
 
-    let result = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
     assert!(matches!(
-        result,
-        Poll::Ready(Err(error))
-            if error.contains("before the outer TLS record boundary")
+        poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics),
+        Poll::Ready(Ok(VisionDriverEvent::Progress))
     ));
+    let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
     assert!(!driver.downlink_direct());
     assert!(!driver.stats().vision_raw_direct_recovered);
     assert!(!driver.stats().vision_downlink_direct_active);
     assert_eq!(proxy.raw_read_polls, 0);
+    assert_eq!(inbound.writes, b"framed");
+
+    proxy.outer_record_handoff_ready = true;
+    assert!(matches!(
+        poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics),
+        Poll::Pending
+    ));
+    assert!(driver.downlink_direct());
+    assert!(driver.stats().vision_raw_direct_recovered);
+    assert!(driver.stats().vision_downlink_direct_active);
+    assert_eq!(proxy.raw_read_polls, 0);
+
+    for _ in 0..2 {
+        let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    }
+    assert_eq!(inbound.writes, b"framedraw");
+}
+
+#[test]
+fn downlink_direct_switch_drains_buffered_plaintext_before_raw_tail() {
+    let user_uuid = [0x55; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        plain_reads: VecDeque::from([
+            vision_response(user_uuid, VISION_COMMAND_DIRECT, b"framed"),
+            b"buffered".to_vec(),
+        ]),
+        raw_reads: VecDeque::from([b"raw".to_vec()]),
+        outer_record_handoff_ready: true,
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+
+    for _ in 0..8 {
+        let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    }
+
+    assert!(driver.downlink_direct());
+    assert!(driver.stats().vision_raw_direct_recovered);
+    assert!(driver.stats().vision_downlink_direct_active);
+    assert!(proxy.raw_read_polls > 0);
+    assert_eq!(inbound.writes, b"framedbufferedraw");
+}
+
+#[test]
+fn overlay_releases_exactly_one_outer_record_after_plaintext_drains() {
+    let user_uuid = [0x56; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_END, b"first")]),
+        outer_record_handoff_ready: true,
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+
+    let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+    let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
+
+    assert_eq!(inbound.writes, b"first");
+    assert_eq!(proxy.allow_next_outer_record_calls, 1);
+    assert!(!proxy.outer_record_handoff_ready);
 }
 
 #[test]

@@ -11,6 +11,7 @@ pub(super) const VISION_PENDING_UPLINK_LIMIT: usize = TLS_RECORD_MAX_PAYLOAD_LEN
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum VisionDownlinkState {
     Overlay,
+    DirectPending,
     DirectPass,
 }
 
@@ -47,7 +48,9 @@ pub(super) trait VisionProxyIo {
 
     fn poll_vision_raw_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
-    fn vision_raw_direct_ready(&self) -> bool;
+    fn vision_outer_record_handoff_ready(&self) -> bool;
+
+    fn allow_next_vision_outer_record(&mut self);
 }
 
 impl VisionProxyIo for AsyncVlessTlsClient {
@@ -99,8 +102,12 @@ impl VisionProxyIo for AsyncVlessTlsClient {
         self.poll_raw_shutdown(cx)
     }
 
-    fn vision_raw_direct_ready(&self) -> bool {
-        AsyncVlessTlsClient::vision_raw_direct_ready(self)
+    fn vision_outer_record_handoff_ready(&self) -> bool {
+        AsyncVlessTlsClient::vision_record_handoff_ready(self)
+    }
+
+    fn allow_next_vision_outer_record(&mut self) {
+        AsyncVlessTlsClient::allow_next_vision_record(self);
     }
 }
 
@@ -432,7 +439,9 @@ impl VisionDuplexDriver {
     {
         let mut read_buffer = tokio::io::ReadBuf::new(&mut self.proxy_buffer);
         let result = match self.downlink_state {
-            VisionDownlinkState::Overlay => client.poll_vision_plain_read(cx, &mut read_buffer),
+            VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
+                client.poll_vision_plain_read(cx, &mut read_buffer)
+            }
             VisionDownlinkState::DirectPass => client.poll_vision_raw_read(cx, &mut read_buffer),
         };
         match result {
@@ -442,7 +451,7 @@ impl VisionDuplexDriver {
                     return Ok(Poll::Ready(0));
                 }
                 match self.downlink_state {
-                    VisionDownlinkState::Overlay => {
+                    VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
                         let stripped =
                             self.response_stripper.consume(&self.proxy_buffer[..read])?;
                         self.stats.response_header_stripped = self.response_stripper.done;
@@ -454,16 +463,10 @@ impl VisionDuplexDriver {
                             self.stats.vision_unpadding_blocks = self.unpadder.completed_blocks;
                             self.stats.vision_direct_command_seen =
                                 self.unpadder.direct_command_seen;
-                            if self.unpadder.direct_command_seen {
-                                if !client.vision_raw_direct_ready() {
-                                    return Err(
-                                        "VLESS Vision direct command arrived before the outer TLS record boundary"
-                                            .to_owned(),
-                                    );
-                                }
-                                self.downlink_state = VisionDownlinkState::DirectPass;
-                                self.stats.vision_raw_direct_recovered = true;
-                                self.stats.vision_downlink_direct_active = true;
+                            if self.unpadder.direct_command_seen
+                                && self.downlink_state == VisionDownlinkState::Overlay
+                            {
+                                self.downlink_state = VisionDownlinkState::DirectPending;
                             }
                             self.queue_uplink()?;
                             self.pending_downlink = payload;
@@ -476,7 +479,7 @@ impl VisionDuplexDriver {
             }
             Poll::Ready(Err(error)) => {
                 let graceful_close = match self.downlink_state {
-                    VisionDownlinkState::Overlay => {
+                    VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
                         is_graceful_vless_response_tls_plain_close_error(&error, &self.stats)
                     }
                     VisionDownlinkState::DirectPass => is_graceful_stream_close_error(&error),
@@ -487,7 +490,23 @@ impl VisionDuplexDriver {
                     Err(format!("read VLESS Vision proxy response: {error}"))
                 }
             }
-            Poll::Pending => Ok(Poll::Pending),
+            Poll::Pending => {
+                if client.vision_outer_record_handoff_ready() {
+                    match self.downlink_state {
+                        VisionDownlinkState::Overlay => {
+                            client.allow_next_vision_outer_record();
+                        }
+                        VisionDownlinkState::DirectPending => {
+                            self.downlink_state = VisionDownlinkState::DirectPass;
+                            self.stats.vision_raw_direct_recovered = true;
+                            self.stats.vision_downlink_direct_active = true;
+                        }
+                        VisionDownlinkState::DirectPass => {}
+                    }
+                    cx.waker().wake_by_ref();
+                }
+                Ok(Poll::Pending)
+            }
         }
     }
 
