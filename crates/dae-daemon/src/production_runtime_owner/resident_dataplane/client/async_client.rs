@@ -73,6 +73,19 @@ impl AsyncVlessTlsClient {
         Pin::new(raw).poll_read(cx, buf)
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn vision_raw_direct_ready(
+        &self,
+    ) -> bool {
+        match &self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                tls.get_ref().0.vision_record_boundary_ready()
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                tls.get_ref().vision_record_boundary_ready()
+            }
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn poll_raw_write(
         &mut self,
         cx: &mut Context<'_>,
