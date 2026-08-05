@@ -17,7 +17,7 @@ pub(crate) async fn open_async_reality_boring_resident_tls_client(
     config.set_custom_verify_callback(SslVerifyMode::PEER, verify_reality_boring_server_cert);
     configure_reality_boring_ssl(&mut config, reality)?;
 
-    let tcp = AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone());
+    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
         tokio_boring::connect(config, &proxy.server_name, tcp),

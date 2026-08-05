@@ -6,6 +6,8 @@ use std::time::Duration;
 pub(in crate::production_runtime_owner::resident_dataplane) enum AsyncResidentTcpStream {
     Plain(TokioTcpStream),
     Fragmenting(AsyncTlsFragmentingTcpStream),
+    VisionPlain(TlsRecordBoundedReader<TokioTcpStream>),
+    VisionFragmenting(TlsRecordBoundedReader<AsyncTlsFragmentingTcpStream>),
 }
 
 impl AsyncResidentTcpStream {
@@ -16,10 +18,29 @@ impl AsyncResidentTcpStream {
         }
     }
 
+    pub(super) fn new_vision(tcp: TokioTcpStream, options: Option<TlsFragmentOptions>) -> Self {
+        match options {
+            Some(options) => Self::VisionFragmenting(TlsRecordBoundedReader::new(
+                AsyncTlsFragmentingTcpStream::new(tcp, options),
+            )),
+            None => Self::VisionPlain(TlsRecordBoundedReader::new(tcp)),
+        }
+    }
+
     pub(super) fn raw_mut(&mut self) -> &mut TokioTcpStream {
         match self {
             Self::Plain(tcp) => tcp,
             Self::Fragmenting(stream) => stream.raw_mut(),
+            Self::VisionPlain(stream) => stream.inner_mut(),
+            Self::VisionFragmenting(stream) => stream.inner_mut().raw_mut(),
+        }
+    }
+
+    pub(super) fn vision_record_boundary_ready(&self) -> bool {
+        match self {
+            Self::VisionPlain(stream) => stream.at_record_boundary(),
+            Self::VisionFragmenting(stream) => stream.at_record_boundary(),
+            Self::Plain(_) | Self::Fragmenting(_) => false,
         }
     }
 }
@@ -33,6 +54,8 @@ impl AsyncRead for AsyncResidentTcpStream {
         match &mut *self {
             Self::Plain(tcp) => Pin::new(tcp).poll_read(cx, buf),
             Self::Fragmenting(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::VisionPlain(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::VisionFragmenting(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
 }
@@ -46,6 +69,8 @@ impl AsyncWrite for AsyncResidentTcpStream {
         match &mut *self {
             Self::Plain(tcp) => Pin::new(tcp).poll_write(cx, buf),
             Self::Fragmenting(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::VisionPlain(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::VisionFragmenting(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -53,6 +78,8 @@ impl AsyncWrite for AsyncResidentTcpStream {
         match &mut *self {
             Self::Plain(tcp) => Pin::new(tcp).poll_flush(cx),
             Self::Fragmenting(stream) => Pin::new(stream).poll_flush(cx),
+            Self::VisionPlain(stream) => Pin::new(stream).poll_flush(cx),
+            Self::VisionFragmenting(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -60,7 +87,116 @@ impl AsyncWrite for AsyncResidentTcpStream {
         match &mut *self {
             Self::Plain(tcp) => Pin::new(tcp).poll_shutdown(cx),
             Self::Fragmenting(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::VisionPlain(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::VisionFragmenting(stream) => Pin::new(stream).poll_shutdown(cx),
         }
+    }
+}
+
+const TLS_RECORD_HEADER_BYTES: usize = 5;
+
+pub(in crate::production_runtime_owner::resident_dataplane) struct TlsRecordBoundedReader<S> {
+    inner: S,
+    header: [u8; TLS_RECORD_HEADER_BYTES],
+    header_read: usize,
+    payload_remaining: usize,
+    yield_after_record: bool,
+}
+
+impl<S> TlsRecordBoundedReader<S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner,
+            header: [0; TLS_RECORD_HEADER_BYTES],
+            header_read: 0,
+            payload_remaining: 0,
+            yield_after_record: false,
+        }
+    }
+
+    fn inner_mut(&mut self) -> &mut S {
+        &mut self.inner
+    }
+
+    fn at_record_boundary(&self) -> bool {
+        self.header_read == 0 && self.payload_remaining == 0
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for TlsRecordBoundedReader<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        if self.yield_after_record {
+            self.yield_after_record = false;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+
+        let reading_header = self.payload_remaining == 0;
+        let limit = if reading_header {
+            TLS_RECORD_HEADER_BYTES - self.header_read
+        } else {
+            self.payload_remaining
+        };
+        let mut bounded = buf.take(limit);
+        match Pin::new(&mut self.inner).poll_read(cx, &mut bounded) {
+            Poll::Ready(Ok(())) => {
+                let read = bounded.filled().len();
+                if read == 0 {
+                    return Poll::Ready(Ok(()));
+                }
+                if reading_header {
+                    let start = self.header_read;
+                    self.header[start..start + read].copy_from_slice(bounded.filled());
+                }
+                buf.advance(read);
+
+                if reading_header {
+                    self.header_read += read;
+                    if self.header_read == TLS_RECORD_HEADER_BYTES {
+                        self.payload_remaining =
+                            u16::from_be_bytes([self.header[3], self.header[4]]) as usize;
+                        if self.payload_remaining == 0 {
+                            self.header_read = 0;
+                            self.yield_after_record = true;
+                        }
+                    }
+                } else {
+                    self.payload_remaining -= read;
+                    if self.payload_remaining == 0 {
+                        self.header_read = 0;
+                        self.yield_after_record = true;
+                    }
+                }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for TlsRecordBoundedReader<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
