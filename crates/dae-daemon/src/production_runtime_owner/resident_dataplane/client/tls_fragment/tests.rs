@@ -321,7 +321,8 @@ async fn tls_record_handoff_gate_requires_explicit_release_for_each_record() {
         assert!(blocked_read.filled().is_empty());
     }
 
-    reader.allow_next_record();
+    assert!(reader.take_record_handoff());
+    assert!(!reader.take_record_handoff());
     let mut first_output = [0_u8; 8];
     reader.read_exact(&mut first_output).await.unwrap();
     assert_eq!(first_output, first);
@@ -336,7 +337,8 @@ async fn tls_record_handoff_gate_requires_explicit_release_for_each_record() {
     );
     assert!(blocked_read.filled().is_empty());
 
-    reader.allow_next_record();
+    assert!(reader.take_record_handoff());
+    assert!(!reader.take_record_handoff());
     let mut second_output = [0_u8; 7];
     reader.read_exact(&mut second_output).await.unwrap();
     assert_eq!(second_output, second);

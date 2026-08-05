@@ -44,6 +44,14 @@ impl AsyncResidentTcpStream {
         }
     }
 
+    pub(super) fn take_vision_record_handoff(&mut self) -> bool {
+        match self {
+            Self::VisionPlain(stream) => stream.take_record_handoff(),
+            Self::VisionFragmenting(stream) => stream.take_record_handoff(),
+            Self::Plain(_) | Self::Fragmenting(_) => false,
+        }
+    }
+
     pub(super) fn vision_record_handoff_ready(&self) -> bool {
         match self {
             Self::VisionPlain(stream) => stream.record_handoff_ready(),
@@ -149,10 +157,16 @@ impl<S> TlsRecordBoundedReader<S> {
         self.handoff_gate_enabled && self.handoff_blocked && self.at_record_boundary()
     }
 
-    fn allow_next_record(&mut self) {
-        if self.record_handoff_ready() {
+    fn take_record_handoff(&mut self) -> bool {
+        let ready = self.record_handoff_ready();
+        if ready {
             self.handoff_blocked = false;
         }
+        ready
+    }
+
+    fn allow_next_record(&mut self) {
+        let _ = self.take_record_handoff();
     }
 
     fn finish_record(&mut self) {
