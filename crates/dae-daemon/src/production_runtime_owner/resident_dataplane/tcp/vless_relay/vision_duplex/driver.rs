@@ -48,9 +48,7 @@ pub(super) trait VisionProxyIo {
 
     fn poll_vision_raw_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
-    fn vision_outer_record_handoff_ready(&self) -> bool;
-
-    fn allow_next_vision_outer_record(&mut self);
+    fn take_vision_outer_record_handoff(&mut self) -> bool;
 }
 
 impl VisionProxyIo for AsyncVlessTlsClient {
@@ -102,12 +100,8 @@ impl VisionProxyIo for AsyncVlessTlsClient {
         self.poll_raw_shutdown(cx)
     }
 
-    fn vision_outer_record_handoff_ready(&self) -> bool {
-        AsyncVlessTlsClient::vision_record_handoff_ready(self)
-    }
-
-    fn allow_next_vision_outer_record(&mut self) {
-        AsyncVlessTlsClient::allow_next_vision_record(self);
+    fn take_vision_outer_record_handoff(&mut self) -> bool {
+        AsyncVlessTlsClient::take_vision_record_handoff(self)
     }
 }
 
@@ -491,19 +485,17 @@ impl VisionDuplexDriver {
                 }
             }
             Poll::Pending => {
-                if client.vision_outer_record_handoff_ready() {
+                if client.take_vision_outer_record_handoff() {
                     match self.downlink_state {
-                        VisionDownlinkState::Overlay => {
-                            client.allow_next_vision_outer_record();
-                        }
+                        VisionDownlinkState::Overlay => cx.waker().wake_by_ref(),
                         VisionDownlinkState::DirectPending => {
                             self.downlink_state = VisionDownlinkState::DirectPass;
                             self.stats.vision_raw_direct_recovered = true;
                             self.stats.vision_downlink_direct_active = true;
+                            cx.waker().wake_by_ref();
                         }
                         VisionDownlinkState::DirectPass => {}
                     }
-                    cx.waker().wake_by_ref();
                 }
                 Ok(Poll::Pending)
             }

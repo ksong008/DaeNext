@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Wake, Waker};
 
 use crate::production_runtime_owner::resident_dataplane::vision::vision_padding_block;
 use crate::production_runtime_owner::resident_dataplane::{
@@ -89,7 +91,7 @@ struct ScriptedProxy {
     raw_writes: Vec<u8>,
     raw_read_polls: usize,
     outer_record_handoff_ready: bool,
-    allow_next_outer_record_calls: usize,
+    outer_record_handoffs_taken: usize,
     events: Vec<ProxyPollEvent>,
 }
 
@@ -181,14 +183,28 @@ impl VisionProxyIo for ScriptedProxy {
         Poll::Ready(Ok(()))
     }
 
-    fn vision_outer_record_handoff_ready(&self) -> bool {
-        self.outer_record_handoff_ready
+    fn take_vision_outer_record_handoff(&mut self) -> bool {
+        let ready = self.outer_record_handoff_ready;
+        if ready {
+            self.outer_record_handoff_ready = false;
+            self.outer_record_handoffs_taken += 1;
+        }
+        ready
+    }
+}
+
+#[derive(Default)]
+struct WakeCounter {
+    count: AtomicUsize,
+}
+
+impl Wake for WakeCounter {
+    fn wake(self: Arc<Self>) {
+        self.count.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn allow_next_vision_outer_record(&mut self) {
-        assert!(self.outer_record_handoff_ready);
-        self.outer_record_handoff_ready = false;
-        self.allow_next_outer_record_calls += 1;
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.count.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -211,7 +227,17 @@ fn poll_driver(
     proxy: &mut ScriptedProxy,
     metrics: &ResidentDataplaneMetrics,
 ) -> Poll<Result<VisionDriverEvent, String>> {
-    let mut cx = Context::from_waker(Waker::noop());
+    poll_driver_with_waker(driver, inbound, proxy, metrics, Waker::noop())
+}
+
+fn poll_driver_with_waker(
+    driver: &mut VisionDuplexDriver,
+    inbound: &mut ScriptedInbound,
+    proxy: &mut ScriptedProxy,
+    metrics: &ResidentDataplaneMetrics,
+    waker: &Waker,
+) -> Poll<Result<VisionDriverEvent, String>> {
+    let mut cx = Context::from_waker(waker);
     driver.poll_cycle(&mut cx, inbound, proxy, metrics)
 }
 
@@ -387,8 +413,42 @@ fn overlay_releases_exactly_one_outer_record_after_plaintext_drains() {
     let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
 
     assert_eq!(inbound.writes, b"first");
-    assert_eq!(proxy.allow_next_outer_record_calls, 1);
+    assert_eq!(proxy.outer_record_handoffs_taken, 1);
     assert!(!proxy.outer_record_handoff_ready);
+}
+
+#[test]
+fn direct_pass_idle_raw_read_does_not_self_wake() {
+    let user_uuid = [0x57; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_DIRECT, b"framed")]),
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+    let wake_counter = Arc::new(WakeCounter::default());
+    let waker = Waker::from(Arc::clone(&wake_counter));
+
+    let _ = poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker);
+    let _ = poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker);
+    proxy.outer_record_handoff_ready = true;
+
+    assert!(matches!(
+        poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker,),
+        Poll::Pending
+    ));
+    assert!(driver.downlink_direct());
+    assert_eq!(proxy.outer_record_handoffs_taken, 1);
+    assert!(!proxy.outer_record_handoff_ready);
+    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 1);
+
+    assert!(matches!(
+        poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker,),
+        Poll::Pending
+    ));
+    assert_eq!(proxy.raw_read_polls, 1);
+    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 1);
 }
 
 #[test]
