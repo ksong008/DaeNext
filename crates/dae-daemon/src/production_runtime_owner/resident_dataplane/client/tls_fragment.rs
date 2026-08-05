@@ -36,11 +36,35 @@ impl AsyncResidentTcpStream {
         }
     }
 
+    pub(super) fn enable_vision_record_handoff(&mut self) {
+        match self {
+            Self::VisionPlain(stream) => stream.enable_record_handoff(),
+            Self::VisionFragmenting(stream) => stream.enable_record_handoff(),
+            Self::Plain(_) | Self::Fragmenting(_) => {}
+        }
+    }
+
     pub(super) fn vision_record_boundary_ready(&self) -> bool {
         match self {
             Self::VisionPlain(stream) => stream.at_record_boundary(),
             Self::VisionFragmenting(stream) => stream.at_record_boundary(),
             Self::Plain(_) | Self::Fragmenting(_) => false,
+        }
+    }
+
+    pub(super) fn vision_record_handoff_ready(&self) -> bool {
+        match self {
+            Self::VisionPlain(stream) => stream.record_handoff_ready(),
+            Self::VisionFragmenting(stream) => stream.record_handoff_ready(),
+            Self::Plain(_) | Self::Fragmenting(_) => false,
+        }
+    }
+
+    pub(super) fn allow_next_vision_record(&mut self) {
+        match self {
+            Self::VisionPlain(stream) => stream.allow_next_record(),
+            Self::VisionFragmenting(stream) => stream.allow_next_record(),
+            Self::Plain(_) | Self::Fragmenting(_) => {}
         }
     }
 }
@@ -100,7 +124,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct TlsRecordBoun
     header: [u8; TLS_RECORD_HEADER_BYTES],
     header_read: usize,
     payload_remaining: usize,
-    yield_after_record: bool,
+    handoff_gate_enabled: bool,
+    handoff_blocked: bool,
 }
 
 impl<S> TlsRecordBoundedReader<S> {
@@ -110,7 +135,8 @@ impl<S> TlsRecordBoundedReader<S> {
             header: [0; TLS_RECORD_HEADER_BYTES],
             header_read: 0,
             payload_remaining: 0,
-            yield_after_record: false,
+            handoff_gate_enabled: false,
+            handoff_blocked: false,
         }
     }
 
@@ -120,6 +146,28 @@ impl<S> TlsRecordBoundedReader<S> {
 
     fn at_record_boundary(&self) -> bool {
         self.header_read == 0 && self.payload_remaining == 0
+    }
+
+    fn enable_record_handoff(&mut self) {
+        self.handoff_gate_enabled = true;
+        self.handoff_blocked = self.at_record_boundary();
+    }
+
+    fn record_handoff_ready(&self) -> bool {
+        self.handoff_gate_enabled && self.handoff_blocked && self.at_record_boundary()
+    }
+
+    fn allow_next_record(&mut self) {
+        if self.record_handoff_ready() {
+            self.handoff_blocked = false;
+        }
+    }
+
+    fn finish_record(&mut self) {
+        self.header_read = 0;
+        if self.handoff_gate_enabled {
+            self.handoff_blocked = true;
+        }
     }
 }
 
@@ -132,9 +180,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for TlsRecordBoundedReader<S> {
         if buf.remaining() == 0 {
             return Poll::Ready(Ok(()));
         }
-        if self.yield_after_record {
-            self.yield_after_record = false;
-            cx.waker().wake_by_ref();
+        if self.handoff_blocked {
             return Poll::Pending;
         }
 
@@ -163,15 +209,13 @@ impl<S: AsyncRead + Unpin> AsyncRead for TlsRecordBoundedReader<S> {
                         self.payload_remaining =
                             u16::from_be_bytes([self.header[3], self.header[4]]) as usize;
                         if self.payload_remaining == 0 {
-                            self.header_read = 0;
-                            self.yield_after_record = true;
+                            self.finish_record();
                         }
                     }
                 } else {
                     self.payload_remaining -= read;
                     if self.payload_remaining == 0 {
-                        self.header_read = 0;
-                        self.yield_after_record = true;
+                        self.finish_record();
                     }
                 }
                 Poll::Ready(Ok(()))

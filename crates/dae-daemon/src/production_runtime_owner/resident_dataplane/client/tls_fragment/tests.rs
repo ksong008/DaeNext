@@ -270,17 +270,22 @@ async fn tls_record_bounded_reader_does_not_consume_raw_tail() {
         &record[TLS_RECORD_HEADER_BYTES..]
     );
     assert!(reader.at_record_boundary());
+    reader.enable_record_handoff();
+    assert!(reader.record_handoff_ready());
 
     let mut blocked = [0_u8; 32];
-    let mut blocked_read = ReadBuf::new(&mut blocked);
     let waker = noop_waker();
     let mut cx = Context::from_waker(&waker);
-    assert!(
-        Pin::new(&mut reader)
-            .poll_read(&mut cx, &mut blocked_read)
-            .is_pending()
-    );
-    assert!(blocked_read.filled().is_empty());
+    for _ in 0..3 {
+        let mut blocked_read = ReadBuf::new(&mut blocked);
+        assert!(
+            Pin::new(&mut reader)
+                .poll_read(&mut cx, &mut blocked_read)
+                .is_pending()
+        );
+        assert!(blocked_read.filled().is_empty());
+        assert!(reader.record_handoff_ready());
+    }
 
     let mut recovered_tail = vec![0_u8; raw_tail.len()];
     reader
@@ -289,6 +294,53 @@ async fn tls_record_bounded_reader_does_not_consume_raw_tail() {
         .await
         .unwrap();
     assert_eq!(recovered_tail, raw_tail);
+}
+
+#[tokio::test]
+async fn tls_record_handoff_gate_requires_explicit_release_for_each_record() {
+    let (mut writer, reader) = tokio::io::duplex(128);
+    let first = [23, 3, 3, 0, 3, 0xaa, 0xbb, 0xcc];
+    let second = [23, 3, 3, 0, 2, 0xdd, 0xee];
+    writer.write_all(&first).await.unwrap();
+    writer.write_all(&second).await.unwrap();
+
+    let mut reader = TlsRecordBoundedReader::new(reader);
+    reader.enable_record_handoff();
+    assert!(reader.record_handoff_ready());
+
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    for _ in 0..3 {
+        let mut output = [0_u8; 32];
+        let mut blocked_read = ReadBuf::new(&mut output);
+        assert!(
+            Pin::new(&mut reader)
+                .poll_read(&mut cx, &mut blocked_read)
+                .is_pending()
+        );
+        assert!(blocked_read.filled().is_empty());
+    }
+
+    reader.allow_next_record();
+    let mut first_output = [0_u8; 8];
+    reader.read_exact(&mut first_output).await.unwrap();
+    assert_eq!(first_output, first);
+    assert!(reader.record_handoff_ready());
+
+    let mut blocked_output = [0_u8; 32];
+    let mut blocked_read = ReadBuf::new(&mut blocked_output);
+    assert!(
+        Pin::new(&mut reader)
+            .poll_read(&mut cx, &mut blocked_read)
+            .is_pending()
+    );
+    assert!(blocked_read.filled().is_empty());
+
+    reader.allow_next_record();
+    let mut second_output = [0_u8; 7];
+    reader.read_exact(&mut second_output).await.unwrap();
+    assert_eq!(second_output, second);
+    assert!(reader.record_handoff_ready());
 }
 
 #[tokio::test]
