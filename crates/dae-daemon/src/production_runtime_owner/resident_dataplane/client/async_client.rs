@@ -86,28 +86,15 @@ impl AsyncVlessTlsClient {
         Pin::new(raw).poll_read(cx, buf)
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane) fn vision_record_handoff_ready(
-        &self,
-    ) -> bool {
-        match &self.engine {
-            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                tls.get_ref().0.vision_record_handoff_ready()
-            }
-            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                tls.get_ref().vision_record_handoff_ready()
-            }
-        }
-    }
-
-    pub(in crate::production_runtime_owner::resident_dataplane) fn allow_next_vision_record(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn take_vision_record_handoff(
         &mut self,
-    ) {
+    ) -> bool {
         match &mut self.engine {
             AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
-                tls.get_mut().0.allow_next_vision_record();
+                tls.get_mut().0.take_vision_record_handoff()
             }
             AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
-                tls.get_mut().allow_next_vision_record();
+                tls.get_mut().take_vision_record_handoff()
             }
         }
     }
