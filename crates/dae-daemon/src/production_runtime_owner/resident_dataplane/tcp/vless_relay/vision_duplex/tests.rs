@@ -357,12 +357,12 @@ fn downlink_direct_switch_waits_for_outer_record_handoff() {
     proxy.outer_record_handoff_ready = true;
     assert!(matches!(
         poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics),
-        Poll::Pending
+        Poll::Ready(Ok(VisionDriverEvent::Progress))
     ));
     assert!(driver.downlink_direct());
     assert!(driver.stats().vision_raw_direct_recovered);
     assert!(driver.stats().vision_downlink_direct_active);
-    assert_eq!(proxy.raw_read_polls, 0);
+    assert_eq!(proxy.raw_read_polls, 1);
 
     for _ in 0..2 {
         let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
@@ -441,14 +441,35 @@ fn direct_pass_idle_raw_read_does_not_self_wake() {
     assert!(driver.downlink_direct());
     assert_eq!(proxy.outer_record_handoffs_taken, 1);
     assert!(!proxy.outer_record_handoff_ready);
-    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 1);
+    assert_eq!(proxy.raw_read_polls, 1);
+    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 0);
 
     assert!(matches!(
         poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker,),
         Poll::Pending
     ));
-    assert_eq!(proxy.raw_read_polls, 1);
-    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 1);
+    assert_eq!(proxy.raw_read_polls, 2);
+    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn overlay_record_handoff_repolls_socket_without_self_wake() {
+    let mut driver = VisionDuplexDriver::new([0x58; 16], Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        outer_record_handoff_ready: true,
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+    let wake_counter = Arc::new(WakeCounter::default());
+    let waker = Waker::from(Arc::clone(&wake_counter));
+
+    assert!(matches!(
+        poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker),
+        Poll::Pending
+    ));
+    assert_eq!(proxy.outer_record_handoffs_taken, 1);
+    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 0);
 }
 
 #[test]
