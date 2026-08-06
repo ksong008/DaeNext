@@ -344,6 +344,12 @@ async fn run_udp_reply_actor(
         socket_idle_timeout,
     );
     eviction.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    // Keep the bounded batch container owned by the reply actor.  The old
+    // loop allocated a fresh Vec for every receive wakeup even though the
+    // batch limit is fixed by the runtime profile.  Reusing this storage
+    // removes allocator traffic from every protocol's UDP reply path without
+    // changing queue bounds or sendmmsg admission.
+    let mut requests = Vec::with_capacity(send_batch_limit.clamp(1, 32));
     loop {
         tokio::select! {
             biased;
@@ -358,7 +364,6 @@ async fn run_udp_reply_actor(
                 let Some(request) = request else {
                     break;
                 };
-                let mut requests = Vec::with_capacity(send_batch_limit.clamp(1, 32));
                 requests.push(request);
                 if !cfg!(feature = "test-scalar-udp-send") {
                     while requests.len() < send_batch_limit.max(1) {
@@ -373,7 +378,7 @@ async fn run_udp_reply_actor(
                 } else {
                     vec![send_udp_reply(&mut cache, &metrics, &requests[0]).await]
                 };
-                for (request, result) in requests.into_iter().zip(results) {
+                for (request, result) in requests.drain(..).zip(results) {
                     if result.is_err() {
                         metrics.udp_reply_failed();
                     } else if request.download_bytes_on_success > 0 {
