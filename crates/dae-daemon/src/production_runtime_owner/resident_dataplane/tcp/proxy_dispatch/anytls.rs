@@ -1,4 +1,5 @@
 use super::*;
+use bytes::BytesMut;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_anytls_tls_tcp_connection_async(
     inbound: &mut TokioTcpStream,
@@ -188,6 +189,41 @@ pub(crate) async fn read_anytls_frame(
         sid: u32::from_be_bytes([header[1], header[2], header[3], header[4]]),
         data,
     })
+}
+
+/// Read one AnyTLS frame while reusing the caller's bounded payload buffer.
+/// The active physical owner receives a continuous stream of frames; keeping
+/// this allocation across iterations removes one Vec allocation/copy lifetime
+/// per frame without changing the frame header or payload contract.
+pub(crate) async fn read_anytls_frame_into(
+    client: &mut (impl AsyncRead + Unpin),
+    data: &mut BytesMut,
+) -> Result<(u8, u32), String> {
+    let mut header = [0_u8; anytls_contract::HEADER_OVERHEAD_SIZE];
+    read_resident_tls_plain_exact(client, &mut header, "read AnyTLS frame header").await?;
+    let len = u16::from_be_bytes([header[5], header[6]]) as usize;
+    data.clear();
+    data.reserve(len);
+    if len != 0 {
+        // `take` preserves the next frame boundary even when the reusable
+        // BytesMut has more spare capacity than this frame.  `read_buf` writes
+        // into uninitialized spare capacity, avoiding a zero-fill pass before
+        // TLS overwrites the complete payload.
+        let mut limited = client.take(len as u64);
+        while data.len() < len {
+            let read = time::timeout(RESIDENT_TCP_IDLE_TIMEOUT, limited.read_buf(data))
+                .await
+                .map_err(|_| "read AnyTLS frame data: timeout".to_owned())?
+                .map_err(|err| format!("read AnyTLS frame data: {err}"))?;
+            if read == 0 {
+                return Err("read AnyTLS frame data: early eof".to_owned());
+            }
+        }
+    }
+    Ok((
+        header[0],
+        u32::from_be_bytes([header[1], header[2], header[3], header[4]]),
+    ))
 }
 
 pub(crate) async fn read_resident_tls_plain_exact(
