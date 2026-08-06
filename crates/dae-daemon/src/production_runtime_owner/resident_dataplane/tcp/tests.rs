@@ -451,6 +451,42 @@ fn resident_vless_response_stripper_handles_split_header() {
 }
 
 #[test]
+fn resident_vless_response_stripper_borrows_payload_after_coalesced_header() {
+    let mut stripper = VlessResponseStripper::default();
+    let response = [VLESS_RESPONSE_VERSION, 0, b'o', b'k'];
+    let payload = stripper.consume(&response).unwrap();
+    assert!(matches!(
+        &payload,
+        std::borrow::Cow::Borrowed(bytes) if *bytes == b"ok"
+    ));
+    assert!(stripper.done);
+    assert!(stripper.header.is_empty());
+}
+
+#[tokio::test]
+async fn resident_anytls_reused_frame_buffer_keeps_back_to_back_boundaries() {
+    let first =
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 7, b"first");
+    let second =
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 9, b"second");
+    let (mut writer, mut reader) = tokio::io::duplex(first.len() + second.len() + 1);
+    writer.write_all(&first).await.unwrap();
+    writer.write_all(&second).await.unwrap();
+
+    let mut data = bytes::BytesMut::with_capacity(16 * 1024);
+    let (cmd, sid) = read_anytls_frame_into(&mut reader, &mut data)
+        .await
+        .unwrap();
+    assert_eq!((cmd, sid), (dae_outbound::anytls::contract::CMD_PSH, 7));
+    assert_eq!(&data[..], b"first");
+    let (cmd, sid) = read_anytls_frame_into(&mut reader, &mut data)
+        .await
+        .unwrap();
+    assert_eq!((cmd, sid), (dae_outbound::anytls::contract::CMD_PSH, 9));
+    assert_eq!(&data[..], b"second");
+}
+
+#[test]
 fn resident_websocket_decoder_treats_close_frame_as_eof() {
     let mut decoder = WebSocketBinaryFrameDecoder::default();
     let frames = decoder

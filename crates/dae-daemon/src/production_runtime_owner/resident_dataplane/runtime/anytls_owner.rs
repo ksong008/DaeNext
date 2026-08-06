@@ -6,6 +6,7 @@ use std::task::{Context, Poll};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use bytes::BytesMut;
 use dae_outbound::anytls::{AnyTlsPaddingScheme, contract as anytls_contract, link as anytls_link};
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
 use serde_json::{Value, json};
@@ -24,7 +25,7 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
     ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::{
-    ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, read_anytls_frame,
+    ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, read_anytls_frame, read_anytls_frame_into,
 };
 
 const ANYTLS_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/anytls-owner/v1";
@@ -670,6 +671,7 @@ struct AnyTlsPhysicalPadding {
     enabled: bool,
     sampled_sizes: Vec<i32>,
     scratch: Vec<u8>,
+    frame: Vec<u8>,
     key: AnyTlsOwnerKey,
     instance_id: u64,
     events: mpsc::Sender<AnyTlsPhysicalEvent>,
@@ -720,6 +722,7 @@ impl AnyTlsPhysicalPadding {
             enabled: true,
             sampled_sizes: Vec::new(),
             scratch: Vec::new(),
+            frame: Vec::new(),
             key,
             instance_id,
             events,
@@ -762,8 +765,20 @@ impl AnyTlsPhysicalPadding {
                 u16::MAX
             ));
         }
-        let frame = anytls_link::frame(cmd, sid, data);
-        self.write_bytes(client, &frame, label, deadline).await
+        // Keep the frame allocation on the physical owner.  AnyTLS payloads
+        // are already bounded by the relay buffer; allocating a fresh Vec
+        // for every PSH/FIN/heartbeat frame needlessly puts that hot path on
+        // the allocator while preserving no protocol state.
+        let mut frame = std::mem::take(&mut self.frame);
+        frame.clear();
+        frame.reserve(anytls_contract::HEADER_OVERHEAD_SIZE + data.len());
+        frame.push(cmd);
+        frame.extend_from_slice(&sid.to_be_bytes());
+        frame.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        frame.extend_from_slice(data);
+        let result = self.write_bytes(client, &frame, label, deadline).await;
+        self.frame = frame;
+        result
     }
 
     async fn write_bytes<W>(
@@ -1735,48 +1750,50 @@ async fn run_anytls_active_stream(
     };
 
     let reader = async {
+        let mut frame_data = BytesMut::with_capacity(16 * 1024);
         loop {
-            let frame = read_anytls_frame(&mut client_read).await?;
-            match frame.cmd {
-                anytls_contract::CMD_PSH if frame.sid == sid => {
-                    if !frame.data.is_empty() {
+            let (cmd, frame_sid) =
+                read_anytls_frame_into(&mut client_read, &mut frame_data).await?;
+            match cmd {
+                anytls_contract::CMD_PSH if frame_sid == sid => {
+                    if !frame_data.is_empty() {
                         logical_write
-                            .write_all(&frame.data)
+                            .write_all(&frame_data)
                             .await
                             .map_err(|error| format!("write AnyTLS logical response: {error}"))?;
                     }
                 }
-                anytls_contract::CMD_FIN if frame.sid == sid => {
+                anytls_contract::CMD_FIN if frame_sid == sid => {
                     let _ = logical_write.shutdown().await;
                     return Ok::<(), String>(());
                 }
                 anytls_contract::CMD_HEART_REQUEST => {
                     writer_commands
-                        .send(WriterCommand::HeartbeatResponse { sid: frame.sid })
+                        .send(WriterCommand::HeartbeatResponse { sid: frame_sid })
                         .await
                         .map_err(|_| {
                             "AnyTLS physical writer closed before heartbeat response".to_owned()
                         })?;
                 }
                 anytls_contract::CMD_SERVER_SETTINGS => {
-                    observe_anytls_server_settings(&frame.data, metrics);
+                    observe_anytls_server_settings(&frame_data, metrics);
                 }
-                anytls_contract::CMD_UPDATE_PADDING if !frame.data.is_empty() => {
-                    padding_updates.observe(&frame.data).await;
+                anytls_contract::CMD_UPDATE_PADDING if !frame_data.is_empty() => {
+                    padding_updates.observe(&frame_data).await;
                 }
                 anytls_contract::CMD_WASTE
                 | anytls_contract::CMD_UPDATE_PADDING
                 | anytls_contract::CMD_HEART_RESPONSE => {}
                 anytls_contract::CMD_PSH | anytls_contract::CMD_FIN
-                    if allocator.is_quarantined(frame.sid, resources) =>
+                    if allocator.is_quarantined(frame_sid, resources) =>
                 {
                     metrics.late_frames.fetch_add(1, Ordering::Relaxed);
                 }
                 anytls_contract::CMD_ALERT => {
                     return Err(format!(
                         "AnyTLS alert frame: sid={} len={}",
-                        frame.sid,
-                        frame.data.len()
+                        frame_sid,
+                        frame_data.len()
                     ));
                 }
                 anytls_contract::CMD_PSH | anytls_contract::CMD_FIN => {
