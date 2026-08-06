@@ -98,7 +98,7 @@ pub(in crate::daed_product) fn apply_runtime_generation(
             return Err(err);
         }
     };
-    let snapshot = match runtime.snapshot_for_apply() {
+    let snapshot = match runtime.snapshot_for_apply(&prepared.runtime_candidate) {
         Ok(snapshot) => snapshot,
         Err(err) => {
             record_apply_failure(

@@ -1,7 +1,8 @@
 use super::*;
 use crate::allocator::{
-    AllocatorReclaimRequestBatch, allocator_pending_reclaim_reason,
-    allocator_pending_reclaim_requests, allocator_take_reclaim_requests,
+    AllocatorReclaimRequestBatch, allocator_pending_publication_reclaim,
+    allocator_pending_reclaim_is_only, allocator_pending_reclaim_requests,
+    allocator_take_reclaim_requests,
 };
 
 #[path = "idle_reclaim/adaptive.rs"]
@@ -416,7 +417,7 @@ fn record_idle_reclaim_evaluation(report: &Value) {
         Some("skipped") => {
             ALLOCATOR_IDLE_RECLAIM_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
-        Some("merged_pending" | "subsumed") => {
+        Some("merged_pending" | "subsumed" | "partial_retry_pending") => {
             ALLOCATOR_IDLE_RECLAIM_MERGED_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
         Some("failed") | None => {
@@ -431,7 +432,10 @@ fn evaluate_allocator_idle_reclaim(
     policy: AllocatorIdleReclaimPolicy,
     admit_deferred_requests: bool,
 ) -> Value {
-    if !policy.enabled {
+    let deferred_waiting = allocator_pending_reclaim_requests();
+    let deferred_pending = admit_deferred_requests && deferred_waiting;
+    let publication_reclaim_pending = deferred_pending && allocator_pending_publication_reclaim();
+    if !policy.enabled && !publication_reclaim_pending {
         reset_idle_reclaim_observation();
         clear_cgroup_reclaim_pressure_latch();
         let deferred = if admit_deferred_requests {
@@ -447,10 +451,8 @@ fn evaluate_allocator_idle_reclaim(
     }
 
     let now = Instant::now();
-    let deferred_waiting = allocator_pending_reclaim_requests();
-    let deferred_pending = admit_deferred_requests && deferred_waiting;
-    let retired_generation_release_pending = deferred_pending
-        && allocator_pending_reclaim_reason(AllocatorReclaimReason::RetiredGenerationReleased);
+    let retired_generation_release_only = deferred_pending
+        && allocator_pending_reclaim_is_only(AllocatorReclaimReason::RetiredGenerationReleased);
     let cgroup_pressure = observe_cgroup_reclaim_pressure();
     let busy_count = allocator_reclaim_busy_count();
     let busy_completion_count = allocator_reclaim_busy_completion_count();
@@ -550,7 +552,11 @@ fn evaluate_allocator_idle_reclaim(
     }
     let low_traffic =
         idle_reclaim_low_traffic_window(now, traffic_rate, policy.low_traffic_duration);
-    let known_heavy_task_finished = deferred_pending && !retired_generation_release_pending;
+    // A pure retired-generation notification may be emitted by ordinary flow/session reaping
+    // and therefore still observes the low-traffic window. If it is merged with a completed
+    // reload (or any other explicit reclaim request), it must not suppress that request and
+    // leave a publication-scoped purge pending indefinitely.
+    let known_heavy_task_finished = deferred_pending && !retired_generation_release_only;
     if !known_heavy_task_finished && !cgroup_pressure.level.is_urgent() && !low_traffic.ready {
         return json!({
             "status": "skipped",
@@ -577,7 +583,9 @@ fn evaluate_allocator_idle_reclaim(
         } else {
             adaptive_min_interval
         };
-    if let Some(wait_remaining) = idle_reclaim_wait_remaining(now, effective_min_interval) {
+    if !publication_reclaim_pending
+        && let Some(wait_remaining) = idle_reclaim_wait_remaining(now, effective_min_interval)
+    {
         return json!({
             "status": "skipped",
             "reason": "cooldown",
@@ -607,7 +615,11 @@ fn evaluate_allocator_idle_reclaim(
         stats.allocated,
         ALLOCATOR_IDLE_RECLAIM_POST_BURST_QUIET,
     );
-    if post_burst && !post_burst_quiet.ready && !cgroup_pressure.level.is_urgent() {
+    if post_burst
+        && !post_burst_quiet.ready
+        && !cgroup_pressure.level.is_urgent()
+        && !publication_reclaim_pending
+    {
         return json!({
             "status": "skipped",
             "state": "cooling",
@@ -627,7 +639,7 @@ fn evaluate_allocator_idle_reclaim(
         cgroup_pressure.level,
         post_burst,
     );
-    if pressure < effective_pressure_threshold {
+    if pressure < effective_pressure_threshold && !publication_reclaim_pending {
         let deferred = if deferred_pending {
             let batch = allocator_take_reclaim_requests();
             allocator_record_trailing_reclaim_evaluation();
@@ -675,10 +687,15 @@ fn evaluate_allocator_idle_reclaim(
     let reclaim_status = reclaim.get("status").and_then(Value::as_str);
     let merged_pending = reclaim_status == Some("merged_pending");
     let reclaim_executed = matches!(reclaim_status, Some("pass" | "partial"));
-    if !reclaim_executed {
+    let publication_reclaim_satisfied =
+        allocator_publication_reclaim_satisfied(publication_reclaim_pending, reclaim_status);
+    if !reclaim_executed || !publication_reclaim_satisfied {
         allocator_restore_reclaim_requests(&deferred);
-    } else {
-        allocator_record_publication_reclaim(&deferred);
+    }
+    if reclaim_executed {
+        if publication_reclaim_satisfied {
+            allocator_record_publication_reclaim(&deferred);
+        }
         record_idle_reclaim_attempt(now);
         reset_idle_reclaim_allocated_high_water(stats.allocated);
         clear_cgroup_reclaim_pressure_latch();
@@ -687,6 +704,8 @@ fn evaluate_allocator_idle_reclaim(
     json!({
         "status": if merged_pending {
             "merged_pending"
+        } else if reclaim_executed && !publication_reclaim_satisfied {
+            "partial_retry_pending"
         } else if reclaim_executed {
             "reclaimed"
         } else {
@@ -714,6 +733,13 @@ fn evaluate_allocator_idle_reclaim(
         "adaptive": adaptive,
         "reclaim": reclaim,
     })
+}
+
+fn allocator_publication_reclaim_satisfied(
+    publication_reclaim_pending: bool,
+    reclaim_status: Option<&str>,
+) -> bool {
+    !publication_reclaim_pending || reclaim_status == Some("pass")
 }
 
 fn deferred_reclaim_evaluation_due(
@@ -1240,6 +1266,20 @@ mod tests {
             false,
         ));
         assert_eq!(deadline, None);
+    }
+
+    #[test]
+    fn publication_reclaim_requires_a_complete_worker_cache_flush() {
+        assert!(allocator_publication_reclaim_satisfied(
+            false,
+            Some("partial")
+        ));
+        assert!(allocator_publication_reclaim_satisfied(true, Some("pass")));
+        assert!(!allocator_publication_reclaim_satisfied(
+            true,
+            Some("partial")
+        ));
+        assert!(!allocator_publication_reclaim_satisfied(true, None));
     }
 
     #[test]

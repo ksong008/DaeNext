@@ -31,12 +31,13 @@ pub(crate) use self::control_plane::{
 mod requests;
 pub(crate) use self::requests::{
     AllocatorReclaimRequestBatch, AllocatorReclaimScope, allocator_notify_reclaim_monitor,
-    allocator_pending_reclaim_reason, allocator_pending_reclaim_requests,
-    allocator_pending_reclaim_scope, allocator_reclaim_request_wake_epoch,
-    allocator_record_publication_reclaim, allocator_record_trailing_reclaim_evaluation,
-    allocator_request_control_plane_reclaim, allocator_request_reclaim,
-    allocator_request_reclaim_for_publication, allocator_restore_reclaim_requests,
-    allocator_take_reclaim_requests, allocator_wait_for_reclaim_request_since,
+    allocator_pending_publication_reclaim, allocator_pending_reclaim_is_only,
+    allocator_pending_reclaim_requests, allocator_pending_reclaim_scope,
+    allocator_reclaim_request_wake_epoch, allocator_record_publication_reclaim,
+    allocator_record_trailing_reclaim_evaluation, allocator_request_control_plane_reclaim,
+    allocator_request_reclaim, allocator_request_reclaim_for_publication,
+    allocator_restore_reclaim_requests, allocator_take_reclaim_requests,
+    allocator_wait_for_reclaim_request_since,
 };
 
 #[cfg(not(feature = "allocator-jemalloc"))]
@@ -61,6 +62,8 @@ pub enum AllocatorReclaimReason {
     ManualLatencyProbe,
     GroupHealthProbe,
     GeodataUpdate,
+    SubscriptionRefresh,
+    LargeControlCompleted,
     RetiredGenerationReleased,
     ControlPlaneIdle,
 }
@@ -76,6 +79,8 @@ impl AllocatorReclaimReason {
             Self::ManualLatencyProbe => "manual_latency_probe",
             Self::GroupHealthProbe => "group_health_probe",
             Self::GeodataUpdate => "geodata_update",
+            Self::SubscriptionRefresh => "subscription_refresh",
+            Self::LargeControlCompleted => "large_control_completed",
             Self::RetiredGenerationReleased => "retired_generation_released",
             Self::ControlPlaneIdle => "control_plane_idle",
         }
@@ -167,6 +172,8 @@ static IDLE_MEMORY_PRESSURE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static MANUAL_LATENCY_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static GROUP_HEALTH_PROBE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static GEODATA_UPDATE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIPTION_REFRESH_RECLAIMS: AtomicU64 = AtomicU64::new(0);
+static LARGE_CONTROL_COMPLETED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static RETIRED_GENERATION_RELEASED_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static CONTROL_PLANE_IDLE_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_RECLAIMS: AtomicU64 = AtomicU64::new(0);
@@ -379,6 +386,8 @@ pub fn allocator_reclaim_snapshot_json() -> Value {
             "manual_latency_probe": MANUAL_LATENCY_PROBE_RECLAIMS.load(Ordering::Relaxed),
             "group_health_probe": GROUP_HEALTH_PROBE_RECLAIMS.load(Ordering::Relaxed),
             "geodata_update": GEODATA_UPDATE_RECLAIMS.load(Ordering::Relaxed),
+            "subscription_refresh": SUBSCRIPTION_REFRESH_RECLAIMS.load(Ordering::Relaxed),
+            "large_control_completed": LARGE_CONTROL_COMPLETED_RECLAIMS.load(Ordering::Relaxed),
             "retired_generation_released": RETIRED_GENERATION_RELEASED_RECLAIMS.load(Ordering::Relaxed),
             "control_plane_idle": CONTROL_PLANE_IDLE_RECLAIMS.load(Ordering::Relaxed),
         },
@@ -411,6 +420,12 @@ fn increment_reason_counter(reason: AllocatorReclaimReason) {
         }
         AllocatorReclaimReason::GeodataUpdate => {
             GEODATA_UPDATE_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
+        AllocatorReclaimReason::SubscriptionRefresh => {
+            SUBSCRIPTION_REFRESH_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
+        AllocatorReclaimReason::LargeControlCompleted => {
+            LARGE_CONTROL_COMPLETED_RECLAIMS.fetch_add(1, Ordering::Relaxed);
         }
         AllocatorReclaimReason::RetiredGenerationReleased => {
             RETIRED_GENERATION_RELEASED_RECLAIMS.fetch_add(1, Ordering::Relaxed);

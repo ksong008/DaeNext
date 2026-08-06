@@ -96,19 +96,40 @@ impl ProductRuntimeManager {
 
     pub(in crate::daed_product) fn snapshot_for_apply(
         &self,
+        prepared: &PreparedProductRuntime,
     ) -> Result<ProductRuntimeApplySnapshot, String> {
         let inner = self
             .inner
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        let transition = match (inner.runtime.as_ref(), inner.config.as_deref()) {
+            (Some(_), Some(active)) => classify_runtime_transition(
+                active,
+                inner.transition_identity,
+                prepared.config(),
+                prepared.transition_identity(),
+            ),
+            (None, _) | (Some(_), None) => RuntimeTransitionClass::KernelRebind,
+        };
+        // Only an in-place generation publication can reactivate the captured Arc. A physical
+        // KernelRebind destroys the old runtime and rollback already rebuilds the prior config;
+        // pinning its complete router/DNS/protocol graph serves no rollback purpose and retained
+        // the old live heap after a successful commit.
+        let retain_resident_generation = transition == RuntimeTransitionClass::GenerationSwap;
         Ok(ProductRuntimeApplySnapshot {
             was_running: inner.runtime.is_some(),
             config: inner.config.clone(),
             config_content: inner.config_content.clone(),
-            resident_generation: inner.runtime.as_ref().and_then(|runtime| match runtime {
-                ProductRuntimeInstance::Resident(runtime) => runtime.active_generation_snapshot(),
-                ProductRuntimeInstance::Fake(_) => None,
-            }),
+            resident_generation: retain_resident_generation
+                .then(|| {
+                    inner.runtime.as_ref().and_then(|runtime| match runtime {
+                        ProductRuntimeInstance::Resident(runtime) => {
+                            runtime.active_generation_snapshot()
+                        }
+                        ProductRuntimeInstance::Fake(_) => None,
+                    })
+                })
+                .flatten(),
             transition_identity: inner.transition_identity,
         })
     }

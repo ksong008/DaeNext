@@ -2,14 +2,47 @@ use super::*;
 use std::sync::atomic::AtomicBool;
 
 static RESIDENT_DATAPLANE_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static RESIDENT_DATAPLANE_GENERATIONS_LIVE: AtomicU64 = AtomicU64::new(0);
+static RESIDENT_DATAPLANE_GENERATIONS_CREATED: AtomicU64 = AtomicU64::new(0);
+static RESIDENT_DATAPLANE_GENERATIONS_DROPPED: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn next_resident_dataplane_generation_id() -> u64 {
     RESIDENT_DATAPLANE_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
 }
 
+pub(crate) fn resident_dataplane_generation_lifetime_counts() -> (u64, u64, u64) {
+    (
+        RESIDENT_DATAPLANE_GENERATIONS_LIVE.load(Ordering::Acquire),
+        RESIDENT_DATAPLANE_GENERATIONS_CREATED.load(Ordering::Relaxed),
+        RESIDENT_DATAPLANE_GENERATIONS_DROPPED.load(Ordering::Relaxed),
+    )
+}
+
+#[derive(Debug)]
+pub(super) struct ResidentDataplaneGenerationLifetime;
+
+impl ResidentDataplaneGenerationLifetime {
+    pub(super) fn register() -> Self {
+        RESIDENT_DATAPLANE_GENERATIONS_CREATED.fetch_add(1, Ordering::Relaxed);
+        RESIDENT_DATAPLANE_GENERATIONS_LIVE.fetch_add(1, Ordering::Release);
+        Self
+    }
+}
+
+impl Drop for ResidentDataplaneGenerationLifetime {
+    fn drop(&mut self) {
+        let previous = RESIDENT_DATAPLANE_GENERATIONS_LIVE.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(
+            previous > 0,
+            "resident generation lifetime counter underflow"
+        );
+        RESIDENT_DATAPLANE_GENERATIONS_DROPPED.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug)]
 struct ActiveGenerationSlotInner<T> {
-    generation: RwLock<Arc<T>>,
+    generation: RwLock<Option<Arc<T>>>,
     publication: AtomicU64,
     publication_signal: tokio::sync::watch::Sender<u64>,
 }
@@ -138,7 +171,7 @@ impl<T> ActiveGenerationSlot<T> {
         let (publication_signal, _) = tokio::sync::watch::channel(1);
         Self {
             inner: Arc::new(ActiveGenerationSlotInner {
-                generation: RwLock::new(generation),
+                generation: RwLock::new(Some(generation)),
                 publication: AtomicU64::new(1),
                 publication_signal,
             }),
@@ -146,13 +179,13 @@ impl<T> ActiveGenerationSlot<T> {
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn load(&self) -> Arc<T> {
-        Arc::clone(
-            &self
-                .inner
-                .generation
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
+        self.inner
+            .generation
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(Arc::clone)
+            .expect("resident active generation slot was cleared during terminal shutdown")
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane) fn load_versioned(
@@ -163,7 +196,10 @@ impl<T> ActiveGenerationSlot<T> {
             .generation
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let generation = Arc::clone(&active);
+        let generation = active
+            .as_ref()
+            .map(Arc::clone)
+            .expect("resident active generation slot was cleared during terminal shutdown");
         let publication = self.inner.publication.load(Ordering::Acquire);
         (publication, generation)
     }
@@ -184,7 +220,9 @@ impl<T> ActiveGenerationSlot<T> {
                 .generation
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let previous = std::mem::replace(&mut *active, generation);
+            let previous = active
+                .replace(generation)
+                .expect("resident active generation slot was cleared before publication");
             let publication = self
                 .inner
                 .publication
@@ -193,6 +231,14 @@ impl<T> ActiveGenerationSlot<T> {
             self.inner.publication_signal.send_replace(publication);
             previous
         }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn clear(&self) -> Option<Arc<T>> {
+        self.inner
+            .generation
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 }
 
@@ -217,6 +263,9 @@ pub(crate) struct ResidentDataplaneGeneration {
         dns::ResidentDnsReloadHandle,
     pub(in crate::production_runtime_owner::resident_dataplane) domain_routing_maintenance:
         Option<dns::ResidentDnsDomainRoutingMaintenanceHandle>,
+    // Keep the lifetime guard last so its drop is observed only after every generation-owned
+    // router, protocol plan, scheduler handle, and maintenance owner has been released.
+    pub(super) _lifetime: ResidentDataplaneGenerationLifetime,
 }
 
 impl std::fmt::Debug for ResidentDataplaneGeneration {
@@ -285,6 +334,19 @@ mod tests {
             .expect("active generation slot must retain its publication sender");
         assert_eq!(*publication.borrow_and_update(), 2);
         assert!(Arc::ptr_eq(&previous, &first));
+    }
+
+    #[test]
+    fn active_generation_slot_clear_releases_shared_inner_generation_owner() {
+        let generation = Arc::new(String::from("generation"));
+        let slot = ActiveGenerationSlot::new(Arc::clone(&generation));
+        let cloned_slot = slot.clone();
+
+        let cleared = slot.clear().expect("active generation must be present");
+
+        assert!(Arc::ptr_eq(&cleared, &generation));
+        assert!(cloned_slot.clear().is_none());
+        assert_eq!(Arc::strong_count(&generation), 2);
     }
 
     #[tokio::test]

@@ -91,6 +91,7 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
         }
     }
     let epoch_after = epoch::advance().ok();
+    let system_allocator_trim = trim_system_allocator_sidecar();
     let status = if failures.is_empty() && thread_cache_flush_ok {
         "pass"
     } else {
@@ -108,10 +109,43 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
             "arenasAttempted": attempted,
             "arenasSkipped": skipped,
             "failures": failures,
+            "systemAllocatorTrim": system_allocator_trim,
             "epochBefore": epoch_before,
             "epochAfter": epoch_after,
         }),
     )
+}
+
+#[cfg(all(
+    feature = "allocator-jemalloc",
+    target_os = "linux",
+    target_env = "gnu"
+))]
+fn trim_system_allocator_sidecar() -> Value {
+    // Rust allocations use jemalloc in this build, while linked C libraries such as
+    // BoringSSL can still retain freed pages in glibc arenas. Lifecycle reclaim must
+    // cover both allocators or a successful runtime replacement cannot return to the
+    // cold-start RSS baseline.
+    let result = unsafe { libc::malloc_trim(0) };
+    json!({
+        "operation": "malloc_trim",
+        "result": result,
+        "scope": "linked-c-libraries",
+        "status": "pass",
+    })
+}
+
+#[cfg(all(
+    feature = "allocator-jemalloc",
+    not(all(target_os = "linux", target_env = "gnu"))
+))]
+fn trim_system_allocator_sidecar() -> Value {
+    json!({
+        "operation": "malloc_trim",
+        "reason": "linked C allocator trim is only available on Linux glibc targets",
+        "scope": "linked-c-libraries",
+        "status": "unsupported",
+    })
 }
 
 #[cfg(all(test, feature = "allocator-jemalloc"))]
@@ -139,6 +173,10 @@ mod tests {
         assert!(report["arenasObserved"].as_u64().unwrap_or(0) > 0);
         assert!(report["arenasAttempted"].as_u64().unwrap_or(0) > 0);
         assert_eq!(report["failures"], json!([]));
+        assert_eq!(
+            report["systemAllocatorTrim"]["scope"],
+            json!("linked-c-libraries")
+        );
     }
 
     #[test]

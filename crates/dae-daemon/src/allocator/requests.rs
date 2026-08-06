@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::sync::Condvar;
 use std::time::Duration;
 
-const RECLAIM_REASON_COUNT: usize = 10;
+const RECLAIM_REASON_COUNT: usize = 12;
 const MAX_PENDING_PUBLICATION_IDS: usize = 64;
 const MAX_PUBLICATION_PURGE_HISTORY: usize = 128;
 
@@ -178,6 +178,8 @@ impl AllocatorReclaimReason {
             Self::GeodataUpdate => 7,
             Self::RetiredGenerationReleased => 8,
             Self::ControlPlaneIdle => 9,
+            Self::SubscriptionRefresh => 10,
+            Self::LargeControlCompleted => 11,
         }
     }
 
@@ -197,6 +199,8 @@ impl AllocatorReclaimReason {
             7 => Some(Self::GeodataUpdate),
             8 => Some(Self::RetiredGenerationReleased),
             9 => Some(Self::ControlPlaneIdle),
+            10 => Some(Self::SubscriptionRefresh),
+            11 => Some(Self::LargeControlCompleted),
             _ => None,
         }
     }
@@ -212,6 +216,8 @@ impl AllocatorReclaimReason {
             Self::ManualLatencyProbe
             | Self::GroupHealthProbe
             | Self::GeodataUpdate
+            | Self::SubscriptionRefresh
+            | Self::LargeControlCompleted
             | Self::ControlPlaneIdle => AllocatorReclaimUrgency::Ordinary,
         }
     }
@@ -250,6 +256,8 @@ impl AllocatorReclaimRequestBatch {
     pub(crate) fn primary_reason(&self) -> Option<AllocatorReclaimReason> {
         [
             AllocatorReclaimReason::GeodataUpdate,
+            AllocatorReclaimReason::SubscriptionRefresh,
+            AllocatorReclaimReason::LargeControlCompleted,
             AllocatorReclaimReason::ManualLatencyProbe,
             AllocatorReclaimReason::GroupHealthProbe,
             AllocatorReclaimReason::RetiredGenerationReleased,
@@ -415,11 +423,32 @@ pub(crate) fn allocator_pending_reclaim_requests() -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn allocator_pending_reclaim_reason(reason: AllocatorReclaimReason) -> bool {
+pub(crate) fn allocator_pending_publication_reclaim() -> bool {
+    RECLAIM_REQUEST_REGISTRY
+        .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
+        .lock()
+        .map(|registry| {
+            !registry.pending.is_empty() && !registry.pending.publication_ids.is_empty()
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn allocator_pending_reclaim_reason(reason: AllocatorReclaimReason) -> bool {
     RECLAIM_REQUEST_REGISTRY
         .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
         .lock()
         .map(|registry| registry.pending.reason_bits & reason.request_bit() != 0)
+        .unwrap_or(false)
+}
+
+pub(crate) fn allocator_pending_reclaim_is_only(reason: AllocatorReclaimReason) -> bool {
+    RECLAIM_REQUEST_REGISTRY
+        .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
+        .lock()
+        .map(|registry| {
+            !registry.pending.is_empty() && registry.pending.reason_bits == reason.request_bit()
+        })
         .unwrap_or(false)
 }
 
@@ -579,9 +608,11 @@ mod tests {
             allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 42);
         assert_eq!(first["status"], json!("requested"));
         assert_eq!(duplicate["status"], json!("deduplicated"));
+        assert!(allocator_pending_publication_reclaim());
 
         let batch = allocator_take_reclaim_requests();
         assert_eq!(batch.publication_ids(), &[42]);
+        assert!(!allocator_pending_publication_reclaim());
         allocator_record_publication_reclaim(&batch);
 
         let after_purge =
@@ -591,6 +622,23 @@ mod tests {
             allocator_reclaim_request_snapshot_json()["publicationPurges"][0]["purgeCount"],
             json!(1)
         );
+    }
+
+    #[test]
+    fn retired_generation_only_detection_does_not_hide_a_merged_reload() {
+        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
+        reset_requests();
+
+        allocator_request_reclaim(AllocatorReclaimReason::RetiredGenerationReleased);
+        assert!(allocator_pending_reclaim_is_only(
+            AllocatorReclaimReason::RetiredGenerationReleased
+        ));
+
+        allocator_request_reclaim(AllocatorReclaimReason::ReloadCompleted);
+        assert!(!allocator_pending_reclaim_is_only(
+            AllocatorReclaimReason::RetiredGenerationReleased
+        ));
+        let _ = allocator_take_reclaim_requests();
     }
 
     #[test]

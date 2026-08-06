@@ -29,7 +29,7 @@ use super::resident_dataplane::{
     ResidentDataplaneStartContext, ResidentDnsReloadSnapshot, ResidentManualProbeHandle,
     ResidentPreparedDataplane, ResidentTrafficCounters, build_resident_dataplane_plan_with_geodata,
     next_resident_runtime_generation, resident_datapath_postflight_interval_seconds_default,
-    start_resident_dataplane_workers,
+    resident_dataplane_generation_lifetime_counts, start_resident_dataplane_workers,
 };
 use super::resident_interfaces::{
     attach_resident_lan_egress_program, attach_resident_wan_programs,

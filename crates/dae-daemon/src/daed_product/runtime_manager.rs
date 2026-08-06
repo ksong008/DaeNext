@@ -25,9 +25,9 @@ pub(super) use traffic::RuntimeTrafficCarry;
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
 use apply_state::RuntimeApplyState;
 use cleanup::{
-    cleanup_report_error, cleanup_runtime_instance_with_reclaim, cleanup_start_blocker_from_report,
-    ensure_cleanup_allows_start_for_inner, release_runtime_conflicts_for_replacement,
-    spawn_background_cleanup, spawn_background_replacement_cleanup,
+    cleanup_replacement_before_start, cleanup_report_error, cleanup_runtime_instance_with_reclaim,
+    cleanup_start_blocker_from_report, ensure_cleanup_allows_start_for_inner,
+    spawn_background_cleanup,
 };
 pub(in crate::daed_product) use instance::PreparedProductRuntime;
 #[cfg(test)]
@@ -618,7 +618,7 @@ fn replace_prepared_product_runtime_with_config_content(
         .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
     ensure_cleanup_allows_start_for_inner(inner)?;
     let (
-        mut previous_runtime,
+        previous_runtime,
         previous_config,
         previous_config_content,
         previous_transition_identity,
@@ -683,13 +683,12 @@ fn replace_prepared_product_runtime_with_config_content(
         .flatten();
     let latency_seed =
         runtime_health_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
-    let previous_cleanup_report =
-        release_runtime_conflicts_for_replacement(previous_runtime.as_mut());
-    if previous_runtime_was_running {
-        spawn_background_replacement_cleanup(Arc::clone(inner), lifecycle_epoch, previous_runtime);
+    let previous_cleanup_report = if previous_runtime_was_running {
+        cleanup_replacement_before_start(inner, lifecycle_epoch, previous_runtime)?
     } else {
         drop(previous_runtime);
-    }
+        None
+    };
     let previous_cleanup_error = cleanup_report_error(previous_cleanup_report.as_ref());
     let previous_cleanup_start_blocker =
         cleanup_start_blocker_from_report(previous_cleanup_report.as_ref());
@@ -709,6 +708,14 @@ fn replace_prepared_product_runtime_with_config_content(
                 report.insert(
                     "previousRuntimeCleanupDegraded".to_owned(),
                     json!(previous_cleanup_error.is_some()),
+                );
+                report.insert(
+                    "previousRuntimeCleanupExecution".to_owned(),
+                    json!(if previous_runtime_was_running {
+                        "synchronous-before-start"
+                    } else {
+                        "not-applicable"
+                    }),
                 );
             }
             let mut inner = inner

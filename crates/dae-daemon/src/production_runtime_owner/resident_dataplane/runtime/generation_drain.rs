@@ -277,6 +277,8 @@ impl ResidentGenerationDrain {
 
     pub(super) fn snapshot(&self) -> Value {
         let now = Instant::now();
+        let (process_live_generations, generations_created_total, generations_dropped_total) =
+            resident_dataplane_generation_lifetime_counts();
         let state = self
             .state
             .lock()
@@ -326,6 +328,9 @@ impl ResidentGenerationDrain {
             "pressureEvictedTotal": state.pressure_evicted_total,
             "reactivatedTotal": state.reactivated_total,
             "publicationRejectedTotal": state.publication_rejected_total,
+            "processLiveGenerations": process_live_generations,
+            "generationsCreatedTotal": generations_created_total,
+            "generationsDroppedTotal": generations_dropped_total,
             "maximumRetired": self.policy.maximum_retired,
             "maximumAgeMs": self.policy.maximum_age.as_millis(),
             "oldestAgeMs": oldest_age_ms,

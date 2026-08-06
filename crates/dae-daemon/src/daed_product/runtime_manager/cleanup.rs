@@ -53,19 +53,28 @@ pub(super) fn spawn_background_cleanup(
     );
 }
 
-pub(super) fn spawn_background_replacement_cleanup(
-    inner: Arc<Mutex<ProductRuntimeState>>,
+pub(super) fn cleanup_replacement_before_start(
+    inner: &Arc<Mutex<ProductRuntimeState>>,
     cleanup_epoch: u64,
     runtime: Option<ProductRuntimeInstance>,
-) {
-    let _ = thread::spawn(move || {
-        let cleanup_report = cleanup_runtime_instance(runtime);
-        if let Ok(mut inner) = inner.lock()
-            && inner.cleanup.epoch == cleanup_epoch
-        {
-            inner.cleanup.finish(cleanup_report);
-        }
-    });
+) -> Result<Option<Value>, String> {
+    // A physical replacement has no continuity contract: the old runtime must stop and
+    // release every userspace owner before the replacement starts. Running this cleanup in
+    // the background allowed the new runtime to overlap old Tokio workers, protocol owners,
+    // DNS actors, and process-wide caches. Besides raising the peak working set, that made a
+    // successful publication observable before the previous generation was actually gone.
+    let cleanup_report = cleanup_runtime_instance(runtime);
+    let mut state = inner.lock().map_err(|_| {
+        "product runtime manager lock poisoned while finishing replacement cleanup".to_owned()
+    })?;
+    if state.cleanup.epoch != cleanup_epoch {
+        return Err(
+            "product runtime replacement cleanup was superseded by a newer lifecycle operation"
+                .to_owned(),
+        );
+    }
+    state.cleanup.finish(cleanup_report.clone());
+    Ok(cleanup_report)
 }
 
 fn spawn_background_cleanup_with_reason(
@@ -82,25 +91,6 @@ fn spawn_background_cleanup_with_reason(
             inner.cleanup.finish(cleanup_report);
         }
     });
-}
-
-pub(super) fn release_runtime_conflicts_for_replacement(
-    runtime: Option<&mut ProductRuntimeInstance>,
-) -> Option<Value> {
-    match runtime? {
-        ProductRuntimeInstance::Resident(runtime) => Some(runtime.release_reload_conflicts()),
-        ProductRuntimeInstance::Fake(_) => Some(json!({
-            "status": "pass",
-            "binding_cleanup_postflight": {"status": "pass"},
-            "after_map_ids": [],
-            "loaded_map_cleaned": true,
-            "leftovers_after_cleanup": [],
-            "sys_fs_bpf_dae_mutated": false,
-            "cleanup_command_timed_out": false,
-            "phaseTimings": [],
-            "fakeRuntime": true,
-        })),
-    }
 }
 
 pub(super) fn wait_for_cleanup_idle_for_inner(
