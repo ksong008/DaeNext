@@ -812,6 +812,7 @@ dependencies = [
  "aes-gcm",
  "base64",
  "blake3",
+ "boring 5.1.0",
  "bytes",
  "chacha20poly1305",
  "dae-core-types",

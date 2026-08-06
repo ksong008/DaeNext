@@ -87,8 +87,8 @@ impl Ss2022TcpClientStreamEncoder {
     }
 
     pub fn chunk_payload_buffer<'a>(&self, buffer: &'a mut [u8]) -> &'a mut [u8] {
-        let payload_offset = 2 + self.codec.tag_len;
-        let reserved_bytes = payload_offset + self.codec.tag_len;
+        let payload_offset = 2 + SS2022_TCP_TAG_LEN;
+        let reserved_bytes = payload_offset + SS2022_TCP_TAG_LEN;
         let payload_capacity = buffer
             .len()
             .saturating_sub(reserved_bytes)
@@ -101,7 +101,7 @@ impl Ss2022TcpClientStreamEncoder {
         buffer: &mut [u8],
         payload_len: usize,
     ) -> Result<usize, OutboundError> {
-        let tag_len = self.codec.tag_len;
+        let tag_len = SS2022_TCP_TAG_LEN;
         let payload_offset = 2 + tag_len;
         let wire_len = payload_offset
             .checked_add(payload_len)
@@ -155,12 +155,6 @@ impl Ss2022TcpServerStreamDecoder {
     where
         S: AsyncRead + Unpin,
     {
-        if self.codec.tag_len != SS2022_TCP_TAG_LEN {
-            return Err(OutboundError::BadShadowsocks(format!(
-                "SS2022 stream tag length must be {SS2022_TCP_TAG_LEN}, got {}",
-                self.codec.tag_len
-            )));
-        }
         let mut length_wire = [0_u8; 2 + SS2022_TCP_TAG_LEN];
         stream
             .read_exact(&mut length_wire)
