@@ -64,15 +64,11 @@ impl BodyCodec {
                         )
                     })?;
                 let (plain, authentication) = payload.split_at_mut(plain_len);
-                let authentication = GenericArray::clone_from_slice(authentication);
                 cipher
-                    .decrypt_in_place_detached(
-                        AesNonce::from_slice(&self.nonce.next()),
-                        &[],
-                        plain,
-                        &authentication,
-                    )
-                    .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
+                    .open_in_place(&self.nonce.next(), plain, authentication, &[])
+                    .map_err(|_| {
+                        OutboundError::BadVmess("VMess AES-GCM body decryption failed".to_owned())
+                    })?;
                 Ok(plain_len)
             }
             BodyCipher::Chacha20Poly1305(cipher) => {
@@ -85,13 +81,13 @@ impl BodyCodec {
                         )
                     })?;
                 let (plain, authentication) = payload.split_at_mut(plain_len);
-                let authentication = GenericArray::clone_from_slice(authentication);
+                let authentication = GenericArray::from_slice(authentication);
                 cipher
                     .decrypt_in_place_detached(
                         ChaChaNonce::from_slice(&self.nonce.next()),
                         &[],
                         plain,
-                        &authentication,
+                        authentication,
                     )
                     .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
                 Ok(plain_len)

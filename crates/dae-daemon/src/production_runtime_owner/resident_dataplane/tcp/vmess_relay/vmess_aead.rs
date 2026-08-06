@@ -18,6 +18,7 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
         VmessTransportRelayPolicy {
             label: "VMess",
             idle_error: "resident VMess relay idle timeout",
+            flush_upload: false,
         },
     )
     .await
@@ -41,6 +42,7 @@ pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
         VmessTransportRelayPolicy {
             label: "VMess WebSocket",
             idle_error: "resident VMess WebSocket relay idle timeout",
+            flush_upload: false,
         },
     )
     .await

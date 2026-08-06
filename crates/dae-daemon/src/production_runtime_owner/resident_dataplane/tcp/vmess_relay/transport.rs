@@ -4,6 +4,7 @@ use super::*;
 pub(super) struct VmessTransportRelayPolicy {
     pub(super) label: &'static str,
     pub(super) idle_error: &'static str,
+    pub(super) flush_upload: bool,
 }
 
 pub(super) async fn relay_tcp_over_vmess_stream_async(
@@ -15,7 +16,11 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
     metrics: &ResidentDataplaneMetrics,
     policy: VmessTransportRelayPolicy,
 ) -> Result<DirectTcpRelayStats, String> {
-    let VmessTransportRelayPolicy { label, idle_error } = policy;
+    let VmessTransportRelayPolicy {
+        label,
+        idle_error,
+        flush_upload,
+    } = policy;
     let (progress, activity) = resident_duplex_progress();
     if stats.client_to_direct != 0 {
         progress.record_upload(stats.client_to_direct);
@@ -55,10 +60,12 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
                 .write_all(&buffer[..wire_len])
                 .await
                 .map_err(|err| format!("write {label} upload chunk: {err}"))?;
-            proxy_write
-                .flush()
-                .await
-                .map_err(|err| format!("flush {label} upload chunk: {err}"))?;
+            if flush_upload {
+                proxy_write
+                    .flush()
+                    .await
+                    .map_err(|err| format!("flush {label} upload chunk: {err}"))?;
+            }
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }
@@ -122,7 +129,9 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
     metrics: &ResidentDataplaneMetrics,
     policy: VmessTransportRelayPolicy,
 ) -> Result<DirectTcpRelayStats, String> {
-    let VmessTransportRelayPolicy { label, idle_error } = policy;
+    let VmessTransportRelayPolicy {
+        label, idle_error, ..
+    } = policy;
     let (progress, activity) = resident_duplex_progress();
     if stats.client_to_direct != 0 {
         progress.record_upload(stats.client_to_direct);
