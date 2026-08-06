@@ -29,6 +29,8 @@ use crate::production_runtime_owner::resident_dataplane::tcp::{
 };
 
 const ANYTLS_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/anytls-owner/v1";
+const ANYTLS_DATA_FLUSH_BYTES: usize = 128 * 1024;
+const ANYTLS_DATA_FLUSH_DELAY: std::time::Duration = std::time::Duration::from_millis(1);
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 struct AnyTlsOwnerKey {
@@ -759,6 +761,38 @@ impl AnyTlsPhysicalPadding {
     where
         W: AsyncWrite + Unpin,
     {
+        self.write_frame_with_flush(client, cmd, sid, data, label, deadline, true)
+            .await
+    }
+
+    async fn write_frame_coalesced<W>(
+        &mut self,
+        client: &mut W,
+        cmd: u8,
+        sid: u32,
+        data: &[u8],
+        label: &str,
+    ) -> Result<(), String>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        self.write_frame_with_flush(client, cmd, sid, data, label, None, false)
+            .await
+    }
+
+    async fn write_frame_with_flush<W>(
+        &mut self,
+        client: &mut W,
+        cmd: u8,
+        sid: u32,
+        data: &[u8],
+        label: &str,
+        deadline: Option<AbsoluteDeadline>,
+        flush: bool,
+    ) -> Result<(), String>
+    where
+        W: AsyncWrite + Unpin,
+    {
         if data.len() > usize::from(u16::MAX) {
             return Err(format!(
                 "{label}: AnyTLS frame payload exceeds {} bytes",
@@ -776,7 +810,9 @@ impl AnyTlsPhysicalPadding {
         frame.extend_from_slice(&sid.to_be_bytes());
         frame.extend_from_slice(&(data.len() as u16).to_be_bytes());
         frame.extend_from_slice(data);
-        let result = self.write_bytes(client, &frame, label, deadline).await;
+        let result = self
+            .write_bytes(client, &frame, label, deadline, flush)
+            .await;
         self.frame = frame;
         result
     }
@@ -787,6 +823,7 @@ impl AnyTlsPhysicalPadding {
         frame: &[u8],
         label: &str,
         deadline: Option<AbsoluteDeadline>,
+        flush: bool,
     ) -> Result<(), String>
     where
         W: AsyncWrite + Unpin,
@@ -852,13 +889,20 @@ impl AnyTlsPhysicalPadding {
                         .fetch_add(padding_bytes as u64, Ordering::Relaxed);
                 }
                 if remaining.is_empty() {
+                    if flush {
+                        flush_anytls_physical(client, label, deadline).await?;
+                    }
                     return Ok(());
                 }
             } else {
                 self.enabled = false;
             }
         }
-        write_anytls_physical_plain(client, remaining, label, deadline).await
+        write_anytls_physical_plain(client, remaining, label, deadline).await?;
+        if flush {
+            flush_anytls_physical(client, label, deadline).await?;
+        }
+        Ok(())
     }
 }
 
@@ -882,11 +926,7 @@ where
         client
             .write_all(payload)
             .await
-            .map_err(|error| format!("{label}: {error}"))?;
-        client
-            .flush()
-            .await
-            .map_err(|error| format!("flush {label}: {error}"))
+            .map_err(|error| format!("{label}: {error}"))
     };
     if let Some(deadline) = deadline {
         let remaining = deadline
@@ -897,6 +937,32 @@ where
             .map_err(|_| format!("{label}: absolute deadline elapsed"))?
     } else {
         write.await
+    }
+}
+
+async fn flush_anytls_physical<W>(
+    client: &mut W,
+    label: &str,
+    deadline: Option<AbsoluteDeadline>,
+) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    let flush = async {
+        client
+            .flush()
+            .await
+            .map_err(|error| format!("flush {label}: {error}"))
+    };
+    if let Some(deadline) = deadline {
+        let remaining = deadline
+            .remaining_at(Instant::now())
+            .ok_or_else(|| format!("flush {label}: absolute deadline elapsed"))?;
+        time::timeout(remaining, flush)
+            .await
+            .map_err(|_| format!("flush {label}: absolute deadline elapsed"))?
+    } else {
+        flush.await
     }
 }
 
@@ -1705,6 +1771,8 @@ async fn run_anytls_active_stream(
 
     let writer = async {
         let mut buffer = vec![0_u8; 16 * 1024];
+        let mut pending_flush_bytes = 0_usize;
+        let mut pending_flush_deadline = None;
         loop {
             tokio::select! {
                 biased;
@@ -1718,6 +1786,8 @@ async fn run_anytls_active_stream(
                             "write AnyTLS heartbeat response",
                             None,
                         ).await?;
+                        pending_flush_bytes = 0;
+                        pending_flush_deadline = None;
                     }
                     None => return Ok::<(), String>(()),
                 },
@@ -1734,17 +1804,40 @@ async fn run_anytls_active_stream(
                         return Ok(());
                     }
                     Ok(read) => {
-                        padding.write_frame(
+                        padding.write_frame_coalesced(
                             &mut client_write,
                             anytls_contract::CMD_PSH,
                             sid,
                             &buffer[..read],
                             "write AnyTLS logical payload",
-                            None,
                         ).await?;
+                        if pending_flush_bytes == 0 {
+                            pending_flush_deadline = Some(Instant::now() + ANYTLS_DATA_FLUSH_DELAY);
+                        }
+                        pending_flush_bytes = pending_flush_bytes.saturating_add(read);
+                        if pending_flush_bytes >= ANYTLS_DATA_FLUSH_BYTES {
+                            flush_anytls_physical(
+                                &mut client_write,
+                                "flush AnyTLS logical payload",
+                                None,
+                            ).await?;
+                            pending_flush_bytes = 0;
+                            pending_flush_deadline = None;
+                        }
                     }
                     Err(error) => return Err(format!("read AnyTLS logical stream: {error}")),
-                }
+                },
+                _ = time::sleep_until(time::Instant::from_std(
+                    pending_flush_deadline.unwrap_or_else(Instant::now),
+                )), if pending_flush_deadline.is_some() => {
+                    flush_anytls_physical(
+                        &mut client_write,
+                        "flush AnyTLS logical payload",
+                        None,
+                    ).await?;
+                    pending_flush_bytes = 0;
+                    pending_flush_deadline = None;
+                },
             }
         }
     };
