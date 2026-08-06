@@ -29,7 +29,7 @@ pub(crate) async fn relay_tcp_over_vless_plain_async(
     let upload = async move {
         let mut inbound_read = inbound_read;
         let mut proxy_write = proxy_write;
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; VLESS_RELAY_BUFFER_SIZE];
         loop {
             let read = match inbound_read.read(&mut buffer).await {
                 Ok(0) => {
@@ -57,7 +57,7 @@ pub(crate) async fn relay_tcp_over_vless_plain_async(
         let mut inbound_write = inbound_write;
         let mut proxy_read = proxy_read;
         let mut stripper = VlessResponseStripper::default();
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; VLESS_RELAY_BUFFER_SIZE];
         loop {
             let read = proxy_read
                 .read(&mut buffer)

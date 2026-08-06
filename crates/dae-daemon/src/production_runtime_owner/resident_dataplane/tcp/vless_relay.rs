@@ -1,4 +1,7 @@
 use super::*;
+
+pub(super) const VLESS_RELAY_BUFFER_SIZE: usize = 32 * 1024;
+
 mod support;
 pub(super) use self::support::*;
 mod async_tls;

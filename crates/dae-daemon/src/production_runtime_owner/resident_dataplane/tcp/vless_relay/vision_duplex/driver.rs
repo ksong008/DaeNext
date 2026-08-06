@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 
 use super::*;
 
-const VISION_RELAY_BUFFER_SIZE: usize = 16 * 1024;
+const VISION_RELAY_BUFFER_SIZE: usize = VLESS_RELAY_BUFFER_SIZE;
 pub(super) const VISION_PENDING_UPLINK_LIMIT: usize = TLS_RECORD_MAX_PAYLOAD_LEN * 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
