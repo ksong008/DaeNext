@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use aes_gcm::aead::{Aead, AeadInPlace, KeyInit};
 use aes_gcm::aes::cipher::generic_array::GenericArray;
-use aes_gcm::{Aes128Gcm, Aes256Gcm};
+use boring::aead::{AeadCtx, Algorithm};
 use chacha20poly1305::ChaCha20Poly1305;
 use hkdf::Hkdf;
 use md5::{Digest, Md5};
@@ -545,8 +545,8 @@ fn nonce_from_counter(counter: u64) -> [u8; NONCE_LEN] {
 }
 
 enum AeadCipher {
-    Aes128(Box<Aes128Gcm>),
-    Aes256(Box<Aes256Gcm>),
+    Aes128(Box<AeadCtx>),
+    Aes256(Box<AeadCtx>),
     ChaCha(Box<ChaCha20Poly1305>),
 }
 
@@ -555,12 +555,14 @@ impl AeadCipher {
         let spec = cipher_spec(cipher)?;
         match spec.cipher {
             "aes-128-gcm" => Ok(Self::Aes128(Box::new(
-                Aes128Gcm::new_from_slice(key)
-                    .map_err(|_| OutboundError::BadShadowsocks("bad aes-128 key".to_owned()))?,
+                AeadCtx::new_default_tag(&Algorithm::aes_128_gcm(), key).map_err(|err| {
+                    OutboundError::BadShadowsocks(format!("bad aes-128 key: {err}"))
+                })?,
             ))),
             "aes-256-gcm" => Ok(Self::Aes256(Box::new(
-                Aes256Gcm::new_from_slice(key)
-                    .map_err(|_| OutboundError::BadShadowsocks("bad aes-256 key".to_owned()))?,
+                AeadCtx::new_default_tag(&Algorithm::aes_256_gcm(), key).map_err(|err| {
+                    OutboundError::BadShadowsocks(format!("bad aes-256 key: {err}"))
+                })?,
             ))),
             "chacha20-ietf-poly1305" => Ok(Self::ChaCha(Box::new(
                 ChaCha20Poly1305::new_from_slice(key)
@@ -574,12 +576,15 @@ impl AeadCipher {
 
     fn encrypt(&self, nonce: &[u8; NONCE_LEN], plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
         match self {
-            Self::Aes128(cipher) => cipher
-                .encrypt(aes_gcm::Nonce::from_slice(nonce), plaintext)
-                .map_err(|_| OutboundError::BadShadowsocks("aead encrypt failed".to_owned())),
-            Self::Aes256(cipher) => cipher
-                .encrypt(aes_gcm::Nonce::from_slice(nonce), plaintext)
-                .map_err(|_| OutboundError::BadShadowsocks("aead encrypt failed".to_owned())),
+            Self::Aes128(cipher) | Self::Aes256(cipher) => {
+                let mut output = plaintext.to_vec();
+                let mut tag = [0_u8; TAG_LEN];
+                cipher
+                    .seal_in_place(nonce, &mut output, &mut tag, &[])
+                    .map_err(|_| OutboundError::BadShadowsocks("aead encrypt failed".to_owned()))?;
+                output.extend_from_slice(&tag);
+                Ok(output)
+            }
             Self::ChaCha(cipher) => cipher
                 .encrypt(chacha20poly1305::Nonce::from_slice(nonce), plaintext)
                 .map_err(|_| OutboundError::BadShadowsocks("aead encrypt failed".to_owned())),
@@ -592,12 +597,18 @@ impl AeadCipher {
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, OutboundError> {
         match self {
-            Self::Aes128(cipher) => cipher
-                .decrypt(aes_gcm::Nonce::from_slice(nonce), ciphertext)
-                .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned())),
-            Self::Aes256(cipher) => cipher
-                .decrypt(aes_gcm::Nonce::from_slice(nonce), ciphertext)
-                .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned())),
+            Self::Aes128(cipher) | Self::Aes256(cipher) => {
+                let payload_len = ciphertext.len().checked_sub(TAG_LEN).ok_or_else(|| {
+                    OutboundError::BadShadowsocks(
+                        "aead ciphertext is shorter than its tag".to_owned(),
+                    )
+                })?;
+                let mut output = ciphertext[..payload_len].to_vec();
+                cipher
+                    .open_in_place(nonce, &mut output, &ciphertext[payload_len..], &[])
+                    .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned()))?;
+                Ok(output)
+            }
             Self::ChaCha(cipher) => cipher
                 .decrypt(chacha20poly1305::Nonce::from_slice(nonce), ciphertext)
                 .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned())),
@@ -610,11 +621,12 @@ impl AeadCipher {
         plaintext: &mut [u8],
     ) -> Result<[u8; TAG_LEN], OutboundError> {
         let tag = match self {
-            Self::Aes128(cipher) => {
-                cipher.encrypt_in_place_detached(aes_gcm::Nonce::from_slice(nonce), &[], plaintext)
-            }
-            Self::Aes256(cipher) => {
-                cipher.encrypt_in_place_detached(aes_gcm::Nonce::from_slice(nonce), &[], plaintext)
+            Self::Aes128(cipher) | Self::Aes256(cipher) => {
+                let mut tag = [0_u8; TAG_LEN];
+                cipher
+                    .seal_in_place(nonce, plaintext, &mut tag, &[])
+                    .map_err(|_| OutboundError::BadShadowsocks("aead encrypt failed".to_owned()))?;
+                return Ok(tag);
             }
             Self::ChaCha(cipher) => cipher.encrypt_in_place_detached(
                 chacha20poly1305::Nonce::from_slice(nonce),
@@ -635,26 +647,21 @@ impl AeadCipher {
             OutboundError::BadShadowsocks("aead ciphertext is shorter than its tag".to_owned())
         })?;
         let (plaintext, tag) = ciphertext.split_at_mut(plain_len);
-        let tag = GenericArray::clone_from_slice(tag);
+        if let Self::Aes128(cipher) | Self::Aes256(cipher) = self {
+            cipher
+                .open_in_place(nonce, plaintext, tag, &[])
+                .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned()))?;
+            return Ok(plain_len);
+        }
+        let tag = GenericArray::from_slice(tag);
         match self {
-            Self::Aes128(cipher) => cipher.decrypt_in_place_detached(
-                aes_gcm::Nonce::from_slice(nonce),
-                &[],
-                plaintext,
-                &tag,
-            ),
-            Self::Aes256(cipher) => cipher.decrypt_in_place_detached(
-                aes_gcm::Nonce::from_slice(nonce),
-                &[],
-                plaintext,
-                &tag,
-            ),
             Self::ChaCha(cipher) => cipher.decrypt_in_place_detached(
                 chacha20poly1305::Nonce::from_slice(nonce),
                 &[],
                 plaintext,
-                &tag,
+                tag,
             ),
+            Self::Aes128(_) | Self::Aes256(_) => unreachable!(),
         }
         .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned()))?;
         Ok(plain_len)

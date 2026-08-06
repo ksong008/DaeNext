@@ -35,13 +35,88 @@ pub(super) fn derive_subkey(psk: &[u8], salt: &[u8], key_len: usize, context: &s
     derived[..key_len].to_vec()
 }
 
-pub(super) fn increment_nonce_le(nonce: &mut [u8]) {
-    for byte in nonce {
-        let (next, overflow) = byte.overflowing_add(1);
-        *byte = next;
-        if !overflow {
-            break;
-        }
+/// Increment the fixed-size SS2022 TCP nonce without carrying a dynamic slice
+/// length through the record hot path.  SS2022 TCP admits a 96-bit nonce and
+/// treats it as a little-endian counter; the early returns preserve the exact
+/// carry semantics of `increment_nonce_le` while allowing the compiler to
+/// specialize the twelve-byte layout.
+#[inline(always)]
+pub(super) fn increment_nonce_le_12(nonce: &mut [u8; 12]) {
+    let (next, overflow) = nonce[0].overflowing_add(1);
+    nonce[0] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[1].overflowing_add(1);
+    nonce[1] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[2].overflowing_add(1);
+    nonce[2] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[3].overflowing_add(1);
+    nonce[3] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[4].overflowing_add(1);
+    nonce[4] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[5].overflowing_add(1);
+    nonce[5] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[6].overflowing_add(1);
+    nonce[6] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[7].overflowing_add(1);
+    nonce[7] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[8].overflowing_add(1);
+    nonce[8] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[9].overflowing_add(1);
+    nonce[9] = next;
+    if !overflow {
+        return;
+    }
+    let (next, overflow) = nonce[10].overflowing_add(1);
+    nonce[10] = next;
+    if !overflow {
+        return;
+    }
+    nonce[11] = nonce[11].wrapping_add(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::increment_nonce_le_12;
+
+    #[test]
+    fn nonce_increment_is_little_endian_with_full_carry() {
+        let mut nonce = [0_u8; 12];
+        increment_nonce_le_12(&mut nonce);
+        assert_eq!(nonce, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+        nonce = [0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        increment_nonce_le_12(&mut nonce);
+        assert_eq!(nonce, [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+        nonce = [0xff; 12];
+        increment_nonce_le_12(&mut nonce);
+        assert_eq!(nonce, [0; 12]);
     }
 }
 

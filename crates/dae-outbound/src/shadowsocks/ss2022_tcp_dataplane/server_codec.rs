@@ -55,7 +55,7 @@ pub(super) fn read_encrypted_exact<S>(
 where
     S: Read,
 {
-    let mut encrypted = vec![0_u8; plaintext_len + codec.tag_len];
+    let mut encrypted = vec![0_u8; plaintext_len + SS2022_TCP_TAG_LEN];
     stream
         .read_exact(&mut encrypted)
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
@@ -70,7 +70,7 @@ pub(super) async fn read_encrypted_exact_async<S>(
 where
     S: AsyncRead + Unpin,
 {
-    let mut encrypted = vec![0_u8; plaintext_len + codec.tag_len];
+    let mut encrypted = vec![0_u8; plaintext_len + SS2022_TCP_TAG_LEN];
     stream
         .read_exact(&mut encrypted)
         .await
