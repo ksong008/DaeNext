@@ -1,8 +1,9 @@
 use super::*;
+use boring::aead::{AeadCtx, Algorithm};
 use tokio::io::AsyncReadExt as _;
 
 enum BodyCipher {
-    Aes128Gcm(Box<Aes128Gcm>),
+    Aes128Gcm(Box<AeadCtx>),
     Chacha20Poly1305(ChaCha20Poly1305),
     None,
     Raw,
@@ -28,7 +29,7 @@ impl BodyCodec {
     ) -> Result<Self, OutboundError> {
         let cipher = match security {
             VMESS_AEAD_SECURITY_AES_128_GCM => BodyCipher::Aes128Gcm(Box::new(
-                Aes128Gcm::new_from_slice(&key)
+                AeadCtx::new_default_tag(&Algorithm::aes_128_gcm(), &key)
                     .map_err(|err| OutboundError::BadVmess(err.to_string()))?,
             )),
             VMESS_AEAD_SECURITY_CHACHA20_POLY1305 => {
@@ -210,9 +211,17 @@ impl BodyCodec {
 
     fn seal_payload(&mut self, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
         match &self.cipher {
-            BodyCipher::Aes128Gcm(cipher) => cipher
-                .encrypt(AesNonce::from_slice(&self.nonce.next()), payload)
-                .map_err(|err| OutboundError::BadVmess(err.to_string())),
+            BodyCipher::Aes128Gcm(cipher) => {
+                let mut output = payload.to_vec();
+                let mut authentication = [0_u8; MAX_CHUNK_AUTHENTICATION_SIZE];
+                cipher
+                    .seal_in_place(&self.nonce.next(), &mut output, &mut authentication, &[])
+                    .map_err(|_| {
+                        OutboundError::BadVmess("VMess AES-GCM body encryption failed".to_owned())
+                    })?;
+                output.extend_from_slice(&authentication);
+                Ok(output)
+            }
             BodyCipher::Chacha20Poly1305(cipher) => cipher
                 .encrypt(ChaChaNonce::from_slice(&self.nonce.next()), payload)
                 .map_err(|err| OutboundError::BadVmess(err.to_string())),
@@ -223,9 +232,23 @@ impl BodyCodec {
 
     fn open_payload(&mut self, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
         match &self.cipher {
-            BodyCipher::Aes128Gcm(cipher) => cipher
-                .decrypt(AesNonce::from_slice(&self.nonce.next()), payload)
-                .map_err(|err| OutboundError::BadVmess(err.to_string())),
+            BodyCipher::Aes128Gcm(cipher) => {
+                let plain_len = payload
+                    .len()
+                    .checked_sub(MAX_CHUNK_AUTHENTICATION_SIZE)
+                    .ok_or_else(|| {
+                        OutboundError::BadVmess(
+                            "VMess AES-GCM body chunk is shorter than its tag".to_owned(),
+                        )
+                    })?;
+                let mut output = payload[..plain_len].to_vec();
+                cipher
+                    .open_in_place(&self.nonce.next(), &mut output, &payload[plain_len..], &[])
+                    .map_err(|_| {
+                        OutboundError::BadVmess("VMess AES-GCM body decryption failed".to_owned())
+                    })?;
+                Ok(output)
+            }
             BodyCipher::Chacha20Poly1305(cipher) => cipher
                 .decrypt(ChaChaNonce::from_slice(&self.nonce.next()), payload)
                 .map_err(|err| OutboundError::BadVmess(err.to_string())),

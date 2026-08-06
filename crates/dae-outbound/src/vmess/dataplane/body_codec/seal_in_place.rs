@@ -125,15 +125,12 @@ impl BodyCodec {
     ) -> Result<usize, OutboundError> {
         match &self.cipher {
             BodyCipher::Aes128Gcm(cipher) => {
-                let tag = cipher
-                    .encrypt_in_place_detached(
-                        AesNonce::from_slice(&self.nonce.next()),
-                        &[],
-                        payload,
-                    )
-                    .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
-                authentication.copy_from_slice(&tag);
-                Ok(tag.len())
+                cipher
+                    .seal_in_place(&self.nonce.next(), payload, authentication, &[])
+                    .map_err(|_| {
+                        OutboundError::BadVmess("VMess AES-GCM body encryption failed".to_owned())
+                    })?;
+                Ok(MAX_CHUNK_AUTHENTICATION_SIZE)
             }
             BodyCipher::Chacha20Poly1305(cipher) => {
                 let tag = cipher
