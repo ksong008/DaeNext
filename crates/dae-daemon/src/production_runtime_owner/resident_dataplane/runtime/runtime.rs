@@ -84,6 +84,7 @@ impl ResidentDataplaneRuntime {
         self.quiesce_workloads();
         let generation = self.active_generation.load();
         let reload_generation = generation.reload_generation;
+        drop(generation);
         let workload = self
             .workload_shutdown
             .take()
@@ -148,6 +149,20 @@ impl ResidentDataplaneRuntime {
             self.owner
                 .shutdown_after_workloads(workload, RESIDENT_RUNTIME_TASK_JOIN_GRACE),
         );
+        let active_generation = self.active_generation.clear();
+        let external_generation_owners = active_generation
+            .as_ref()
+            .map(|generation| Arc::strong_count(generation).saturating_sub(1))
+            .unwrap_or(0);
+        let generation_removed = active_generation.is_some();
+        drop(active_generation);
+        steps.push(json!({
+            "name": "clear-resident-active-generation-slot",
+            "status": "pass",
+            "generationRemoved": generation_removed,
+            "externalGenerationOwnersBeforeRelease": external_generation_owners,
+            "ownership": "terminal-runtime-shutdown-after-workload-join",
+        }));
         steps.push(json!({
             "name": "clear-resident-udp-reply-socket-cache",
             "status": "pass",
@@ -155,11 +170,13 @@ impl ResidentDataplaneRuntime {
             "ownership": "udp-session-manager",
             "cleanup": "reply dispatcher stopped and joined with UDP manager",
         }));
+        let tls_caches = client::clear_resident_tls_config_caches();
         steps.push(json!({
-            "name": "preserve-process-wide-tls-config-caches",
+            "name": "clear-resident-tls-config-caches",
             "status": "pass",
-            "ownership": "process-wide-bounded-cache",
-            "cleanup": "bounded caches are reused across runtime generations",
+            "ownership": "process-wide-cache-cleared-after-runtime-quiesce",
+            "rustlsEntries": tls_caches.rustls,
+            "boringEntries": tls_caches.boring,
         }));
     }
 

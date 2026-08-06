@@ -83,8 +83,10 @@ pub(super) use self::runtime::*;
 #[path = "runtime/generation.rs"]
 mod generation;
 pub(in crate::production_runtime_owner) use self::generation::ResidentDataplaneGeneration;
+pub(crate) use self::generation::resident_dataplane_generation_lifetime_counts;
 use self::generation::{
-    ActiveGenerationSlot, ResidentGenerationDrainControl, next_resident_dataplane_generation_id,
+    ActiveGenerationSlot, ResidentDataplaneGenerationLifetime, ResidentGenerationDrainControl,
+    next_resident_dataplane_generation_id,
 };
 #[path = "runtime/generation_lifecycle.rs"]
 mod generation_lifecycle;

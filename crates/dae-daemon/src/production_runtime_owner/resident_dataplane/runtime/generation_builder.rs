@@ -233,6 +233,7 @@ pub(super) fn build_resident_dataplane_generation(
         owner.spawn_generation_async_task("dns-target-refresh-owner", "dns-target-refresh", task);
     }
     let generation = Arc::new(ResidentDataplaneGeneration {
+        _lifetime: ResidentDataplaneGenerationLifetime::register(),
         id: generation_id,
         reload_generation,
         tcp_router,

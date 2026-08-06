@@ -450,6 +450,14 @@ fn consecutive_generic_config_changes_do_not_leave_a_cleanup_interlock() {
             .unwrap();
             assert!(applied.applied);
             assert!(!applied.coalesced);
+            assert_eq!(
+                applied.runtime_report["previousRuntimeCleanupExecution"],
+                json!("synchronous-before-start")
+            );
+            assert_eq!(
+                applied.runtime_report["previousRuntimeCleanup"]["cleanupRuntime"],
+                json!("fake-resident-runtime-test-only")
+            );
             runtime.ensure_cleanup_allows_start().unwrap();
             assert!(runtime.wait_for_cleanup_idle(Duration::from_secs(1)));
             let summary = runtime.summary();

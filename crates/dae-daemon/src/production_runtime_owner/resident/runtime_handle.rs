@@ -387,6 +387,8 @@ impl ResidentProductionRuntime {
             );
         }
         self.dataplane = None;
+        let (process_live_generations, generations_created_total, generations_dropped_total) =
+            resident_dataplane_generation_lifetime_counts();
 
         let binding_cleanup_postflight = conflict_cleanup["binding_cleanup_postflight"].clone();
         let binding_cleanup_ok = binding_cleanup_postflight["status"].as_str() == Some("pass");
@@ -434,6 +436,11 @@ impl ResidentProductionRuntime {
             "leftovers_after_cleanup": leftovers_after_cleanup,
             "sys_fs_bpf_dae_mutated": sys_fs_bpf_dae_mutated,
             "reload_conflict_cleanup": conflict_cleanup,
+            "generation_lifetime_after_dataplane_drop": {
+                "processLiveGenerations": process_live_generations,
+                "generationsCreatedTotal": generations_created_total,
+                "generationsDroppedTotal": generations_dropped_total,
+            },
         });
         let phase_started = Instant::now();
         let write_status = if write_json_file(

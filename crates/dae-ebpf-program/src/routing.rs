@@ -12,6 +12,8 @@ use crate::{helpers, maps};
 const BPF_ANY: u64 = 0;
 const CONTROL_PLANE_SO_MARK: u32 = 0x100;
 const LATENCY_PROBE_HELPER_COMM: [u8; TASK_COMM_LEN] = *b"daed-latency\0\0\0\0";
+const GEODATA_PREPARE_HELPER_COMM: [u8; TASK_COMM_LEN] = *b"daed-geodata\0\0\0\0";
+const SUBSCRIPTION_PREPARE_HELPER_COMM: [u8; TASK_COMM_LEN] = *b"daed-subscript\0\0";
 const OUTBOUND_DIRECT: u8 = 0;
 const OUTBOUND_BLOCK: u8 = 1;
 const OUTBOUND_MUST_RULES: u8 = 0xfc;
@@ -160,7 +162,7 @@ pub fn pid_is_control_plane(skb: *mut __sk_buff, pid_pname: *mut BpfPidPname) ->
             return true;
         }
         if (unsafe { (*skb).mark } & CONTROL_PLANE_SO_MARK) == CONTROL_PLANE_SO_MARK {
-            return unsafe { pid_pname_is_latency_probe_helper(pid_pname) };
+            return unsafe { pid_pname_is_control_helper(pid_pname) };
         }
         return false;
     }
@@ -168,11 +170,17 @@ pub fn pid_is_control_plane(skb: *mut __sk_buff, pid_pname: *mut BpfPidPname) ->
 }
 
 #[inline(always)]
-unsafe fn pid_pname_is_latency_probe_helper(pid_pname: *const BpfPidPname) -> bool {
+unsafe fn pid_pname_is_control_helper(pid_pname: *const BpfPidPname) -> bool {
     unsafe {
         names_equal(
             ptr::addr_of!((*pid_pname).comm).cast::<u8>(),
             LATENCY_PROBE_HELPER_COMM.as_ptr(),
+        ) || names_equal(
+            ptr::addr_of!((*pid_pname).comm).cast::<u8>(),
+            GEODATA_PREPARE_HELPER_COMM.as_ptr(),
+        ) || names_equal(
+            ptr::addr_of!((*pid_pname).comm).cast::<u8>(),
+            SUBSCRIPTION_PREPARE_HELPER_COMM.as_ptr(),
         )
     }
 }
@@ -580,13 +588,24 @@ mod tests {
             comm: helper_comm,
             pname: enhanced_pname,
         };
-        assert!(unsafe { pid_pname_is_latency_probe_helper(ptr::addr_of!(helper_identity)) });
+        assert!(unsafe { pid_pname_is_control_helper(ptr::addr_of!(helper_identity)) });
 
         let reversed_identity = BpfPidPname {
             pid: 0,
             comm: enhanced_pname,
             pname: helper_comm,
         };
-        assert!(!unsafe { pid_pname_is_latency_probe_helper(ptr::addr_of!(reversed_identity)) });
+        assert!(!unsafe { pid_pname_is_control_helper(ptr::addr_of!(reversed_identity)) });
+    }
+
+    #[test]
+    fn geodata_helper_control_identity_uses_task_comm() {
+        let helper_comm = process_name(&GEODATA_PREPARE_HELPER_COMM);
+        let helper_identity = BpfPidPname {
+            pid: 0,
+            comm: helper_comm,
+            pname: process_name(HELPER_PARENT_ARGV0_BASENAME),
+        };
+        assert!(unsafe { pid_pname_is_control_helper(ptr::addr_of!(helper_identity)) });
     }
 }
