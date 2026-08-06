@@ -390,6 +390,27 @@ routing {
 }
 
 #[test]
+pub(super) fn resident_routing_regex_sets_scope_thread_caches_to_one_generation() {
+    let patterns = (0..40)
+        .map(|index| format!(r"^service-{index}\.example\.test$"))
+        .collect::<Vec<_>>();
+    let first_generation = ResidentGeodataStore::new(Vec::<std::path::PathBuf>::new());
+    let first = first_generation
+        .shared_domain_set("regex", patterns.clone())
+        .unwrap();
+    let first_again = first_generation
+        .shared_domain_set("regex", patterns.clone())
+        .unwrap();
+    assert!(first.ptr_eq(&first_again));
+
+    let next_generation = ResidentGeodataStore::new(Vec::<std::path::PathBuf>::new());
+    let next = next_generation
+        .shared_domain_set("regex", patterns)
+        .unwrap();
+    assert!(!first.ptr_eq(&next));
+}
+
+#[test]
 pub(super) fn resident_routing_geoip_shared_prefix_sets_are_generic() {
     let root = test_asset_root("shared-geoip-generic");
     write_asset(

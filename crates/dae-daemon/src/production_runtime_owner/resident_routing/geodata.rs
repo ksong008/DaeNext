@@ -487,6 +487,21 @@ impl GeodataResolver {
         {
             return Ok(cached);
         }
+        if key == DomainKey::Regex {
+            // `regex::Regex` and `RegexSet` own lazy hybrid-DFA cache pools. Those pools retain
+            // one cache for every OS thread that has used the matcher. A physical reload replaces
+            // the Tokio worker threads, so process-wide interning of the complete regex object
+            // made each reload permanently add caches for the dead worker generation. Keep regex
+            // sets shared within one resolver/generation, but give every physical generation a
+            // fresh cache owner so dropping the generation also drops its retired-thread caches.
+            let built = SharedDomainSet::from_vec(values, key)
+                .map_err(|err| format!("build shared resident domain set: {err}"))?;
+            self.shared_domain_sets
+                .lock()
+                .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
+                .insert(cache_key, built.clone());
+            return Ok(built);
+        }
         if let Some(shared) = shared_domain_set_interner()
             .lock()
             .map_err(|_| "process shared domain set interner lock poisoned".to_owned())?
