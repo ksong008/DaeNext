@@ -50,6 +50,12 @@ impl ProductControlRuntime {
         Self::start(ProductControlRuntimeConfig::for_test())
     }
 
+    pub(in crate::daed_product) fn start_for_helper(
+        thread_name: &'static str,
+    ) -> io::Result<Arc<Self>> {
+        Self::start(ProductControlRuntimeConfig::for_helper(thread_name))
+    }
+
     fn start(config: ProductControlRuntimeConfig) -> io::Result<Arc<Self>> {
         let allocator_reclaim = crate::allocator::AllocatorRuntimeReclaimHooks::new(
             crate::allocator::AllocatorWorkerKind::ProductControl,
@@ -60,7 +66,7 @@ impl ProductControlRuntime {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(config.worker_threads)
             .max_blocking_threads(config.maximum_blocking_threads)
-            .thread_name(PRODUCT_CONTROL_RUNTIME_THREAD_NAME)
+            .thread_name(config.thread_name)
             .thread_stack_size(config.worker_stack_bytes)
             .on_thread_start(move || start_reclaim.thread_start())
             .on_thread_stop(move || stop_reclaim.thread_stop())

@@ -71,6 +71,26 @@ impl SubscriptionFetchFailureKind {
                 | Self::SourceIo
         )
     }
+
+    fn from_code(code: &str) -> Option<Self> {
+        Some(match code {
+            "invalid_source" => Self::InvalidSource,
+            "tls_unknown_issuer" => Self::TlsUnknownIssuer,
+            "tls_certificate" => Self::TlsCertificate,
+            "dns" => Self::Dns,
+            "connect" => Self::Connect,
+            "timeout" => Self::Timeout,
+            "http_status" => Self::HttpStatus,
+            "redirect" => Self::Redirect,
+            "content_decode" => Self::ContentDecode,
+            "response_too_large" => Self::ResponseTooLarge,
+            "access_denied" => Self::AccessDenied,
+            "control_busy" => Self::ControlBusy,
+            "control_unavailable" => Self::ControlUnavailable,
+            "source_io" => Self::SourceIo,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,6 +159,14 @@ impl SubscriptionFetchFailure {
 
     pub(super) fn message(&self) -> &'static str {
         self.kind.message()
+    }
+
+    pub(super) fn code(&self) -> &'static str {
+        self.kind.code()
+    }
+
+    pub(super) fn from_code(code: &str) -> Option<Self> {
+        SubscriptionFetchFailureKind::from_code(code).map(|kind| Self { kind })
     }
 
     pub(super) fn response_value(&self) -> Value {

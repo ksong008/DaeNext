@@ -7,6 +7,7 @@ fn geodata_update_runtime_is_bounded_by_the_two_resource_kinds() {
     assert_eq!(config.worker_count, 2);
     assert_eq!(config.queue_capacity, 2);
     assert_eq!(config.worker_stack_bytes, 512 * 1024);
+    assert_eq!(config.preparation_mode, GeodataPreparationMode::Inline);
 }
 
 #[test]

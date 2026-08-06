@@ -105,11 +105,26 @@ async fn connect_subscription_endpoint(
 ) -> io::Result<tokio::net::TcpStream> {
     let mut last_error = None;
     for addr in addrs {
+        let socket = if addr.is_ipv4() {
+            tokio::net::TcpSocket::new_v4()
+        } else {
+            tokio::net::TcpSocket::new_v6()
+        };
+        let socket = match socket.and_then(|socket| {
+            apply_product_control_helper_socket_mark(&socket)?;
+            Ok(socket)
+        }) {
+            Ok(socket) => socket,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
         let connected = tokio::select! {
             _ = cancellation.cancelled() => return Err(subscription_cancelled()),
             connected = tokio::time::timeout(
                 SUBSCRIPTION_TCP_CONNECT_TIMEOUT,
-                tokio::net::TcpStream::connect(addr),
+                socket.connect(*addr),
             ) => connected,
         };
         match connected {

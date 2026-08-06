@@ -2,6 +2,7 @@ use super::*;
 
 mod content;
 mod fetch_error;
+mod helper;
 mod http;
 mod node_stage;
 mod node_sync;
@@ -23,12 +24,13 @@ pub(crate) use self::http::{
 pub(crate) use self::node_sync::replace_subscription_nodes;
 #[cfg(test)]
 pub(crate) use self::source::fetch_subscription_content;
-use self::source::fetch_subscription_content_with_proxy_config;
 
 const SUBSCRIPTION_HTTP_HEADER_LIMIT: usize = 128 * 1024;
 const SUBSCRIPTION_MAX_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Clone, PartialEq, Eq)]
+pub(in crate::daed_product) use helper::run_subscription_prepare_helper_command;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SubscriptionSourceIdentity {
     id: i64,
     link: String,
@@ -42,7 +44,28 @@ pub(crate) fn refresh_subscription_from_remote(
     config_dir: &Path,
     id: i64,
 ) -> io::Result<Value> {
-    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
+    #[cfg(not(test))]
+    let _ = control_runtime;
+    let result = {
+        let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
+        #[cfg(not(test))]
+        let result = refresh_subscription_from_remote_inner(state, config_dir, id);
+        #[cfg(test)]
+        let result =
+            refresh_subscription_from_remote_inline(control_runtime, state, config_dir, id);
+        result
+    };
+    allocator_request_reclaim(AllocatorReclaimReason::SubscriptionRefresh);
+    result
+}
+
+#[cfg(test)]
+fn refresh_subscription_from_remote_inline(
+    control_runtime: &ProductControlRuntime,
+    state: &Path,
+    config_dir: &Path,
+    id: i64,
+) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let source = subscription_source_by_id(state, id)?;
     let fetched_at = now_text();
@@ -51,7 +74,7 @@ pub(crate) fn refresh_subscription_from_remote(
     } else {
         None
     };
-    match fetch_subscription_content_with_proxy_config(
+    match source::fetch_subscription_content_with_proxy_config(
         control_runtime,
         config_dir,
         source.tag.as_deref(),
@@ -85,34 +108,113 @@ pub(crate) fn refresh_subscription_from_remote(
                     "preservedExistingNodes": applied.preserved_existing_nodes,
                     "runtimeInputChanged": applied.runtime_input_changed,
                     "nodeImportResult": applied.node_import_result,
+                    "preparationMode": "inline-test",
                 })),
                 transaction::SubscriptionCommitResult::Stale => {
                     Ok(stale_subscription_refresh_report(&source, &fetched_at))
                 }
             }
         }
-        Err(err) => {
-            let failure = fetch_error::SubscriptionFetchFailure::from_io_error(&err);
-            match transaction::record_subscription_fetch_error(
+        Err(error) => record_subscription_fetch_failure(
+            state,
+            &source,
+            &fetched_at,
+            fetch_error::SubscriptionFetchFailure::from_io_error(&error),
+        ),
+    }
+}
+
+#[cfg(not(test))]
+fn refresh_subscription_from_remote_inner(
+    state: &Path,
+    config_dir: &Path,
+    id: i64,
+) -> io::Result<Value> {
+    ensure_state_schema(state)?;
+    let source = subscription_source_by_id(state, id)?;
+    let fetched_at = now_text();
+    match helper::prepare_subscription_with_helper(state, config_dir, &source) {
+        Ok(helper::SubscriptionHelperOutcome::Prepared(prepared)) => {
+            let persist_path = if prepared.persist_staging.is_some() {
+                Some(source::persist_subscription_path(
+                    config_dir,
+                    source.tag.as_deref(),
+                )?)
+            } else {
+                None
+            };
+            let persist = persist_path
+                .as_deref()
+                .zip(prepared.persist_staging.as_deref())
+                .map(
+                    |(path, staging)| transaction::PersistedSubscriptionContent::StagedFile {
+                        path,
+                        staging,
+                    },
+                );
+            match transaction::apply_prepared_subscription_refresh_report(
                 state,
                 &source,
                 &fetched_at,
-                failure.message(),
+                &prepared.prepared,
+                persist,
             )? {
-                transaction::SubscriptionCommitResult::Applied(()) => Ok(json!({
+                transaction::SubscriptionCommitResult::Applied(applied) => Ok(json!({
                     "link": source.link,
-                    "fetched": false,
-                    "fetchError": failure.response_value(),
+                    "fetched": true,
+                    "fetchError": Value::Null,
                     "fetchedAt": fetched_at,
-                    "refreshOutcome": "fetch-failed-preserved",
-                    "preservedExistingNodes": true,
-                    "runtimeInputChanged": false,
-                    "nodeImportResult": [],
+                    "refreshOutcome": applied.refresh_outcome,
+                    "sourceKind": applied.source_kind,
+                    "sourceNodeCount": applied.source_node_count,
+                    "admittedNodeCount": applied.admitted_node_count,
+                    "invalidNodeCount": applied.invalid_node_count,
+                    "notAdmittedNodeCount": applied.not_admitted_node_count,
+                    "preservedExistingNodes": applied.preserved_existing_nodes,
+                    "runtimeInputChanged": applied.runtime_input_changed,
+                    "nodeImportResult": applied.node_import_result,
+                    "preparationMode": "isolated-process",
                 })),
                 transaction::SubscriptionCommitResult::Stale => {
                     Ok(stale_subscription_refresh_report(&source, &fetched_at))
                 }
             }
+        }
+        Ok(helper::SubscriptionHelperOutcome::FetchFailed(failure)) => {
+            record_subscription_fetch_failure(state, &source, &fetched_at, failure)
+        }
+        Err(error) => {
+            let failure = fetch_error::SubscriptionFetchFailure::from_io_error(&error);
+            record_subscription_fetch_failure(state, &source, &fetched_at, failure)
+        }
+    }
+}
+
+fn record_subscription_fetch_failure(
+    state: &Path,
+    source: &SubscriptionSourceIdentity,
+    fetched_at: &str,
+    failure: fetch_error::SubscriptionFetchFailure,
+) -> io::Result<Value> {
+    match transaction::record_subscription_fetch_error(
+        state,
+        source,
+        fetched_at,
+        failure.message(),
+    )? {
+        transaction::SubscriptionCommitResult::Applied(()) => Ok(json!({
+            "link": source.link,
+            "fetched": false,
+            "fetchError": failure.response_value(),
+            "fetchedAt": fetched_at,
+            "refreshOutcome": "fetch-failed-preserved",
+            "preservedExistingNodes": true,
+            "runtimeInputChanged": false,
+            "nodeImportResult": [],
+            "preparationMode": "isolated-process",
+        })),
+        transaction::SubscriptionCommitResult::Stale => {
+            Ok(stale_subscription_refresh_report(source, fetched_at))
         }
     }
 }

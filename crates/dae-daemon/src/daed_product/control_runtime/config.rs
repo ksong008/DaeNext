@@ -14,6 +14,7 @@ const PRODUCT_CONTROL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ProductControlRuntimeConfig {
+    pub(super) thread_name: &'static str,
     pub(super) profile: ProductHttpProfile,
     pub(super) worker_threads: usize,
     pub(super) maximum_blocking_threads: usize,
@@ -67,6 +68,7 @@ impl ProductControlRuntimeConfig {
             .min(dns_limit.max(1))
             .max(1);
         Self {
+            thread_name: PRODUCT_CONTROL_RUNTIME_THREAD_NAME,
             profile: http.profile,
             worker_threads,
             maximum_blocking_threads,
@@ -85,8 +87,16 @@ impl ProductControlRuntimeConfig {
         Self::for_benchmark()
     }
 
+    pub(super) fn for_helper(thread_name: &'static str) -> Self {
+        Self {
+            thread_name,
+            ..Self::for_benchmark()
+        }
+    }
+
     pub(super) fn for_benchmark() -> Self {
         Self {
+            thread_name: PRODUCT_CONTROL_RUNTIME_THREAD_NAME,
             profile: ProductHttpProfile::LowMemory,
             worker_threads: 1,
             maximum_blocking_threads: 1,
@@ -104,6 +114,7 @@ impl ProductControlRuntimeConfig {
         json!({
             "profile": self.profile.name(),
             "executor": "process-owned-bounded-multi-thread",
+            "threadName": self.thread_name,
             "workerThreads": self.worker_threads,
             "maximumBlockingThreads": self.maximum_blocking_threads,
             "workerStackBytes": self.worker_stack_bytes,
@@ -119,6 +130,10 @@ impl ProductControlRuntimeConfig {
 
     pub(super) fn startup_fields(self) -> BTreeMap<String, String> {
         BTreeMap::from([
+            (
+                "controlRuntimeThreadName".to_owned(),
+                self.thread_name.to_owned(),
+            ),
             (
                 "controlRuntimeProfile".to_owned(),
                 self.profile.name().to_owned(),
@@ -204,5 +219,13 @@ mod tests {
             PRODUCT_CONTROL_LOW_MEMORY_BLOCKING_THREAD_MAX
         );
         assert!(low_memory.queue_capacity < standard.queue_capacity);
+    }
+
+    #[test]
+    fn helper_control_runtime_uses_the_supplied_control_helper_identity() {
+        let config = ProductControlRuntimeConfig::for_helper("daed-geodata");
+        assert_eq!(config.thread_name, "daed-geodata");
+        assert_eq!(config.worker_threads, 1);
+        assert_eq!(config.maximum_blocking_threads, 1);
     }
 }

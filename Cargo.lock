@@ -708,6 +708,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sha3",
+ "socket2",
  "tikv-jemalloc-ctl",
  "tikv-jemalloc-sys",
  "tikv-jemallocator",
