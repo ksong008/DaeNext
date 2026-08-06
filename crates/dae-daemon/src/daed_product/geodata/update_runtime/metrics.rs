@@ -115,6 +115,7 @@ impl ProductGeodataUpdateMetrics {
             "configuredWorkers": self.configured_workers,
             "queueCapacity": self.queue_capacity,
             "workerStackBytes": config.worker_stack_bytes,
+            "preparationMode": config.preparation_mode.name(),
             "queueDepth": self.queue_depth.load(Ordering::Relaxed),
             "activeWorkers": self.active_workers.load(Ordering::Relaxed),
             "active": {

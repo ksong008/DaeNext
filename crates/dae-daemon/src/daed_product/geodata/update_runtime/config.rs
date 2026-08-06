@@ -13,6 +13,7 @@ pub(super) struct ProductGeodataUpdateRuntimeConfig {
     pub(super) worker_stack_bytes: usize,
     pub(super) worker_recv_timeout: Duration,
     pub(super) shutdown_timeout: Duration,
+    pub(super) preparation_mode: GeodataPreparationMode,
 }
 
 impl ProductGeodataUpdateRuntimeConfig {
@@ -24,6 +25,7 @@ impl ProductGeodataUpdateRuntimeConfig {
             worker_stack_bytes: http.worker_stack_bytes,
             worker_recv_timeout: PRODUCT_GEODATA_UPDATE_WORKER_RECV_TIMEOUT,
             shutdown_timeout: PRODUCT_GEODATA_UPDATE_SHUTDOWN_TIMEOUT,
+            preparation_mode: GeodataPreparationMode::IsolatedProcess,
         }
     }
 
@@ -36,6 +38,7 @@ impl ProductGeodataUpdateRuntimeConfig {
             worker_stack_bytes: PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT,
             worker_recv_timeout: Duration::from_millis(10),
             shutdown_timeout: Duration::from_millis(100),
+            preparation_mode: GeodataPreparationMode::Inline,
         }
     }
 }

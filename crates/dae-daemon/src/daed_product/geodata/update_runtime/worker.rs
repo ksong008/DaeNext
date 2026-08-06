@@ -144,11 +144,17 @@ fn product_geodata_update_worker_loop(
                 if stopping.load(Ordering::Acquire) {
                     return;
                 }
+                // Receiver is shared behind a mutex because std::mpsc::Receiver is not Sync.
+                // Give a worker already waiting for that mutex a deterministic chance to take
+                // ownership after the bounded receive. Without this handoff one worker can
+                // repeatedly reacquire the receiver while its peer cannot poll a process-wide
+                // allocator reclaim request before the acknowledgement deadline.
+                std::thread::sleep(Duration::from_millis(1));
                 continue;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
         };
-        run_product_geodata_update_job(&context, &metrics, &stopping, job);
+        run_product_geodata_update_job(&context, &metrics, &stopping, config.preparation_mode, job);
         allocator_worker.poll();
     }
 }
@@ -157,6 +163,7 @@ fn run_product_geodata_update_job(
     context: &ProductGeodataUpdateContext,
     metrics: &Arc<ProductGeodataUpdateMetrics>,
     stopping: &std::sync::atomic::AtomicBool,
+    preparation_mode: GeodataPreparationMode,
     job: ProductGeodataUpdateJob,
 ) {
     let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Geodata);
@@ -180,7 +187,7 @@ fn run_product_geodata_update_job(
         HttpResponse::json(503, json!({"error": "geodata update runtime is stopping"}))
     } else {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            update_geodata_with_lease(context, kind, lease)
+            update_geodata_with_lease_using(context, kind, lease, preparation_mode)
         })) {
             Ok(result) => geodata_update_http_response(kind, result),
             Err(_) => {

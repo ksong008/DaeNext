@@ -19,67 +19,41 @@ pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Va
 pub(super) fn update_geodata_with_lease(
     context: &ProductGeodataUpdateContext,
     kind: GeodataKind,
+    update_lease: ProductGeodataUpdateLease,
+) -> io::Result<Value> {
+    update_geodata_with_lease_using(context, kind, update_lease, GeodataPreparationMode::Inline)
+}
+
+pub(super) fn update_geodata_with_lease_using(
+    context: &ProductGeodataUpdateContext,
+    kind: GeodataKind,
     _update_lease: ProductGeodataUpdateLease,
+    preparation_mode: GeodataPreparationMode,
 ) -> io::Result<Value> {
     let dir = context.dir.clone();
     fs::create_dir_all(&dir)?;
     recover_geodata_transaction(&dir, &context.state, kind)?;
-    let source = geodata_source(&context.state, kind)?;
-    let proxy_config = if source.use_proxy {
-        Some(product_default_proxy_config(&context.state)?)
-    } else {
-        None
-    };
-    let release = match source.mode {
-        GeodataSourceMode::ReleaseApi => fetch_geodata_latest_release(
-            &context.control_runtime,
-            kind,
-            &source.url,
-            proxy_config.as_ref(),
-        )?,
-        GeodataSourceMode::DirectFile => {
-            direct_geodata_release(context, kind, &source.url, proxy_config.as_ref())
-        }
-    };
     let tmp_path = context
         .updates
         .reserve_staging_path(&dir, kind, "download")?;
-    let download = match fetch_geodata_url_to_file(
-        &context.control_runtime,
-        &release.download_url,
-        &tmp_path,
-        proxy_config.as_ref(),
-    ) {
-        Ok(download) => download,
+    let prepared = match preparation_mode {
+        GeodataPreparationMode::Inline => prepare_geodata_download_inline(
+            &context.control_runtime,
+            &context.state,
+            kind,
+            &tmp_path,
+        ),
+        GeodataPreparationMode::IsolatedProcess => {
+            prepare_geodata_with_helper(&context.updates, &context.state, &dir, kind, &tmp_path)
+        }
+    };
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
         Err(err) => {
             let _ = fs::remove_file(&tmp_path);
             return Err(err);
         }
     };
-    let summary = match summarize_geodata_file(kind, &tmp_path) {
-        Ok(summary) => summary,
-        Err(err) => {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(err);
-        }
-    };
-    if summary.category_count == 0 || summary.item_count == 0 {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "downloaded geodata is empty",
-        ));
-    }
-    if download.bytes == 0 {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "downloaded geodata is empty",
-        ));
-    }
-    let version = release
-        .version
-        .unwrap_or_else(|| geodata_sha256_version(&download.sha256));
     let input_versions_before = match runtime_input_versions_if_running(context) {
         Ok(version) => version,
         Err(error) => {
@@ -94,9 +68,9 @@ pub(super) fn update_geodata_with_lease(
         kind,
         PreparedGeodataGeneration {
             data_stage: tmp_path,
-            version,
-            summary,
-            sha256: download.sha256,
+            version: prepared.version,
+            summary: prepared.summary,
+            sha256: prepared.sha256,
             input_versions_before,
         },
     )?;
@@ -113,18 +87,62 @@ pub(super) fn update_geodata_with_lease(
     Ok(Value::Object(response_object))
 }
 
+pub(super) fn prepare_geodata_download_inline(
+    control_runtime: &ProductControlRuntime,
+    state: &Path,
+    kind: GeodataKind,
+    tmp_path: &Path,
+) -> io::Result<GeodataPreparedDownload> {
+    let source = geodata_source(state, kind)?;
+    let proxy_config = if source.use_proxy {
+        Some(product_default_proxy_config(state)?)
+    } else {
+        None
+    };
+    let release = match source.mode {
+        GeodataSourceMode::ReleaseApi => {
+            fetch_geodata_latest_release(control_runtime, kind, &source.url, proxy_config.as_ref())?
+        }
+        GeodataSourceMode::DirectFile => {
+            direct_geodata_release(control_runtime, kind, &source.url, proxy_config.as_ref())
+        }
+    };
+    let download = fetch_geodata_url_to_file(
+        control_runtime,
+        &release.download_url,
+        tmp_path,
+        proxy_config.as_ref(),
+    )?;
+    let summary = summarize_geodata_file(kind, tmp_path)?;
+    if summary.category_count == 0 || summary.item_count == 0 || download.bytes == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "downloaded geodata is empty",
+        ));
+    }
+    let version = release
+        .version
+        .unwrap_or_else(|| geodata_sha256_version(&download.sha256));
+    Ok(GeodataPreparedDownload {
+        version,
+        summary,
+        sha256: download.sha256,
+        download_bytes: download.bytes,
+    })
+}
+
 fn geodata_sha256_version(sha256: &str) -> String {
     sha256.chars().take(10).collect()
 }
 
 fn direct_geodata_release(
-    context: &ProductGeodataUpdateContext,
+    control_runtime: &ProductControlRuntime,
     kind: GeodataKind,
     source_url: &url::Url,
     proxy_config: Option<&Config>,
 ) -> GeodataRelease {
     let version = if source_url.as_str() == kind.default_source_url() {
-        default_direct_geodata_version(context, kind, proxy_config)
+        default_direct_geodata_version(control_runtime, kind, proxy_config)
     } else {
         None
     };
@@ -135,12 +153,12 @@ fn direct_geodata_release(
 }
 
 fn default_direct_geodata_version(
-    context: &ProductGeodataUpdateContext,
+    control_runtime: &ProductControlRuntime,
     kind: GeodataKind,
     proxy_config: Option<&Config>,
 ) -> Option<String> {
     let api_url = url::Url::parse(kind.legacy_release_api_url()).ok()?;
-    fetch_geodata_latest_release(&context.control_runtime, kind, &api_url, proxy_config)
+    fetch_geodata_latest_release(control_runtime, kind, &api_url, proxy_config)
         .ok()?
         .version
 }

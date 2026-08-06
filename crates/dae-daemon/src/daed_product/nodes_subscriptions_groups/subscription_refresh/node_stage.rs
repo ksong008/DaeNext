@@ -19,6 +19,29 @@ pub(super) struct PreparedSubscriptionNodes {
     pub(super) not_admitted: Vec<RejectedSubscriptionNode>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct PreparedSubscriptionRefresh {
+    pub(super) content_kind: content::SubscriptionContentKind,
+    pub(super) source_node_count: usize,
+    pub(super) invalid_source_count: usize,
+    pub(super) empty: bool,
+    pub(super) nodes: PreparedSubscriptionNodes,
+    pub(super) persist_content: bool,
+}
+
+pub(super) fn prepare_subscription_refresh(
+    content: &content::SubscriptionContentReport,
+) -> PreparedSubscriptionRefresh {
+    PreparedSubscriptionRefresh {
+        content_kind: content.kind,
+        source_node_count: content.source_node_count,
+        invalid_source_count: content.invalid_source_count,
+        empty: content.empty,
+        nodes: prepare_subscription_nodes(&content.links),
+        persist_content: false,
+    }
+}
+
 pub(super) fn prepare_subscription_nodes(links: &[String]) -> PreparedSubscriptionNodes {
     let admissions = resident_node_source_admissions(links);
     let mut prepared = PreparedSubscriptionNodes {

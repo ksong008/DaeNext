@@ -20,6 +20,8 @@ pub fn run_daed_product_with_args_and_version(
         Some("export") => run_export_command(&args[1..]),
         Some("resetpass") => run_resetpass_command(&args[1..]),
         Some("latency-probe-helper") => run_latency_probe_helper_command(&args[1..]),
+        Some("geodata-prepare-helper") => geodata::run_geodata_prepare_helper_command(&args[1..]),
+        Some("subscription-prepare-helper") => run_subscription_prepare_helper_command(&args[1..]),
         Some("help") | Some("--help") | Some("-h") => DaedProductOutput::ok(help_text()),
         Some(command) => DaedProductOutput::usage(format!("unsupported daed command: {command}")),
         None => DaedProductOutput::usage("missing daed command"),

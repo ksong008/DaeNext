@@ -17,6 +17,14 @@ pub(super) enum SubscriptionCommitResult<T> {
     Stale,
 }
 
+pub(super) enum PersistedSubscriptionContent<'a> {
+    #[cfg(test)]
+    Bytes { path: &'a Path, bytes: &'a [u8] },
+    #[cfg(not(test))]
+    StagedFile { path: &'a Path, staging: &'a Path },
+}
+
+#[cfg(test)]
 pub(super) fn apply_subscription_refresh_report(
     state: &Path,
     source: &SubscriptionSourceIdentity,
@@ -24,13 +32,24 @@ pub(super) fn apply_subscription_refresh_report(
     content: &content::SubscriptionContentReport,
     persist: Option<(&Path, &[u8])>,
 ) -> io::Result<SubscriptionCommitResult<SubscriptionRefreshApplyResult>> {
-    let prepared = node_stage::prepare_subscription_nodes(&content.links);
-    let admitted_node_count = prepared.admitted.len();
-    let invalid_node_count = content
+    let prepared = node_stage::prepare_subscription_refresh(content);
+    let persist = persist.map(|(path, bytes)| PersistedSubscriptionContent::Bytes { path, bytes });
+    apply_prepared_subscription_refresh_report(state, source, fetched_at, &prepared, persist)
+}
+
+pub(super) fn apply_prepared_subscription_refresh_report(
+    state: &Path,
+    source: &SubscriptionSourceIdentity,
+    fetched_at: &str,
+    prepared: &node_stage::PreparedSubscriptionRefresh,
+    persist: Option<PersistedSubscriptionContent<'_>>,
+) -> io::Result<SubscriptionCommitResult<SubscriptionRefreshApplyResult>> {
+    let admitted_node_count = prepared.nodes.admitted.len();
+    let invalid_node_count = prepared
         .invalid_source_count
-        .saturating_add(prepared.invalid.len());
-    let not_admitted_node_count = prepared.not_admitted.len();
-    let mut node_import_result = rejected_node_results(&prepared);
+        .saturating_add(prepared.nodes.invalid.len());
+    let not_admitted_node_count = prepared.nodes.not_admitted.len();
+    let mut node_import_result = rejected_node_results(&prepared.nodes);
 
     let _guard = subscription_write_guard()?;
     let mut conn = open_state_connection(state)?;
@@ -40,20 +59,32 @@ pub(super) fn apply_subscription_refresh_report(
     if !subscription_source_is_current(&tx, source)? {
         return Ok(SubscriptionCommitResult::Stale);
     }
-    if let Some((path, bytes)) = persist {
-        super::source::write_persisted_subscription(path, bytes)?;
+    if let Some(persist) = persist {
+        match persist {
+            #[cfg(test)]
+            PersistedSubscriptionContent::Bytes { path, bytes } => {
+                super::source::write_persisted_subscription(path, bytes)?;
+            }
+            #[cfg(not(test))]
+            PersistedSubscriptionContent::StagedFile { path, staging } => {
+                super::source::write_persisted_subscription_from_staging(path, staging)?;
+            }
+        }
     }
 
     let (runtime_input_changed, preserved_existing_nodes, refresh_outcome) =
-        if prepared.admitted.is_empty() {
+        if prepared.nodes.admitted.is_empty() {
             (
                 false,
                 true,
-                preserved_refresh_outcome(content, invalid_node_count, not_admitted_node_count),
+                preserved_refresh_outcome(prepared, invalid_node_count, not_admitted_node_count),
             )
         } else {
-            let sync_result =
-                node_sync::replace_prepared_subscription_nodes(&tx, source.id, &prepared.admitted)?;
+            let sync_result = node_sync::replace_prepared_subscription_nodes(
+                &tx,
+                source.id,
+                &prepared.nodes.admitted,
+            )?;
             node_import_result.splice(0..0, sync_result.items);
             let outcome = if invalid_node_count != 0 || not_admitted_node_count != 0 {
                 "partial"
@@ -67,8 +98,8 @@ pub(super) fn apply_subscription_refresh_report(
 
     let info = format!(
         "subscription refresh {refresh_outcome}: source={}, sourceNodes={}, admitted={}, invalid={}, notAdmitted={}",
-        content.kind.as_str(),
-        content.source_node_count,
+        prepared.content_kind.as_str(),
+        prepared.source_node_count,
         admitted_node_count,
         invalid_node_count,
         not_admitted_node_count,
@@ -88,8 +119,8 @@ pub(super) fn apply_subscription_refresh_report(
             runtime_input_changed,
             node_import_result,
             refresh_outcome,
-            source_kind: content.kind.as_str(),
-            source_node_count: content.source_node_count,
+            source_kind: prepared.content_kind.as_str(),
+            source_node_count: prepared.source_node_count,
             admitted_node_count,
             invalid_node_count,
             not_admitted_node_count,
@@ -122,11 +153,11 @@ pub(super) fn record_subscription_fetch_error(
 }
 
 fn preserved_refresh_outcome(
-    content: &content::SubscriptionContentReport,
+    prepared: &node_stage::PreparedSubscriptionRefresh,
     invalid_node_count: usize,
     not_admitted_node_count: usize,
 ) -> &'static str {
-    if content.empty {
+    if prepared.empty {
         "empty-preserved"
     } else if invalid_node_count != 0 && not_admitted_node_count == 0 {
         "all-invalid-preserved"

@@ -1,4 +1,4 @@
-use super::update::update_geodata_with_lease;
+use super::update::update_geodata_with_lease_using;
 use super::*;
 
 mod config;

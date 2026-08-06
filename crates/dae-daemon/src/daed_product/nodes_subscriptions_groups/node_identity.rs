@@ -7,6 +7,14 @@ impl StableNodeKey {
     pub(crate) fn from_link(link: &str) -> Self {
         Self(dae_outbound::canonical_link_without_display_name(link))
     }
+
+    pub(in crate::daed_product) fn from_canonical(value: String) -> Self {
+        Self(value)
+    }
+
+    pub(in crate::daed_product) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
