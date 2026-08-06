@@ -780,6 +780,7 @@ impl AnyTlsPhysicalPadding {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn write_frame_with_flush<W>(
         &mut self,
         client: &mut W,
