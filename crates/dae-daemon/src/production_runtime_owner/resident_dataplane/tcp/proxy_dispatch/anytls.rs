@@ -112,7 +112,7 @@ pub(crate) async fn relay_tcp_over_anytls_async(
     let upload = async move {
         let mut inbound_read = inbound_read;
         let mut logical_write = logical_write;
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; RESIDENT_ANYTLS_RELAY_BUFFER_SIZE];
         loop {
             let read = match inbound_read.read(&mut buffer).await {
                 Ok(0) => {
@@ -140,7 +140,7 @@ pub(crate) async fn relay_tcp_over_anytls_async(
     let download = async move {
         let mut inbound_write = inbound_write;
         let mut logical_read = logical_read;
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = [0_u8; RESIDENT_ANYTLS_RELAY_BUFFER_SIZE];
         loop {
             let read = match logical_read.read(&mut buffer).await {
                 Ok(0) => {

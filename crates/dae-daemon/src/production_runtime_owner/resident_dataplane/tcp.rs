@@ -120,9 +120,10 @@ use super::vision::{
     VisionUplinkWriteMode, queue_vision_uplink,
 };
 use super::{
-    RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-    RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION,
-    resident_normalized_socket_addr, resident_socket_addr_display, resident_tcp_network_name,
+    RESIDENT_ANYTLS_RELAY_BUFFER_SIZE, RESIDENT_CONNECT_TIMEOUT,
+    RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT,
+    TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION, resident_normalized_socket_addr,
+    resident_socket_addr_display, resident_tcp_network_name,
 };
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
