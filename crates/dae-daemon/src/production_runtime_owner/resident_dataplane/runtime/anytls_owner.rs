@@ -1771,7 +1771,7 @@ async fn run_anytls_active_stream(
         mpsc::channel(resources.physical_control_queue_depth().max(1));
 
     let writer = async {
-        let mut buffer = vec![0_u8; 16 * 1024];
+        let mut buffer = vec![0_u8; RESIDENT_ANYTLS_RELAY_BUFFER_SIZE];
         let mut pending_flush_bytes = 0_usize;
         let mut pending_flush_deadline = None;
         loop {

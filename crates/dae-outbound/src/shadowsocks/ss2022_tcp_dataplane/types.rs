@@ -3,8 +3,13 @@ pub(super) const SESSION_SUBKEY_CONTEXT: &str = "shadowsocks 2022 session subkey
 pub(super) const IDENTITY_SUBKEY_CONTEXT: &str = "shadowsocks 2022 identity subkey";
 pub const SS2022_TCP_TAG_LEN: usize = 16;
 pub const SS2022_TCP_RELAY_PAYLOAD_SIZE: usize = 16 * 1024;
+// The SS2022 TCP length field is u16.  Keep the response/read-side staging
+// profile at 16 KiB, but let the upload-side in-place encoder admit one full
+// legal record so high-throughput upload does not split every 64 KiB into four
+// AEAD record pairs.
+pub const SS2022_TCP_RELAY_UPLOAD_PAYLOAD_SIZE: usize = TCP_CHUNK_MAX_LEN;
 pub const SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE: usize =
-    2 + SS2022_TCP_TAG_LEN + SS2022_TCP_RELAY_PAYLOAD_SIZE + SS2022_TCP_TAG_LEN;
+    2 + SS2022_TCP_TAG_LEN + SS2022_TCP_RELAY_UPLOAD_PAYLOAD_SIZE + SS2022_TCP_TAG_LEN;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ss2022TcpSalts<'a> {

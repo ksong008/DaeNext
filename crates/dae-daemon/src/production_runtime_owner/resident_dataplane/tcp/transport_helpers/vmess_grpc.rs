@@ -21,9 +21,12 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     let upload_progress = progress.clone();
     let upload = async move {
         let mut inbound_read = inbound_read;
-        let mut inbound_buf = Box::new([0_u8; VMESS_AEAD_TCP_MAX_PAYLOAD_SIZE]);
+        let mut inbound_buf = Box::new([0_u8; VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
         loop {
-            let read = match inbound_read.read(inbound_buf.as_mut()).await {
+            let read = match inbound_read
+                .read(upload_codec.chunk_payload_buffer(inbound_buf.as_mut()))
+                .await
+            {
                 Ok(0) => {
                     send_h2_data(send_stream, Bytes::new(), true).await?;
                     return Ok(());
@@ -37,10 +40,10 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
                     return Err(format!("read inbound TCP for VMess gRPC relay: {err}"));
                 }
             };
-            let encrypted = upload_codec
-                .seal_chunk(&inbound_buf[..read])
+            let wire_len = upload_codec
+                .seal_chunk_in_place(inbound_buf.as_mut(), read)
                 .map_err(|err| format!("encode VMess gRPC upload chunk: {err}"))?;
-            send_grpc_hunk(send_stream, &encrypted, false).await?;
+            send_grpc_hunk(send_stream, &inbound_buf[..wire_len], false).await?;
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }
