@@ -1114,8 +1114,8 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_stream_modes_and_xmux()
     .unwrap();
     assert_eq!(stream_up.xhttp_mode, ResidentXhttpMode::StreamUp);
     let default_xmux = stream_up.xhttp_xmux.as_ref().unwrap();
-    assert_eq!(default_xmux.max_concurrency, Some((1, 1)));
-    assert_eq!(default_xmux.max_connections, None);
+    assert_eq!(default_xmux.max_concurrency, Some((0, 0)));
+    assert_eq!(default_xmux.max_connections, Some((3, 3)));
     assert_eq!(default_xmux.c_max_reuse_times, None);
     assert_eq!(default_xmux.h_max_request_times, Some((600, 900)));
     assert_eq!(default_xmux.h_max_reusable_secs, Some((1800, 3000)));
@@ -1156,8 +1156,8 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_stream_modes_and_xmux()
     )
     .unwrap();
     let zero_xmux = zero_xmux.xhttp_xmux.as_ref().unwrap();
-    assert_eq!(zero_xmux.max_concurrency, Some((1, 1)));
-    assert_eq!(zero_xmux.max_connections, None);
+    assert_eq!(zero_xmux.max_concurrency, Some((0, 0)));
+    assert_eq!(zero_xmux.max_connections, Some((3, 3)));
     assert_eq!(zero_xmux.h_max_request_times, Some((600, 900)));
     assert_eq!(zero_xmux.h_max_reusable_secs, Some((1800, 3000)));
 
