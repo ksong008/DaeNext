@@ -400,8 +400,8 @@ impl ResidentXhttpXmuxPlan {
         Self {
             runtime_generation: 0,
             physical_connection_limit: selected_xhttp_physical_connection_limit(),
-            max_concurrency: Some((1, 1)),
-            max_connections: None,
+            max_concurrency: Some((0, 0)),
+            max_connections: Some((3, 3)),
             c_max_reuse_times: None,
             h_max_request_times: Some((600, 900)),
             h_max_reusable_secs: Some((1800, 3000)),
@@ -615,7 +615,8 @@ mod tests {
         let normalized = xmux.official_normalized();
         assert_eq!(normalized.runtime_generation, 42);
         assert!(normalized.physical_connection_limit > 0);
-        assert_eq!(normalized.max_concurrency, Some((1, 1)));
+        assert_eq!(normalized.max_concurrency, Some((0, 0)));
+        assert_eq!(normalized.max_connections, Some((3, 3)));
     }
 
     #[test]
