@@ -238,7 +238,7 @@ pub(super) fn dns_upstream_targets_failed(
 /// deadline through that context.
 pub(super) async fn race_dns_upstream_targets_with_refresh<F, Fut, R, RFut>(
     upstream: &ResidentDnsUpstream,
-    resolved: &ResidentDnsResolvedTargetSnapshot,
+    _resolved: &ResidentDnsResolvedTargetSnapshot,
     operation: &str,
     targets: Vec<ResidentDnsUpstreamRoutedTarget>,
     failures: Vec<String>,
@@ -262,7 +262,6 @@ where
             >,
         >,
 {
-    let mut current_resolved = resolved.clone();
     let mut current_targets = targets;
     let mut current_failures = failures;
     for pass in 0..=1 {
@@ -300,11 +299,7 @@ where
             }
         }
 
-        if attempted > 0
-            && every_attempt_invalidates_stale
-            && current_resolved.is_stale()
-            && pass == 0
-        {
+        if attempted > 0 && every_attempt_invalidates_stale && pass == 0 {
             if context.ensure(ProxyDnsRequestStage::Retry).is_err() {
                 return Err(ResidentDnsTransportError::proxy(
                     ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Retry),
@@ -319,8 +314,7 @@ where
                 }
             };
             match refreshed {
-                Ok(Some((fresh_resolved, fresh_targets, fresh_failures))) => {
-                    current_resolved = fresh_resolved;
+                Ok(Some((_fresh_resolved, fresh_targets, fresh_failures))) => {
                     current_targets = fresh_targets;
                     current_failures = fresh_failures;
                     continue;
@@ -563,16 +557,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stale_candidate_refresh_retries_current_request_once() {
+    async fn fresh_target_connect_failure_refreshes_and_retries_current_request_once() {
         let stale_target = dns_upstream_target_v4();
         let fresh_target = dns_upstream_target_v6();
         let upstream = test_upstream();
-        let stale = ResidentDnsResolvedTargetSnapshot::stale_literal(stale_target);
+        let fresh = ResidentDnsResolvedTargetSnapshot::literal(stale_target);
         let attempts = Arc::new(AtomicUsize::new(0));
         let refreshes = Arc::new(AtomicUsize::new(0));
         let response = race_dns_upstream_targets_with_refresh(
             &upstream,
-            &stale,
+            &fresh,
             "stale retry fixture",
             vec![ResidentDnsUpstreamRoutedTarget {
                 target: stale_target,
@@ -709,5 +703,93 @@ mod tests {
             matches!(error, ResidentDnsTransportError::Refresh(message) if message.contains("resolver unavailable"))
         );
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn response_timeout_does_not_evict_a_fresh_target() {
+        let target = dns_upstream_target_v4();
+        let upstream = test_upstream();
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let error = race_dns_upstream_targets_with_refresh(
+            &upstream,
+            &ResidentDnsResolvedTargetSnapshot::literal(target),
+            "response-timeout fixture",
+            vec![ResidentDnsUpstreamRoutedTarget {
+                target,
+                l4proto: L4Proto::Udp,
+                selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+            }],
+            Vec::new(),
+            1,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+            {
+                let refreshes = Arc::clone(&refreshes);
+                move || {
+                    refreshes.fetch_add(1, Ordering::Relaxed);
+                    async { panic!("response timeout must not refresh the target") }
+                }
+            },
+            |_target| async {
+                Err(ResidentDnsTransportError::response_timeout(
+                    "upstream response timeout",
+                ))
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("response-timeout fixture"));
+        assert_eq!(refreshes.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn mixed_target_failures_do_not_evict_or_refresh() {
+        let connect_target = dns_upstream_target_v4();
+        let timeout_target = dns_upstream_target_v6();
+        let upstream = test_upstream();
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let error = race_dns_upstream_targets_with_refresh(
+            &upstream,
+            &ResidentDnsResolvedTargetSnapshot::literal(connect_target),
+            "mixed-error fixture",
+            vec![
+                ResidentDnsUpstreamRoutedTarget {
+                    target: connect_target,
+                    l4proto: L4Proto::Udp,
+                    selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+                },
+                ResidentDnsUpstreamRoutedTarget {
+                    target: timeout_target,
+                    l4proto: L4Proto::Udp,
+                    selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+                },
+            ],
+            Vec::new(),
+            2,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+            {
+                let refreshes = Arc::clone(&refreshes);
+                move || {
+                    refreshes.fetch_add(1, Ordering::Relaxed);
+                    async { panic!("mixed candidate failures must not refresh") }
+                }
+            },
+            move |target| async move {
+                if target.target == connect_target {
+                    Err(ResidentDnsTransportError::TargetConnect(
+                        "connection refused".to_owned(),
+                    ))
+                } else {
+                    Err(ResidentDnsTransportError::response_timeout(
+                        "response timeout",
+                    ))
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("mixed-error fixture"));
+        assert_eq!(refreshes.load(Ordering::Relaxed), 0);
     }
 }

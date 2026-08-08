@@ -81,12 +81,6 @@ impl ResidentDnsResolvedTargetSnapshot {
     ) -> &[SocketAddr] {
         &self.addrs
     }
-
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) const fn is_stale(
-        &self,
-    ) -> bool {
-        self.stale
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -301,11 +295,12 @@ impl ResidentDnsResolvedTargetCache {
             .map_err(|error| error.to_string())
     }
 
-    /// Invalidate a stale snapshot, singleflight the forced refresh, and return the
-    /// newly published snapshot to the caller.  The old API intentionally discarded
-    /// this value, which meant the request that discovered a dead target returned the
-    /// original error even after a successful refresh.  Callers use this method for a
-    /// single bounded retry of that same request.
+    /// Invalidate the snapshot that produced a target-specific connect/initial-send
+    /// failure, singleflight the forced refresh, and return the newly published
+    /// snapshot to the caller.  The snapshot may still be fresh by TTL: an immediate
+    /// refusal is sufficient evidence that the currently cached address is unusable.
+    /// The epoch check prevents an older failure from evicting a newer publication.
+    /// Callers use this method for a single bounded retry of that same request.
     pub(super) async fn refresh_after_stale_failure_and_resolve<F, Fut>(
         &self,
         snapshot: &ResidentDnsResolvedTargetSnapshot,
@@ -316,9 +311,6 @@ impl ResidentDnsResolvedTargetCache {
         F: FnOnce(Duration) -> Fut,
         Fut: std::future::Future<Output = Result<ResolvedHostAddrs, String>>,
     {
-        if !snapshot.stale {
-            return Ok(None);
-        }
         if time::Instant::now() >= deadline {
             self.defer_invalidated_retry(Some(snapshot.epoch));
             return Err(ResidentDnsTargetRefreshError::Deadline);
@@ -692,7 +684,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_snapshot_failure_feedback_does_not_run_the_resolver() {
+    async fn fresh_snapshot_target_failure_forces_one_refresh() {
         let cache = Arc::new(ResidentDnsResolvedTargetCache::seeded(
             vec!["192.0.2.12:53".parse().unwrap()],
             Duration::from_secs(60),
@@ -712,6 +704,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            cache.cached_addrs_for_test().unwrap()[0],
+            "192.0.2.13:53".parse().unwrap()
+        );
     }
 }
