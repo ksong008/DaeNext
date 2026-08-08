@@ -906,6 +906,8 @@ use self::runtime_materialization::*;
 mod runtime_reload;
 mod runtime_transition;
 use self::runtime_reload::*;
+mod pprof_runtime;
+use self::pprof_runtime::*;
 mod runtime_reconcile;
 use self::runtime_reconcile::*;
 mod runtime_apply;

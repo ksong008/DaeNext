@@ -98,4 +98,17 @@ mod tests {
         assert!(runtime.process_transition_for_config(&desired).is_some());
         assert!(runtime.process_transition_for_config(&active).is_none());
     }
+
+    #[test]
+    fn reload_owned_pprof_and_network_gate_do_not_report_pending_restart() {
+        let runtime = ProductRuntimeManager::new();
+        let active = Arc::new(test_config());
+        runtime.set_process_http_config(ProductHttpWorkerConfig::from_config(Some(&active)));
+        runtime.inner.lock().unwrap().process_baseline_config = Some(Arc::clone(&active));
+
+        let mut desired = active.as_ref().clone();
+        desired.global.pprof_port = 6060;
+        desired.global.disable_waiting_network = true;
+        assert!(runtime.process_transition_for_config(&desired).is_none());
+    }
 }
