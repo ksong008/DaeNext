@@ -46,6 +46,7 @@ pub(crate) fn insert_header_and_contract(
             "listen_socket_map_kernel_name": "listen_socket_m",
             "listener_keys": [0, 1],
             "tproxy_port": context.options.tproxy_port,
+            "tproxy_port_protect": context.options.tproxy_port_protect,
             "dae_netns_id": context.options.dae_netns_id,
             "netns_link": {
                 "env": super::super::super::netns_link::netns_link_env_name(),

@@ -20,6 +20,17 @@ pub fn htons(value: u16) -> u16 {
 }
 
 pub fn build_dae_param(input: DaeParamInput) -> BpfDaeParam {
+    build_dae_param_with_protection(input, true)
+}
+
+/// Build the PARAM image while explicitly selecting the native transparent
+/// proxy ingress guard.  The legacy `build_dae_param` entry point keeps the
+/// documented/default-protected behavior for tools that do not expose the
+/// switch yet.
+pub fn build_dae_param_with_protection(
+    input: DaeParamInput,
+    tproxy_port_protect: bool,
+) -> BpfDaeParam {
     BpfDaeParam {
         tproxy_port: u32::from(htons(input.tproxy_port)),
         control_plane_pid: input.control_plane_pid,
@@ -27,7 +38,8 @@ pub fn build_dae_param(input: DaeParamInput) -> BpfDaeParam {
         dae_netns_id: input.dae_netns_id,
         dae0peer_mac: input.dae0peer_mac,
         has_bpf_get_current_task: u8::from(input.has_bpf_get_current_task),
-        padding: 0,
+        // Reuse the ABI-stable historical padding byte for the new flag.
+        padding: u8::from(tproxy_port_protect),
         task_struct_mm_offset: input.task_struct_mm_offset,
         mm_struct_arg_start_offset: input.mm_struct_arg_start_offset,
         abi_version: BPF_DAE_PARAM_ABI_VERSION,

@@ -114,6 +114,7 @@ pub(super) fn resident_runtime_options(
         source_object,
         geodata_asset_dirs,
         tproxy_port: config.global.tproxy_port,
+        tproxy_port_protect: config.global.tproxy_port_protect,
         dae_netns_id: DEFAULT_DAE_NETNS_ID,
         netns_link_mode,
         peer_section: DEFAULT_PEER_SECTION.to_owned(),

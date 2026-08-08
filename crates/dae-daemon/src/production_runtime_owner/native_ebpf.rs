@@ -8,7 +8,7 @@ use dae_datapath::{ACTIVE_TCP_LAN_FILTER_PREF, ACTIVE_TCP_LAN_HOST_IFACE};
 use dae_ebpf_support::{
     AttachBackend, BpfDaeParam, DaeParamInput, NativeBackendAdmissionEvidence,
     NativeBackendRuntimeDecision, NativeBackendRuntimeRequest, REDIRECT_TRACK_ABI_VERSION,
-    RuntimeMapProfile, TcAttachLayer, build_dae_param, native_backend_admission_report,
+    RuntimeMapProfile, TcAttachLayer, native_backend_admission_report,
     native_backend_runtime_decision, redirect_runtime_generation,
 };
 #[cfg(feature = "native-ebpf")]

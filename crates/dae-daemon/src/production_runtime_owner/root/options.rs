@@ -27,6 +27,8 @@ pub struct ProductionRuntimeOwnerOptions {
     pub source_object: PathBuf,
     pub geodata_asset_dirs: Vec<PathBuf>,
     pub tproxy_port: u16,
+    /// Drop unsolicited WAN packets addressed to `tproxy_port` in native TC.
+    pub tproxy_port_protect: bool,
     pub dae_netns_id: u32,
     pub netns_link_mode: NetnsLinkMode,
     pub peer_section: String,
@@ -66,6 +68,7 @@ impl Default for ProductionRuntimeOwnerOptions {
             source_object: PathBuf::from(DEFAULT_SOURCE_OBJECT),
             geodata_asset_dirs: Vec::new(),
             tproxy_port: DEFAULT_TPROXY_PORT,
+            tproxy_port_protect: true,
             dae_netns_id: DEFAULT_DAE_NETNS_ID,
             netns_link_mode: NetnsLinkMode::Auto,
             peer_section: DEFAULT_PEER_SECTION.to_owned(),
