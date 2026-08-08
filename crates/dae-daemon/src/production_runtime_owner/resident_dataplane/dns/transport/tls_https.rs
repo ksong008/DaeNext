@@ -2,8 +2,8 @@ use super::super::*;
 use super::ResidentDnsTransportError;
 use super::plain::{dns_transport_route_name, open_dns_tcp_stream_with_context_async};
 use super::route::{
-    ResidentDnsUpstreamRoutedTarget, race_dns_upstream_targets, resolved_upstream_targets,
-    select_dns_upstream_targets,
+    ResidentDnsUpstreamRoutedTarget, race_dns_upstream_targets_with_refresh,
+    refresh_dns_upstream_targets, resolved_upstream_targets, select_dns_upstream_targets,
 };
 use super::wire::{
     doh_request_target, forward_dns_framed_stream_async, http1_doh_keep_alive_request_bytes,
@@ -24,19 +24,30 @@ pub(super) async fn forward_dns_tls_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let resolved = resolved_upstream_targets(upstream)
+    let resolved = resolved_upstream_targets(upstream, context.deadline())
         .await
         .map_err(ResidentDnsTransportError::message)?;
     let (targets, failures) =
         select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Tcp)
             .map_err(ResidentDnsTransportError::message)?;
-    race_dns_upstream_targets(
+    race_dns_upstream_targets_with_refresh(
         upstream,
         &resolved,
         "forward DNS TLS to",
         targets,
         failures,
         forwarders.resources.upstream_candidate_race_width(),
+        context,
+        || async {
+            refresh_dns_upstream_targets(
+                plan,
+                upstream,
+                &resolved,
+                L4Proto::Tcp,
+                context.deadline(),
+            )
+            .await
+        },
         |target| async move {
             forward_dns_tls_to_routed_target_async(upstream, target, payload, forwarders, context)
                 .await
@@ -212,19 +223,30 @@ pub(super) async fn forward_dns_https_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let resolved = resolved_upstream_targets(upstream)
+    let resolved = resolved_upstream_targets(upstream, context.deadline())
         .await
         .map_err(ResidentDnsTransportError::message)?;
     let (targets, failures) =
         select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Tcp)
             .map_err(ResidentDnsTransportError::message)?;
-    race_dns_upstream_targets(
+    race_dns_upstream_targets_with_refresh(
         upstream,
         &resolved,
         "forward DNS HTTPS to",
         targets,
         failures,
         forwarders.resources.upstream_candidate_race_width(),
+        context,
+        || async {
+            refresh_dns_upstream_targets(
+                plan,
+                upstream,
+                &resolved,
+                L4Proto::Tcp,
+                context.deadline(),
+            )
+            .await
+        },
         |target| async move {
             forward_dns_https_to_routed_target_async(upstream, target, payload, forwarders, context)
                 .await

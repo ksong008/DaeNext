@@ -6,8 +6,8 @@ use super::quic::{
     connect_dns_quic_endpoint_async,
 };
 use super::route::{
-    ResidentDnsUpstreamRoutedTarget, race_dns_upstream_targets, resolved_upstream_targets,
-    select_dns_upstream_targets,
+    ResidentDnsUpstreamRoutedTarget, race_dns_upstream_targets_with_refresh,
+    refresh_dns_upstream_targets, resolved_upstream_targets, select_dns_upstream_targets,
 };
 use super::wire::{doh_request_target, restore_dns_response_id};
 use crate::production_runtime_owner::resident_dataplane::tcp::inherit_quic_endpoint_observation;
@@ -25,19 +25,30 @@ pub(super) async fn forward_dns_h3_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let resolved = resolved_upstream_targets(upstream)
+    let resolved = resolved_upstream_targets(upstream, context.deadline())
         .await
         .map_err(ResidentDnsTransportError::message)?;
     let (targets, failures) =
         select_dns_upstream_targets(plan, upstream, resolved.to_vec(), L4Proto::Udp)
             .map_err(ResidentDnsTransportError::message)?;
-    race_dns_upstream_targets(
+    race_dns_upstream_targets_with_refresh(
         upstream,
         &resolved,
         "forward DNS H3 to",
         targets,
         failures,
         forwarders.resources.upstream_candidate_race_width(),
+        context,
+        || async {
+            refresh_dns_upstream_targets(
+                plan,
+                upstream,
+                &resolved,
+                L4Proto::Udp,
+                context.deadline(),
+            )
+            .await
+        },
         |remote| async move {
             forward_dns_h3_to_routed_target_async(upstream, remote, payload, forwarders, context)
                 .await
@@ -63,8 +74,13 @@ async fn forward_dns_h3_to_routed_target_async(
                 .map_err(ResidentDnsTransportError::message)?;
             forward_dns_h3_cached(upstream, forwarder, payload, context)
                 .await
-                .map_err(|err| format!("{target}: {err}"))
-                .map_err(ResidentDnsTransportError::message)
+                .map_err(|error| {
+                    if error.failure() == ProxyDnsRequestFailure::Protocol {
+                        ResidentDnsTransportError::protocol(format!("{target}: {error}"))
+                    } else {
+                        ResidentDnsTransportError::proxy(error.with_context(target))
+                    }
+                })
         }
         ResidentDnsUpstreamSelection::Proxy { binding } => {
             let forwarder = forwarders
@@ -92,9 +108,13 @@ async fn forward_dns_h3_cached(
     forwarder: Arc<AsyncMutex<ResidentDnsH3Forwarder>>,
     payload: &[u8],
     context: ProxyDnsRequestContext,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let permits = {
-        let forwarder = lock_dns_h3_forwarder(&forwarder, context, "read stream permits").await?;
+        let forwarder = lock_dns_h3_forwarder(&forwarder, context, "read stream permits")
+            .await
+            .map_err(|error| {
+                direct_dns_h3_internal_error(context, ProxyDnsRequestStage::OwnerAcquire, error)
+            })?;
         Arc::clone(&forwarder.permits)
     };
     let _permit = context
@@ -103,35 +123,64 @@ async fn forward_dns_h3_cached(
             ProxyDnsRequestFailure::Capacity,
             permits.acquire_owned(),
         )
-        .await
-        .map_err(|error| error.to_string())?;
-    let (mut client, connection_id) = cached_dns_h3_client(&forwarder, context).await?;
+        .await?;
+    let (mut client, connection_id) =
+        cached_dns_h3_client(&forwarder, context)
+            .await
+            .map_err(|error| {
+                direct_dns_h3_internal_error(context, ProxyDnsRequestStage::Connect, error)
+            })?;
     let exchange = context
         .run(
             ProxyDnsRequestStage::Send,
-            ProxyDnsRequestFailure::Network,
+            ProxyDnsRequestFailure::Protocol,
             forward_dns_h3_with_client_async(upstream, payload, &mut client),
         )
         .await;
     match exchange {
         Ok(response) => Ok(response),
         Err(first_err) => {
-            reset_cached_dns_h3_client(&forwarder, connection_id, context).await?;
-            context
-                .ensure(ProxyDnsRequestStage::Retry)
-                .map_err(|error| error.to_string())?;
-            let (mut client, _) = cached_dns_h3_client(&forwarder, context).await?;
+            reset_cached_dns_h3_client(&forwarder, connection_id, context)
+                .await
+                .map_err(|error| {
+                    ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Cleanup,
+                        ProxyDnsRequestFailure::Network,
+                        error,
+                    )
+                })?;
+            context.ensure(ProxyDnsRequestStage::Retry)?;
+            let (mut client, _) =
+                cached_dns_h3_client(&forwarder, context)
+                    .await
+                    .map_err(|error| {
+                        direct_dns_h3_internal_error(context, ProxyDnsRequestStage::Connect, error)
+                    })?;
             context
                 .run(
                     ProxyDnsRequestStage::Send,
-                    ProxyDnsRequestFailure::Network,
+                    ProxyDnsRequestFailure::Protocol,
                     forward_dns_h3_with_client_async(upstream, payload, &mut client),
                 )
                 .await
                 .map_err(|retry_err| {
-                    format!("DNS H3 cached forwarder retry failed after {first_err}: {retry_err}")
+                    retry_err.with_context(format!(
+                        "DNS H3 cached forwarder retry failed after {first_err}"
+                    ))
                 })
         }
+    }
+}
+
+fn direct_dns_h3_internal_error(
+    context: ProxyDnsRequestContext,
+    stage: ProxyDnsRequestStage,
+    error: impl Into<String>,
+) -> ProxyDnsRequestError {
+    if time::Instant::now() >= context.deadline() {
+        ProxyDnsRequestError::deadline(stage)
+    } else {
+        ProxyDnsRequestError::new(stage, ProxyDnsRequestFailure::Network, error)
     }
 }
 

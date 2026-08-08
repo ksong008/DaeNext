@@ -114,6 +114,7 @@ impl ResidentDnsForwarderCache {
         })
     }
 
+    #[allow(dead_code)]
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn quic_forwarder(
         &self,
         upstream: &ResidentDnsUpstream,

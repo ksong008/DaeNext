@@ -1,6 +1,7 @@
 use super::transport::tcp_udp::ResidentDnsTcpUdpHedgeRegistry;
 use super::transport::udp_multiplex::{ResidentDnsUdpActorExecutor, ResidentDnsUdpMultiplexHandle};
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::resolve_host_addrs_with_bootstrap_dns_ttl;
 use std::sync::{
     Weak,
     atomic::{AtomicBool, Ordering},
@@ -14,6 +15,7 @@ mod target_refresh;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use h2_recovery::ResidentDnsH2Recovery;
 use target_cache::ResidentDnsResolvedTargetCache;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use target_cache::ResidentDnsResolvedTargetSnapshot;
+pub(in crate::production_runtime_owner::resident_dataplane::dns) use target_cache::ResidentDnsTargetRefreshError;
 pub(in crate::production_runtime_owner::resident_dataplane::dns) use target_refresh::{
     ResidentDnsTargetRefreshHandle, ResidentDnsTargetRefreshOwner,
     ResidentDnsTargetRefreshOwnerTask,
@@ -102,7 +104,7 @@ impl ResidentDnsUpstreamTarget {
         let resolver_mark = self.resolver_mark;
         self.resolved_addrs
             .resolve(move |refresh_interval| async move {
-                resolve_host_addrs_with_configured_fallback_dns_ttl(
+                resolve_host_addrs_with_bootstrap_dns_ttl(
                     &host,
                     port,
                     fallback_resolver,
@@ -115,29 +117,34 @@ impl ResidentDnsUpstreamTarget {
             .await
     }
 
-    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn refresh_after_stale_failure(
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) async fn refresh_after_stale_failure_and_resolve(
         &self,
         snapshot: &ResidentDnsResolvedTargetSnapshot,
-    ) -> Result<(), String> {
+        deadline: time::Instant,
+    ) -> Result<Option<ResidentDnsResolvedTargetSnapshot>, ResidentDnsTargetRefreshError> {
         if self.literal_addr.is_some() || !snapshot.is_stale() {
-            return Ok(());
+            return Ok(None);
         }
         let host = self.host.clone();
         let port = self.port;
         let fallback_resolver = self.fallback_resolver;
         let resolver_mark = self.resolver_mark;
         self.resolved_addrs
-            .refresh_after_stale_failure(snapshot, move |refresh_interval| async move {
-                resolve_host_addrs_with_configured_fallback_dns_ttl(
-                    &host,
-                    port,
-                    fallback_resolver,
-                    resolver_mark,
-                    "refresh DNS upstream after stale address failure",
-                    refresh_interval,
-                )
-                .await
-            })
+            .refresh_after_stale_failure_and_resolve(
+                snapshot,
+                deadline,
+                move |refresh_interval| async move {
+                    resolve_host_addrs_with_bootstrap_dns_ttl(
+                        &host,
+                        port,
+                        fallback_resolver,
+                        resolver_mark,
+                        "refresh DNS upstream after stale address failure",
+                        refresh_interval,
+                    )
+                    .await
+                },
+            )
             .await
     }
 

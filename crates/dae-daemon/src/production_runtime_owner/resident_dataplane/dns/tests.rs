@@ -1514,7 +1514,7 @@ async fn resident_dns_ipversion_prefer_rejects_non_preferred_when_preferred_has_
 }
 
 #[tokio::test]
-async fn resident_dns_ipversion_prefer_does_not_synthesize_preferred_lookup() {
+async fn resident_dns_ipversion_prefer_synthesizes_preferred_lookup_in_parallel() {
     let socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
@@ -1522,7 +1522,7 @@ async fn resident_dns_ipversion_prefer_does_not_synthesize_preferred_lookup() {
     let received = Arc::new(AtomicUsize::new(0));
     let server_received = Arc::clone(&received);
     let query = query_with_qtype(DNS_QTYPE_AAAA);
-    let expected_queries = DnsPacketView::parse(&query).unwrap().question_count();
+    let expected_queries = 2;
     let server = tokio::spawn(async move {
         let mut buf = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
         loop {
