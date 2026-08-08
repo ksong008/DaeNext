@@ -7,6 +7,9 @@ use super::{ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage};
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsTransportError {
     Message(String),
     TargetConnect(String),
+    Refresh(String),
+    ResponseTimeout(String),
+    Protocol(String),
     UdpTruncated(SocketAddr),
     Proxy(ProxyDnsRequestError),
 }
@@ -18,6 +21,18 @@ impl ResidentDnsTransportError {
 
     pub(super) fn proxy(error: ProxyDnsRequestError) -> Self {
         Self::Proxy(error)
+    }
+
+    pub(super) fn response_timeout(error: impl Into<String>) -> Self {
+        Self::ResponseTimeout(error.into())
+    }
+
+    pub(super) fn refresh(error: impl Into<String>) -> Self {
+        Self::Refresh(error.into())
+    }
+
+    pub(super) fn protocol(error: impl Into<String>) -> Self {
+        Self::Protocol(error.into())
     }
 
     pub(super) fn udp_truncated(target: SocketAddr) -> Self {
@@ -39,6 +54,9 @@ impl ResidentDnsTransportError {
         match self {
             Self::Message(_) => true,
             Self::TargetConnect(_) => true,
+            Self::Refresh(_) => false,
+            Self::ResponseTimeout(_) => true,
+            Self::Protocol(_) => false,
             Self::UdpTruncated(_) => true,
             Self::Proxy(error) => match (error.stage(), error.failure()) {
                 (ProxyDnsRequestStage::Cleanup, _) => false,
@@ -53,6 +71,8 @@ impl ResidentDnsTransportError {
         match self {
             Self::Message(_) => false,
             Self::TargetConnect(_) => true,
+            Self::Refresh(_) => false,
+            Self::ResponseTimeout(_) | Self::Protocol(_) => false,
             Self::UdpTruncated(_) => false,
             Self::Proxy(error) => {
                 error.stage() == ProxyDnsRequestStage::Connect
@@ -72,7 +92,11 @@ impl ResidentDnsTransportError {
 impl fmt::Display for ResidentDnsTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Message(error) | Self::TargetConnect(error) => formatter.write_str(error),
+            Self::Message(error)
+            | Self::TargetConnect(error)
+            | Self::Refresh(error)
+            | Self::ResponseTimeout(error)
+            | Self::Protocol(error) => formatter.write_str(error),
             Self::UdpTruncated(target) => write!(formatter, "{target} UDP response truncated"),
             Self::Proxy(error) => error.fmt(formatter),
         }
@@ -127,6 +151,12 @@ mod tests {
         ));
         assert!(!cleanup.allows_next_candidate());
         assert!(ResidentDnsTransportError::message("direct failure").allows_next_candidate());
+        let protocol = ResidentDnsTransportError::protocol("malformed DNS response");
+        assert!(!protocol.allows_next_candidate());
+        assert!(!protocol.invalidates_stale_target());
+        let refresh = ResidentDnsTransportError::refresh("resolver unavailable");
+        assert!(!refresh.allows_next_candidate());
+        assert!(!refresh.invalidates_stale_target());
         assert!(!network.invalidates_stale_target());
         let connect_network = ResidentDnsTransportError::proxy(ProxyDnsRequestError::new(
             ProxyDnsRequestStage::Connect,

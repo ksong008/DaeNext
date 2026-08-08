@@ -11,6 +11,22 @@ use super::target_refresh::ResidentDnsTargetRefreshHandle;
 const DNS_UPSTREAM_STALE_RETRY_DIVISOR: u32 = 10;
 const DNS_UPSTREAM_STALE_RETRY_MIN: Duration = Duration::from_secs(1);
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsTargetRefreshError
+{
+    Deadline,
+    Resolver(String),
+}
+
+impl std::fmt::Display for ResidentDnsTargetRefreshError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Deadline => formatter.write_str("DNS upstream target refresh deadline expired"),
+            Self::Resolver(error) => formatter.write_str(error),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsResolvedTargetCache
 {
@@ -39,6 +55,17 @@ impl ResidentDnsResolvedTargetSnapshot {
             addrs: Arc::from([addr]),
             epoch: 0,
             stale: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn stale_literal(
+        addr: SocketAddr,
+    ) -> Self {
+        Self {
+            addrs: Arc::from([addr]),
+            epoch: 1,
+            stale: true,
         }
     }
 
@@ -211,6 +238,28 @@ impl ResidentDnsResolvedTargetCache {
         }
     }
 
+    fn defer_invalidated_retry(&self, expected_epoch: Option<u64>) {
+        let retry = self
+            .refresh_interval
+            .checked_div(DNS_UPSTREAM_STALE_RETRY_DIVISOR)
+            .unwrap_or(Duration::ZERO)
+            .max(DNS_UPSTREAM_STALE_RETRY_MIN)
+            .min(self.refresh_interval);
+        if let Some(entry) = self
+            .state
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_mut()
+        {
+            if expected_epoch.is_some_and(|epoch| epoch != entry.epoch) {
+                return;
+            }
+            entry.invalidated = true;
+            entry.invalidated_refresh_attempted = true;
+            entry.refresh_at = time::Instant::now() + retry;
+        }
+    }
+
     fn begin_background_refresh(&self) -> bool {
         self.refreshing
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -235,6 +284,7 @@ impl ResidentDnsResolvedTargetCache {
         true
     }
 
+    #[cfg(test)]
     pub(super) async fn refresh_after_stale_failure<F, Fut>(
         &self,
         snapshot: &ResidentDnsResolvedTargetSnapshot,
@@ -244,8 +294,34 @@ impl ResidentDnsResolvedTargetCache {
         F: FnOnce(Duration) -> Fut,
         Fut: std::future::Future<Output = Result<ResolvedHostAddrs, String>>,
     {
+        let deadline = time::Instant::now() + self.refresh_interval;
+        self.refresh_after_stale_failure_and_resolve(snapshot, deadline, resolver)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    /// Invalidate a stale snapshot, singleflight the forced refresh, and return the
+    /// newly published snapshot to the caller.  The old API intentionally discarded
+    /// this value, which meant the request that discovered a dead target returned the
+    /// original error even after a successful refresh.  Callers use this method for a
+    /// single bounded retry of that same request.
+    pub(super) async fn refresh_after_stale_failure_and_resolve<F, Fut>(
+        &self,
+        snapshot: &ResidentDnsResolvedTargetSnapshot,
+        deadline: time::Instant,
+        resolver: F,
+    ) -> Result<Option<ResidentDnsResolvedTargetSnapshot>, ResidentDnsTargetRefreshError>
+    where
+        F: FnOnce(Duration) -> Fut,
+        Fut: std::future::Future<Output = Result<ResolvedHostAddrs, String>>,
+    {
         if !snapshot.stale {
-            return Ok(());
+            return Ok(None);
+        }
+        if time::Instant::now() >= deadline {
+            self.defer_invalidated_retry(Some(snapshot.epoch));
+            return Err(ResidentDnsTargetRefreshError::Deadline);
         }
         {
             let mut state = self
@@ -253,10 +329,10 @@ impl ResidentDnsResolvedTargetCache {
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let Some(entry) = state.as_mut() else {
-                return Ok(());
+                return Ok(None);
             };
             if entry.epoch != snapshot.epoch {
-                return Ok(());
+                return Ok(Some(Self::snapshot(entry.clone(), false)));
             }
             if !entry.invalidated {
                 entry.invalidated = true;
@@ -264,19 +340,39 @@ impl ResidentDnsResolvedTargetCache {
             }
         }
 
-        self.wait_for_background_refresh().await;
-        let _refresh = self.initial_refresh.lock().await;
-        if !self.prepare_invalidated_refresh(time::Instant::now(), Some(snapshot.epoch)) {
-            return Ok(());
+        if tokio::time::timeout_at(deadline, self.wait_for_background_refresh())
+            .await
+            .is_err()
+        {
+            self.defer_invalidated_retry(Some(snapshot.epoch));
+            return Err(ResidentDnsTargetRefreshError::Deadline);
         }
-        match resolver(self.refresh_interval).await {
-            Ok(resolved) => {
-                self.store_resolved(resolved);
-                Ok(())
+        let _refresh = match tokio::time::timeout_at(deadline, self.initial_refresh.lock()).await {
+            Ok(refresh) => refresh,
+            Err(_) => {
+                self.defer_invalidated_retry(Some(snapshot.epoch));
+                return Err(ResidentDnsTargetRefreshError::Deadline);
             }
-            Err(error) => {
-                self.defer_stale_retry();
-                Err(error)
+        };
+        if !self.prepare_invalidated_refresh(time::Instant::now(), Some(snapshot.epoch)) {
+            return Ok(self
+                .cached_entry()
+                .filter(|entry| !entry.invalidated)
+                .map(|entry| Self::snapshot(entry, false)));
+        }
+        if time::Instant::now() >= deadline {
+            self.defer_invalidated_retry(Some(snapshot.epoch));
+            return Err(ResidentDnsTargetRefreshError::Deadline);
+        }
+        match tokio::time::timeout_at(deadline, resolver(self.refresh_interval)).await {
+            Ok(Ok(resolved)) => Ok(Some(self.store_resolved(resolved))),
+            Ok(Err(error)) => {
+                self.defer_invalidated_retry(Some(snapshot.epoch));
+                Err(ResidentDnsTargetRefreshError::Resolver(error))
+            }
+            Err(_) => {
+                self.defer_invalidated_retry(Some(snapshot.epoch));
+                Err(ResidentDnsTargetRefreshError::Deadline)
             }
         }
     }
@@ -554,6 +650,40 @@ mod tests {
                 move |_| async move {
                     calls.fetch_add(1, Ordering::Relaxed);
                     Ok(resolved("192.0.2.11:53", Duration::from_secs(60)))
+                }
+            })
+            .await;
+        assert!(retry.is_err());
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn forced_refresh_respects_absolute_deadline_and_keeps_old_target_unusable() {
+        let cache = Arc::new(ResidentDnsResolvedTargetCache::new(Duration::from_secs(2)));
+        cache
+            .seed(vec!["192.0.2.17:53".parse().unwrap()], Duration::ZERO)
+            .await;
+        let stale = cache
+            .resolve(|_| async { Err("background refresh not used".to_owned()) })
+            .await
+            .unwrap();
+        let deadline = time::Instant::now() + Duration::from_millis(10);
+        let error = cache
+            .refresh_after_stale_failure_and_resolve(&stale, deadline, |_| async {
+                time::sleep(Duration::from_secs(1)).await;
+                Ok(resolved("192.0.2.18:53", Duration::from_secs(60)))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, ResidentDnsTargetRefreshError::Deadline);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let retry = cache
+            .resolve({
+                let calls = Arc::clone(&calls);
+                move |_| async move {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    Ok(resolved("192.0.2.19:53", Duration::from_secs(60)))
                 }
             })
             .await;

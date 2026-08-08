@@ -6,6 +6,7 @@ use super::*;
 #[derive(Debug, Default)]
 pub(super) struct ResidentDnsIpversionPreferenceRegistry {
     waiters: Mutex<BTreeMap<DnsCacheKey, Vec<tokio::sync::oneshot::Sender<bool>>>>,
+    inflight: Mutex<BTreeMap<DnsCacheKey, ()>>,
 }
 
 impl ResidentDnsIpversionPreferenceRegistry {
@@ -39,6 +40,20 @@ impl ResidentDnsIpversionPreferenceRegistry {
         for waiter in waiters {
             let _ = waiter.send(has_ip);
         }
+        if let Ok(mut inflight) = self.inflight.lock() {
+            inflight.remove(key);
+        }
+    }
+
+    pub(super) fn try_start_preferred(&self, key: &DnsCacheKey) -> bool {
+        let Ok(mut inflight) = self.inflight.lock() else {
+            return true;
+        };
+        if inflight.contains_key(key) {
+            return false;
+        }
+        inflight.insert(key.clone(), ());
+        true
     }
 
     fn remove_closed_waiters(&self, key: &DnsCacheKey) {

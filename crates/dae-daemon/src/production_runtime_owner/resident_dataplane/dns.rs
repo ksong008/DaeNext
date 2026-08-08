@@ -37,6 +37,7 @@ use super::super::resident_routing::{
     expand_resident_dns_response_ip_params_with_resolver,
     expand_resident_dns_response_qname_rules_with_resolver,
 };
+use super::ResolvedHostAddrs;
 use super::direct::open_direct_tcp_connection_async;
 #[cfg(test)]
 use super::plan::ResidentProxyPlan;
@@ -63,7 +64,6 @@ use super::{
     ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
     apply_resident_udp_socket_buffer_tuning,
 };
-use super::{ResolvedHostAddrs, resolve_host_addrs_with_configured_fallback_dns_ttl};
 
 mod cache;
 mod domain_routing;
@@ -719,15 +719,15 @@ async fn handle_ipversion_preference(
         .qname_to_canonical_string()
         .map_err(|err| format!("read DNS request qname for ipversion preference: {err}"))?;
     let preferred_key = DnsCacheKey::new(qname, preferred_qtype, question.qclass());
-    let requested = handle_resident_dns_request_without_preference(
-        plan,
-        original_dst,
-        payload,
-        request,
-        asis_transport,
-    )
-    .await;
     if requested_qtype == preferred_qtype {
+        let requested = handle_resident_dns_request_without_preference(
+            plan,
+            original_dst,
+            payload,
+            request,
+            asis_transport,
+        )
+        .await;
         if let Ok(response) = requested.as_ref() {
             plan.ipversion_preference_registry
                 .notify_preferred(&preferred_key, dns_response_has_any_ip(response)?);
@@ -740,15 +740,92 @@ async fn handle_ipversion_preference(
     if dns_preferred_cache_has_ip(plan, &preferred_key)? {
         return build_reject_response(payload, request).map(Some);
     }
+
+    let preferred_payload = rewrite_dns_query_qtype(payload, request, preferred_qtype)?;
+    let preferred_is_owner = plan
+        .ipversion_preference_registry
+        .try_start_preferred(&preferred_key);
+    if preferred_is_owner {
+        // The two family lookups are deliberately joined rather than chained. Both
+        // execute under the same request deadline and share the existing bounded
+        // upstream/cache machinery; no per-query background task is left behind.
+        let preferred_request = DnsPacketView::parse(&preferred_payload)
+            .map_err(|err| format!("parse synthesized preferred DNS query: {err}"))?;
+        let preferred = handle_resident_dns_request_without_preference(
+            plan,
+            original_dst,
+            &preferred_payload,
+            &preferred_request,
+            asis_transport,
+        );
+        let requested = handle_resident_dns_request_without_preference(
+            plan,
+            original_dst,
+            payload,
+            request,
+            asis_transport,
+        );
+        let (preferred, requested) = tokio::join!(preferred, requested);
+        let preferred_has_ip = match preferred {
+            Ok(response) => dns_response_has_any_ip(&response)?,
+            Err(_) => false,
+        };
+        plan.ipversion_preference_registry
+            .notify_preferred(&preferred_key, preferred_has_ip);
+        if preferred_has_ip {
+            return build_reject_response(payload, request).map(Some);
+        }
+        return requested.map(Some);
+    }
+
+    let requested = handle_resident_dns_request_without_preference(
+        plan,
+        original_dst,
+        payload,
+        request,
+        asis_transport,
+    );
     let preferred_wait = plan
         .ipversion_preference_registry
-        .wait_for_preferred(&preferred_key, dns_ipversion_preference_wait_timeout())
-        .await
-        .unwrap_or(false);
-    if preferred_wait || dns_preferred_cache_has_ip(plan, &preferred_key)? {
+        .wait_for_preferred(&preferred_key, dns_ipversion_preference_wait_timeout());
+    let (requested, preferred_wait) = tokio::join!(requested, preferred_wait);
+    if preferred_wait.unwrap_or(false) || dns_preferred_cache_has_ip(plan, &preferred_key)? {
         return build_reject_response(payload, request).map(Some);
     }
     requested.map(Some)
+}
+
+fn rewrite_dns_query_qtype(
+    payload: &[u8],
+    request: &DnsPacketView<'_>,
+    qtype: u16,
+) -> Result<Vec<u8>, String> {
+    if request.question_count() != 1 {
+        return Err("cannot synthesize preferred DNS query with multiple questions".to_owned());
+    }
+    let mut offset = 12_usize;
+    while offset < payload.len() {
+        let length = payload[offset];
+        offset += 1;
+        if length == 0 {
+            break;
+        }
+        if length & 0xc0 != 0 || length > 63 {
+            return Err("cannot synthesize preferred DNS query with compressed qname".to_owned());
+        }
+        offset = offset
+            .checked_add(length as usize)
+            .ok_or_else(|| "preferred DNS qname offset overflow".to_owned())?;
+    }
+    let qtype_end = offset
+        .checked_add(2)
+        .ok_or_else(|| "preferred DNS qtype offset overflow".to_owned())?;
+    if qtype_end > payload.len() {
+        return Err("preferred DNS query is truncated before qtype".to_owned());
+    }
+    let mut rewritten = payload.to_vec();
+    rewritten[offset..qtype_end].copy_from_slice(&qtype.to_be_bytes());
+    Ok(rewritten)
 }
 
 fn dns_preferred_cache_has_ip(

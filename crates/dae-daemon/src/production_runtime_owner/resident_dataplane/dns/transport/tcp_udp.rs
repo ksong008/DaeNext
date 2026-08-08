@@ -4,7 +4,8 @@ use super::plain::{
     forward_dns_tcp_to_routed_target_async, forward_dns_udp_to_routed_target_async,
 };
 use super::route::{
-    ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed, race_dns_upstream_targets,
+    ResidentDnsUpstreamRoutedTarget, dns_upstream_targets_failed,
+    race_dns_upstream_targets_with_refresh, refresh_dns_upstream_targets,
     resolved_upstream_targets, select_dns_upstream_targets,
 };
 use super::wire::dns_response_truncated;
@@ -19,7 +20,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ResidentDnsTransportError> {
-    let resolved = resolved_upstream_targets(upstream)
+    let resolved = resolved_upstream_targets(upstream, context.deadline())
         .await
         .map_err(ResidentDnsTransportError::message)?;
     let udp_selection =
@@ -36,6 +37,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
         upstream,
         &resolved,
         payload,
+        plan,
         udp_selection,
         forwarders,
         context,
@@ -70,6 +72,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
             upstream,
             &resolved,
             payload,
+            plan,
             select_tcp_targets(),
             forwarders,
             context,
@@ -85,6 +88,7 @@ pub(super) async fn forward_dns_tcp_udp_async(
         upstream,
         &resolved,
         payload,
+        plan,
         select_tcp_targets(),
         forwarders,
         context,
@@ -133,6 +137,7 @@ async fn forward_dns_udp_branch_async(
     upstream: &ResidentDnsUpstream,
     resolved: &ResidentDnsResolvedTargetSnapshot,
     payload: &[u8],
+    plan: &ResidentDnsPlan,
     selection: Result<(Vec<ResidentDnsUpstreamRoutedTarget>, Vec<String>), String>,
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
@@ -146,13 +151,18 @@ async fn forward_dns_udp_branch_async(
             upstream.tag, upstream.target.authority
         ));
     }
-    race_dns_upstream_targets(
+    race_dns_upstream_targets_with_refresh(
         upstream,
         resolved,
         "forward DNS tcp+udp UDP branch to",
         targets,
         failures,
         forwarders.resources.upstream_candidate_race_width(),
+        context,
+        || async {
+            refresh_dns_upstream_targets(plan, upstream, resolved, L4Proto::Udp, context.deadline())
+                .await
+        },
         |target| async move {
             let remote = target.target;
             let response = forward_dns_udp_to_routed_target_async(
@@ -173,6 +183,7 @@ async fn forward_dns_tcp_branch_async(
     upstream: &ResidentDnsUpstream,
     resolved: &ResidentDnsResolvedTargetSnapshot,
     payload: &[u8],
+    plan: &ResidentDnsPlan,
     selection: Result<(Vec<ResidentDnsUpstreamRoutedTarget>, Vec<String>), String>,
     forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
@@ -186,13 +197,18 @@ async fn forward_dns_tcp_branch_async(
             upstream.tag, upstream.target.authority
         ));
     }
-    race_dns_upstream_targets(
+    race_dns_upstream_targets_with_refresh(
         upstream,
         resolved,
         "forward DNS tcp+udp TCP branch to",
         targets,
         failures,
         forwarders.resources.upstream_candidate_race_width(),
+        context,
+        || async {
+            refresh_dns_upstream_targets(plan, upstream, resolved, L4Proto::Tcp, context.deadline())
+                .await
+        },
         |target| async move {
             forward_dns_tcp_to_routed_target_async(upstream, target, payload, forwarders, context)
                 .await

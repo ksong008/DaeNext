@@ -102,6 +102,42 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_hos
     }
 }
 
+/// Resolve a hostname for a DNS upstream through the configured bootstrap
+/// resolver without consulting the host's system resolver first.
+///
+/// DNS upstream authorities are part of the resolver bootstrap path itself.
+/// Using `tokio::net::lookup_host` first here can accept a syntactically valid
+/// but polluted answer from dnsmasq, which then pins the upstream target cache
+/// to the wrong address.  The regular configured-fallback helper intentionally
+/// keeps its historical system-first behavior because it is also used by
+/// health checks and proxy-node endpoint resolution.  Callers that are
+/// building a resident DNS upstream must use this explicit bootstrap variant.
+pub(in crate::production_runtime_owner::resident_dataplane) async fn resolve_host_addrs_with_bootstrap_dns_ttl(
+    host: &str,
+    port: u16,
+    bootstrap_resolver: SocketAddr,
+    mark: u32,
+    context: &str,
+    refresh_interval: Duration,
+) -> Result<ResolvedHostAddrs, String> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(ResolvedHostAddrs {
+            addrs: vec![SocketAddr::new(ip, port)],
+            valid_for: refresh_interval,
+        });
+    }
+
+    resolve_host_addrs_with_fallback_dns(
+        host,
+        port,
+        bootstrap_resolver,
+        mark,
+        context,
+        refresh_interval,
+    )
+    .await
+}
+
 #[cfg(test)]
 async fn resolve_host_with_system_dns(authority: &str) -> Result<SocketAddr, String> {
     let addrs = resolve_host_addrs_with_system_dns(authority).await?;
@@ -484,7 +520,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fallback_dns_address_list_keeps_a_before_aaaa() {
+    async fn bootstrap_dns_address_list_keeps_a_before_aaaa() {
         let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let resolver = socket.local_addr().unwrap();
         let expected_v4 = Ipv4Addr::new(192, 0, 2, 10);
@@ -531,7 +567,7 @@ mod tests {
             seen
         });
 
-        let resolved = resolve_host_addrs_with_fallback_dns(
+        let resolved = resolve_host_addrs_with_bootstrap_dns_ttl(
             "fallback.example",
             443,
             resolver,

@@ -1,11 +1,41 @@
 use super::super::*;
 use super::ResidentDnsTransportError;
+use crate::production_runtime_owner::resident_dataplane::dns::upstream_model::ResidentDnsTargetRefreshError;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
 pub(super) async fn resolved_upstream_targets(
     upstream: &ResidentDnsUpstream,
+    deadline: time::Instant,
 ) -> Result<ResidentDnsResolvedTargetSnapshot, String> {
-    upstream.target.resolve_addrs().await
+    tokio::time::timeout_at(deadline, upstream.target.resolve_addrs())
+        .await
+        .map_err(|_| "DNS upstream target resolution deadline expired".to_owned())?
+}
+
+pub(super) async fn refresh_dns_upstream_targets(
+    plan: &ResidentDnsPlan,
+    upstream: &ResidentDnsUpstream,
+    resolved: &ResidentDnsResolvedTargetSnapshot,
+    l4proto: L4Proto,
+    deadline: time::Instant,
+) -> Result<
+    Option<(
+        ResidentDnsResolvedTargetSnapshot,
+        Vec<ResidentDnsUpstreamRoutedTarget>,
+        Vec<String>,
+    )>,
+    ResidentDnsTargetRefreshError,
+> {
+    let Some(fresh) = upstream
+        .target
+        .refresh_after_stale_failure_and_resolve(resolved, deadline)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let (targets, failures) = select_dns_upstream_targets(plan, upstream, fresh.to_vec(), l4proto)
+        .map_err(ResidentDnsTargetRefreshError::Resolver)?;
+    Ok(Some((fresh, targets, failures)))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -201,60 +231,121 @@ pub(super) fn dns_upstream_targets_failed(
     )
 }
 
-pub(super) async fn race_dns_upstream_targets<F, Fut>(
+/// Race DNS candidates and, when a stale snapshot is proven dead, refresh the
+/// target cache and retry the current request once with the newly published
+/// candidates. The attempt closure is reused so its request context/deadline
+/// remains unchanged; transport implementations enforce the original absolute
+/// deadline through that context.
+pub(super) async fn race_dns_upstream_targets_with_refresh<F, Fut, R, RFut>(
     upstream: &ResidentDnsUpstream,
     resolved: &ResidentDnsResolvedTargetSnapshot,
     operation: &str,
     targets: Vec<ResidentDnsUpstreamRoutedTarget>,
-    mut failures: Vec<String>,
+    failures: Vec<String>,
     width: usize,
+    context: ProxyDnsRequestContext,
+    refresh: R,
     attempt: F,
 ) -> Result<Vec<u8>, ResidentDnsTransportError>
 where
     F: Fn(ResidentDnsUpstreamRoutedTarget) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<u8>, ResidentDnsTransportError>>,
+    R: Fn() -> RFut,
+    RFut: std::future::Future<
+            Output = Result<
+                Option<(
+                    ResidentDnsResolvedTargetSnapshot,
+                    Vec<ResidentDnsUpstreamRoutedTarget>,
+                    Vec<String>,
+                )>,
+                ResidentDnsTargetRefreshError,
+            >,
+        >,
 {
-    let preserve_single_truncated_error = targets.len() == 1 && failures.is_empty();
-    let mut remaining = targets.into_iter();
-    let mut attempts = FuturesUnordered::new();
-    let mut attempted = 0_usize;
-    let mut every_attempt_invalidates_stale = true;
-    let mut single_truncated_error = None;
-    for _ in 0..width.max(1) {
-        let Some(target) = remaining.next() else {
-            break;
-        };
-        attempts.push(attempt(target));
-    }
-    while let Some(result) = attempts.next().await {
-        match result {
-            Ok(response) => return Ok(response),
-            Err(error) => {
-                if !error.allows_next_candidate() {
-                    return Err(error);
+    let mut current_resolved = resolved.clone();
+    let mut current_targets = targets;
+    let mut current_failures = failures;
+    for pass in 0..=1 {
+        let preserve_single_truncated_error =
+            current_targets.len() == 1 && current_failures.is_empty();
+        let mut remaining = current_targets.into_iter();
+        let mut attempts = FuturesUnordered::new();
+        let mut attempted = 0_usize;
+        let mut every_attempt_invalidates_stale = true;
+        let mut single_truncated_error = None;
+        for _ in 0..width.max(1) {
+            let Some(target) = remaining.next() else {
+                break;
+            };
+            attempts.push(attempt(target));
+        }
+        while let Some(result) = attempts.next().await {
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    if !error.allows_next_candidate() {
+                        return Err(error);
+                    }
+                    attempted += 1;
+                    every_attempt_invalidates_stale &= error.invalidates_stale_target();
+                    if preserve_single_truncated_error && error.is_udp_truncated() {
+                        single_truncated_error = Some(error);
+                    } else {
+                        current_failures.push(error.to_string());
+                    }
                 }
-                attempted += 1;
-                every_attempt_invalidates_stale &= error.invalidates_stale_target();
-                if preserve_single_truncated_error && error.is_udp_truncated() {
-                    single_truncated_error = Some(error);
-                } else {
-                    failures.push(error.to_string());
+            }
+            if let Some(target) = remaining.next() {
+                attempts.push(attempt(target));
+            }
+        }
+
+        if attempted > 0
+            && every_attempt_invalidates_stale
+            && current_resolved.is_stale()
+            && pass == 0
+        {
+            if context.ensure(ProxyDnsRequestStage::Retry).is_err() {
+                return Err(ResidentDnsTransportError::proxy(
+                    ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Retry),
+                ));
+            }
+            let refreshed = match tokio::time::timeout_at(context.deadline(), refresh()).await {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(ResidentDnsTransportError::proxy(
+                        ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Retry),
+                    ));
+                }
+            };
+            match refreshed {
+                Ok(Some((fresh_resolved, fresh_targets, fresh_failures))) => {
+                    current_resolved = fresh_resolved;
+                    current_targets = fresh_targets;
+                    current_failures = fresh_failures;
+                    continue;
+                }
+                Ok(None) => {}
+                Err(ResidentDnsTargetRefreshError::Deadline) => {
+                    return Err(ResidentDnsTransportError::proxy(
+                        ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Retry),
+                    ));
+                }
+                Err(ResidentDnsTargetRefreshError::Resolver(error)) => {
+                    return Err(ResidentDnsTransportError::refresh(format!(
+                        "{operation} stale target refresh failed: {error}"
+                    )));
                 }
             }
         }
-        if let Some(target) = remaining.next() {
-            attempts.push(attempt(target));
+        if let Some(error) = single_truncated_error {
+            return Err(error);
         }
+        return Err(ResidentDnsTransportError::message(
+            dns_upstream_targets_failed(upstream, operation, current_failures),
+        ));
     }
-    if attempted > 0 && every_attempt_invalidates_stale && resolved.is_stale() {
-        let _ = upstream.target.refresh_after_stale_failure(resolved).await;
-    }
-    if let Some(error) = single_truncated_error {
-        return Err(error);
-    }
-    Err(ResidentDnsTransportError::message(
-        dns_upstream_targets_failed(upstream, operation, failures),
-    ))
+    unreachable!("bounded stale retry loop exhausted")
 }
 
 fn dns_upstream_proxy_network_type(target: SocketAddr, l4proto: L4Proto) -> NetworkType {
@@ -269,6 +360,7 @@ fn dns_upstream_proxy_network_type(target: SocketAddr, l4proto: L4Proto) -> Netw
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     fn route_candidate(
@@ -435,13 +527,24 @@ mod tests {
         let resolved = ResidentDnsResolvedTargetSnapshot::literal(blackhole);
         let response = time::timeout(
             Duration::from_millis(100),
-            race_dns_upstream_targets(
+            race_dns_upstream_targets_with_refresh(
                 &upstream,
                 &resolved,
                 "race DNS fixture",
                 targets,
                 Vec::new(),
                 2,
+                ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+                || async {
+                    Ok::<
+                        Option<(
+                            ResidentDnsResolvedTargetSnapshot,
+                            Vec<ResidentDnsUpstreamRoutedTarget>,
+                            Vec<String>,
+                        )>,
+                        ResidentDnsTargetRefreshError,
+                    >(None)
+                },
                 move |target| async move {
                     if target.target == blackhole {
                         std::future::pending::<Result<Vec<u8>, ResidentDnsTransportError>>().await
@@ -457,5 +560,154 @@ mod tests {
         .unwrap();
 
         assert_eq!(response, vec![0x12, 0x34, 0x81, 0x80]);
+    }
+
+    #[tokio::test]
+    async fn stale_candidate_refresh_retries_current_request_once() {
+        let stale_target = dns_upstream_target_v4();
+        let fresh_target = dns_upstream_target_v6();
+        let upstream = test_upstream();
+        let stale = ResidentDnsResolvedTargetSnapshot::stale_literal(stale_target);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let response = race_dns_upstream_targets_with_refresh(
+            &upstream,
+            &stale,
+            "stale retry fixture",
+            vec![ResidentDnsUpstreamRoutedTarget {
+                target: stale_target,
+                l4proto: L4Proto::Udp,
+                selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+            }],
+            Vec::new(),
+            1,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+            {
+                let refreshes = Arc::clone(&refreshes);
+                move || {
+                    refreshes.fetch_add(1, Ordering::Relaxed);
+                    let fresh = ResidentDnsResolvedTargetSnapshot::literal(fresh_target);
+                    async move {
+                        Ok(Some((
+                            fresh,
+                            vec![ResidentDnsUpstreamRoutedTarget {
+                                target: fresh_target,
+                                l4proto: L4Proto::Udp,
+                                selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+                            }],
+                            Vec::new(),
+                        )))
+                    }
+                }
+            },
+            {
+                let attempts = Arc::clone(&attempts);
+                move |target| {
+                    attempts.fetch_add(1, Ordering::Relaxed);
+                    async move {
+                        if target.target == fresh_target {
+                            Ok(vec![0x12, 0x34, 0x81, 0x80])
+                        } else {
+                            Err(ResidentDnsTransportError::TargetConnect(
+                                "stale target refused".to_owned(),
+                            ))
+                        }
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response, vec![0x12, 0x34, 0x81, 0x80]);
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        assert_eq!(refreshes.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn stale_refresh_does_not_start_after_request_deadline() {
+        let stale_target = dns_upstream_target_v4();
+        let upstream = test_upstream();
+        let stale = ResidentDnsResolvedTargetSnapshot::stale_literal(stale_target);
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let error = race_dns_upstream_targets_with_refresh(
+            &upstream,
+            &stale,
+            "stale deadline fixture",
+            vec![ResidentDnsUpstreamRoutedTarget {
+                target: stale_target,
+                l4proto: L4Proto::Udp,
+                selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+            }],
+            Vec::new(),
+            1,
+            ProxyDnsRequestContext::from_deadline(time::Instant::now() - Duration::from_millis(1)),
+            {
+                let refreshes = Arc::clone(&refreshes);
+                move || {
+                    refreshes.fetch_add(1, Ordering::Relaxed);
+                    async { panic!("refresh must not start after the request deadline") }
+                }
+            },
+            |_target| async {
+                Err(ResidentDnsTransportError::TargetConnect(
+                    "stale target refused".to_owned(),
+                ))
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ResidentDnsTransportError::Proxy(error)
+                if error.stage() == ProxyDnsRequestStage::Retry
+                    && error.failure() == ProxyDnsRequestFailure::Deadline
+        ));
+        assert_eq!(refreshes.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_refresh_failure_is_not_retried_with_old_target() {
+        let stale_target = dns_upstream_target_v4();
+        let upstream = test_upstream();
+        let stale = ResidentDnsResolvedTargetSnapshot::stale_literal(stale_target);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let error = race_dns_upstream_targets_with_refresh(
+            &upstream,
+            &stale,
+            "stale refresh failure fixture",
+            vec![ResidentDnsUpstreamRoutedTarget {
+                target: stale_target,
+                l4proto: L4Proto::Udp,
+                selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
+            }],
+            Vec::new(),
+            1,
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+            || async {
+                Err(ResidentDnsTargetRefreshError::Resolver(
+                    "resolver unavailable".to_owned(),
+                ))
+            },
+            {
+                let attempts = Arc::clone(&attempts);
+                move |_target| {
+                    attempts.fetch_add(1, Ordering::Relaxed);
+                    async {
+                        Err(ResidentDnsTransportError::TargetConnect(
+                            "stale target refused".to_owned(),
+                        ))
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(error, ResidentDnsTransportError::Refresh(message) if message.contains("resolver unavailable"))
+        );
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
     }
 }
