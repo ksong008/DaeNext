@@ -122,7 +122,7 @@ impl ResidentDnsUpstreamTarget {
         snapshot: &ResidentDnsResolvedTargetSnapshot,
         deadline: time::Instant,
     ) -> Result<Option<ResidentDnsResolvedTargetSnapshot>, ResidentDnsTargetRefreshError> {
-        if self.literal_addr.is_some() || !snapshot.is_stale() {
+        if self.literal_addr.is_some() {
             return Ok(None);
         }
         let host = self.host.clone();
