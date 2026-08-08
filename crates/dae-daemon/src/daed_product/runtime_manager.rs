@@ -59,6 +59,7 @@ pub(super) struct ProductRuntimeManager {
     interface_recovery: Mutex<ProductRuntimeInterfaceRecoverySupervisor>,
     startup_recovery: Mutex<ProductRuntimeStartupRecoverySupervisor>,
     process_http_config: Mutex<Option<ProductHttpWorkerConfig>>,
+    pprof_runtime: Arc<ProductPprofRuntime>,
     runtime_required_for_readiness: AtomicBool,
     #[cfg(test)]
     summary_render_barrier: Mutex<Option<Arc<std::sync::Barrier>>>,
@@ -341,6 +342,7 @@ impl ProductRuntimeManager {
             interface_recovery: Mutex::new(interface_recovery),
             startup_recovery: Mutex::new(ProductRuntimeStartupRecoverySupervisor::default()),
             process_http_config: Mutex::new(None),
+            pprof_runtime: Arc::new(ProductPprofRuntime::default()),
             runtime_required_for_readiness: AtomicBool::new(false),
             #[cfg(test)]
             summary_render_barrier: Mutex::new(None),
@@ -888,7 +890,19 @@ impl ProductRuntimeManager {
             barrier.wait();
             barrier.wait();
         }
-        snapshot.render()
+        let mut rendered = snapshot.render();
+        if let Value::Object(object) = &mut rendered {
+            object.insert("pprof".to_owned(), self.pprof_runtime.status());
+        }
+        rendered
+    }
+
+    pub(super) fn configure_pprof_port(&self, port: u16) -> Result<(), String> {
+        self.pprof_runtime.apply_port(port)
+    }
+
+    pub(super) fn pprof_port(&self) -> u16 {
+        self.pprof_runtime.port()
     }
 
     pub(super) fn runtime_overview_delta_state(&self) -> RuntimeOverviewDeltaState {

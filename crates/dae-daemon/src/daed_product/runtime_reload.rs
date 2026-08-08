@@ -25,6 +25,7 @@ pub(in crate::daed_product) struct AppliedRuntimeReload {
 pub(in crate::daed_product) enum RuntimeReloadPrepareError {
     Materialize(String),
     BuildConfig(String),
+    NetworkWait(String),
     Preflight(String),
 }
 
@@ -32,6 +33,7 @@ impl RuntimeReloadPrepareError {
     pub(in crate::daed_product) fn http_status(&self) -> u16 {
         match self {
             Self::Materialize(_) | Self::BuildConfig(_) => 400,
+            Self::NetworkWait(_) => 503,
             Self::Preflight(_) => 409,
         }
     }
@@ -40,6 +42,7 @@ impl RuntimeReloadPrepareError {
         match self {
             Self::Materialize(_) => "[Reload] Failed to materialize runtime preview",
             Self::BuildConfig(_) => "[Reload] Failed to build runtime config",
+            Self::NetworkWait(_) => "[Runtime] Waiting for network before runtime build failed",
             Self::Preflight(_) => "[Reload] Candidate preflight failed",
         }
     }
@@ -48,9 +51,10 @@ impl RuntimeReloadPrepareError {
 impl std::fmt::Display for RuntimeReloadPrepareError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Materialize(err) | Self::BuildConfig(err) | Self::Preflight(err) => {
-                formatter.write_str(err)
-            }
+            Self::Materialize(err)
+            | Self::BuildConfig(err)
+            | Self::NetworkWait(err)
+            | Self::Preflight(err) => formatter.write_str(err),
         }
     }
 }
@@ -93,7 +97,7 @@ pub(in crate::daed_product) fn prepare_runtime_reload_config(
 ) -> Result<PreparedRuntimeReload, RuntimeReloadPrepareError> {
     let plan = prepare_runtime_materialization_plan(state)
         .map_err(|err| RuntimeReloadPrepareError::Materialize(err.to_string()))?;
-    build_prepared_runtime_reload(plan)
+    build_prepared_runtime_reload(plan, false)
 }
 
 pub(in crate::daed_product) fn prepare_runtime_reload_preview(
@@ -108,12 +112,18 @@ pub(in crate::daed_product) fn prepare_runtime_reload_preview(
 
 fn build_prepared_runtime_reload(
     plan: RuntimeMaterializationPlan,
+    wait_for_network: bool,
 ) -> Result<PreparedRuntimeReload, RuntimeReloadPrepareError> {
     let compile_started = Instant::now();
     let config = Arc::new(
         build_runtime_config_from_content(&plan.content)
             .map_err(RuntimeReloadPrepareError::BuildConfig)?,
     );
+    if wait_for_network && !config.global.disable_waiting_network && !config.subscription.is_empty()
+    {
+        wait_for_network_before_subscriptions(&config)
+            .map_err(RuntimeReloadPrepareError::NetworkWait)?;
+    }
     let runtime_candidate = prepare_product_runtime_candidate(Arc::clone(&config))
         .map_err(RuntimeReloadPrepareError::Preflight)?
         .with_transition_identity(RuntimeTransitionIdentity {
@@ -245,7 +255,10 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_inner(
     if let Err(error) = lead.checkpoint("materializing") {
         return lead.finish(Err(error));
     }
-    let prepared = match build_prepared_runtime_reload(plan) {
+    // Legacy rebuilds the control plane on both startup and reload, so a
+    // reload that will pull subscriptions must honor the selected network
+    // waiting policy as well.  Dry previews still use the non-waiting helper.
+    let prepared = match build_prepared_runtime_reload(plan, true) {
         Ok(prepared) => prepared,
         Err(err) => {
             return lead.finish(Err(CoordinatedRuntimeReloadError::Prepare(err)));
@@ -276,11 +289,18 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_inner(
         preflight_elapsed_ns,
         process_transition,
     );
+    let previous_pprof_port = runtime.pprof_port();
+    if let Err(error) = runtime.configure_pprof_port(prepared.config.global.pprof_port) {
+        return lead.finish(Err(CoordinatedRuntimeReloadError::Apply(format!(
+            "pprof listener preflight failed: {error}"
+        ))));
+    }
     let commit = lead.begin_commit();
     if commit.is_err() {
         let error = commit
             .err()
             .expect("runtime commit admission error was checked");
+        let _ = runtime.configure_pprof_port(previous_pprof_port);
         return lead.finish(Err(error));
     }
     let permit = commit.expect("runtime commit admission success was checked");
@@ -306,8 +326,14 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_inner(
             lead.finish(Ok(applied))
         }
         Err(err) => {
+            let pprof_restore = runtime
+                .configure_pprof_port(previous_pprof_port)
+                .map_err(|restore| format!("pprof listener rollback failed: {restore}"));
             permit.finish("failed");
-            lead.finish(Err(err))
+            lead.finish(Err(match pprof_restore {
+                Ok(()) => err,
+                Err(restore) => CoordinatedRuntimeReloadError::Apply(format!("{err}; {restore}")),
+            }))
         }
     }
 }
@@ -332,6 +358,82 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
 
 fn elapsed_nanos(started: Instant) -> u64 {
     started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+const NETWORK_WAIT_LINKS: &[&str] = &[
+    "http://edge.microsoft.com/captiveportal/generate_204",
+    "http://www.gstatic.com/generate_204",
+    "http://www.qualcomm.cn/generate_204",
+];
+const NETWORK_WAIT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const NETWORK_WAIT_RETRY_DELAY: Duration = Duration::from_secs(5);
+
+/// Match legacy's pre-subscription network gate without coupling it to the
+/// resident dataplane.  Startup waits until one of the captive-portal probes
+/// returns an HTTP status below 500; `DAED_NETWORK_WAIT_MAX_ATTEMPTS` is an
+/// intentionally explicit diagnostic escape hatch (zero/unset means keep
+/// waiting, as legacy does).
+fn wait_for_network_before_subscriptions(config: &Config) -> Result<(), String> {
+    use std::net::ToSocketAddrs;
+
+    let max_attempts = std::env::var("DAED_NETWORK_WAIT_MAX_ATTEMPTS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let mut attempts = 0_u32;
+    loop {
+        attempts = attempts.saturating_add(1);
+        for link in NETWORK_WAIT_LINKS {
+            let Ok(url) = url::Url::parse(link) else {
+                continue;
+            };
+            let Some(host) = url.host_str() else {
+                continue;
+            };
+            let port = url.port_or_known_default().unwrap_or(80);
+            let Ok(addresses) = (host, port).to_socket_addrs() else {
+                continue;
+            };
+            for address in addresses {
+                let Ok(mut stream) =
+                    TcpStream::connect_timeout(&address, NETWORK_WAIT_CONNECT_TIMEOUT)
+                else {
+                    continue;
+                };
+                let request = format!(
+                    "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                    url.path(),
+                    host
+                );
+                if stream.write_all(request.as_bytes()).is_err() {
+                    continue;
+                }
+                let mut response = [0_u8; 128];
+                let Ok(read) = stream.read(&mut response) else {
+                    continue;
+                };
+                let status_ok = std::str::from_utf8(&response[..read])
+                    .ok()
+                    .and_then(|line| line.strip_prefix("HTTP/"))
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .and_then(|status| status.parse::<u16>().ok())
+                    .is_some_and(|status| (200..500).contains(&status));
+                if status_ok {
+                    return Ok(());
+                }
+            }
+        }
+        if max_attempts != 0 && attempts >= max_attempts {
+            return Err(format!(
+                "network did not become ready after {attempts} probe attempts"
+            ));
+        }
+        thread::sleep(NETWORK_WAIT_RETRY_DELAY);
+        // Keep the parameter in the contract even though the current direct
+        // resolver owns its own fallback resolver; callers still get a clear
+        // diagnostic when a malformed fallback is supplied.
+        let _ = &config.global.fallback_resolver;
+    }
 }
 
 pub(in crate::daed_product) fn runtime_modified_for_running_runtime(

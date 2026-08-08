@@ -5,6 +5,10 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     }
     let runtime_config = load_config_file(&options.config)
         .map_err(|err| format!("resident run config validation failed: {err}"))?;
+    if !runtime_config.global.disable_waiting_network {
+        wait_for_network_before_subscriptions()
+            .map_err(|err| format!("waiting for network before subscriptions failed: {err}"))?;
+    }
     let geodata_asset_dirs = resident_config_geodata_asset_dirs(&options.config);
     block_service_signals()?;
     let mut state = ResidentServiceState {
@@ -110,6 +114,18 @@ pub(super) fn handle_reload(
     let _abort_connections = fs::remove_file(&options.abort_file).is_ok();
     match load_config_file(&options.config) {
         Ok(runtime_config) => {
+            if !runtime_config.global.disable_waiting_network
+                && let Err(err) = wait_for_network_before_subscriptions()
+            {
+                write_progress(
+                    &options.progress_file,
+                    RELOAD_ERROR,
+                    &format!("\nwaiting for network before reload failed: {err}"),
+                )?;
+                log_event(options, "reload failed while waiting for network")?;
+                notify_systemd("READY=1")?;
+                return Ok(());
+            }
             if let Err(err) = validate_resident_runtime_reload_config(&runtime_config) {
                 write_progress(&options.progress_file, RELOAD_ERROR, &format!("\n{err}"))?;
                 log_event(options, "reload failed")?;

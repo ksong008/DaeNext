@@ -61,7 +61,6 @@ pub(in crate::daed_product) fn process_owned_field_changes(
             }
         };
     }
-    record!(pprof_port);
     record!(resident_tcp_flow_stack_bytes);
     record!(resident_tcp_runtime_workers);
     record!(resident_event_queue_depth);
@@ -84,7 +83,6 @@ fn kernel_ownership_changed(active: &Config, desired: &Config) -> bool {
         || active.global.tproxy_port_protect != desired.global.tproxy_port_protect
         || active.global.lan_interface != desired.global.lan_interface
         || active.global.wan_interface != desired.global.wan_interface
-        || active.global.disable_waiting_network != desired.global.disable_waiting_network
         || active.global.enable_local_tcp_fast_redirect
             != desired.global.enable_local_tcp_fast_redirect
         || active.global.auto_config_kernel_parameter != desired.global.auto_config_kernel_parameter
@@ -101,7 +99,15 @@ fn equivalent_without_generation_publication(active: &Config, desired: &Config) 
         .global
         .log_level
         .clone_from(&active.global.log_level);
+    // `pprof_port` is applied by the process-owned listener before the
+    // generation decision.  `disable_waiting_network` is consumed by the
+    // current startup/reload subscription gate.  Neither changes the
+    // resident dataplane or requires a pending process restart transition.
     normalized.global.pprof_port = active.global.pprof_port;
+    normalized.global.disable_waiting_network = active.global.disable_waiting_network;
+    // Kept for parser/API compatibility only.  Resident UDP uses the bounded
+    // runtime-profile resources, not the historical endpoint cache knob.
+    normalized.global.udp_endpoint_pool_size = active.global.udp_endpoint_pool_size;
     normalized.global.resident_tcp_flow_stack_bytes = active.global.resident_tcp_flow_stack_bytes;
     normalized.global.resident_tcp_runtime_workers = active.global.resident_tcp_runtime_workers;
     normalized.global.resident_event_queue_depth = active.global.resident_event_queue_depth;
@@ -175,6 +181,41 @@ mod tests {
         assert_eq!(
             classify_runtime_transition(&active, None, &desired, None),
             RuntimeTransitionClass::ProcessRestart
+        );
+    }
+
+    #[test]
+    fn network_wait_policy_is_reload_gate_owned_not_dataplane_owned() {
+        let active = test_config();
+        let mut desired = active.clone();
+        desired.global.disable_waiting_network = true;
+        assert_eq!(
+            classify_runtime_transition(&active, None, &desired, None),
+            RuntimeTransitionClass::NoChange
+        );
+        assert!(process_owned_field_changes(&active, &desired).is_empty());
+    }
+
+    #[test]
+    fn pprof_port_is_reload_listener_owned_not_dataplane_owned() {
+        let active = test_config();
+        let mut desired = active.clone();
+        desired.global.pprof_port = 6060;
+        assert_eq!(
+            classify_runtime_transition(&active, None, &desired, None),
+            RuntimeTransitionClass::NoChange
+        );
+        assert!(process_owned_field_changes(&active, &desired).is_empty());
+    }
+
+    #[test]
+    fn legacy_udp_endpoint_pool_size_is_a_reload_noop() {
+        let active = test_config();
+        let mut desired = active.clone();
+        desired.global.udp_endpoint_pool_size += 1;
+        assert_eq!(
+            classify_runtime_transition(&active, None, &desired, None),
+            RuntimeTransitionClass::NoChange
         );
     }
 

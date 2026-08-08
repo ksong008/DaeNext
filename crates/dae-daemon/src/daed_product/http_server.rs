@@ -13,6 +13,11 @@ pub(super) fn serve_forever(
     let listen_started_at = Instant::now();
     let listener = TcpListener::bind(listen)?;
     listener.set_nonblocking(true)?;
+    if let Some(config) = app.runtime.current_config() {
+        app.runtime
+            .configure_pprof_port(config.global.pprof_port)
+            .map_err(io::Error::other)?;
+    }
     let local_control = spawn_local_control_socket(Arc::clone(&app))?;
     let allocator_monitor = match spawn_allocator_idle_reclaim_monitor(&app) {
         Ok(monitor) => monitor,
