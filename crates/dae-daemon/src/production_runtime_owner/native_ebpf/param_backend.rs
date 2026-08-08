@@ -31,16 +31,19 @@ pub(crate) fn prepare_native_param_object(
         };
     }
     let map_profile = selected_native_map_profile();
-    let mut param = build_dae_param(DaeParamInput {
-        tproxy_port: options.tproxy_port,
-        control_plane_pid: std::process::id(),
-        dae0_ifindex,
-        dae_netns_id,
-        dae0peer_mac,
-        has_bpf_get_current_task: false,
-        task_struct_mm_offset: 0,
-        mm_struct_arg_start_offset: 0,
-    });
+    let mut param = dae_ebpf_support::build_dae_param_with_protection(
+        DaeParamInput {
+            tproxy_port: options.tproxy_port,
+            control_plane_pid: std::process::id(),
+            dae0_ifindex,
+            dae_netns_id,
+            dae0peer_mac,
+            has_bpf_get_current_task: false,
+            task_struct_mm_offset: 0,
+            mm_struct_arg_start_offset: 0,
+        },
+        options.tproxy_port_protect,
+    );
     param.udp_state_idle_timeout_ns = map_profile.profile.udp_state_idle_timeout_ns();
     let redirect_generation =
         redirect_runtime_generation(param.control_plane_pid, param.dae0_ifindex);
@@ -76,6 +79,7 @@ pub(crate) fn prepare_native_param_object(
                 "dae_netns_id": param.dae_netns_id,
                 "dae0peer_mac": mac_string(param.dae0peer_mac),
                 "has_bpf_get_current_task": param.has_bpf_get_current_task,
+                "tproxy_port_protect": param.padding != 0,
                 "task_struct_mm_offset": param.task_struct_mm_offset,
                 "mm_struct_arg_start_offset": param.mm_struct_arg_start_offset,
                 "abi_version": param.abi_version,

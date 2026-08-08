@@ -620,6 +620,7 @@ pub(super) fn start_with_options(
             "param_object": path_string(&param_object),
             "native_param_object": path_string(&selected_native_param_object),
             "tproxy_port": options.tproxy_port,
+            "tproxy_port_protect": options.tproxy_port_protect,
             "requested_dae_netns_id": options.dae_netns_id,
             "dae_netns_id": dae_netns_id,
             "preflight_checks": checks,

@@ -74,6 +74,11 @@ fn is_dns_udp(info: *const ParsedPacket) -> bool {
 }
 
 #[inline(always)]
+fn protected_wan_destination(l4proto: u8, dport: u16, protect: bool, tproxy_port: u16) -> bool {
+    protect && (l4proto == IPPROTO_TCP || l4proto == IPPROTO_UDP) && dport == tproxy_port
+}
+
+#[inline(always)]
 fn udp_state_unavailable_action() -> i32 {
     udp_state_unavailable_action_for_policy(crate::abi::param_udp_state_saturation_policy())
 }
@@ -383,6 +388,20 @@ pub fn wan_ingress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     if ret != 0 {
         return chain_next();
     }
+    // `tproxy_port_protect` is a WAN-ingress guard.  Traffic arriving from
+    // the physical WAN and addressed directly to the transparent-proxy
+    // listener is unsolicited; do not let it reach the dae listener.  LAN
+    // ingress and dae-owned outbound traffic use different hooks and remain
+    // unaffected.  The flag lives in the historical PARAM padding byte so
+    // older object/layout checks continue to pass.
+    if protected_wan_destination(
+        info.l4proto,
+        info.dport,
+        crate::abi::param_tproxy_port_protect(),
+        crate::abi::param_tproxy_port(),
+    ) {
+        return TC_ACT_SHOT;
+    }
     if info.l4proto == IPPROTO_UDP
         && !udp_state::refresh_reversed_udp_state(ptr::addr_of!(info), true)
     {
@@ -660,6 +679,21 @@ mod tests {
             udp_state_unavailable_action_for_policy(u32::MAX),
             TC_ACT_SHOT
         );
+    }
+
+    #[test]
+    fn tproxy_port_protection_only_drops_protected_tcp_and_udp_wan_destinations() {
+        let port = u16::to_be(12345);
+        assert!(protected_wan_destination(IPPROTO_TCP, port, true, port));
+        assert!(protected_wan_destination(IPPROTO_UDP, port, true, port));
+        assert!(!protected_wan_destination(IPPROTO_TCP, port, false, port));
+        assert!(!protected_wan_destination(
+            IPPROTO_TCP,
+            u16::to_be(443),
+            true,
+            port
+        ));
+        assert!(!protected_wan_destination(IPPROTO_ICMPV6, port, true, port));
     }
 
     #[test]

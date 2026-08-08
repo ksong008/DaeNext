@@ -138,7 +138,7 @@ pub use maps::{
     MapSpec, RuntimeMapContract, RuntimeMapProfile, RuntimeMapRole, map_catalog, pinned_reuse_maps,
     runtime_map_contract,
 };
-pub use param::{DaeParamInput, build_dae_param, htons};
+pub use param::{DaeParamInput, build_dae_param, build_dae_param_with_protection, htons};
 pub use param_loader::{
     DAE_PARAM_SYMBOL, DAE_PARAM_SYMBOL_SIZE, DaeParamPayload, DaeParamRequirement,
     build_dae_param_payload, dae_param_requirements, dae_param_runtime_values_present,

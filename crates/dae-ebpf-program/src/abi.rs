@@ -7,7 +7,10 @@ pub struct BpfDaeParam {
     pub dae_netns_id: u32,
     pub dae0peer_mac: [u8; 6],
     pub has_bpf_get_current_task: u8,
-    pub padding: u8,
+    /// Non-zero when the native WAN ingress guard must reject unsolicited
+    /// traffic addressed to the transparent-proxy port.  This occupies the
+    /// historical padding byte so the PARAM ABI size/offsets stay stable.
+    pub tproxy_port_protect: u8,
     pub task_struct_mm_offset: u32,
     pub mm_struct_arg_start_offset: u32,
     pub abi_version: u32,
@@ -24,7 +27,7 @@ impl BpfDaeParam {
             dae_netns_id: 0,
             dae0peer_mac: [0; 6],
             has_bpf_get_current_task: 0,
-            padding: 0,
+            tproxy_port_protect: 0,
             task_struct_mm_offset: 0,
             mm_struct_arg_start_offset: 0,
             abi_version: 0,
@@ -266,6 +269,19 @@ pub static PARAM: BpfDaeParam = BpfDaeParam::zeroed();
 #[inline(always)]
 pub fn param_control_plane_pid() -> u32 {
     unsafe { core::ptr::addr_of!(PARAM.control_plane_pid).read_volatile() }
+}
+
+#[inline(always)]
+pub fn param_tproxy_port() -> u16 {
+    // The userspace contract stores htons(port) widened to u32.  Reading the
+    // low 16 bits gives the same network-order representation as ParsedPacket
+    // uses for transport ports.
+    unsafe { core::ptr::addr_of!(PARAM.tproxy_port).read_volatile() as u16 }
+}
+
+#[inline(always)]
+pub fn param_tproxy_port_protect() -> bool {
+    unsafe { core::ptr::addr_of!(PARAM.tproxy_port_protect).read_volatile() != 0 }
 }
 
 #[inline(always)]

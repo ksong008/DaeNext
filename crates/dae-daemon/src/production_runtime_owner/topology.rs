@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, path::Path};
 
 use dae_ebpf_support::{
     DaeParamInput, TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec,
-    build_dae_param, write_param_aware_object,
+    write_param_aware_object,
 };
 use serde_json::{Value, json};
 

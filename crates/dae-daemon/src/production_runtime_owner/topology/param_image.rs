@@ -6,16 +6,19 @@ pub(crate) fn write_param_image(
     dae0peer_mac: [u8; 6],
     dae_netns_id: u32,
 ) -> Value {
-    let param = build_dae_param(DaeParamInput {
-        tproxy_port: options.tproxy_port,
-        control_plane_pid: std::process::id(),
-        dae0_ifindex,
-        dae_netns_id,
-        dae0peer_mac,
-        has_bpf_get_current_task: false,
-        task_struct_mm_offset: 0,
-        mm_struct_arg_start_offset: 0,
-    });
+    let param = dae_ebpf_support::build_dae_param_with_protection(
+        DaeParamInput {
+            tproxy_port: options.tproxy_port,
+            control_plane_pid: std::process::id(),
+            dae0_ifindex,
+            dae_netns_id,
+            dae0peer_mac,
+            has_bpf_get_current_task: false,
+            task_struct_mm_offset: 0,
+            mm_struct_arg_start_offset: 0,
+        },
+        options.tproxy_port_protect,
+    );
     let redirect_generation =
         dae_ebpf_support::redirect_runtime_generation(param.control_plane_pid, param.dae0_ifindex);
     match write_param_aware_object(&options.source_object, param_object, param) {
@@ -33,6 +36,7 @@ pub(crate) fn write_param_image(
                 "dae_netns_id": param.dae_netns_id,
                 "dae0peer_mac": mac_string(param.dae0peer_mac),
                 "has_bpf_get_current_task": param.has_bpf_get_current_task,
+                "tproxy_port_protect": param.padding != 0,
                 "task_struct_mm_offset": param.task_struct_mm_offset,
                 "mm_struct_arg_start_offset": param.mm_struct_arg_start_offset,
                 "abi_version": param.abi_version,

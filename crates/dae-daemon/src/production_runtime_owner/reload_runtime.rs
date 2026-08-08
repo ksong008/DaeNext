@@ -492,6 +492,7 @@ fn restore_guard_value(
         "current_owner_preserved_on_failure": true,
         "listener_identity_after_restore": listener,
         "tproxy_port_preserved": options.tproxy_port,
+        "tproxy_port_protect": options.tproxy_port_protect,
         "production_topology_preserved_until_owner_cleanup": true,
     })
 }

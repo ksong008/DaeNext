@@ -29,6 +29,28 @@ pub(super) fn dae_param_packs_big_endian_tproxy_port() {
 }
 
 #[test]
+pub(super) fn tproxy_protection_flag_uses_abi_stable_padding_byte() {
+    let input = DaeParamInput {
+        tproxy_port: 12345,
+        control_plane_pid: 77,
+        dae0_ifindex: 8,
+        dae_netns_id: 9,
+        dae0peer_mac: [1, 2, 3, 4, 5, 6],
+        has_bpf_get_current_task: false,
+        task_struct_mm_offset: 0,
+        mm_struct_arg_start_offset: 0,
+    };
+    let protected = build_dae_param_with_protection(input, true);
+    let unprotected = build_dae_param_with_protection(input, false);
+    assert_eq!(protected.padding, 1);
+    assert_eq!(unprotected.padding, 0);
+    assert_eq!(
+        std::mem::size_of_val(&protected),
+        std::mem::size_of::<BpfDaeParam>()
+    );
+}
+
+#[test]
 pub(super) fn param_aware_loader_gate_requires_real_loader_and_runtime_values() {
     let input = DaeParamInput {
         tproxy_port: 12345,
