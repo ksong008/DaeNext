@@ -1207,6 +1207,7 @@ fn runtime_traffic_stats_prefer_live_resident_metrics() {
             active_udp_sessions: 2,
             ..ResidentTrafficCounters::default()
         },
+        1,
         100,
         first_at,
         None,
@@ -1225,9 +1226,11 @@ fn runtime_traffic_stats_prefer_live_resident_metrics() {
             active_udp_sessions: 0,
             ..ResidentTrafficCounters::default()
         },
+        1,
         101,
         first_at + Duration::from_secs(1),
         Some(RuntimeTrafficTotalSample {
+            epoch: 1,
             upload_total: first.upload_total,
             download_total: first.download_total,
             observed_at: first_at,
@@ -1283,11 +1286,9 @@ fn runtime_overview_reads_fixed_sampler_state_without_legacy_zero_claims() {
     assert_eq!(narrow["udpTaskDropTotal"], Value::Null);
     assert_eq!(narrow["packetSnifferSessions"], Value::Null);
     assert_eq!(narrow["runtimeSampler"]["intervalMillis"], json!(1_000));
-    assert!(
-        narrow["runtimeSampler"]["historyLength"]
-            .as_u64()
-            .is_some_and(|length| length >= 1)
-    );
+    assert_eq!(narrow["runtimeSampler"]["historyLength"], json!(0));
+    assert_eq!(narrow["trafficAvailable"], json!(false));
+    assert_eq!(narrow["trafficSampleStatus"], json!("runtime-stopped"));
 
     drop(app);
     fs::remove_dir_all(dir).unwrap();

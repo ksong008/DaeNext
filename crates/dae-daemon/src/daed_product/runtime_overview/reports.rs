@@ -15,6 +15,10 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
     let allocator_stats = sampled.allocator;
     let allocator_live_heap = allocator_stats.map(|stats| stats.allocated);
     let cgroup_memory = sampled.cgroup_memory;
+    let traffic_available = sampled.traffic_availability == RuntimeTrafficAvailability::Active;
+    let traffic_age_ms = sampled
+        .last_runtime_counter_at
+        .map(|at| unix_now().saturating_sub(at).saturating_mul(1_000));
     json!({
         "updatedAt": iso8601_utc(sampled.sampled_at),
         "uploadRate": traffic.upload_rate.to_string(),
@@ -23,6 +27,13 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         "downloadTotal": traffic.download_total.to_string(),
         "activeConnections": traffic.active_connections,
         "udpSessions": traffic.udp_sessions,
+        "trafficAvailable": traffic_available,
+        "trafficSampleStatus": sampled.traffic_availability.as_str(),
+        "trafficScope": "resident-userspace-payload",
+        "directIncluded": false,
+        "counterEpoch": sampled.counter_epoch,
+        "lastTrafficSampleAt": sampled.last_runtime_counter_at.map(iso8601_utc),
+        "trafficAgeMs": traffic_age_ms,
         "udpTaskQueues": Value::Null,
         "udpTaskDropTotal": Value::Null,
         "packetSnifferSessions": Value::Null,
@@ -63,6 +74,7 @@ pub(crate) fn runtime_overview_report(app: &AppState, request: &HttpRequest) -> 
         "productGeodataUpdate": app.geodata_update_runtime.as_ref().map(|runtime| runtime.snapshot()).unwrap_or(Value::Null),
         "runtimeSampler": app.runtime_sampler.as_ref().map(|sampler| sampler.snapshot()).unwrap_or(Value::Null),
         "runtimeSampleCount": sampled.sample_count,
+        "sequence": sampled.sample_count,
         "runtime": runtime,
         "runtimeRevision": runtime_revision,
         "samples": traffic.samples,
@@ -76,6 +88,10 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState) -> Value {
     let process = sampled.process;
     let allocator_live_heap = sampled.allocator.map(|stats| stats.allocated);
     let cgroup_memory = sampled.cgroup_memory;
+    let traffic_available = sampled.traffic_availability == RuntimeTrafficAvailability::Active;
+    let traffic_age_ms = sampled
+        .last_runtime_counter_at
+        .map(|at| unix_now().saturating_sub(at).saturating_mul(1_000));
     json!({
         "updatedAt": iso8601_utc(sampled.sampled_at),
         "uploadRate": traffic.upload_rate.to_string(),
@@ -84,6 +100,13 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState) -> Value {
         "downloadTotal": traffic.download_total.to_string(),
         "activeConnections": traffic.active_connections,
         "udpSessions": traffic.udp_sessions,
+        "trafficAvailable": traffic_available,
+        "trafficSampleStatus": sampled.traffic_availability.as_str(),
+        "trafficScope": "resident-userspace-payload",
+        "directIncluded": false,
+        "counterEpoch": sampled.counter_epoch,
+        "lastTrafficSampleAt": sampled.last_runtime_counter_at.map(iso8601_utc),
+        "trafficAgeMs": traffic_age_ms,
         "cpuUsagePercent": process.cpu_usage_percent,
         "rssBytes": process.rss_bytes.to_string(),
         "rssAnonBytes": process.anonymous_rss_bytes.to_string(),
@@ -97,10 +120,6 @@ pub(crate) fn runtime_overview_delta_report(app: &AppState) -> Value {
         "heapCompatBytesSource": "compat-alias-rss-anon-not-live-heap",
         "cgroupMemory": cgroup_memory,
         "goroutines": process.thread_count,
-        "productAuth": app.auth_runtime.snapshot(),
-        "productControl": app.control_runtime.snapshot(),
-        "productLogWriter": product_log_runtime_snapshot(&app.config_dir),
-        "productGeodataUpdate": app.geodata_update_runtime.as_ref().map(|runtime| runtime.snapshot()).unwrap_or(Value::Null),
         "runtimeSampler": app.runtime_sampler.as_ref().map(|sampler| sampler.snapshot()).unwrap_or(Value::Null),
         "runtimeSampleCount": sampled.sample_count,
         "sequence": sampled.sample_count,

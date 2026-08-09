@@ -106,6 +106,7 @@ impl ProductSseRuntime {
         let admission = Arc::new(ProductSseAdmission::new(config));
         let (sender, receiver) = tokio::sync::mpsc::channel(config.queue_capacity);
         let (overview, _) = runtime_overview_feed();
+        let overview_full_cache = Arc::new(ProductRuntimeOverviewFullCache::default());
         let (stop, stop_receiver) = tokio::sync::watch::channel(false);
         let worker = start_product_sse_worker(
             config,
@@ -114,6 +115,7 @@ impl ProductSseRuntime {
             stop_receiver,
             Arc::clone(&metrics),
             overview.clone(),
+            Arc::clone(&overview_full_cache),
         )?;
         Ok(Arc::new(Self {
             config,

@@ -2,6 +2,41 @@ use super::summary::apply_runtime_traffic_metric_carry;
 use super::*;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::daed_product) enum RuntimeTrafficAvailability {
+    Active,
+    TemporarilyUnavailable,
+    #[default]
+    RuntimeStopped,
+}
+
+impl RuntimeTrafficAvailability {
+    pub(in crate::daed_product) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::TemporarilyUnavailable => "temporarily-unavailable",
+            Self::RuntimeStopped => "runtime-stopped",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::daed_product) struct RuntimeTrafficRead {
+    pub(in crate::daed_product) epoch: u64,
+    pub(in crate::daed_product) counters: ResidentTrafficCounters,
+    pub(in crate::daed_product) availability: RuntimeTrafficAvailability,
+}
+
+impl RuntimeTrafficRead {
+    pub(in crate::daed_product) fn runtime_stopped(epoch: u64) -> Self {
+        Self {
+            epoch,
+            counters: ResidentTrafficCounters::default(),
+            availability: RuntimeTrafficAvailability::RuntimeStopped,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::daed_product) struct RuntimeTrafficCarry {
     pub(in crate::daed_product) upload_total: u64,
     pub(in crate::daed_product) download_total: u64,
@@ -59,12 +94,45 @@ impl RuntimeTrafficCarry {
 }
 
 impl ProductRuntimeManager {
+    pub(in crate::daed_product) fn resident_traffic_read(&self) -> RuntimeTrafficRead {
+        let Ok(inner) = self.inner.lock() else {
+            return RuntimeTrafficRead {
+                epoch: u64::MAX,
+                counters: ResidentTrafficCounters::default(),
+                availability: RuntimeTrafficAvailability::TemporarilyUnavailable,
+            };
+        };
+        let epoch = inner.allocator_publication_id;
+        let Some(runtime) = inner.runtime.as_ref() else {
+            return RuntimeTrafficRead {
+                epoch,
+                counters: ResidentTrafficCounters::default(),
+                availability: if inner.cleanup.running || inner.config.is_some() {
+                    RuntimeTrafficAvailability::TemporarilyUnavailable
+                } else {
+                    RuntimeTrafficAvailability::RuntimeStopped
+                },
+            };
+        };
+        let Some(counters) = runtime_traffic_counters(runtime) else {
+            return RuntimeTrafficRead {
+                epoch,
+                counters: ResidentTrafficCounters::default(),
+                availability: RuntimeTrafficAvailability::TemporarilyUnavailable,
+            };
+        };
+        RuntimeTrafficRead {
+            epoch,
+            counters: inner.traffic_carry.apply_to_counters(counters),
+            availability: RuntimeTrafficAvailability::Active,
+        }
+    }
+
     pub(in crate::daed_product) fn resident_traffic_counters(
         &self,
     ) -> Option<ResidentTrafficCounters> {
-        let inner = self.inner.lock().ok()?;
-        let counters = runtime_traffic_counters(inner.runtime.as_ref()?)?;
-        Some(inner.traffic_carry.apply_to_counters(counters))
+        let read = self.resident_traffic_read();
+        (read.availability == RuntimeTrafficAvailability::Active).then_some(read.counters)
     }
 }
 

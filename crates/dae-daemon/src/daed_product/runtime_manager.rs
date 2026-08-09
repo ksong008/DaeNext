@@ -20,7 +20,7 @@ use super::runtime_transition::{
     RuntimeTransitionClass, RuntimeTransitionIdentity, classify_runtime_transition,
     process_owned_field_changes,
 };
-pub(super) use traffic::RuntimeTrafficCarry;
+pub(super) use traffic::{RuntimeTrafficAvailability, RuntimeTrafficCarry, RuntimeTrafficRead};
 
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
 use apply_state::RuntimeApplyState;

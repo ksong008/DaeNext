@@ -22,6 +22,7 @@ pub(super) fn start_product_sse_worker(
     stop: tokio::sync::watch::Receiver<bool>,
     metrics: Arc<ProductHttpMetrics>,
     overview: tokio::sync::broadcast::Sender<Arc<ProductRuntimeOverviewTick>>,
+    overview_full_cache: Arc<ProductRuntimeOverviewFullCache>,
 ) -> io::Result<ProductSseWorkerHandle> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -44,6 +45,7 @@ pub(super) fn start_product_sse_worker(
                 &mut reclaim_worker,
                 &mut allocator_worker,
                 overview,
+                overview_full_cache,
             ));
         })?;
     Ok(ProductSseWorkerHandle {
@@ -68,6 +70,7 @@ async fn run_product_sse_runtime(
     reclaim_worker: &mut Option<ProductUiReclaimWorker>,
     allocator_worker: &mut AllocatorReclaimWorker,
     overview: tokio::sync::broadcast::Sender<Arc<ProductRuntimeOverviewTick>>,
+    overview_full_cache: Arc<ProductRuntimeOverviewFullCache>,
 ) {
     let mut tasks = tokio::task::JoinSet::new();
     let mut maintenance = tokio::time::interval(PRODUCT_HTTP_WORKER_RECV_TIMEOUT);
@@ -94,8 +97,9 @@ async fn run_product_sse_runtime(
                 };
                 let task_stop = stop.clone();
                 let task_metrics = Arc::clone(&metrics);
+                let task_overview_full_cache = Arc::clone(&overview_full_cache);
                 tasks.spawn(async move {
-                    run_product_sse_job(app, job, task_stop, task_metrics).await;
+                    run_product_sse_job(app, job, task_stop, task_metrics, task_overview_full_cache).await;
                 });
             }
             completed = tasks.join_next(), if !tasks.is_empty() => {
@@ -132,6 +136,7 @@ async fn run_product_sse_job(
     job: ProductSseJob,
     stop: tokio::sync::watch::Receiver<bool>,
     metrics: Arc<ProductHttpMetrics>,
+    overview_full_cache: Arc<ProductRuntimeOverviewFullCache>,
 ) {
     let ProductSseJob {
         stream,
@@ -163,7 +168,15 @@ async fn run_product_sse_job(
             let Some(overview) = overview else {
                 return;
             };
-            stream_runtime_events_async(&mut stream, &app, &request, stop, overview).await
+            stream_runtime_events_async(
+                &mut stream,
+                &app,
+                &request,
+                stop,
+                overview,
+                overview_full_cache,
+            )
+            .await
         }
     };
 }

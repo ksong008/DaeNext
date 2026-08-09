@@ -9,16 +9,14 @@ pub(super) async fn stream_runtime_events_async(
     request: &HttpRequest,
     mut stop: tokio::sync::watch::Receiver<bool>,
     mut overview: tokio::sync::broadcast::Receiver<Arc<ProductRuntimeOverviewTick>>,
+    overview_full_cache: Arc<ProductRuntimeOverviewFullCache>,
 ) -> io::Result<()> {
     write_sse_headers(stream, request).await?;
     write_sse_retry(stream).await?;
     let mut last_runtime_identity = app.runtime.runtime_event_identity();
-    let first = runtime_overview_report(app, request);
-    let mut last_reload_count = first
-        .pointer("/runtime/reloadCount")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    write_sse_event(stream, "runtime.overview", &first).await?;
+    let first = overview_full_cache.serialized(app, request)?;
+    let mut last_reload_count = app.runtime.runtime_overview_delta_state().reload_count;
+    write_sse_serialized_runtime_overview(stream, &first).await?;
     let mut group_selection_events = RuntimeGroupSelectionEventTracker::default();
     if let Some(event) = group_selection_events.observe_app(app) {
         write_sse_event(stream, RUNTIME_GROUP_SELECTION_EVENT, &event).await?;
@@ -39,8 +37,8 @@ pub(super) async fn stream_runtime_events_async(
         let tick = match tick {
             Ok(tick) => tick,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                let full = runtime_overview_report(app, request);
-                write_sse_event(stream, "runtime.overview", &full).await?;
+                let full = overview_full_cache.serialized(app, request)?;
+                write_sse_serialized_runtime_overview(stream, &full).await?;
                 sequence_synced = false;
                 continue;
             }
@@ -52,13 +50,10 @@ pub(super) async fn stream_runtime_events_async(
             || tick.reload_count != last_reload_count
             || runtime_identity != last_runtime_identity
         {
-            let full = runtime_overview_report(app, request);
-            last_reload_count = full
-                .pointer("/runtime/reloadCount")
-                .and_then(Value::as_u64)
-                .unwrap_or(tick.reload_count);
+            let full = overview_full_cache.serialized(app, request)?;
+            last_reload_count = tick.reload_count;
             last_runtime_identity = runtime_identity;
-            write_sse_event(stream, "runtime.overview", &full).await?;
+            write_sse_serialized_runtime_overview(stream, &full).await?;
         } else {
             write_sse_serialized_runtime_delta(stream, &tick.payload).await?;
         }

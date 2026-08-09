@@ -51,6 +51,20 @@ pub(super) async fn write_sse_serialized_runtime_delta(
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSE write timed out"))?
 }
 
+pub(super) async fn write_sse_serialized_runtime_overview(
+    stream: &mut tokio::net::TcpStream,
+    payload: &[u8],
+) -> io::Result<()> {
+    tokio::time::timeout(PRODUCT_HTTP_SSE_WRITE_TIMEOUT, async {
+        stream.write_all(b"event: runtime.overview\ndata: ").await?;
+        stream.write_all(payload).await?;
+        stream.write_all(b"\n\n").await?;
+        stream.flush().await
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSE write timed out"))?
+}
+
 pub(super) async fn write_sse_retry(stream: &mut tokio::net::TcpStream) -> io::Result<()> {
     write_sse_bytes(
         stream,

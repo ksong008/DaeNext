@@ -13,6 +13,7 @@ pub(crate) struct RuntimeTrafficStats {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RuntimeTrafficTotalSample {
+    pub(in crate::daed_product) epoch: u64,
     pub(in crate::daed_product) upload_total: u64,
     pub(in crate::daed_product) download_total: u64,
     pub(in crate::daed_product) observed_at: Instant,
@@ -58,6 +59,7 @@ fn resident_runtime_traffic_stats_from_metrics(metrics: &Value) -> RuntimeTraffi
             active_udp_sessions: event_u64(metrics, "activeUdpSessions"),
             ..ResidentTrafficCounters::default()
         },
+        0,
         unix_now(),
         Instant::now(),
         None,
@@ -74,6 +76,7 @@ fn resident_runtime_traffic_stats_from_metrics(metrics: &Value) -> RuntimeTraffi
 
 pub(crate) fn runtime_traffic_observation(
     counters: ResidentTrafficCounters,
+    epoch: u64,
     timestamp: u64,
     observed_at: Instant,
     previous: Option<RuntimeTrafficTotalSample>,
@@ -84,7 +87,10 @@ pub(crate) fn runtime_traffic_observation(
     let mut download_rate = 0_u64;
     let mut totals_reset = false;
     if let Some(previous) = previous {
-        if upload_total < previous.upload_total || download_total < previous.download_total {
+        if previous.epoch != epoch {
+            // A newly published physical runtime has a fresh timing baseline. The manager's
+            // carry keeps totals monotonic, so do not turn the carried total into a reload spike.
+        } else if upload_total < previous.upload_total || download_total < previous.download_total {
             totals_reset = true;
         } else {
             let elapsed = observed_at

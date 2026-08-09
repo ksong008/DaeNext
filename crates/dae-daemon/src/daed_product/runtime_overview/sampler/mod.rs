@@ -73,6 +73,13 @@ impl ProductRuntimeSampler {
             .unwrap_or(0);
         self.metrics.snapshot(history_length)
     }
+
+    pub(crate) fn sequence(&self) -> u64 {
+        self.state
+            .lock()
+            .map(|state| state.sequence())
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for ProductRuntimeSampler {
@@ -122,6 +129,7 @@ fn fallback_runtime_sample_view(
     let sampled_at = unix_now();
     let observation = runtime_traffic_observation(
         counters.unwrap_or_default(),
+        0,
         sampled_at,
         Instant::now(),
         None,
@@ -157,5 +165,10 @@ fn fallback_runtime_sample_view(
         process: process_metrics_lifetime_snapshot(),
         allocator: allocator_stats_snapshot(),
         cgroup_memory: cgroup_memory_snapshot_json(),
+        traffic_availability: counters
+            .map(|_| RuntimeTrafficAvailability::Active)
+            .unwrap_or(RuntimeTrafficAvailability::RuntimeStopped),
+        counter_epoch: 0,
+        last_runtime_counter_at: counters.map(|_| sampled_at),
     }
 }
