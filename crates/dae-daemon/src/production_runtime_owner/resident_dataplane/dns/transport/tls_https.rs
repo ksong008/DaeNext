@@ -709,6 +709,7 @@ async fn forward_dns_https_over_reusable_stream_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::production_runtime_owner::resident_dataplane::RESIDENT_IDLE_SLEEP;
 
     const H2_DOH_TEST_AUTHORITY: &str = "doh-fixture.invalid";
     const H2_DOH_TEST_PATH: &str = "/dns-query";

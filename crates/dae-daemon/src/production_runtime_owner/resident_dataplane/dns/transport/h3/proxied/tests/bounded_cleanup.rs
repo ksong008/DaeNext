@@ -3,7 +3,9 @@ use super::*;
 use std::future::pending;
 use std::sync::{Arc, Mutex};
 
-use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+use crate::production_runtime_owner::resident_dataplane::{
+    RESIDENT_IDLE_SLEEP, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+};
 
 #[derive(Clone, Copy)]
 enum ForcedExchangeOutcome {
