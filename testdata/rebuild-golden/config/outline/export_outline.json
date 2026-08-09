@@ -86,7 +86,7 @@
           },
           {
             "defaultValue": "4096",
-            "desc": "Maximum number of cached UDP endpoints before dae evicts the oldest inactive entries. Increase it for heavy QUIC, gaming, or P2P workloads.",
+            "desc": "Deprecated compatibility field. Resident UDP capacity is selected by the runtime profile and resident_udp_session_limit; this field is not consumed by the production dataplane.",
             "mapping": "udp_endpoint_pool_size",
             "name": "UdpEndpointPoolSize",
             "type": "int"
@@ -445,7 +445,7 @@
         "name": "Dns",
         "structure": [
           {
-            "desc": "For example, if ipversion_prefer is 4 and the domain name has both type A and type AAAA records, the dae will only respond to type A queries and response empty answer to type AAAA queries.",
+            "desc": "0 means no family preference; 4 prefers IPv4 and 6 prefers IPv6 for internal address ordering and connection establishment while retaining the other family as fallback. Client A/AAAA DNS responses are preserved. Strict family-only modes are not admitted.",
             "mapping": "ipversion_prefer",
             "name": "IpVersionPrefer",
             "type": "int"

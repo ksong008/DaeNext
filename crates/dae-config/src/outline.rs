@@ -198,7 +198,7 @@ fn dns_outline() -> Value {
         "type": "config.Dns",
         "desc": "See more at https://github.com/daeuniverse/dae/blob/main/docs/en/configuration/dns.md.",
         "structure": [
-            leaf("IpVersionPrefer", "ipversion_prefer", "int", None, Some("For example, if ipversion_prefer is 4 and the domain name has both type A and type AAAA records, the dae will only respond to type A queries and response empty answer to type AAAA queries."), false, false),
+            leaf("IpVersionPrefer", "ipversion_prefer", "int", None, Some("0 means no family preference; 4 prefers IPv4 and 6 prefers IPv6 for internal address ordering and connection establishment while retaining the other family as fallback. Client A/AAAA DNS responses are preserved. Strict family-only modes are not admitted."), false, false),
             leaf("FixedDomainTtl", "fixed_domain_ttl", "config.KeyableString", None, Some("Give a fixed ttl for domains. Zero means that dae will request to upstream every time and not cache DNS results for these domains."), true, false),
             leaf("Upstream", "upstream", "config.KeyableString", None, Some("Value can be scheme://host:port, where the scheme can be tcp/udp/tcp+udp.\nIf host is a domain and has both IPv4 and IPv6 record, dae will automatically choose IPv4 or IPv6 to use according to group policy (such as min latency policy).\nPlease make sure DNS traffic will go through and be forwarded by dae, which is REQUIRED for domain routing.\nIf dial_mode is \"ip\", the upstream DNS answer SHOULD NOT be polluted, so domestic public DNS is not recommended."), true, false),
             json!({
