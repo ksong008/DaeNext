@@ -488,6 +488,60 @@ fn dns_upstream_candidates_keep_multiple_resolved_targets_generic() {
     assert_eq!(binding.plan().node_tag, "node_b");
 }
 
+#[test]
+fn dns_upstream_targets_prefer_configured_family_without_dropping_fallback() {
+    let upstream = parse_dns_upstream(
+        0,
+        "family-preference",
+        "udp://192.0.2.53",
+        test_fallback_resolver(),
+        0,
+    )
+    .unwrap();
+    let v4 = test_dns_upstream_target_v4();
+    let v6 = test_dns_upstream_target_v6();
+
+    let mut plan = ResidentDnsPlan::asis(0);
+    plan.ipversion_prefer = Some(DNS_QTYPE_A);
+    let (targets, failures) =
+        transport::select_dns_upstream_targets(&plan, &upstream, vec![v6, v4], L4Proto::Udp)
+            .unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(
+        targets
+            .iter()
+            .map(|target| target.target)
+            .collect::<Vec<_>>(),
+        vec![v4, v6]
+    );
+
+    plan.ipversion_prefer = Some(DNS_QTYPE_AAAA);
+    let (targets, failures) =
+        transport::select_dns_upstream_targets(&plan, &upstream, vec![v4, v6], L4Proto::Udp)
+            .unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(
+        targets
+            .iter()
+            .map(|target| target.target)
+            .collect::<Vec<_>>(),
+        vec![v6, v4]
+    );
+
+    plan.ipversion_prefer = None;
+    let (targets, failures) =
+        transport::select_dns_upstream_targets(&plan, &upstream, vec![v6, v4], L4Proto::Udp)
+            .unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(
+        targets
+            .iter()
+            .map(|target| target.target)
+            .collect::<Vec<_>>(),
+        vec![v6, v4]
+    );
+}
+
 #[tokio::test]
 async fn tcp_udp_fast_udp_response_does_not_admit_a_tcp_request() {
     let tcp = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
@@ -1487,7 +1541,7 @@ async fn resident_dns_request_reject_removes_scoped_cached_responses() {
 }
 
 #[tokio::test]
-async fn resident_dns_ipversion_prefer_rejects_non_preferred_when_preferred_has_ip() {
+async fn resident_dns_ipversion_prefer_preserves_non_preferred_cached_response() {
     let mut plan = ResidentDnsPlan::asis(0);
     plan.ipversion_prefer = Some(DNS_QTYPE_A);
     let a_query = DnsPacketView::parse(QUERY).unwrap();
@@ -1510,32 +1564,44 @@ async fn resident_dns_ipversion_prefer_rejects_non_preferred_when_preferred_has_
 
     assert_eq!(&response[0..2], &[0x12, 0x34]);
     assert_eq!(u16::from_be_bytes([response[2], response[3]]) & 0x000f, 0);
-    assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+    assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
+    let response_view = DnsPacketView::parse(&response).unwrap();
+    assert_eq!(
+        response_view.questions().next().unwrap().qtype(),
+        DNS_QTYPE_AAAA
+    );
 }
 
 #[tokio::test]
-async fn resident_dns_ipversion_prefer_synthesizes_preferred_lookup_in_parallel() {
+async fn resident_dns_ipversion_prefer_forwards_opposite_family_without_synthesis() {
     let socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
     let upstream_addr = socket.local_addr().unwrap();
     let received = Arc::new(AtomicUsize::new(0));
     let server_received = Arc::clone(&received);
+    let seen_qtypes = Arc::new(Mutex::new(Vec::new()));
+    let server_qtypes = Arc::clone(&seen_qtypes);
     let query = query_with_qtype(DNS_QTYPE_AAAA);
-    let expected_queries = 2;
+    let expected_queries = 1;
     let server = tokio::spawn(async move {
         let mut buf = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
         loop {
             let timeout = if server_received.load(Ordering::Relaxed) == 0 {
                 RESIDENT_UDP_RESPONSE_TIMEOUT
             } else {
-                dns_ipversion_preference_wait_timeout() + dns_ipversion_preference_wait_timeout()
+                Duration::from_millis(20)
             };
             let Ok(Ok((read, peer))) = time::timeout(timeout, socket.recv_from(&mut buf)).await
             else {
                 break;
             };
             server_received.fetch_add(1, Ordering::Relaxed);
+            let request = DnsPacketView::parse(&buf[..read]).unwrap();
+            server_qtypes
+                .lock()
+                .unwrap()
+                .push(request.questions().next().unwrap().qtype());
             let response = empty_response_for_query(&buf[..read]);
             socket.send_to(&response, peer).await.unwrap();
         }
@@ -1550,6 +1616,7 @@ async fn resident_dns_ipversion_prefer_synthesizes_preferred_lookup_in_parallel(
     server.await.unwrap();
 
     assert_eq!(received.load(Ordering::Relaxed), expected_queries);
+    assert_eq!(seen_qtypes.lock().unwrap().as_slice(), &[DNS_QTYPE_AAAA]);
 }
 
 #[tokio::test]

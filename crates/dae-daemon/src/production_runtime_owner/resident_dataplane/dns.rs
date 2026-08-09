@@ -59,16 +59,14 @@ use super::udp::{
 };
 use super::{
     AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
-    RESIDENT_IDLE_SLEEP, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT,
-    ResidentDataplaneMetrics, ResidentDnsResourceProfile, ResidentDnsUdpRuntimeConfig,
-    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
-    apply_resident_udp_socket_buffer_tuning,
+    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics,
+    ResidentDnsResourceProfile, ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries,
+    SharedResidentStopSignal, TuicOwnerRegistryHandle, apply_resident_udp_socket_buffer_tuning,
 };
 
 mod cache;
 mod domain_routing;
 mod error_response;
-mod ipversion_preference;
 mod reload;
 mod request;
 mod routing;
@@ -95,9 +93,6 @@ use self::domain_routing::{
 };
 pub(super) use self::error_response::build_dns_server_failure_response;
 use self::error_response::build_reject_response;
-use self::ipversion_preference::{
-    ResidentDnsIpversionPreferenceRegistry, dns_ipversion_preference_wait_timeout,
-};
 pub(in crate::production_runtime_owner) use self::reload::ResidentDnsReloadHandle;
 use self::reload::ResidentDnsReloadRestoreReport;
 pub(crate) use self::reload::ResidentDnsReloadSnapshot;
@@ -167,12 +162,9 @@ const DNS_TRACE_CACHE_BYPASS: &str = "bypass";
 const DNS_TRACE_CACHE_HIT: &str = "hit";
 const DNS_TRACE_CACHE_LOCKED_HIT: &str = "locked-hit";
 const DNS_TRACE_CACHE_MISS: &str = "miss";
-const DNS_TRACE_CACHE_UNKNOWN: &str = "unknown";
 const DNS_TRACE_ROUTING_UNRESOLVED: &str = "unresolved";
 const DNS_TRACE_ROUTING_ASIS: &str = "asis";
 const DNS_TRACE_ROUTING_UPSTREAM: &str = "upstream";
-const DNS_TRACE_ROUTING_IPVERSION_PREFERENCE: &str = "ipversion_preference";
-const DNS_TRACE_ROUTING_RESOLVED: &str = "resolved";
 const DNS_TRACE_ROUTING_CACHE: &str = "cache";
 const DNS_TRACE_ROUTING_ACCEPT: &str = "accept";
 const DNS_TRACE_ROUTING_REJECT: &str = "reject";
@@ -183,7 +175,6 @@ const DNS_TRACE_REASON_ASIS_ACCEPTED: &str = "resident DNS asis response accepte
 const DNS_TRACE_REASON_ASIS_REJECTED: &str = "resident DNS asis response rejected";
 const DNS_TRACE_REASON_UPSTREAM_ACCEPTED: &str = "resident DNS upstream response accepted";
 const DNS_TRACE_REASON_UPSTREAM_REJECTED: &str = "resident DNS upstream response rejected";
-const DNS_TRACE_REASON_IPVERSION: &str = "ipversion preference resolved DNS path";
 pub(super) const DNS_TRANSPORT_ROUTE_DIRECT: &str = "direct";
 pub(super) const DNS_TRANSPORT_ROUTE_PROXY: &str = "proxy";
 pub(super) const DNS_TRANSPORT_TARGET_FAMILY_IPV4: &str = "ipv4";
@@ -218,7 +209,6 @@ pub(super) struct ResidentDnsPlan {
     forwarders: Arc<ResidentDnsForwarderCache>,
     fixed_domain_ttl: Arc<BTreeMap<String, i64>>,
     ipversion_prefer: Option<u16>,
-    ipversion_preference_registry: Arc<ResidentDnsIpversionPreferenceRegistry>,
     mark: u32,
     upstream_router: Option<Arc<ResidentDnsUpstreamRouter>>,
     target_refresh_owner: Option<Arc<ResidentDnsTargetRefreshOwner>>,
@@ -245,9 +235,6 @@ impl ResidentDnsPlan {
             forwarders: Arc::new(ResidentDnsForwarderCache::default()),
             fixed_domain_ttl: Arc::new(BTreeMap::new()),
             ipversion_prefer: None,
-            ipversion_preference_registry: Arc::new(
-                ResidentDnsIpversionPreferenceRegistry::default(),
-            ),
             mark,
             upstream_router: None,
             target_refresh_owner: None,
@@ -428,7 +415,6 @@ pub(super) fn build_resident_dns_plan(
         forwarders: Arc::new(ResidentDnsForwarderCache::default()),
         fixed_domain_ttl: Arc::new(fixed_domain_ttl),
         ipversion_prefer,
-        ipversion_preference_registry: Arc::new(ResidentDnsIpversionPreferenceRegistry::default()),
         mark: so_mark_from_dae,
         upstream_router: None,
         target_refresh_owner: Some(target_refresh_owner),
@@ -615,19 +601,7 @@ pub(super) async fn handle_resident_dns_local_trace_async(
     if request.question_count() == 0 {
         return Err("DNS request has no question".to_owned());
     }
-    let mut trace = ResidentDnsTraceSummary::from_request(plan, &request)?;
-    if dns_ipversion_preference_applies(plan, &request) {
-        let (response, transport_attempts) = capture_dns_transport_trace_async(Box::pin(
-            handle_resident_dns_request_async(plan, original_dst, payload, None),
-        ))
-        .await;
-        let response = response?;
-        trace.cache = DNS_TRACE_CACHE_UNKNOWN.to_owned();
-        trace.request_routing = DNS_TRACE_ROUTING_IPVERSION_PREFERENCE.to_owned();
-        trace.response_routing = DNS_TRACE_ROUTING_RESOLVED.to_owned();
-        trace.transport_attempts = transport_attempts;
-        return Ok(trace.finish(response, DNS_TRACE_REASON_IPVERSION));
-    }
+    let trace = ResidentDnsTraceSummary::from_request(plan, &request)?;
     let (result, transport_attempts) = capture_dns_transport_trace_async(Box::pin(
         handle_resident_dns_request_without_preference_trace(
             plan,
@@ -665,11 +639,6 @@ async fn handle_resident_dns_request_async(
     if request.question_count() == 0 {
         return Err("DNS request has no question".to_owned());
     }
-    if let Some(response) =
-        handle_ipversion_preference(plan, original_dst, payload, &request, asis_transport).await?
-    {
-        return Ok(response);
-    }
     handle_resident_dns_request_without_preference(
         plan,
         original_dst,
@@ -678,161 +647,6 @@ async fn handle_resident_dns_request_async(
         asis_transport,
     )
     .await
-}
-
-fn dns_ipversion_preference_applies(plan: &ResidentDnsPlan, request: &DnsPacketView<'_>) -> bool {
-    let Some(preferred_qtype) = plan.ipversion_prefer else {
-        return false;
-    };
-    if request.question_count() != 1 {
-        return false;
-    }
-    let Some(question) = request.questions().next() else {
-        return false;
-    };
-    let requested_qtype = question.qtype();
-    matches!(requested_qtype, DNS_QTYPE_A | DNS_QTYPE_AAAA) && requested_qtype != preferred_qtype
-}
-
-async fn handle_ipversion_preference(
-    plan: &ResidentDnsPlan,
-    original_dst: SocketAddr,
-    payload: &[u8],
-    request: &DnsPacketView<'_>,
-    asis_transport: Option<ResidentDnsAsisTransport>,
-) -> Result<Option<Vec<u8>>, String> {
-    let Some(preferred_qtype) = plan.ipversion_prefer else {
-        return Ok(None);
-    };
-    if request.question_count() != 1 {
-        return Ok(None);
-    }
-    let question = request
-        .questions()
-        .next()
-        .ok_or_else(|| "DNS request has no question".to_owned())?;
-    let requested_qtype = question.qtype();
-    if !matches!(requested_qtype, DNS_QTYPE_A | DNS_QTYPE_AAAA) {
-        return Ok(None);
-    }
-    let qname = question
-        .qname_to_canonical_string()
-        .map_err(|err| format!("read DNS request qname for ipversion preference: {err}"))?;
-    let preferred_key = DnsCacheKey::new(qname, preferred_qtype, question.qclass());
-    if requested_qtype == preferred_qtype {
-        let requested = handle_resident_dns_request_without_preference(
-            plan,
-            original_dst,
-            payload,
-            request,
-            asis_transport,
-        )
-        .await;
-        if let Ok(response) = requested.as_ref() {
-            plan.ipversion_preference_registry
-                .notify_preferred(&preferred_key, dns_response_has_any_ip(response)?);
-        } else {
-            plan.ipversion_preference_registry
-                .notify_preferred(&preferred_key, false);
-        }
-        return requested.map(Some);
-    }
-    if dns_preferred_cache_has_ip(plan, &preferred_key)? {
-        return build_reject_response(payload, request).map(Some);
-    }
-
-    let preferred_payload = rewrite_dns_query_qtype(payload, request, preferred_qtype)?;
-    let preferred_is_owner = plan
-        .ipversion_preference_registry
-        .try_start_preferred(&preferred_key);
-    if preferred_is_owner {
-        // The two family lookups are deliberately joined rather than chained. Both
-        // execute under the same request deadline and share the existing bounded
-        // upstream/cache machinery; no per-query background task is left behind.
-        let preferred_request = DnsPacketView::parse(&preferred_payload)
-            .map_err(|err| format!("parse synthesized preferred DNS query: {err}"))?;
-        let preferred = handle_resident_dns_request_without_preference(
-            plan,
-            original_dst,
-            &preferred_payload,
-            &preferred_request,
-            asis_transport,
-        );
-        let requested = handle_resident_dns_request_without_preference(
-            plan,
-            original_dst,
-            payload,
-            request,
-            asis_transport,
-        );
-        let (preferred, requested) = tokio::join!(preferred, requested);
-        let preferred_has_ip = match preferred {
-            Ok(response) => dns_response_has_any_ip(&response)?,
-            Err(_) => false,
-        };
-        plan.ipversion_preference_registry
-            .notify_preferred(&preferred_key, preferred_has_ip);
-        if preferred_has_ip {
-            return build_reject_response(payload, request).map(Some);
-        }
-        return requested.map(Some);
-    }
-
-    let requested = handle_resident_dns_request_without_preference(
-        plan,
-        original_dst,
-        payload,
-        request,
-        asis_transport,
-    );
-    let preferred_wait = plan
-        .ipversion_preference_registry
-        .wait_for_preferred(&preferred_key, dns_ipversion_preference_wait_timeout());
-    let (requested, preferred_wait) = tokio::join!(requested, preferred_wait);
-    if preferred_wait.unwrap_or(false) || dns_preferred_cache_has_ip(plan, &preferred_key)? {
-        return build_reject_response(payload, request).map(Some);
-    }
-    requested.map(Some)
-}
-
-fn rewrite_dns_query_qtype(
-    payload: &[u8],
-    request: &DnsPacketView<'_>,
-    qtype: u16,
-) -> Result<Vec<u8>, String> {
-    if request.question_count() != 1 {
-        return Err("cannot synthesize preferred DNS query with multiple questions".to_owned());
-    }
-    let mut offset = 12_usize;
-    while offset < payload.len() {
-        let length = payload[offset];
-        offset += 1;
-        if length == 0 {
-            break;
-        }
-        if length & 0xc0 != 0 || length > 63 {
-            return Err("cannot synthesize preferred DNS query with compressed qname".to_owned());
-        }
-        offset = offset
-            .checked_add(length as usize)
-            .ok_or_else(|| "preferred DNS qname offset overflow".to_owned())?;
-    }
-    let qtype_end = offset
-        .checked_add(2)
-        .ok_or_else(|| "preferred DNS qtype offset overflow".to_owned())?;
-    if qtype_end > payload.len() {
-        return Err("preferred DNS query is truncated before qtype".to_owned());
-    }
-    let mut rewritten = payload.to_vec();
-    rewritten[offset..qtype_end].copy_from_slice(&qtype.to_be_bytes());
-    Ok(rewritten)
-}
-
-fn dns_preferred_cache_has_ip(
-    plan: &ResidentDnsPlan,
-    preferred_key: &DnsCacheKey,
-) -> Result<bool, String> {
-    plan.cache.lookup_key_has_any_ip(preferred_key, false)
 }
 
 async fn handle_resident_dns_request_without_preference(

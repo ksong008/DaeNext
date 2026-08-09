@@ -73,6 +73,7 @@ struct ResidentDnsUpstreamRouteCandidate {
     requested_network_type: NetworkType,
     selected_network_type: NetworkType,
     latency_ms: i64,
+    family_preference_rank: u8,
 }
 
 impl ResidentDnsUpstreamRouteCandidate {
@@ -111,6 +112,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) fn select_dns_u
     targets: Vec<SocketAddr>,
     l4proto: L4Proto,
 ) -> Result<(Vec<ResidentDnsUpstreamRoutedTarget>, Vec<String>), String> {
+    let targets = order_dns_upstream_targets_by_preference(plan, targets);
     select_dns_upstream_candidates(
         plan,
         upstream,
@@ -173,6 +175,7 @@ fn select_dns_upstream_route_candidate(
             requested_network_type,
             selected_network_type: requested_network_type,
             latency_ms: 0,
+            family_preference_rank: family_preference_rank(target, plan.ipversion_prefer),
         });
     };
     let selected = router.select_candidate(upstream, target, l4proto, requested_network_type)?;
@@ -188,7 +191,38 @@ fn select_dns_upstream_route_candidate(
         requested_network_type,
         selected_network_type: selected.network_type,
         latency_ms: selected.latency_ms,
+        family_preference_rank: family_preference_rank(target, plan.ipversion_prefer),
     })
+}
+
+fn order_dns_upstream_targets_by_preference(
+    plan: &ResidentDnsPlan,
+    targets: Vec<SocketAddr>,
+) -> Vec<SocketAddr> {
+    let Some(preferred_qtype) = plan.ipversion_prefer else {
+        return targets;
+    };
+    let preferred_ipv6 = preferred_qtype == DNS_QTYPE_AAAA;
+    let mut preferred = Vec::with_capacity(targets.len());
+    let mut fallback = Vec::with_capacity(targets.len());
+    for target in targets {
+        if target.is_ipv6() == preferred_ipv6 {
+            preferred.push(target);
+        } else {
+            fallback.push(target);
+        }
+    }
+    preferred.extend(fallback);
+    preferred
+}
+
+fn family_preference_rank(target: SocketAddr, preferred_qtype: Option<u16>) -> u8 {
+    match preferred_qtype {
+        Some(DNS_QTYPE_A) if target.is_ipv4() => 0,
+        Some(DNS_QTYPE_AAAA) if target.is_ipv6() => 0,
+        Some(_) => 1,
+        None => 0,
+    }
 }
 
 fn compare_dns_upstream_route_candidates(
@@ -199,6 +233,13 @@ fn compare_dns_upstream_route_candidates(
         || right.route_kind != ResidentDnsUpstreamRouteKind::Proxy
     {
         return left.order.cmp(&right.order);
+    }
+    match left
+        .family_preference_rank
+        .cmp(&right.family_preference_rank)
+    {
+        std::cmp::Ordering::Equal => {}
+        ordering => return ordering,
     }
     match left.latency_ms.cmp(&right.latency_ms) {
         std::cmp::Ordering::Equal => {}
@@ -373,6 +414,7 @@ mod tests {
             requested_network_type,
             selected_network_type,
             latency_ms,
+            family_preference_rank: 0,
         }
     }
 
