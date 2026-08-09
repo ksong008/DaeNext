@@ -115,24 +115,21 @@ fn run_product_runtime_sampler(
     metrics: Arc<ProductRuntimeSamplerMetrics>,
     ready: mpsc::SyncSender<()>,
 ) {
+    metrics.worker_started();
+    let _worker_liveness = ProductRuntimeSamplerWorkerLiveness(Arc::clone(&metrics));
     let mut process_tracker = ProcessCpuTracker::default();
     let mut previous_traffic = None;
+    let mut previous_availability = None;
     let mut next_sample_at = Instant::now();
     let mut first = true;
     loop {
         let observed_at = Instant::now();
         let timestamp = unix_now();
-        let runtime_traffic = runtime
-            .upgrade()
-            .and_then(|runtime| runtime.resident_traffic_counters())
-            .unwrap_or_default();
-        let (traffic, totals_reset) =
-            runtime_traffic_observation(runtime_traffic, timestamp, observed_at, previous_traffic);
-        previous_traffic = Some(RuntimeTrafficTotalSample {
-            upload_total: traffic.upload_total,
-            download_total: traffic.download_total,
-            observed_at,
-        });
+        metrics.tick(timestamp);
+        let runtime_traffic = runtime.upgrade().map_or_else(
+            || RuntimeTrafficRead::runtime_stopped(0),
+            |runtime| runtime.resident_traffic_read(),
+        );
         let process = match process_tracker.sample() {
             Ok(process) => Some(process),
             Err(_) => {
@@ -143,14 +140,46 @@ fn run_product_runtime_sampler(
         let allocator = allocator_stats_snapshot();
         let cgroup_memory = cgroup_memory_snapshot_json();
         if let Ok(mut state) = state.lock() {
-            state.record(
-                traffic,
-                totals_reset,
-                process,
-                allocator,
-                cgroup_memory,
-                config,
-            );
+            if runtime_traffic.availability == RuntimeTrafficAvailability::Active {
+                let (traffic, totals_reset) = runtime_traffic_observation(
+                    runtime_traffic.counters,
+                    runtime_traffic.epoch,
+                    timestamp,
+                    observed_at,
+                    previous_traffic,
+                );
+                previous_traffic = Some(RuntimeTrafficTotalSample {
+                    epoch: runtime_traffic.epoch,
+                    upload_total: traffic.upload_total,
+                    download_total: traffic.download_total,
+                    observed_at,
+                });
+                state.record(
+                    runtime_traffic.epoch,
+                    traffic,
+                    totals_reset,
+                    process,
+                    allocator,
+                    cgroup_memory,
+                    config,
+                );
+                metrics.runtime_counter_sampled(timestamp);
+            } else {
+                if previous_availability == Some(RuntimeTrafficAvailability::Active) {
+                    metrics.generation_gap();
+                }
+                state.record_unavailable(
+                    timestamp,
+                    runtime_traffic.epoch,
+                    runtime_traffic.availability,
+                    process,
+                    allocator,
+                    cgroup_memory,
+                );
+            }
+            previous_availability = Some(runtime_traffic.availability);
+        } else {
+            metrics.state_lock_failed();
         }
         metrics.sampled();
         if first {
@@ -170,5 +199,13 @@ fn run_product_runtime_sampler(
         if stop.wait_until(next_sample_at) {
             break;
         }
+    }
+}
+
+struct ProductRuntimeSamplerWorkerLiveness(Arc<ProductRuntimeSamplerMetrics>);
+
+impl Drop for ProductRuntimeSamplerWorkerLiveness {
+    fn drop(&mut self) {
+        self.0.worker_stopped();
     }
 }

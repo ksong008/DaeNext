@@ -1,7 +1,10 @@
 use super::*;
 
 const PRODUCT_RUNTIME_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
-const PRODUCT_RUNTIME_SAMPLE_RETENTION: Duration = Duration::from_secs(60 * 60);
+const PRODUCT_RUNTIME_SAMPLE_RETENTION: Duration = Duration::from_secs(15 * 60);
+const PRODUCT_RUNTIME_LOW_MEMORY_SAMPLE_RETENTION: Duration = Duration::from_secs(5 * 60);
+const PRODUCT_RUNTIME_STANDARD_HISTORY_CAPACITY: usize = 1_000;
+const PRODUCT_RUNTIME_LOW_MEMORY_HISTORY_CAPACITY: usize = 360;
 const PRODUCT_RUNTIME_SAMPLER_STACK_BYTES: usize = 512 * 1024;
 const PRODUCT_RUNTIME_SAMPLER_START_TIMEOUT: Duration = Duration::from_secs(5);
 const PRODUCT_RUNTIME_SAMPLER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -18,9 +21,21 @@ pub(super) struct ProductRuntimeSamplerConfig {
 
 impl ProductRuntimeSamplerConfig {
     pub(super) fn product_default() -> Self {
-        Self::new(
+        let profile = ProductHttpProfile::from_env().0;
+        let (retention, history_capacity) = match profile {
+            ProductHttpProfile::Standard => (
+                PRODUCT_RUNTIME_SAMPLE_RETENTION,
+                PRODUCT_RUNTIME_STANDARD_HISTORY_CAPACITY,
+            ),
+            ProductHttpProfile::LowMemory => (
+                PRODUCT_RUNTIME_LOW_MEMORY_SAMPLE_RETENTION,
+                PRODUCT_RUNTIME_LOW_MEMORY_HISTORY_CAPACITY,
+            ),
+        };
+        Self::with_history_capacity(
             PRODUCT_RUNTIME_SAMPLE_INTERVAL,
-            PRODUCT_RUNTIME_SAMPLE_RETENTION,
+            retention,
+            history_capacity,
             PRODUCT_RUNTIME_SAMPLER_STACK_BYTES,
             PRODUCT_RUNTIME_SAMPLER_START_TIMEOUT,
             PRODUCT_RUNTIME_SAMPLER_SHUTDOWN_TIMEOUT,
@@ -48,6 +63,25 @@ impl ProductRuntimeSamplerConfig {
             start_timeout,
             shutdown_timeout,
         }
+    }
+
+    fn with_history_capacity(
+        interval: Duration,
+        retention: Duration,
+        history_capacity: usize,
+        worker_stack_bytes: usize,
+        start_timeout: Duration,
+        shutdown_timeout: Duration,
+    ) -> Self {
+        let mut config = Self::new(
+            interval,
+            retention,
+            worker_stack_bytes,
+            start_timeout,
+            shutdown_timeout,
+        );
+        config.history_capacity = history_capacity.max(2);
+        config
     }
 
     #[cfg(test)]

@@ -30,6 +30,7 @@ fn reader_windows_do_not_mutate_shared_history() {
     let mut state = ProductRuntimeSamplerState::default();
     for index in 0..20_u64 {
         state.record(
+            1,
             RuntimeTrafficObservation {
                 timestamp: 1_000 + index,
                 upload_total: index * 10,
@@ -87,6 +88,7 @@ fn counter_reset_clears_only_sampler_owned_history() {
     let config = ProductRuntimeSamplerConfig::for_test();
     let mut state = ProductRuntimeSamplerState::default();
     state.record(
+        1,
         RuntimeTrafficObservation {
             timestamp: 100,
             upload_total: 100,
@@ -100,6 +102,7 @@ fn counter_reset_clears_only_sampler_owned_history() {
         config,
     );
     state.record(
+        1,
         RuntimeTrafficObservation {
             timestamp: 101,
             upload_total: 1,
@@ -118,12 +121,84 @@ fn counter_reset_clears_only_sampler_owned_history() {
 }
 
 #[test]
+fn unavailable_gap_preserves_history_and_new_epoch_starts_at_zero_rate() {
+    let config = ProductRuntimeSamplerConfig::for_test();
+    let mut state = ProductRuntimeSamplerState::default();
+    let first = RuntimeTrafficObservation {
+        timestamp: 100,
+        upload_total: 1_000,
+        download_total: 2_000,
+        upload_rate: 0,
+        download_rate: 0,
+        ..RuntimeTrafficObservation::default()
+    };
+    state.record(7, first, false, None, None, Value::Null, config);
+    let history_before = state.history_len();
+    state.record_unavailable(
+        101,
+        7,
+        RuntimeTrafficAvailability::TemporarilyUnavailable,
+        None,
+        None,
+        Value::Null,
+    );
+    assert_eq!(state.history_len(), history_before);
+    assert_eq!(state.view(60, 10).traffic.upload_total, 1_000);
+
+    let (next, reset) = runtime_traffic_observation(
+        ResidentTrafficCounters {
+            upload_total: 1_050,
+            download_total: 2_100,
+            ..ResidentTrafficCounters::default()
+        },
+        8,
+        102,
+        Instant::now(),
+        Some(RuntimeTrafficTotalSample {
+            epoch: 7,
+            upload_total: 1_000,
+            download_total: 2_000,
+            observed_at: Instant::now(),
+        }),
+    );
+    assert!(!reset);
+    assert_eq!(next.upload_total, 1_050);
+    assert_eq!(next.upload_rate, 0);
+    assert_eq!(next.download_rate, 0);
+}
+
+#[test]
+fn same_epoch_uses_delta_rate() {
+    let now = Instant::now();
+    let (observation, reset) = runtime_traffic_observation(
+        ResidentTrafficCounters {
+            upload_total: 1_300,
+            download_total: 2_600,
+            ..ResidentTrafficCounters::default()
+        },
+        4,
+        103,
+        now + Duration::from_secs(1),
+        Some(RuntimeTrafficTotalSample {
+            epoch: 4,
+            upload_total: 1_000,
+            download_total: 2_000,
+            observed_at: now,
+        }),
+    );
+    assert!(!reset);
+    assert_eq!(observation.upload_rate, 300);
+    assert_eq!(observation.download_rate, 600);
+}
+
+#[test]
 fn sampler_history_obeys_internal_capacity_independent_of_readers() {
     let mut config = ProductRuntimeSamplerConfig::product_default();
     config.history_capacity = 5;
     let mut state = ProductRuntimeSamplerState::default();
     for timestamp in 1_000..1_010_u64 {
         state.record(
+            1,
             RuntimeTrafficObservation {
                 timestamp,
                 upload_total: timestamp,
@@ -164,7 +239,8 @@ fn sampler_runs_on_fixed_cadence_and_api_reads_do_not_sample() {
         sampler.view(60, 100).sample_count >= initial.saturating_add(2)
     });
     let snapshot = sampler.snapshot();
-    assert!(snapshot["historyLength"].as_u64().unwrap_or(0) > 0);
+    assert!(snapshot["sampleTotal"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(snapshot["workerAlive"], json!(true));
     assert_eq!(snapshot["processReadFailureTotal"], json!(0));
 
     drop(sampler);

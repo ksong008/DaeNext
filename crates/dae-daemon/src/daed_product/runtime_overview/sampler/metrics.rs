@@ -10,6 +10,11 @@ pub(super) struct ProductRuntimeSamplerMetrics {
     schedule_miss_total: AtomicU64,
     runtime_joined_total: AtomicU64,
     runtime_detached_total: AtomicU64,
+    worker_alive: AtomicBool,
+    last_tick_at: AtomicU64,
+    last_runtime_counter_at: AtomicU64,
+    counter_read_failure_total: AtomicU64,
+    generation_gap_total: AtomicU64,
 }
 
 impl ProductRuntimeSamplerMetrics {
@@ -26,6 +31,32 @@ impl ProductRuntimeSamplerMetrics {
 
     pub(super) fn sampled(&self) {
         self.sample_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn worker_started(&self) {
+        self.worker_alive.store(true, Ordering::Release);
+    }
+
+    pub(super) fn worker_stopped(&self) {
+        self.worker_alive.store(false, Ordering::Release);
+    }
+
+    pub(super) fn tick(&self, timestamp: u64) {
+        self.last_tick_at.store(timestamp, Ordering::Relaxed);
+    }
+
+    pub(super) fn runtime_counter_sampled(&self, timestamp: u64) {
+        self.last_runtime_counter_at
+            .store(timestamp, Ordering::Relaxed);
+    }
+
+    pub(super) fn state_lock_failed(&self) {
+        self.counter_read_failure_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn generation_gap(&self) {
+        self.generation_gap_total.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(super) fn process_read_failed(&self) {
@@ -56,6 +87,19 @@ impl ProductRuntimeSamplerMetrics {
             "scheduleMissTotal": self.schedule_miss_total.load(Ordering::Relaxed),
             "runtimeJoinedTotal": self.runtime_joined_total.load(Ordering::Relaxed),
             "runtimeDetachedTotal": self.runtime_detached_total.load(Ordering::Relaxed),
+            "workerAlive": self.worker_alive.load(Ordering::Acquire),
+            "lastTickAt": optional_unix_timestamp(self.last_tick_at.load(Ordering::Relaxed)),
+            "lastRuntimeCounterAt": optional_unix_timestamp(self.last_runtime_counter_at.load(Ordering::Relaxed)),
+            "counterReadFailureTotal": self.counter_read_failure_total.load(Ordering::Relaxed),
+            "generationGapTotal": self.generation_gap_total.load(Ordering::Relaxed),
         })
+    }
+}
+
+fn optional_unix_timestamp(timestamp: u64) -> Value {
+    if timestamp == 0 {
+        Value::Null
+    } else {
+        json!(iso8601_utc(timestamp))
     }
 }
