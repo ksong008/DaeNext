@@ -114,8 +114,74 @@ pub(crate) async fn open_grpc_h2_stream(
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
     let lease = acquire_h2_carrier(binding.clone(), deadline).await?;
     let (response, mut send_stream) = lease.open_request(request, false, deadline, "gRPC").await?;
-    send_grpc_hunk(&mut send_stream, first_payload, false).await?;
+    if !first_payload.is_empty() {
+        send_grpc_hunk(&mut send_stream, first_payload, false).await?;
+    }
     Ok((send_stream, GrpcH2Response::new(response), lease))
+}
+
+/// Bridges a gRPC byte stream to a bounded logical duplex stream.  The VLESS
+/// Encryption layer is placed on the returned stream, above gRPC framing.
+pub(crate) fn spawn_grpc_h2_payload_stream(
+    send_stream: h2::SendStream<Bytes>,
+    response: GrpcH2Response,
+    carrier_lease: H2CarrierLease,
+) -> SpawnedLogicalStream {
+    SpawnedLogicalStream::spawn(move |logical| {
+        drive_grpc_h2_payload_stream(logical, send_stream, response, carrier_lease)
+    })
+}
+
+async fn drive_grpc_h2_payload_stream(
+    logical: tokio::io::DuplexStream,
+    mut send_stream: h2::SendStream<Bytes>,
+    mut response: GrpcH2Response,
+    _carrier_lease: H2CarrierLease,
+) -> Result<(), String> {
+    let (mut logical_read, mut logical_write) = tokio::io::split(logical);
+    let upload = async {
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = logical_read
+                .read(&mut buffer)
+                .await
+                .map_err(|error| format!("read VLESS Encryption gRPC logical stream: {error}"))?;
+            if read == 0 {
+                send_grpc_hunk(&mut send_stream, &[], true).await?;
+                return Ok(());
+            }
+            send_grpc_hunk(&mut send_stream, &buffer[..read], false).await?;
+        }
+    };
+    let download = async {
+        let mut response_buf = GrpcHunkReadBuffer::default();
+        loop {
+            let Some(data) = response.next_data().await? else {
+                if !response_buf.is_empty() {
+                    return Err("VLESS Encryption gRPC response ended with partial hunk".to_owned());
+                }
+                logical_write.shutdown().await.map_err(|error| {
+                    format!("shutdown VLESS Encryption gRPC logical stream: {error}")
+                })?;
+                return Ok(());
+            };
+            response_buf.extend_from_slice(&data);
+            while let Some(payload) = response_buf.next_payload()? {
+                if !payload.is_empty() {
+                    logical_write.write_all(payload).await.map_err(|error| {
+                        format!("write VLESS Encryption gRPC logical stream: {error}")
+                    })?;
+                    logical_write.flush().await.map_err(|error| {
+                        format!("flush VLESS Encryption gRPC logical stream: {error}")
+                    })?;
+                }
+            }
+        }
+    };
+    tokio::select! {
+        result = upload => result,
+        result = download => result,
+    }
 }
 
 #[cfg(test)]

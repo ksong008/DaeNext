@@ -48,7 +48,15 @@ pub(super) fn async_resident_tcp_stream_for_proxy(
     proxy: &ResidentProxyPlan,
     tcp: TokioTcpStream,
 ) -> AsyncResidentTcpStream {
-    if proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision {
+    // The record-bounded transport gate is needed by the legacy Vision path:
+    // after Xray's DIRECT command, that path hands the connection itself to
+    // raw TCP.  VLESS Encryption + Vision is different.  Its DIRECT command
+    // only hands off the *inner VLESS record wrapper*; the outer TLS session
+    // must continue to consume subsequent TLS records.  Putting a bounded
+    // reader underneath rustls would leave it parked at the first record
+    // boundary and make the post-DIRECT response look like a stalled socket.
+    let vision_encryption = proxy.vless_encryption().ok().flatten().is_some();
+    if proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision && !vision_encryption {
         AsyncResidentTcpStream::new_vision(tcp, proxy.tls_fragment.clone())
     } else {
         AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone())

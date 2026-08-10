@@ -15,7 +15,21 @@ enum VisionDownlinkState {
     DirectPass,
 }
 
-pub(super) trait VisionProxyIo {
+pub(crate) trait VisionProxyIo {
+    fn enable_vision_outer_record_handoff(&mut self) {}
+
+    /// Request the post-Vision raw handoff.  Plain TLS/Reality clients already
+    /// expose this as a record-boundary gate; VLESS Encryption needs to switch
+    /// its outer record wrapper to the same underlying TLS stream after the
+    /// direct command has been consumed.
+    fn request_vision_outer_record_handoff(&mut self) {}
+
+    /// Request the write-side handoff after the local Vision encoder has
+    /// flushed its DIRECT command block.  VLESS Encryption switches read and
+    /// write directions independently; the peer may not have sent its own
+    /// DIRECT command yet.
+    fn request_vision_outer_write_handoff(&mut self) {}
+
     fn poll_vision_plain_read(
         &mut self,
         cx: &mut Context<'_>,
@@ -52,6 +66,10 @@ pub(super) trait VisionProxyIo {
 }
 
 impl VisionProxyIo for AsyncVlessTlsClient {
+    fn enable_vision_outer_record_handoff(&mut self) {
+        self.enable_vision_record_handoff();
+    }
+
     fn poll_vision_plain_read(
         &mut self,
         cx: &mut Context<'_>,
@@ -102,6 +120,77 @@ impl VisionProxyIo for AsyncVlessTlsClient {
 
     fn take_vision_outer_record_handoff(&mut self) -> bool {
         AsyncVlessTlsClient::take_vision_record_handoff(self)
+    }
+}
+
+impl<S> VisionProxyIo for VlessEncryptedStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    fn enable_vision_outer_record_handoff(&mut self) {
+        // The VLESS Encryption wrapper is switched explicitly after the
+        // Vision direct command; enabling the relay gate alone must not switch
+        // before the encrypted response record has been consumed.
+    }
+
+    fn request_vision_outer_record_handoff(&mut self) {
+        self.request_vision_raw_read_handoff();
+    }
+
+    fn request_vision_outer_write_handoff(&mut self) {
+        self.request_vision_raw_write_handoff();
+    }
+
+    fn poll_vision_plain_read(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(self).poll_read(cx, buf)
+    }
+
+    fn poll_vision_plain_write(
+        &mut self,
+        cx: &mut Context<'_>,
+        payload: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(self).poll_write(cx, payload)
+    }
+
+    fn poll_vision_plain_flush(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(self).poll_flush(cx)
+    }
+
+    fn poll_vision_plain_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(self).poll_shutdown(cx)
+    }
+
+    fn poll_vision_raw_read(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(self).poll_read(cx, buf)
+    }
+
+    fn poll_vision_raw_write(
+        &mut self,
+        cx: &mut Context<'_>,
+        payload: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(self).poll_write(cx, payload)
+    }
+
+    fn poll_vision_raw_flush(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(self).poll_flush(cx)
+    }
+
+    fn poll_vision_raw_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(self).poll_shutdown(cx)
+    }
+
+    fn take_vision_outer_record_handoff(&mut self) -> bool {
+        self.vision_raw_handoff_active()
     }
 }
 
@@ -326,6 +415,9 @@ impl VisionDuplexDriver {
             return Ok(false);
         };
         if self.uplink_write_offset < write.payload.len() {
+            if write.mode == VisionUplinkWriteMode::DirectPass && self.uplink_write_offset == 0 {
+                client.request_vision_outer_write_handoff();
+            }
             let payload = &write.payload[self.uplink_write_offset..];
             let result = match write.mode {
                 VisionUplinkWriteMode::PlainOverlay => client.poll_vision_plain_write(cx, payload),
@@ -463,6 +555,7 @@ impl VisionDuplexDriver {
                                 if self.unpadder.direct_command_seen
                                     && self.downlink_state == VisionDownlinkState::Overlay
                                 {
+                                    client.request_vision_outer_record_handoff();
                                     self.downlink_state = VisionDownlinkState::DirectPending;
                                 }
                                 self.queue_uplink()?;
@@ -488,16 +581,35 @@ impl VisionDuplexDriver {
                     };
                 }
                 Poll::Pending => {
+                    // The record-gate implementation used by plain Vision is
+                    // one-shot, while VLESS Encryption exposes a sticky
+                    // handoff-active state after the wrapper is bypassed.
+                    // Consume the transition only while waiting in
+                    // DirectPending.  Treating a sticky active state as a
+                    // fresh event in DirectPass would spin forever whenever
+                    // the raw underlay is idle, starving the native probe task
+                    // that must be woken by the duplex peer write.
                     if client.take_vision_outer_record_handoff() {
-                        if self.downlink_state == VisionDownlinkState::DirectPending {
-                            self.downlink_state = VisionDownlinkState::DirectPass;
-                            self.stats.vision_raw_direct_recovered = true;
-                            self.stats.vision_downlink_direct_active = true;
+                        match self.downlink_state {
+                            VisionDownlinkState::DirectPending => {
+                                self.downlink_state = VisionDownlinkState::DirectPass;
+                                self.stats.vision_raw_direct_recovered = true;
+                                self.stats.vision_downlink_direct_active = true;
+                                // Repoll once after consuming the handoff
+                                // transition; the next Pending must return to
+                                // the executor so the underlying read waker
+                                // remains authoritative.
+                                continue;
+                            }
+                            VisionDownlinkState::Overlay => {
+                                // Plain Vision's record gate may become ready
+                                // while overlay data is still being drained.
+                                // Preserve the existing one-shot repoll, but
+                                // never use it as a self-wake in DirectPass.
+                                continue;
+                            }
+                            VisionDownlinkState::DirectPass => {}
                         }
-                        // Repoll immediately after consuming the one-shot gate.
-                        // This either registers the underlying socket waker or
-                        // makes real I/O progress, without scheduling ourselves.
-                        continue;
                     }
                     return Ok(Poll::Pending);
                 }

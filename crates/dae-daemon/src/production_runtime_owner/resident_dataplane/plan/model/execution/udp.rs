@@ -76,7 +76,7 @@ impl ResidentUdpPolicyClosedReason {
             }
             Self::VlessMeek => "VLESS Meek transport has no resident UDP packet carrier",
             Self::VlessUnsupportedShape => {
-                "VLESS wrapped-stream UDP requires a matching packet-over-wrapper executor for this transport and flow combination"
+                "VLESS wrapped-stream UDP requires a matching packet-over-wrapper executor for this transport and flow combination; Encryption wrappers remain policy-closed until that executor is admitted"
             }
             Self::VmessH2 => "VMess H2 has no resident UDP packet-over-wrapper executor",
             Self::VmessUnsupportedShape => {
@@ -195,6 +195,14 @@ impl ResidentUdpExecutorFactory {
             }
             ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => {
                 Self::PolicyClosed(Closed::VlessMux)
+            }
+            ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                encryption: Some(_),
+                ..
+            } if is_xtls_rprx_vision_flow(&proxy.flow)
+                || !matches!(wrapper, ResidentStreamWrapperPlan::None) =>
+            {
+                Self::PolicyClosed(Closed::VlessUnsupportedShape)
             }
             ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
                 if is_xtls_rprx_vision_flow(&proxy.flow)

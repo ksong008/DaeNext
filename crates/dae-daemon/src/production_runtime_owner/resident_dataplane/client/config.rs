@@ -462,8 +462,10 @@ mod tests {
 
     #[test]
     fn boring_read_ahead_stays_disabled_for_vless_vision() {
-        let mut proxy =
-            test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         proxy.flow = XTLS_RPRX_VISION.to_owned();
         proxy.materialize_execution();
 
@@ -515,8 +517,10 @@ mod tests {
 
     #[test]
     fn reality_client_config_keeps_auth_slot_per_connection() {
-        let mut proxy =
-            test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         proxy.tls = "reality".to_owned();
         proxy.reality = Some(ResidentRealityUnderlayPlan {
             public_key: [7; 32],
@@ -533,8 +537,10 @@ mod tests {
 
     #[test]
     fn reality_client_config_keeps_rustls_fingerprint_fail_closed_if_called_directly() {
-        let mut proxy =
-            test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         proxy.tls = "reality".to_owned();
         proxy.reality = Some(ResidentRealityUnderlayPlan {
             public_key: [7; 32],
@@ -552,8 +558,10 @@ mod tests {
 
     #[test]
     fn reality_fingerprint_uses_boring_provider() {
-        let mut proxy =
-            test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         proxy.tls = "reality".to_owned();
         proxy.reality = Some(ResidentRealityUnderlayPlan {
             public_key: [7; 32],
@@ -573,7 +581,10 @@ mod tests {
 
     #[test]
     fn standard_rustls_client_config_still_uses_cache() {
-        let proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
 
         let first = rustls_vless_client_config(&proxy).unwrap();
         let second = rustls_vless_client_config(&proxy).unwrap();

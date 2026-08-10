@@ -130,8 +130,8 @@ where
     }
 }
 
-pub(super) struct SpawnedNativeTcpTunnel {
-    stream: DuplexStream,
+pub(super) struct SpawnedNativeTcpTunnel<T = DuplexStream> {
+    stream: T,
     task: Option<JoinHandle<()>>,
     stop: SharedResidentStopSignal,
     cleanup_grace: Duration,
@@ -139,17 +139,13 @@ pub(super) struct SpawnedNativeTcpTunnel {
     abort_requested: bool,
 }
 
-impl SpawnedNativeTcpTunnel {
-    pub(super) fn new(
-        stream: DuplexStream,
-        task: JoinHandle<()>,
-        stop: SharedResidentStopSignal,
-    ) -> Self {
+impl<T> SpawnedNativeTcpTunnel<T> {
+    pub(super) fn new(stream: T, task: JoinHandle<()>, stop: SharedResidentStopSignal) -> Self {
         Self::with_cleanup_grace(stream, task, stop, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
     }
 
     fn with_cleanup_grace(
-        stream: DuplexStream,
+        stream: T,
         task: JoinHandle<()>,
         stop: SharedResidentStopSignal,
         cleanup_grace: Duration,
@@ -178,7 +174,10 @@ impl SpawnedNativeTcpTunnel {
     }
 }
 
-impl NativeTcpTunnel for SpawnedNativeTcpTunnel {
+impl<T> NativeTcpTunnel for SpawnedNativeTcpTunnel<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+{
     fn poll_cleanup(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.stop.store(true, Ordering::Release);
         if self.cleanup_deadline.is_none() {
@@ -212,7 +211,7 @@ impl NativeTcpTunnel for SpawnedNativeTcpTunnel {
     }
 }
 
-impl Drop for SpawnedNativeTcpTunnel {
+impl<T> Drop for SpawnedNativeTcpTunnel<T> {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(task) = self.task.as_ref() {
@@ -221,7 +220,10 @@ impl Drop for SpawnedNativeTcpTunnel {
     }
 }
 
-impl AsyncRead for SpawnedNativeTcpTunnel {
+impl<T> AsyncRead for SpawnedNativeTcpTunnel<T>
+where
+    T: AsyncRead + Unpin,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -231,7 +233,10 @@ impl AsyncRead for SpawnedNativeTcpTunnel {
     }
 }
 
-impl AsyncWrite for SpawnedNativeTcpTunnel {
+impl<T> AsyncWrite for SpawnedNativeTcpTunnel<T>
+where
+    T: AsyncWrite + Unpin,
+{
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -257,8 +262,73 @@ mod tests {
     };
 
     use crate::production_runtime_owner::resident_dataplane::ResidentStopSignal;
+    use rcgen::generate_simple_self_signed;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::oneshot;
+    use tokio_rustls::TlsAcceptor;
+    use tokio_rustls::rustls;
+    use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawned_tunnel_forwards_rustls_application_read_wake() {
+        let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let certificate = certified.cert.der().clone();
+        let private_key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
+        let server_config =
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_single_cert(vec![certificate.clone()], private_key)
+                .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(certificate).unwrap();
+        let client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let (probe_side, server_side) = tokio::io::duplex(64 * 1024);
+        let (first_poll_tx, first_poll_rx) = oneshot::channel();
+        let relay_task = tokio::spawn(async move {
+            let mut tls = acceptor.accept(server_side).await.unwrap();
+            let mut request = [0_u8; 1];
+            tls.read_exact(&mut request).await.unwrap();
+            first_poll_rx.await.unwrap();
+            tls.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+            tls.flush().await.unwrap();
+        });
+        let stop = ResidentStopSignal::shared();
+        let mut tunnel = SpawnedNativeTcpTunnel::new(probe_side, relay_task, stop);
+        let server_name = ServerName::try_from("localhost".to_owned()).unwrap();
+        let mut tls = tokio_rustls::TlsConnector::from(Arc::new(client_config))
+            .connect(server_name, &mut tunnel)
+            .await
+            .unwrap();
+        tls.write_all(b"x").await.unwrap();
+        tls.flush().await.unwrap();
+        let mut first_poll_tx = Some(first_poll_tx);
+        let mut buf = [0_u8; 32];
+        let read = tokio::time::timeout(
+            Duration::from_secs(1),
+            std::future::poll_fn(|cx| {
+                if let Some(tx) = first_poll_tx.take() {
+                    let _ = tx.send(());
+                }
+                let mut read_buf = ReadBuf::new(&mut buf);
+                match Pin::new(&mut tls).poll_read(cx, &mut read_buf) {
+                    Poll::Ready(result) => Poll::Ready(result.map(|_| read_buf.filled().len())),
+                    Poll::Pending => Poll::Pending,
+                }
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(read > 0);
+        drop(tls);
+        cleanup_native_tcp_tunnel(&mut tunnel).await.unwrap();
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn cleanup_requests_stop_and_joins_the_relay() {

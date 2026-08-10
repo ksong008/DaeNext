@@ -1,4 +1,6 @@
 use super::*;
+mod logical_stream;
+pub(crate) use self::logical_stream::*;
 mod grpc_common;
 pub(crate) use self::grpc_common::*;
 mod xhttp_h2;

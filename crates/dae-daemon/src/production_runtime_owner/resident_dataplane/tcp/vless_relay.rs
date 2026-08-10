@@ -15,4 +15,4 @@ pub(super) use self::mux_duplex::*;
 mod tls_plain_duplex;
 use self::tls_plain_duplex::*;
 mod vision_duplex;
-use self::vision_duplex::*;
+pub(crate) use self::vision_duplex::*;

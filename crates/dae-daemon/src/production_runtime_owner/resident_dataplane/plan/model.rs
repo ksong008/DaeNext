@@ -277,8 +277,23 @@ impl ResidentProxyPlan {
         &self,
     ) -> Result<[u8; 16], String> {
         match self.handler {
-            ResidentProxyProtocolPlan::VlessVisionTcpTls { key }
-            | ResidentProxyProtocolPlan::VlessMuxTcpTls { key } => Ok(key),
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { key, .. }
+            | ResidentProxyProtocolPlan::VlessMuxTcpTls { key, .. } => Ok(key),
+            _ => Err(format!(
+                "resident proxy {} node {} is not a VLESS handler",
+                self.protocol, self.node_tag
+            )),
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn vless_encryption(
+        &self,
+    ) -> Result<Option<dae_outbound::vless::VlessEncryptionClient>, String> {
+        match &self.handler {
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { encryption, .. }
+            | ResidentProxyProtocolPlan::VlessMuxTcpTls { encryption, .. } => {
+                Ok(encryption.clone())
+            }
             _ => Err(format!(
                 "resident proxy {} node {} is not a VLESS handler",
                 self.protocol, self.node_tag

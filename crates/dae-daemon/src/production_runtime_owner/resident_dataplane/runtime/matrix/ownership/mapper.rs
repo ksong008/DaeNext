@@ -81,7 +81,16 @@ fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
             WrapperDimension::None,
             UdpDimension::VlessVision,
             FLOW_STREAM_PACKET_OWNERSHIP,
-        ),
+        )
+        .or_else(|| {
+            exact_profile(
+                shape,
+                STANDARD_OR_REALITY_SECURITY,
+                WrapperDimension::None,
+                UdpDimension::PolicyClosed(PolicyClosedDimension::VlessUnsupportedShape),
+                FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
+            )
+        }),
         Protocol::VlessMux => exact_profile(
             shape,
             STANDARD_TLS_SECURITY,
@@ -204,10 +213,27 @@ fn vless_standard_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnership
         {
             Some(FLOW_STREAM_PACKET_OWNERSHIP)
         }
+        (
+            security,
+            Wrapper::WebSocket,
+            UdpDimension::PolicyClosed(PolicyClosedDimension::VlessUnsupportedShape),
+        )
+        | (
+            security,
+            Wrapper::HttpUpgrade,
+            UdpDimension::PolicyClosed(PolicyClosedDimension::VlessUnsupportedShape),
+        ) if is_vless_stream_security(security) => Some(FLOW_STREAM_POLICY_CLOSED_OWNERSHIP),
         (security, Wrapper::Grpc, Vless(Stream::GrpcTls))
             if is_standard_or_reality_security(security) =>
         {
             Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP)
+        }
+        (
+            security,
+            Wrapper::Grpc,
+            UdpDimension::PolicyClosed(PolicyClosedDimension::VlessUnsupportedShape),
+        ) if is_standard_or_reality_security(security) => {
+            Some(GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP)
         }
         (security, Wrapper::H2, Vless(Stream::H2Tls)) if is_standard_tls_security(security) => {
             Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP)
@@ -217,14 +243,29 @@ fn vless_standard_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnership
         {
             Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
+        (
+            security,
+            Wrapper::XhttpH1,
+            UdpDimension::PolicyClosed(PolicyClosedDimension::VlessUnsupportedShape),
+        ) if is_standard_tls_security(security) => Some(GENERATION_OWNED_XHTTP_OWNERSHIP),
         (SecurityDimension::QuicTls, Wrapper::XhttpH3, Vless(Stream::XhttpH3)) => {
             Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
+        (
+            SecurityDimension::QuicTls,
+            Wrapper::XhttpH3,
+            UdpDimension::PolicyClosed(PolicyClosedDimension::VlessUnsupportedShape),
+        ) => Some(GENERATION_OWNED_XHTTP_OWNERSHIP),
         (security, Wrapper::XhttpH2, Vless(Stream::XhttpH2))
             if is_standard_or_reality_security(security) =>
         {
             Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
+        (
+            security,
+            Wrapper::XhttpH2,
+            UdpDimension::PolicyClosed(PolicyClosedDimension::VlessUnsupportedShape),
+        ) if is_standard_or_reality_security(security) => Some(GENERATION_OWNED_XHTTP_OWNERSHIP),
         (security, Wrapper::Meek, UdpDimension::PolicyClosed(PolicyClosedDimension::VlessMeek))
             if is_standard_or_reality_security(security) =>
         {
@@ -315,6 +356,10 @@ fn is_standard_tls_security(security: SecurityDimension) -> bool {
 
 fn is_standard_or_reality_security(security: SecurityDimension) -> bool {
     STANDARD_OR_REALITY_SECURITY.contains(&security)
+}
+
+fn is_vless_stream_security(security: SecurityDimension) -> bool {
+    security == SecurityDimension::None || is_standard_or_reality_security(security)
 }
 
 fn exact_profile(

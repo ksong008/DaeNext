@@ -86,7 +86,19 @@ pub(crate) fn queue_vision_uplink(
         let Some((record_type, record_len)) = peek_complete_tls_record(pending)? else {
             return Ok(());
         };
-        let Some(command) = vision_uplink_command(record_type, tls_state) else {
+        // Xray assigns DIRECT/END to the final complete TLS record in one
+        // write batch.  Assigning it to the first application record causes
+        // any following record from the same socket read to bypass VLESS
+        // Encryption too early; the peer then sees that tail before its own
+        // Vision direct transition.  A complete prefix followed by a partial
+        // record remains padded and is retried when the next read completes it.
+        let command =
+            if record_type == TLS_CONTENT_TYPE_APPLICATION_DATA && record_len == pending.len() {
+                vision_uplink_command(record_type, tls_state)
+            } else {
+                Some(VISION_COMMAND_CONTINUE)
+            };
+        let Some(command) = command else {
             return Ok(());
         };
         let record = take_vec_prefix(pending, record_len);

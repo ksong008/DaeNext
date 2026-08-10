@@ -115,6 +115,8 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
     let mut client =
         open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_tls_underlay_name(&client);
+    let encryption = selection.proxy.vless_encryption()?;
+    let encryption_enabled = encryption.is_some();
     let key = selection.proxy.vless_key()?;
     let request = packet::first_write_bytes(
         &key,
@@ -125,23 +127,53 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
         &[],
     )
     .map_err(|err| format!("build VLESS TCP request: {err}"))?;
-    client
-        .write_plain_all(&request, "write VLESS TCP request")
-        .await?;
-    drop(request);
-    let initial_payload = sniff.take_payload();
-    relay_tcp_over_vless_tls_async(
-        inbound,
-        &mut client,
-        stop,
-        &selection.proxy.flow,
-        key,
-        initial_payload,
-        metrics,
-    )
-    .await
+    if let Some(encryption) = encryption {
+        let mut client = VlessEncryptedStream::handshake(client, encryption)
+            .await
+            .map_err(|err| format!("VLESS Encryption handshake over TLS: {err}"))?;
+        client
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write VLESS encrypted TCP request over TLS: {err}"))?;
+        client
+            .flush()
+            .await
+            .map_err(|err| format!("flush VLESS encrypted TCP request over TLS: {err}"))?;
+        drop(request);
+        let initial_payload = sniff.take_payload();
+        if is_xtls_rprx_vision_flow(&selection.proxy.flow) {
+            relay_tcp_over_vless_vision_duplex(
+                inbound,
+                &mut client,
+                stop,
+                key,
+                initial_payload,
+                metrics,
+            )
+            .await
+        } else {
+            relay_tcp_over_vless_plain_async(inbound, &mut client, stop, initial_payload, metrics)
+                .await
+        }
+    } else {
+        client
+            .write_plain_all(&request, "write VLESS TCP request")
+            .await?;
+        drop(request);
+        let initial_payload = sniff.take_payload();
+        relay_tcp_over_vless_tls_async(
+            inbound,
+            &mut client,
+            stop,
+            &selection.proxy.flow,
+            key,
+            initial_payload,
+            metrics,
+        )
+        .await
+    }
     .map(|stats| {
-        proxy_tcp_finished_event(
+        let mut event = proxy_tcp_finished_event(
             peer,
             original_dst,
             &selection,
@@ -149,10 +181,12 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             tls_underlay,
             &stats,
             "async-proxy-tls",
-        )
+        );
+        event["vless_encryption"] = json!(encryption_enabled);
+        event
     })
     .or_else(|err| {
-        let event = proxy_tcp_failed_event(
+        let mut event = proxy_tcp_failed_event(
             peer,
             original_dst,
             &selection,
@@ -161,6 +195,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             &err,
             "async-proxy-tls",
         );
+        event["vless_encryption"] = json!(encryption_enabled);
         Ok::<Value, String>(event)
     })
 }
@@ -176,6 +211,8 @@ pub(crate) async fn handle_vless_plain_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let mut client = open_proxy_tcp_stream_with_binding(&selection.proxy, selection.mptcp).await?;
+    let encryption = selection.proxy.vless_encryption()?;
+    let encryption_enabled = encryption.is_some();
     let key = selection.proxy.vless_key()?;
     let request = packet::first_write_bytes(
         &key,
@@ -186,37 +223,56 @@ pub(crate) async fn handle_vless_plain_tcp_connection_async(
         &[],
     )
     .map_err(|err| format!("build VLESS plain TCP request: {err}"))?;
-    client
-        .write_all(&request)
-        .await
-        .map_err(|err| format!("write VLESS plain TCP request: {err}"))?;
-    drop(request);
-    let initial_payload = sniff.take_payload();
-    relay_tcp_over_vless_plain_async(inbound, &mut client, stop, initial_payload, metrics)
-        .await
-        .map(|stats| {
-            proxy_tcp_finished_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "none",
-                &stats,
-                "async-proxy-plain",
-            )
-        })
-        .or_else(|err| {
-            let event = proxy_tcp_failed_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "none",
-                &err,
-                "async-proxy-plain",
-            );
-            Ok::<Value, String>(event)
-        })
+    if let Some(encryption) = encryption {
+        let mut client = VlessEncryptedStream::handshake(client, encryption)
+            .await
+            .map_err(|err| format!("VLESS Encryption handshake: {err}"))?;
+        client
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write VLESS encrypted TCP request: {err}"))?;
+        client
+            .flush()
+            .await
+            .map_err(|err| format!("flush VLESS encrypted TCP request: {err}"))?;
+        drop(request);
+        let initial_payload = sniff.take_payload();
+        relay_tcp_over_vless_plain_async(inbound, &mut client, stop, initial_payload, metrics).await
+    } else {
+        client
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write VLESS plain TCP request: {err}"))?;
+        drop(request);
+        let initial_payload = sniff.take_payload();
+        relay_tcp_over_vless_plain_async(inbound, &mut client, stop, initial_payload, metrics).await
+    }
+    .map(|stats| {
+        let mut event = proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "none",
+            &stats,
+            "async-proxy-plain",
+        );
+        event["vless_encryption"] = json!(encryption_enabled);
+        event
+    })
+    .or_else(|err| {
+        let mut event = proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "none",
+            &err,
+            "async-proxy-plain",
+        );
+        event["vless_encryption"] = json!(encryption_enabled);
+        Ok::<Value, String>(event)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -237,6 +293,7 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
         deadline,
     )
     .await?;
+    let encryption_enabled = selection.proxy.vless_encryption()?.is_some();
     let tls_underlay = logical.tls_underlay();
     let mux_sid = logical.sid();
     let physical_instance_id = logical.physical_instance_id();
@@ -257,6 +314,7 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
             event["packet_semantics"] = json!("multiplexed-stream");
             event["mux_sid"] = json!(mux_sid);
             event["mux_physical_instance_id"] = json!(physical_instance_id);
+            event["vless_encryption"] = json!(encryption_enabled);
             event
         })
         .or_else(|err| {
@@ -273,6 +331,7 @@ pub(crate) async fn handle_vless_mux_tcp_connection_async(
             event["packet_semantics"] = json!("multiplexed-stream");
             event["mux_sid"] = json!(mux_sid);
             event["mux_physical_instance_id"] = json!(physical_instance_id);
+            event["vless_encryption"] = json!(encryption_enabled);
             Ok::<Value, String>(event)
         })
 }
@@ -296,33 +355,57 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
     let initial_payload = sniff.take_payload();
     let initial_payload_len = initial_payload.len();
+    let encryption = selection.proxy.vless_encryption()?;
+    let encryption_enabled = encryption.is_some();
     let request = packet::first_write_bytes(
         &key,
         &selection.proxy.flow,
         "tcp",
         &selection.route.dial_target,
         false,
-        &initial_payload,
+        if encryption.is_some() {
+            &[]
+        } else {
+            &initial_payload
+        },
     )
     .map_err(|err| format!("build VLESS WebSocket TCP request: {err}"))?;
-    write_websocket_binary_frame_over_resident_tls_async(
-        &mut client,
-        &request,
-        "write VLESS websocket request",
-    )
-    .await?;
-    if initial_payload_len != 0 {
-        metrics.add_upload(initial_payload_len);
+    if let Some(encryption) = encryption {
+        let logical = spawn_websocket_payload_stream(client);
+        let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+            .await
+            .map_err(|err| format!("VLESS Encryption websocket handshake: {err}"))?;
+        encrypted
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write VLESS encrypted websocket request: {err}"))?;
+        encrypted
+            .flush()
+            .await
+            .map_err(|err| format!("flush VLESS encrypted websocket request: {err}"))?;
+        drop(request);
+        relay_tcp_over_vless_plain_async(inbound, &mut encrypted, stop, initial_payload, metrics)
+            .await
+    } else {
+        write_websocket_binary_frame_over_resident_tls_async(
+            &mut client,
+            &request,
+            "write VLESS websocket request",
+        )
+        .await?;
+        if initial_payload_len != 0 {
+            metrics.add_upload(initial_payload_len);
+        }
+        drop((request, initial_payload));
+        relay_tcp_over_vless_websocket_tls_async(
+            inbound,
+            &mut client,
+            stop,
+            initial_payload_len,
+            metrics,
+        )
+        .await
     }
-    drop((request, initial_payload));
-    relay_tcp_over_vless_websocket_tls_async(
-        inbound,
-        &mut client,
-        stop,
-        initial_payload_len,
-        metrics,
-    )
-    .await
     .map(|stats| {
         let mut event = proxy_tcp_finished_event(
             peer,
@@ -334,6 +417,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
             "async-proxy-websocket-tls",
         );
         event["stream_wrapper"] = json!("websocket");
+        event["vless_encryption"] = json!(encryption_enabled);
         event
     })
     .or_else(|err| {
@@ -347,6 +431,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
             "async-proxy-websocket-tls",
         );
         event["stream_wrapper"] = json!("websocket");
+        event["vless_encryption"] = json!(encryption_enabled);
         Ok::<Value, String>(event)
     })
 }
@@ -377,21 +462,58 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
         &[],
     )
     .map_err(|err| format!("build VLESS HTTP Upgrade TCP request: {err}"))?;
-    client
-        .write_plain_all(&request, "write VLESS HTTP Upgrade TCP request")
-        .await?;
-    drop(request);
     let initial_payload = sniff.take_payload();
-    relay_tcp_over_vless_tls_async(
-        inbound,
-        &mut client,
-        stop,
-        &selection.proxy.flow,
-        key,
-        initial_payload,
-        metrics,
-    )
-    .await
+    let encryption = selection.proxy.vless_encryption()?;
+    let encryption_enabled = encryption.is_some();
+    if let Some(encryption) = encryption {
+        let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
+            .await
+            .map_err(|err| format!("VLESS Encryption HTTP Upgrade handshake: {err}"))?;
+        encrypted
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write VLESS encrypted HTTP Upgrade request: {err}"))?;
+        encrypted
+            .flush()
+            .await
+            .map_err(|err| format!("flush VLESS encrypted HTTP Upgrade request: {err}"))?;
+        drop(request);
+        if is_xtls_rprx_vision_flow(&selection.proxy.flow) {
+            relay_tcp_over_vless_vision_duplex(
+                inbound,
+                &mut encrypted,
+                stop,
+                key,
+                initial_payload,
+                metrics,
+            )
+            .await
+        } else {
+            relay_tcp_over_vless_plain_async(
+                inbound,
+                &mut encrypted,
+                stop,
+                initial_payload,
+                metrics,
+            )
+            .await
+        }
+    } else {
+        client
+            .write_plain_all(&request, "write VLESS HTTP Upgrade TCP request")
+            .await?;
+        drop(request);
+        relay_tcp_over_vless_tls_async(
+            inbound,
+            &mut client,
+            stop,
+            &selection.proxy.flow,
+            key,
+            initial_payload,
+            metrics,
+        )
+        .await
+    }
     .map(|stats| {
         let mut event = proxy_tcp_finished_event(
             peer,
@@ -403,6 +525,7 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
             "async-proxy-httpupgrade-tls",
         );
         event["stream_wrapper"] = json!("httpupgrade");
+        event["vless_encryption"] = json!(encryption_enabled);
         event
     })
     .or_else(|err| {
@@ -416,6 +539,7 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
             "async-proxy-httpupgrade-tls",
         );
         event["stream_wrapper"] = json!("httpupgrade");
+        event["vless_encryption"] = json!(encryption_enabled);
         Ok::<Value, String>(event)
     })
 }

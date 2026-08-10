@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use dae_outbound::{
     shared_transport::{HttpUpgradeOptions, MeekRoundTripOptions},
-    vless::packet,
+    vless::{VlessEncryptedStream, packet},
 };
 
 use super::super::super::{ResidentStopSignal, SharedResidentStopSignal};
@@ -31,8 +31,11 @@ use super::super::super::{
         native_write_websocket_binary_frame_over_resident_tls_async, open_grpc_h2_stream,
         open_h2_body_stream_with_deferred_response, open_xhttp_packet_up_parts,
         open_xhttp_stream_parts, relay_tcp_over_deferred_h2_body, relay_tcp_over_grpc_h2,
-        relay_tcp_over_vless_tls_async, relay_tcp_over_vless_websocket_tls_async,
-        relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream, send_xhttp_packet_up_request,
+        relay_tcp_over_vless_tls_async, relay_tcp_over_vless_vision_duplex,
+        relay_tcp_over_vless_websocket_tls_async, relay_tcp_over_xhttp_packet_up,
+        relay_tcp_over_xhttp_stream, send_xhttp_packet_up_request, spawn_grpc_h2_payload_stream,
+        spawn_websocket_payload_stream, spawn_xhttp_packet_up_payload_stream,
+        spawn_xhttp_stream_payload_stream,
     },
 };
 use super::errors::NativeTcpProbeError;
@@ -62,6 +65,24 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         let mut stream = open_proxy_tcp_stream_with_binding(&selection.proxy, selection.mptcp)
             .await
             .map_err(NativeTcpProbeError::Open)?;
+        if let Some(encryption) = selection
+            .proxy
+            .vless_encryption()
+            .map_err(NativeTcpProbeError::Open)?
+        {
+            let mut encrypted = VlessEncryptedStream::handshake(stream, encryption)
+                .await
+                .map_err(|err| {
+                    NativeTcpProbeError::Open(format!("VLESS Encryption handshake: {err}"))
+                })?;
+            encrypted.write_all(&request).await.map_err(|err| {
+                NativeTcpProbeError::Open(format!("write native VLESS encrypted request: {err}"))
+            })?;
+            encrypted.flush().await.map_err(|err| {
+                NativeTcpProbeError::Open(format!("flush native VLESS encrypted request: {err}"))
+            })?;
+            return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(encrypted)));
+        }
         tokio::io::AsyncWriteExt::write_all(&mut stream, &request)
             .await
             .map_err(|err| {
@@ -83,10 +104,44 @@ pub(super) async fn open_vless_native_tcp_tunnel(
 
     match execution.wrapper {
         ResidentStreamWrapperPlan::Grpc => {
-            let (mut h2_send, mut h2_recv, carrier_lease) =
-                open_grpc_h2_stream(&selection.proxy, &request)
+            let (mut h2_send, mut h2_recv, carrier_lease) = open_grpc_h2_stream(
+                &selection.proxy,
+                if selection
+                    .proxy
+                    .vless_encryption()
+                    .map_err(NativeTcpProbeError::Open)?
+                    .is_some()
+                {
+                    &[]
+                } else {
+                    &request
+                },
+            )
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
+            if let Some(encryption) = selection
+                .proxy
+                .vless_encryption()
+                .map_err(NativeTcpProbeError::Open)?
+            {
+                let logical = spawn_grpc_h2_payload_stream(h2_send, h2_recv, carrier_lease);
+                let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
                     .await
-                    .map_err(NativeTcpProbeError::Open)?;
+                    .map_err(|err| {
+                        NativeTcpProbeError::Open(format!("VLESS Encryption gRPC handshake: {err}"))
+                    })?;
+                encrypted.write_all(&request).await.map_err(|err| {
+                    NativeTcpProbeError::Open(format!(
+                        "write native VLESS encrypted gRPC request: {err}"
+                    ))
+                })?;
+                encrypted.flush().await.map_err(|err| {
+                    NativeTcpProbeError::Open(format!(
+                        "flush native VLESS encrypted gRPC request: {err}"
+                    ))
+                })?;
+                return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(encrypted)));
+            }
             let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
             let stop = ResidentStopSignal::shared();
             let relay_stop = Arc::clone(&stop);
@@ -158,6 +213,37 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         native_websocket_handshake_over_resident_tls_async(&mut client, &options)
             .await
             .map_err(NativeTcpProbeError::Open)?;
+        if let Some(encryption) = selection
+            .proxy
+            .vless_encryption()
+            .map_err(NativeTcpProbeError::Open)?
+        {
+            // The Encryption layer belongs above decoded WebSocket payloads,
+            // exactly as it does for the resident traffic handler.  Sending
+            // the VLESS request as a plain binary frame here would make the
+            // Xray server interpret the first bytes as a corrupted
+            // Encryption handshake, causing probe-only failures that do not
+            // reflect the actual traffic executor.
+            let logical = spawn_websocket_payload_stream(client);
+            let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+                .await
+                .map_err(|err| {
+                    NativeTcpProbeError::Open(format!(
+                        "VLESS Encryption websocket handshake: {err}"
+                    ))
+                })?;
+            encrypted.write_all(&request).await.map_err(|err| {
+                NativeTcpProbeError::Open(format!(
+                    "write native VLESS encrypted websocket request: {err}"
+                ))
+            })?;
+            encrypted.flush().await.map_err(|err| {
+                NativeTcpProbeError::Open(format!(
+                    "flush native VLESS encrypted websocket request: {err}"
+                ))
+            })?;
+            return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(encrypted)));
+        }
         native_write_websocket_binary_frame_over_resident_tls_async(
             &mut client,
             &request,
@@ -193,6 +279,48 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
             .await
             .map_err(NativeTcpProbeError::Open)?;
+    }
+    if let Some(encryption) = selection
+        .proxy
+        .vless_encryption()
+        .map_err(NativeTcpProbeError::Open)?
+    {
+        let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
+            .await
+            .map_err(|err| {
+                NativeTcpProbeError::Open(format!("VLESS Encryption handshake over TLS: {err}"))
+            })?;
+        encrypted.write_all(&request).await.map_err(|err| {
+            NativeTcpProbeError::Open(format!("write native VLESS encrypted TLS request: {err}"))
+        })?;
+        encrypted.flush().await.map_err(|err| {
+            NativeTcpProbeError::Open(format!("flush native VLESS encrypted TLS request: {err}"))
+        })?;
+        if execution.protocol == ResidentProtocolShape::VlessVision {
+            let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
+            let stop = ResidentStopSignal::shared();
+            let relay_stop = Arc::clone(&stop);
+            let tunnel_stop = Arc::clone(&stop);
+            let metrics = ResidentDataplaneMetrics::default();
+            let task = tokio::spawn(async move {
+                let _ = relay_tcp_over_vless_vision_duplex(
+                    &mut relay_side,
+                    &mut encrypted,
+                    relay_stop,
+                    key,
+                    Vec::new(),
+                    &metrics,
+                )
+                .await;
+                stop.store(true, Ordering::Relaxed);
+            });
+            return Ok(Box::new(SpawnedNativeTcpTunnel::new(
+                probe,
+                task,
+                tunnel_stop,
+            )));
+        }
+        return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(encrypted)));
     }
     client
         .write_plain_all(&request, "write native VLESS TLS request")
@@ -343,6 +471,10 @@ async fn open_vless_xhttp_native_tcp_tunnel(
     selection: TcpProxySelection,
     request: Vec<u8>,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
+    let encryption = selection
+        .proxy
+        .vless_encryption()
+        .map_err(NativeTcpProbeError::Open)?;
     let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
     let stop = ResidentStopSignal::shared();
     let relay_stop = Arc::clone(&stop);
@@ -352,12 +484,44 @@ async fn open_vless_xhttp_native_tcp_tunnel(
         ResidentXhttpMode::PacketUp => {
             let XhttpPacketUpParts {
                 session_id,
-                mut upload,
-                mut download,
-                ..
+                upload,
+                download,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
             } = open_xhttp_packet_up_parts(&selection.proxy, selection.mptcp)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
+            if let Some(encryption) = encryption {
+                let logical = spawn_xhttp_packet_up_payload_stream(XhttpPacketUpParts {
+                    session_id,
+                    upload,
+                    download,
+                    upload_underlay,
+                    upload_http_version,
+                    download_separate,
+                });
+                let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+                    .await
+                    .map_err(|err| {
+                        NativeTcpProbeError::Open(format!(
+                            "VLESS Encryption xHTTP packet-up handshake: {err}"
+                        ))
+                    })?;
+                encrypted.write_all(&request).await.map_err(|err| {
+                    NativeTcpProbeError::Open(format!(
+                        "write native VLESS encrypted xHTTP packet-up request: {err}"
+                    ))
+                })?;
+                encrypted.flush().await.map_err(|err| {
+                    NativeTcpProbeError::Open(format!(
+                        "flush native VLESS encrypted xHTTP packet-up request: {err}"
+                    ))
+                })?;
+                return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(encrypted)));
+            }
+            let mut upload = upload;
+            let mut download = download;
             send_xhttp_packet_up_request(&mut upload, &session_id, 0, Bytes::from(request))
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
@@ -380,12 +544,53 @@ async fn open_vless_xhttp_native_tcp_tunnel(
         }
         ResidentXhttpMode::StreamUp | ResidentXhttpMode::StreamOne => {
             let XhttpStreamParts {
-                mut upload,
-                mut download,
-                ..
-            } = open_xhttp_stream_parts(&selection.proxy, selection.mptcp, Bytes::from(request))
-                .await
-                .map_err(NativeTcpProbeError::Open)?;
+                session_id,
+                upload,
+                download,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            } = open_xhttp_stream_parts(
+                &selection.proxy,
+                selection.mptcp,
+                if encryption.is_some() {
+                    Bytes::new()
+                } else {
+                    Bytes::from(request.clone())
+                },
+            )
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
+            if let Some(encryption) = encryption {
+                let logical = spawn_xhttp_stream_payload_stream(XhttpStreamParts {
+                    session_id,
+                    upload,
+                    download,
+                    upload_underlay,
+                    upload_http_version,
+                    download_separate,
+                });
+                let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+                    .await
+                    .map_err(|err| {
+                        NativeTcpProbeError::Open(format!(
+                            "VLESS Encryption xHTTP stream handshake: {err}"
+                        ))
+                    })?;
+                encrypted.write_all(&request).await.map_err(|err| {
+                    NativeTcpProbeError::Open(format!(
+                        "write native VLESS encrypted xHTTP request: {err}"
+                    ))
+                })?;
+                encrypted.flush().await.map_err(|err| {
+                    NativeTcpProbeError::Open(format!(
+                        "flush native VLESS encrypted xHTTP request: {err}"
+                    ))
+                })?;
+                return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(encrypted)));
+            }
+            let mut upload = upload;
+            let mut download = download;
             tokio::spawn(async move {
                 let _ = relay_tcp_over_xhttp_stream(
                     &mut relay_side,

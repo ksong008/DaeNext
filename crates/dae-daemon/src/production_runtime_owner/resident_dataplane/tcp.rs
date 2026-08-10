@@ -68,8 +68,8 @@ use dae_outbound::{
         TuicCongestionController, build_tuic_runtime_client_config_with_congestion,
         write_tuic_connect_request,
     },
-    vless::contract::is_xtls_rprx_vision_flow,
     vless::packet,
+    vless::{VlessEncryptedStream, contract::is_xtls_rprx_vision_flow},
     vmess::{
         VMESS_AEAD_TCP_MAX_PAYLOAD_SIZE, VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE,
         VMessAeadTcpClientSessionStart, aead_tcp_response_reader_from_buffer,
@@ -150,6 +150,7 @@ use shadowsocks_stream::{
     read_shadowsocks_aead_chunk_in_place_from_v2ray_plugin_mux,
     read_shadowsocks_aead_chunk_in_place_from_websocket_tls,
 };
+pub(crate) use websocket::spawn_websocket_payload_stream;
 #[cfg(test)]
 pub(crate) use websocket::{AsyncWebSocketPayloadChannelReader, AsyncWebSocketPayloadChannelState};
 pub(crate) use websocket::{
@@ -214,7 +215,9 @@ pub(crate) use self::transport_helpers::{
     relay_tcp_over_resident_tls_plain_async, relay_tcp_over_vmess_grpc_h2,
     relay_tcp_over_vmess_h2_body, relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream,
     send_grpc_hunk, send_h2_data, send_h2_data_with_context, send_xhttp_packet_up_request,
-    send_xhttp_stream_data, start_xhttp_xmux_generation_owner_on, stop_xhttp_xmux_generation_owner,
+    send_xhttp_stream_data, spawn_grpc_h2_payload_stream, spawn_xhttp_packet_up_payload_stream,
+    spawn_xhttp_stream_payload_stream, start_xhttp_xmux_generation_owner_on,
+    stop_xhttp_xmux_generation_owner,
 };
 mod stream_helpers;
 use self::stream_helpers::*;
@@ -252,7 +255,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_hand
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::relay_tcp_over_trojan_websocket_tls_async;
 use self::vless_relay::*;
 pub(in crate::production_runtime_owner::resident_dataplane) use self::vless_relay::{
-    relay_tcp_over_vless_tls_async, relay_tcp_over_vless_websocket_tls_async,
+    relay_tcp_over_vless_tls_async, relay_tcp_over_vless_vision_duplex,
+    relay_tcp_over_vless_websocket_tls_async,
 };
 #[cfg(test)]
 mod tests;

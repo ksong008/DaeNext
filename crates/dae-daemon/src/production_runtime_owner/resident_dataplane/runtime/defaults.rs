@@ -28,7 +28,12 @@ pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_LEGACY_ENV: &str =
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MIN: usize = 512 * 1024;
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
-pub(crate) const RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN: usize = 1024 * 1024;
+// Native VLESS Encryption performs ML-KEM-768 key generation/decapsulation on
+// the resident Tokio worker.  AWS-LC's constant-time KEM path can exceed a
+// one-megabyte stack, which used to abort the manual probe/runtime worker with
+// `stack overflow` before a TCP request was sent.  Keep the worker stack
+// bounded, but reserve enough space for the admitted post-quantum handshake.
+pub(crate) const RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN: usize = 2 * 1024 * 1024;
 pub(crate) const RESIDENT_TCP_RUNTIME_WORKERS_ENV: &str = "RESIDENT_TCP_RUNTIME_WORKERS";
 pub(crate) const RESIDENT_TCP_RUNTIME_WORKERS_MIN: usize = 1;
 pub(crate) const RESIDENT_TCP_RUNTIME_WORKERS_MAX: usize = 64;
