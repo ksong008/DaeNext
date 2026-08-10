@@ -16,6 +16,21 @@ pub(crate) fn resident_live_adapter_udp_probe(
         .build();
     let owner_stop = ResidentStopSignal::shared();
     let owner_resources = ResidentRuntimeResourceConfig::from_config(config);
+    // gRPC and the other HTTP/2-backed wrappers acquire their physical carrier
+    // through the generation owner.  The live adapter is a standalone probe
+    // (rather than the resident runtime owner), so it must install the same
+    // bounded H2 owner before materializing a binding.  Without this, an
+    // admitted gRPC row fails immediately with "generation 0 is unavailable"
+    // and no network I/O reaches the remote Xray peer.
+    let h2_carrier_runtime = probe_runtime.as_ref().ok().and_then(|runtime| {
+        start_h2_carrier_generation_owner_on(
+            runtime.handle(),
+            0,
+            Arc::clone(&owner_stop),
+            owner_resources.tcp_runtime_workers.value(),
+        )
+        .ok()
+    });
     let owner_runtime = start_hysteria2_owner_registry(
         0,
         Arc::clone(&owner_stop),
@@ -156,6 +171,13 @@ pub(crate) fn resident_live_adapter_udp_probe(
     }
     if let Some((_, thread)) = anytls_owner_runtime {
         let _ = thread.join();
+    }
+    if let Some((_, task)) = h2_carrier_runtime {
+        if let Ok(runtime) = &probe_runtime {
+            runtime.block_on(async {
+                let _ = task.await;
+            });
+        }
     }
     let pass_count = rows
         .iter()
