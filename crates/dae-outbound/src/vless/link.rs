@@ -27,6 +27,10 @@ pub struct VLESSLink {
     pub short_id: String,
     pub spider_x: String,
     pub mux: bool,
+    /// Xray VLESS Encryption account string.  `none`/empty keeps the
+    /// legacy unencrypted VLESS record path; any other value is parsed and
+    /// validated by the resident builder before a connection is published.
+    pub encryption: String,
     pub protocol: String,
 }
 
@@ -64,6 +68,7 @@ impl VLESSLink {
             short_id: query_value(&query, "sid").unwrap_or_default(),
             spider_x: query_value(&query, "spx").unwrap_or_default(),
             mux: parse_mux_enabled(&query),
+            encryption: query_value(&query, "encryption").unwrap_or_default(),
             protocol: "vless".to_owned(),
         };
         if parsed.net.is_empty() {
@@ -165,6 +170,7 @@ impl VLESSLink {
         if self.mux {
             query.push(("mux".to_owned(), "1".to_owned()));
         }
+        push_if_non_empty(&mut query, "encryption", &self.encryption);
         query.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         let mut out = String::new();
         out.push_str("vless://");
