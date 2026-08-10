@@ -86,7 +86,10 @@ fn test_proxy(endpoint: &ResidentXhttpEndpointPlan) -> ResidentProxyPlan {
         tls_fragment: endpoint.tls_fragment.clone(),
         utls_fingerprint: None,
         reality: endpoint.reality.clone(),
-        handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [7; 16] },
+        handler: ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [7; 16],
+            encryption: None,
+        },
         execution: None,
         chain_parent: None,
         mark: 0,

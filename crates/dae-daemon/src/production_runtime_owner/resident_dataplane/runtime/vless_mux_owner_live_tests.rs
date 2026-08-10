@@ -249,7 +249,10 @@ fn vless_mux_test_proxy(
         tls_fragment: None,
         utls_fingerprint: None,
         reality: None,
-        handler: plan::ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [11; 16] },
+        handler: plan::ResidentProxyProtocolPlan::VlessMuxTcpTls {
+            key: [11; 16],
+            encryption: None,
+        },
         execution: None,
         chain_parent: None,
         mark: 0,

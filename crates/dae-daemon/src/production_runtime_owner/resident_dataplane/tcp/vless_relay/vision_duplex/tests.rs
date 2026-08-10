@@ -91,6 +91,7 @@ struct ScriptedProxy {
     raw_writes: Vec<u8>,
     raw_read_polls: usize,
     outer_record_handoff_ready: bool,
+    outer_record_handoff_sticky: bool,
     outer_record_handoffs_taken: usize,
     events: Vec<ProxyPollEvent>,
 }
@@ -184,9 +185,11 @@ impl VisionProxyIo for ScriptedProxy {
     }
 
     fn take_vision_outer_record_handoff(&mut self) -> bool {
-        let ready = self.outer_record_handoff_ready;
+        let ready = self.outer_record_handoff_ready || self.outer_record_handoff_sticky;
         if ready {
-            self.outer_record_handoff_ready = false;
+            if !self.outer_record_handoff_sticky {
+                self.outer_record_handoff_ready = false;
+            }
             self.outer_record_handoffs_taken += 1;
         }
         ready
@@ -453,6 +456,37 @@ fn direct_pass_idle_raw_read_does_not_self_wake() {
 }
 
 #[test]
+fn sticky_outer_handoff_is_not_reinterpreted_as_a_raw_read_event() {
+    let user_uuid = [0x59; 16];
+    let mut driver = VisionDuplexDriver::new(user_uuid, Vec::new()).unwrap();
+    let mut inbound = ScriptedInbound::default();
+    let mut proxy = ScriptedProxy {
+        plain_reads: VecDeque::from([vision_response(user_uuid, VISION_COMMAND_DIRECT, b"framed")]),
+        outer_record_handoff_sticky: true,
+        ..ScriptedProxy::default()
+    };
+    let metrics = ResidentDataplaneMetrics::default();
+    let wake_counter = Arc::new(WakeCounter::default());
+    let waker = Waker::from(Arc::clone(&wake_counter));
+
+    let _ = poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker);
+    let _ = poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker);
+    assert!(driver.downlink_direct());
+    assert_eq!(proxy.raw_read_polls, 1);
+    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 0);
+
+    // A sticky handoff must not make an idle DirectPass socket spin. One raw
+    // poll is enough; the driver returns Pending and lets the underlay waker
+    // schedule the next cycle.
+    assert!(matches!(
+        poll_driver_with_waker(&mut driver, &mut inbound, &mut proxy, &metrics, &waker),
+        Poll::Pending
+    ));
+    assert_eq!(proxy.raw_read_polls, 2);
+    assert_eq!(wake_counter.count.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn overlay_record_handoff_repolls_socket_without_self_wake() {
     let mut driver = VisionDuplexDriver::new([0x58; 16], Vec::new()).unwrap();
     let mut inbound = ScriptedInbound::default();
@@ -487,9 +521,8 @@ fn uplink_direct_flushes_overlay_command_before_raw_tail() {
         let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);
     }
     driver.force_uplink_decision(VisionTlsDecision::Direct);
-    inbound
-        .reads
-        .push_back([&[23, 3, 3, 0, 1, 0xaa][..], &b"tail"[..]].concat());
+    inbound.reads.push_back(vec![23, 3, 3, 0, 1, 0xaa]);
+    inbound.reads.push_back(b"tail".to_vec());
 
     for _ in 0..10 {
         let _ = poll_driver(&mut driver, &mut inbound, &mut proxy, &metrics);

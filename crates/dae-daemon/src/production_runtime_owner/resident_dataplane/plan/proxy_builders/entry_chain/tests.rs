@@ -26,7 +26,10 @@ fn xhttp_child() -> ResidentProxyPlan {
         tls_fragment: None,
         utls_fingerprint: None,
         reality: None,
-        handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] },
+        handler: ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [1; 16],
+            encryption: None,
+        },
         execution: None,
         chain_parent: None,
         mark: 0,

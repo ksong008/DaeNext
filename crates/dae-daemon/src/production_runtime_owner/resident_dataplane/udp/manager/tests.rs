@@ -300,7 +300,10 @@ fn retired_unbound_udp_pin_lasts_only_while_rollback_or_sniffing_can_use_it() {
 
 #[test]
 fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
-    let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
+    let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+        key: [1; 16],
+        encryption: None,
+    });
     let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
     let dns_dst = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53);
     let key = UdpSessionKey::new(&proxy, peer, dns_dst);
@@ -328,7 +331,10 @@ fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
 
 #[test]
 fn forced_dns_session_lanes_are_distinct_and_observable() {
-    let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
+    let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+        key: [1; 16],
+        encryption: None,
+    });
     let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
     let dns_dst = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53);
     let first = UdpSessionKey::with_dispatch_lane(&proxy, peer, dns_dst, 1);
@@ -351,7 +357,10 @@ fn forced_dns_session_lanes_are_distinct_and_observable() {
 fn udp_session_key_separates_packet_semantics() {
     let peer = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 10).into(), 53000);
     let original_dst = SocketAddr::new(Ipv4Addr::new(8, 8, 8, 8).into(), 443);
-    let vless = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
+    let vless = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+        key: [1; 16],
+        encryption: None,
+    });
     let socks = test_udp_proxy(ResidentProxyProtocolPlan::Socks5Tcp {
         username: String::new(),
         password: String::new(),
@@ -375,7 +384,10 @@ fn udp_session_key_emits_display_and_redacted_identity() {
     let original_dst = ipv4_mapped_socket_addr(original_dst_ip, 443);
     let peer_display = ipv4_socket_display(peer_ip, 53000);
     let original_dst_display = ipv4_socket_display(original_dst_ip, 443);
-    let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] });
+    let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+        key: [1; 16],
+        encryption: None,
+    });
     let key = UdpSessionKey::new(&proxy, peer, original_dst);
     let value = key.to_value();
 
