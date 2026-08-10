@@ -199,9 +199,7 @@ impl ResidentUdpExecutorFactory {
             ResidentProxyProtocolPlan::VlessVisionTcpTls {
                 encryption: Some(_),
                 ..
-            } if is_xtls_rprx_vision_flow(&proxy.flow)
-                || !matches!(wrapper, ResidentStreamWrapperPlan::None) =>
-            {
+            } if is_xtls_rprx_vision_flow(&proxy.flow) => {
                 Self::PolicyClosed(Closed::VlessUnsupportedShape)
             }
             ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
