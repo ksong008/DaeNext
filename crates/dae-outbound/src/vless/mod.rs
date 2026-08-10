@@ -1,5 +1,6 @@
 pub mod contract;
 pub mod dataplane;
+pub mod encryption;
 pub mod key;
 pub mod link;
 pub mod packet;
@@ -27,6 +28,9 @@ pub use dataplane::{
     tcp_exchange_over_xhttp_h3_loopback, tcp_exchange_over_xhttp_http2_stream,
     tcp_exchange_over_xhttp_packet_stream, udp_over_tcp_exchange_over_stream, udp_response_packet,
     write_grpc_http2_hunk_response, write_xhttp_http2_payload_response,
+};
+pub use encryption::{
+    VlessEncryptedStream, VlessEncryptionClient, VlessEncryptionMode, VlessEncryptionRtt,
 };
 pub use key::password_to_key;
 pub use link::VLESSLink;

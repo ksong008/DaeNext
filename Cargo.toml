@@ -59,6 +59,7 @@ repository = "https://github.com/ksong008/DaeNext"
 aho-corasick = "1"
 aes = "0.8"
 aes-gcm = "0.10"
+aws-lc-rs = "1.17.1"
 argon2 = "0.5"
 aya = { version = "0.13.1", default-features = false }
 aya-ebpf = { version = "0.1.1", default-features = false }
@@ -128,3 +129,4 @@ tikv-jemalloc-ctl = { version = "0.7", default-features = false, features = ["st
 tikv-jemalloc-sys = { version = "0.7", default-features = false }
 url = "2"
 webpki-roots = "1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
