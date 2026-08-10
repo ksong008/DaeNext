@@ -4,7 +4,7 @@ use super::*;
 
 pub(crate) async fn relay_tcp_over_vless_plain_async(
     inbound: &mut TokioTcpStream,
-    proxy: &mut TokioTcpStream,
+    proxy: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     stop: SharedResidentStopSignal,
     initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
@@ -17,6 +17,12 @@ pub(crate) async fn relay_tcp_over_vless_plain_async(
                 &RelayStats::default(),
             )
         })?;
+        proxy.flush().await.map_err(|err| {
+            RelayError::new(
+                format!("flush sniffed client payload to VLESS plain TCP: {err}"),
+                &RelayStats::default(),
+            )
+        })?;
         progress.record_upload(initial_payload.len());
         metrics.add_upload(initial_payload.len());
     }
@@ -24,7 +30,7 @@ pub(crate) async fn relay_tcp_over_vless_plain_async(
 
     let response_header_stripped = Arc::new(AtomicBool::new(false));
     let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
-    let (proxy_read, proxy_write) = proxy.split();
+    let (proxy_read, proxy_write) = tokio::io::split(&mut *proxy);
     let upload_progress = progress.clone();
     let upload = async move {
         let mut inbound_read = inbound_read;
@@ -47,6 +53,10 @@ pub(crate) async fn relay_tcp_over_vless_plain_async(
                 .write_all(&buffer[..read])
                 .await
                 .map_err(|err| format!("write client payload to VLESS plain TCP: {err}"))?;
+            proxy_write
+                .flush()
+                .await
+                .map_err(|err| format!("flush client payload to VLESS plain TCP: {err}"))?;
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }

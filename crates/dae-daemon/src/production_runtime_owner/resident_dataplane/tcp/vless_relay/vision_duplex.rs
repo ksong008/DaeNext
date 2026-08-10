@@ -7,18 +7,21 @@ use self::driver::*;
 
 const VISION_RELAY_COOPERATIVE_BUDGET: usize = 32;
 
-pub(super) async fn relay_tcp_over_vless_vision_duplex(
+pub(crate) async fn relay_tcp_over_vless_vision_duplex<Proxy>(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
-    client: &mut AsyncVlessTlsClient,
+    client: &mut Proxy,
     stop: SharedResidentStopSignal,
     user_uuid: [u8; 16],
     initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
-) -> Result<RelayStats, RelayError> {
+) -> Result<RelayStats, RelayError>
+where
+    Proxy: VisionProxyIo + Send + ?Sized,
+{
     // Only the TCP Vision duplex driver can safely consume record-boundary
     // handoffs and switch to the raw transport. Vision XUDP uses the same TLS
     // client but remains framed for the lifetime of the UDP session.
-    client.enable_vision_record_handoff();
+    client.enable_vision_outer_record_handoff();
     let initial_payload_len = initial_payload.len();
     let mut driver = VisionDuplexDriver::new(user_uuid, initial_payload)
         .map_err(|error| RelayError::new(error, &RelayStats::default()))?;

@@ -31,7 +31,9 @@ use dae_outbound::{
     },
     trojan::{TrojanLink, TrojanTransportType},
     tuic::TuicLink,
-    vless::{VLESSLink, contract::is_xtls_rprx_vision_flow, password_to_key},
+    vless::{
+        VLESSLink, VlessEncryptionClient, contract::is_xtls_rprx_vision_flow, password_to_key,
+    },
     vmess::VMessLink,
 };
 use serde_json::{Value, json};

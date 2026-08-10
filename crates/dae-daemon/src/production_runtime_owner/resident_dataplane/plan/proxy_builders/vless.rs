@@ -21,6 +21,22 @@ pub(crate) fn build_vless_proxy_plan(
         .validate_transport_contract()
         .map_err(|err| format!("validate VLESS transport for {node_tag}: {err}"))?;
     let net = canonical_resident_vless_net(&vless.net);
+    let encryption = VlessEncryptionClient::parse(&vless.encryption)
+        .map_err(|err| format!("parse VLESS encryption for {node_tag}: {err}"))?;
+    if encryption.is_some() && matches!(net.as_str(), "h2" | "meek") {
+        return Err(format!(
+            "resident dataplane keeps VLESS Encryption with legacy H2 and Meek policy-closed for node {node_tag}; neither is an admitted current-Xray transport"
+        ));
+    }
+    if encryption.is_some()
+        && (vless.mux && net != "tcp"
+            || (!vless.flow.is_empty() && (net != "tcp" || !is_xtls_rprx_vision_flow(&vless.flow))))
+    {
+        return Err(format!(
+            "resident dataplane VLESS Encryption admits tcp Vision or empty-flow official wrappers only for node {node_tag}; got net={net}, mux={}, flow='{}'",
+            vless.mux, vless.flow
+        ));
+    }
     if vless.mux && net != "tcp" {
         return Err(format!(
             "resident dataplane vless mux transport admits tcp carrier only for node {node_tag}; got {net}"
@@ -206,9 +222,9 @@ pub(crate) fn build_vless_proxy_plan(
     };
     let graph = resident_graph_identity(&link);
     let handler = if vless.mux {
-        ResidentProxyProtocolPlan::VlessMuxTcpTls { key }
+        ResidentProxyProtocolPlan::VlessMuxTcpTls { key, encryption }
     } else {
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { key }
+        ResidentProxyProtocolPlan::VlessVisionTcpTls { key, encryption }
     };
     let xhttp_xmux = if net == "xhttp" {
         Some(

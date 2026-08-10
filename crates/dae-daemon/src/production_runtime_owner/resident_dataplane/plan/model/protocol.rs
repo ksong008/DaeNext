@@ -4,9 +4,11 @@ use super::*;
 pub(crate) enum ResidentProxyProtocolPlan {
     VlessVisionTcpTls {
         key: [u8; 16],
+        encryption: Option<dae_outbound::vless::VlessEncryptionClient>,
     },
     VlessMuxTcpTls {
         key: [u8; 16],
+        encryption: Option<dae_outbound::vless::VlessEncryptionClient>,
     },
     Socks5Tcp {
         username: String,

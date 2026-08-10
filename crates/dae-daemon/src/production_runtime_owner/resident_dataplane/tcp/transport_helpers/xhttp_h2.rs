@@ -40,7 +40,10 @@ mod packet_up_pipeline;
 pub(crate) use self::packet_up_pipeline::XhttpPacketUpPipeline;
 
 mod relay;
-pub(crate) use self::relay::{relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream};
+pub(crate) use self::relay::{
+    relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream,
+    spawn_xhttp_packet_up_payload_stream, spawn_xhttp_stream_payload_stream,
+};
 
 mod parts;
 pub(crate) use self::parts::{open_xhttp_packet_up_parts, open_xhttp_stream_parts};

@@ -1,4 +1,5 @@
 use super::*;
+use dae_outbound::vless::VlessEncryptedStream;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
@@ -22,6 +23,13 @@ pub(super) enum VlessStandardUdpUnderlay {
     },
     TlsTcp {
         client: AsyncResidentTlsClient,
+        tls_underlay: &'static str,
+    },
+    EncryptedPlainTcp {
+        stream: VlessEncryptedStream<tokio::net::TcpStream>,
+    },
+    EncryptedTlsTcp {
+        client: VlessEncryptedStream<AsyncResidentTlsClient>,
         tls_underlay: &'static str,
     },
     WebSocketPlain {
@@ -65,28 +73,57 @@ impl VlessStandardUdpUnderlay {
         match wrapper {
             VlessStandardUdpWrapperKind::PlainTcp => {
                 let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
-                write_vless_stream_bytes(
-                    &mut stream,
-                    initial_packet,
-                    "write VLESS plain UDP-over-stream first packet",
-                )
-                .await?;
-                Ok(Self::PlainTcp { stream })
+                if let Some(encryption) = proxy.vless_encryption()? {
+                    let mut stream = VlessEncryptedStream::handshake(stream, encryption)
+                        .await
+                        .map_err(|err| format!("VLESS Encryption UDP handshake: {err}"))?;
+                    write_vless_stream_bytes(
+                        &mut stream,
+                        initial_packet,
+                        "write VLESS encrypted plain UDP-over-stream first packet",
+                    )
+                    .await?;
+                    Ok(Self::EncryptedPlainTcp { stream })
+                } else {
+                    write_vless_stream_bytes(
+                        &mut stream,
+                        initial_packet,
+                        "write VLESS plain UDP-over-stream first packet",
+                    )
+                    .await?;
+                    Ok(Self::PlainTcp { stream })
+                }
             }
             VlessStandardUdpWrapperKind::TlsTcp => {
                 let mut client =
                     open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
-                write_vless_stream_bytes(
-                    &mut client,
-                    initial_packet,
-                    "write VLESS TLS UDP-over-stream first packet",
-                )
-                .await?;
-                Ok(Self::TlsTcp {
-                    client,
-                    tls_underlay,
-                })
+                if let Some(encryption) = proxy.vless_encryption()? {
+                    let mut client = VlessEncryptedStream::handshake(client, encryption)
+                        .await
+                        .map_err(|err| format!("VLESS Encryption TLS UDP handshake: {err}"))?;
+                    write_vless_stream_bytes(
+                        &mut client,
+                        initial_packet,
+                        "write VLESS encrypted TLS UDP-over-stream first packet",
+                    )
+                    .await?;
+                    Ok(Self::EncryptedTlsTcp {
+                        client,
+                        tls_underlay,
+                    })
+                } else {
+                    write_vless_stream_bytes(
+                        &mut client,
+                        initial_packet,
+                        "write VLESS TLS UDP-over-stream first packet",
+                    )
+                    .await?;
+                    Ok(Self::TlsTcp {
+                        client,
+                        tls_underlay,
+                    })
+                }
             }
             VlessStandardUdpWrapperKind::WebSocketPlain => {
                 let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
@@ -210,6 +247,22 @@ impl VlessStandardUdpUnderlay {
                 write_vless_stream_bytes(client, payload, "write VLESS TLS UDP-over-stream packet")
                     .await
             }
+            Self::EncryptedPlainTcp { stream } => {
+                write_vless_stream_bytes(
+                    stream,
+                    payload,
+                    "write VLESS encrypted plain UDP-over-stream packet",
+                )
+                .await
+            }
+            Self::EncryptedTlsTcp { client, .. } => {
+                write_vless_stream_bytes(
+                    client,
+                    payload,
+                    "write VLESS encrypted TLS UDP-over-stream packet",
+                )
+                .await
+            }
             Self::WebSocketPlain { stream, .. } => {
                 write_vless_websocket_frame(stream, payload, "write VLESS WebSocket UDP packet")
                     .await
@@ -266,6 +319,16 @@ impl VlessStandardUdpUnderlay {
                 "tls-tcp-stream-reused",
                 Some(*tls_underlay),
             ),
+            Self::EncryptedPlainTcp { .. } => (
+                "tokio-encrypted-stream-session",
+                "vless-encryption-tcp-stream-reused",
+                None,
+            ),
+            Self::EncryptedTlsTcp { tls_underlay, .. } => (
+                "tokio-encrypted-stream-session",
+                "vless-encryption-tls-stream-reused",
+                Some(*tls_underlay),
+            ),
             Self::WebSocketPlain { .. } => (
                 "tokio-wrapper-stream-session",
                 "websocket-tunnel-reused",
@@ -311,6 +374,12 @@ impl VlessStandardUdpUnderlay {
             | Self::HttpUpgradeTls { client, .. } => {
                 client.shutdown().await;
             }
+            Self::EncryptedPlainTcp { stream } => {
+                let _ = stream.shutdown().await;
+            }
+            Self::EncryptedTlsTcp { client, .. } => {
+                let _ = client.shutdown().await;
+            }
             Self::GrpcTls { send_stream, .. } => {
                 let _ = send_grpc_hunk(send_stream, &[], true).await;
             }
@@ -336,6 +405,12 @@ async fn read_vless_standard_stream_underlay(
             }
             VlessStandardUdpUnderlay::TlsTcp { client, .. }
             | VlessStandardUdpUnderlay::HttpUpgradeTls { client, .. } => {
+                Pin::new(client).poll_read(cx, &mut read_buf)
+            }
+            VlessStandardUdpUnderlay::EncryptedPlainTcp { stream } => {
+                Pin::new(stream).poll_read(cx, &mut read_buf)
+            }
+            VlessStandardUdpUnderlay::EncryptedTlsTcp { client, .. } => {
                 Pin::new(client).poll_read(cx, &mut read_buf)
             }
             VlessStandardUdpUnderlay::WebSocketPlain { stream, state } => {

@@ -8,6 +8,7 @@ use tokio::time;
 
 use super::super::RESIDENT_CONNECT_TIMEOUT;
 use super::super::client::AsyncVlessTlsClient;
+use super::SpawnedLogicalStream;
 
 mod async_payload;
 mod duplex_control;
@@ -212,6 +213,103 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn write_webso
     let frame = websocket_client_binary_frame_with_random_mask(payload)
         .map_err(|err| format!("{label}: {err}"))?;
     client.write_plain_all(&frame, label).await
+}
+
+/// Exposes decoded WebSocket binary payload bytes as a bounded logical stream.
+/// VLESS Encryption wraps this stream, so HTTP/WebSocket framing stays outside
+/// the encrypted VLESS record layer exactly as it does in Xray.
+pub(crate) fn spawn_websocket_payload_stream(client: AsyncVlessTlsClient) -> SpawnedLogicalStream {
+    SpawnedLogicalStream::spawn(move |logical| drive_websocket_payload_stream(logical, client))
+}
+
+async fn drive_websocket_payload_stream(
+    logical: tokio::io::DuplexStream,
+    client: AsyncVlessTlsClient,
+) -> Result<(), String> {
+    let (mut logical_read, mut logical_write) = tokio::io::split(logical);
+    let (mut client_read, mut client_write) = tokio::io::split(client);
+    let (control_tx, mut control_rx) = websocket_control_channel();
+    let upload = async {
+        let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
+        loop {
+            tokio::select! {
+                biased;
+                control = control_rx.recv() => {
+                    let Some(control) = control else {
+                        return Ok(());
+                    };
+                    write_websocket_control_response(
+                        &mut client_write,
+                        control,
+                        "VLESS Encryption websocket",
+                    ).await?;
+                }
+                read = logical_read.read(&mut buffer) => {
+                    let read = read.map_err(|error| {
+                        format!("read VLESS Encryption websocket logical stream: {error}")
+                    })?;
+                    if read == 0 {
+                        return Ok(());
+                    }
+                    write_websocket_binary_frame_in_place_to_async_stream(
+                        &mut client_write,
+                        &mut buffer[..read],
+                        "write VLESS Encryption websocket frame",
+                    ).await?;
+                }
+            }
+        }
+    };
+    let download = async {
+        let mut decoder = WebSocketBinaryFrameDecoder::default();
+        let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
+        loop {
+            let read = client_read
+                .read(&mut buffer)
+                .await
+                .map_err(|error| format!("read VLESS Encryption websocket frame: {error}"))?;
+            if read == 0 {
+                logical_write
+                    .shutdown()
+                    .await
+                    .map_err(|error| format!("shutdown websocket logical stream: {error}"))?;
+                return Ok(());
+            }
+            decoder
+                .extend(&buffer[..read])
+                .map_err(|error| format!("decode VLESS Encryption websocket frame: {error}"))?;
+            while let Some(payload) = decoder
+                .next_message()
+                .map_err(|error| format!("decode VLESS Encryption websocket frame: {error}"))?
+            {
+                if !payload.is_empty() {
+                    logical_write.write_all(payload).await.map_err(|error| {
+                        format!("write VLESS Encryption websocket logical stream: {error}")
+                    })?;
+                    logical_write.flush().await.map_err(|error| {
+                        format!("flush VLESS Encryption websocket logical stream: {error}")
+                    })?;
+                }
+            }
+            queue_websocket_control_responses(
+                &mut decoder,
+                &control_tx,
+                "VLESS Encryption websocket",
+            )
+            .await?;
+            if decoder.is_closed() {
+                logical_write
+                    .shutdown()
+                    .await
+                    .map_err(|error| format!("shutdown websocket logical stream: {error}"))?;
+                return Ok(());
+            }
+        }
+    };
+    tokio::select! {
+        result = upload => result,
+        result = download => result,
+    }
 }
 
 #[cfg(test)]
