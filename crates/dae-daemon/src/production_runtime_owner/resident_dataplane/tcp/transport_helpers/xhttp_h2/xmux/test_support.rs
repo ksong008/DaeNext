@@ -68,7 +68,10 @@ pub(super) fn download_test_key(
         tls_fragment: None,
         utls_fingerprint: None,
         reality: Some(reality),
-        handler: ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] },
+        handler: ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [1; 16],
+            encryption: None,
+        },
         execution: None,
         chain_parent: None,
         mark: 0,

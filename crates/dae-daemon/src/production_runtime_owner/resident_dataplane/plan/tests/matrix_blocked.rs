@@ -1,6 +1,196 @@
 use super::*;
 
 #[test]
+pub(super) fn vless_encryption_official_tcp_shapes_are_admitted_and_udp_wrappers_fail_closed() {
+    let config = parse_config(
+        r#"
+        global {
+        lan_interface: daerust0
+        allow_insecure: false
+        so_mark_from_dae: 1234
+        mptcp: false
+        }
+        routing {
+        fallback: direct
+        }
+        "#,
+    );
+    let primary = fixture_host(FixtureEndpoint::Primary);
+    let authority = fixture_host(FixtureEndpoint::Authority);
+
+    let plain = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_plain_tcp".to_owned(),
+        with_vless_encryption(vless_fixture_url(
+            "vless-encryption-plain",
+            &primary,
+            fixture_authority_port(),
+            "tcp",
+            "",
+            "",
+            &authority,
+            "",
+            "",
+        )),
+    )
+    .unwrap();
+    assert!(matches!(
+        plain.execution_plan().udp,
+        ResidentUdpExecutorFactory::VlessStandard(ResidentStreamPacketTransport::TlsTcp)
+    ));
+
+    let vision = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_vision".to_owned(),
+        with_vless_encryption(vless_vision_fixture_url("")),
+    )
+    .unwrap();
+    assert!(vision.execution_plan().udp.policy_closed());
+    assert!(
+        vision
+            .execution_plan()
+            .udp
+            .policy_closed_reason()
+            .is_some_and(|reason| reason.contains("Encryption"))
+    );
+
+    let mux = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_mux".to_owned(),
+        with_vless_encryption(vless_mux_fixture_url()),
+    )
+    .unwrap();
+    assert!(matches!(
+        mux.handler,
+        ResidentProxyProtocolPlan::VlessMuxTcpTls {
+            encryption: Some(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        mux.execution_plan().udp,
+        ResidentUdpExecutorFactory::PolicyClosed(ResidentUdpPolicyClosedReason::VlessMux)
+    ));
+
+    let websocket = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_websocket".to_owned(),
+        with_vless_encryption(vless_fixture_url(
+            "vless-encryption-websocket",
+            &primary,
+            fixture_authority_port(),
+            "websocket",
+            &authority,
+            "/vless",
+            &authority,
+            "",
+            "",
+        )),
+    )
+    .unwrap();
+    assert!(websocket.execution_plan().udp.policy_closed());
+
+    let httpupgrade = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_httpupgrade".to_owned(),
+        with_vless_encryption(vless_fixture_url(
+            "vless-encryption-httpupgrade",
+            &primary,
+            fixture_authority_port(),
+            "httpupgrade",
+            &authority,
+            "/vless",
+            &authority,
+            "",
+            "",
+        )),
+    )
+    .unwrap();
+    assert!(httpupgrade.execution_plan().udp.policy_closed());
+
+    let grpc = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_grpc".to_owned(),
+        with_vless_encryption(vless_fixture_url(
+            "vless-encryption-grpc",
+            &primary,
+            fixture_authority_port(),
+            "grpc",
+            "",
+            "vless-service",
+            &authority,
+            "",
+            "",
+        )),
+    )
+    .unwrap();
+    assert!(grpc.execution_plan().udp.policy_closed());
+
+    for (tag, mode) in [
+        ("stream-one", "stream-one"),
+        ("stream-up", "stream-up"),
+        ("packet-up", "packet-up"),
+    ] {
+        let xhttp = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            format!("vless_encryption_xhttp_{tag}"),
+            with_vless_encryption(vless_xhttp_parser_fixture_url(mode, "h2,http/1.1", "")),
+        )
+        .unwrap();
+        assert!(xhttp.execution_plan().udp.policy_closed(), "{tag}");
+    }
+
+    let h2 = VLESSLink::parse(&vless_fixture_url(
+        "vless-encryption-h2",
+        &primary,
+        fixture_authority_port(),
+        "h2",
+        &authority,
+        "/vless",
+        &authority,
+        "",
+        "",
+    ))
+    .unwrap();
+    let h2_error = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_h2".to_owned(),
+        with_vless_encryption(h2.export_url()),
+    )
+    .unwrap_err();
+    assert!(h2_error.contains("legacy H2"), "{h2_error}");
+
+    let meek = VLESSLink::parse(&vless_fixture_url(
+        "vless-encryption-meek",
+        &primary,
+        fixture_authority_port(),
+        "meek",
+        "",
+        "https://meek.fixture.invalid/resource",
+        &authority,
+        "",
+        "",
+    ))
+    .unwrap();
+    let meek_error = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_meek".to_owned(),
+        with_vless_encryption(meek.export_url()),
+    )
+    .unwrap_err();
+    assert!(meek_error.contains("Meek"), "{meek_error}");
+}
+
+#[test]
 pub(super) fn resident_exact_shape_graph_keeps_vless_meek_udp_policy_closed() {
     let config = parse_config(
         r#"
@@ -1060,6 +1250,7 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settin
         short_id: "05060708".to_owned(),
         spider_x: "/primary".to_owned(),
         mux: false,
+        encryption: String::new(),
         protocol: "vless".to_owned(),
     }
     .export_url();

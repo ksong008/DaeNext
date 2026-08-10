@@ -89,8 +89,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
 
     #[test]
     fn resident_vless_vision_udp_request_uses_xudp_mux_target() {
-        let mut proxy =
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [9_u8; 16] });
+        let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [9_u8; 16],
+            encryption: None,
+        });
         proxy.protocol = "vless";
         proxy.flow = XTLS_RPRX_VISION.to_owned();
         proxy.tls = "tls".to_owned();
@@ -161,7 +163,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
                 inner_cipher: String::new(),
                 inner_password: String::new(),
             }),
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [0; 16] }),
+            test_udp_proxy(ResidentProxyProtocolPlan::VlessMuxTcpTls {
+                key: [0; 16],
+                encryption: None,
+            }),
         ];
 
         let mut trojan = test_udp_proxy(ResidentProxyProtocolPlan::TrojanTcpTls {
@@ -170,14 +175,18 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         trojan.net = "unsupported-wrapper".to_owned();
         proxies.push(trojan);
 
-        let mut vless_meek =
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut vless_meek = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         vless_meek.net = "meek".to_owned();
         vless_meek.tls = "tls".to_owned();
         proxies.push(vless_meek);
 
-        let mut vless_unsupported =
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut vless_unsupported = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         vless_unsupported.net = "websocket".to_owned();
         vless_unsupported.tls = "tls".to_owned();
         vless_unsupported.flow = XTLS_RPRX_VISION.to_owned();
@@ -415,7 +424,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
                 UdpExecutorShape::Socks5,
             ),
             (
-                ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] },
+                ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                    key: [0; 16],
+                    encryption: None,
+                },
                 UdpExecutorShape::VlessVision,
             ),
             (
@@ -494,8 +506,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
         }
 
-        let mut vless_xhttp =
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut vless_xhttp = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         vless_xhttp.protocol = "vless";
         vless_xhttp.net = "xhttp".to_owned();
         vless_xhttp.tls = "tls".to_owned();
@@ -517,8 +531,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         );
         assert!(executor.agrees_with(vless_xhttp.execution_plan().udp.agreement()));
 
-        let mut vless_udp443 =
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut vless_udp443 = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         vless_udp443.protocol = "vless";
         vless_udp443.net = "tcp".to_owned();
         vless_udp443.tls = "tls".to_owned();
@@ -546,8 +562,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             ("h2", "tls"),
             ("h2", "reality"),
         ] {
-            let mut proxy =
-                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                key: [0; 16],
+                encryption: None,
+            });
             proxy.protocol = "vless";
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
@@ -561,7 +579,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         }
 
         let fail_closed = [
-            ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [0; 16] },
+            ResidentProxyProtocolPlan::VlessMuxTcpTls {
+                key: [0; 16],
+                encryption: None,
+            },
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
                 cipher: String::new(),
                 password: String::new(),
@@ -655,8 +676,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         }
 
         for (net, tls) in [("grpc", ""), ("grpc", "none"), ("h2", ""), ("h2", "none")] {
-            let mut proxy =
-                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                key: [0; 16],
+                encryption: None,
+            });
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
             proxy.flow = String::new();
@@ -667,8 +690,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
         }
 
         for net in ["websocket", "httpupgrade", "grpc", "h2", "meek"] {
-            let mut proxy =
-                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                key: [0; 16],
+                encryption: None,
+            });
             proxy.net = net.to_owned();
             proxy.tls = "tls".to_owned();
             proxy.flow = "xtls-rprx-vision".to_owned();
@@ -678,8 +703,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             assert!(executor.agrees_with(proxy.execution_plan().udp.agreement()));
         }
 
-        let mut meek =
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let mut meek = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         meek.net = "meek".to_owned();
         meek.tls = "tls".to_owned();
         meek.flow = String::new();
@@ -745,8 +772,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             ("xhttp", "tls"),
             ("xhttp", "reality"),
         ] {
-            let mut proxy =
-                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                key: [0; 16],
+                encryption: None,
+            });
             proxy.protocol = "vless";
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();
@@ -773,7 +802,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             assert_eq!(resident_udp_proxy_handler_name(&proxy), expected_handler);
         }
 
-        let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+        let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
         assert_eq!(
             udp_packet_semantics_for_destination(&proxy, target),
             UdpPacketSemantics::UdpOverStream
@@ -790,8 +822,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
     #[test]
     fn resident_vless_vision_udp_uses_xudp_semantics() {
         for flow in [XTLS_RPRX_VISION, "xtls-rprx-vision-udp443"] {
-            let mut proxy =
-                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                key: [0; 16],
+                encryption: None,
+            });
             proxy.protocol = "vless";
             proxy.net = "tcp".to_owned();
             proxy.tls = "tls".to_owned();
@@ -826,8 +860,10 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) mod tests {
             ("grpc", "tls", XTLS_RPRX_VISION),
             ("h2", "tls", XTLS_RPRX_VISION),
         ] {
-            let mut proxy =
-                test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] });
+            let mut proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                key: [0; 16],
+                encryption: None,
+            });
             proxy.protocol = "vless";
             proxy.net = net.to_owned();
             proxy.tls = tls.to_owned();

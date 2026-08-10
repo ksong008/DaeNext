@@ -1,4 +1,16 @@
 use super::*;
+
+pub(crate) fn vless_encryption_fixture_value() -> String {
+    let client_public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7_u8; 32]);
+    format!("mlkem768x25519plus.native.1rtt.{client_public_key}")
+}
+
+pub(crate) fn with_vless_encryption(url: String) -> String {
+    let mut link = VLESSLink::parse(&url).expect("valid VLESS fixture URL");
+    link.encryption = vless_encryption_fixture_value();
+    link.export_url()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn vless_fixture_url(
     _ps: &str,
@@ -32,6 +44,7 @@ pub(crate) fn vless_fixture_url(
         short_id: String::new(),
         spider_x: String::new(),
         mux: false,
+        encryption: String::new(),
         protocol: "vless".to_owned(),
     }
     .export_url()
@@ -67,6 +80,7 @@ fn vless_vision_fixture_url_with_allow_insecure(fingerprint: &str, allow_insecur
         short_id: String::new(),
         spider_x: String::new(),
         mux: false,
+        encryption: String::new(),
         protocol: "vless".to_owned(),
     }
     .export_url()
@@ -108,6 +122,7 @@ pub(crate) fn vless_plain_tcp_none_fixture_url() -> String {
         short_id: String::new(),
         spider_x: String::new(),
         mux: false,
+        encryption: String::new(),
         protocol: "vless".to_owned(),
     }
     .export_url()
@@ -162,6 +177,7 @@ fn vless_reality_fixture_url_with_allow_insecure(allow_insecure: bool) -> String
         short_id,
         spider_x: "/".to_owned(),
         mux: false,
+        encryption: String::new(),
         protocol: "vless".to_owned(),
     }
     .export_url()
@@ -189,6 +205,7 @@ pub(crate) fn vless_mux_fixture_url() -> String {
         short_id: String::new(),
         spider_x: String::new(),
         mux: true,
+        encryption: String::new(),
         protocol: "vless".to_owned(),
     }
     .export_url()
@@ -216,6 +233,7 @@ pub(crate) fn vless_xhttp_parser_fixture_url(mode: &str, alpn: &str, extra: &str
         short_id: String::new(),
         spider_x: String::new(),
         mux: false,
+        encryption: String::new(),
         protocol: "vless".to_owned(),
     }
     .export_url()

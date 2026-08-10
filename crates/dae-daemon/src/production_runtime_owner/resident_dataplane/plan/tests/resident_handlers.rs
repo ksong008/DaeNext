@@ -300,8 +300,14 @@ fn hysteria2_unavailable_bbr_profile_fails_before_socket_construction() {
 #[test]
 pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
     let variants = [
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [1; 16] },
-        ResidentProxyProtocolPlan::VlessMuxTcpTls { key: [2; 16] },
+        ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [1; 16],
+            encryption: None,
+        },
+        ResidentProxyProtocolPlan::VlessMuxTcpTls {
+            key: [2; 16],
+            encryption: None,
+        },
         ResidentProxyProtocolPlan::Socks5Tcp {
             username: fixture_secret(),
             password: fixture_secret(),

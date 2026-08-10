@@ -210,6 +210,7 @@ fn vless_link(net: &str, security: &str, alpn: &str, path: &str) -> VLESSLink {
         short_id: String::new(),
         spider_x: String::new(),
         mux: false,
+        encryption: String::new(),
         protocol: "vless".to_owned(),
     }
 }

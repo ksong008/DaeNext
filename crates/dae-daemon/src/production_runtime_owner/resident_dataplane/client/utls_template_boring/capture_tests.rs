@@ -296,7 +296,10 @@ fn test_tls_proxy(fingerprint: &UtlsFingerprint) -> ResidentProxyPlan {
 fn test_reality_proxy(fingerprint: &UtlsFingerprint) -> ResidentProxyPlan {
     let mut proxy = base_proxy(
         fingerprint,
-        ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [0; 16] },
+        ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        },
     );
     proxy.protocol = "vless";
     proxy.tls = "reality".to_owned();

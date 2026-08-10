@@ -277,7 +277,10 @@ fn meek_test_proxy(
         tls_fragment: None,
         utls_fingerprint: None,
         reality: None,
-        handler: plan::ResidentProxyProtocolPlan::VlessVisionTcpTls { key: [9; 16] },
+        handler: plan::ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [9; 16],
+            encryption: None,
+        },
         execution: None,
         chain_parent: None,
         mark: 0,
