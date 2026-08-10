@@ -211,6 +211,13 @@ pub(crate) fn vless_mux_fixture_url() -> String {
     .export_url()
 }
 
+pub(crate) fn vless_vision_mux_fixture_url() -> String {
+    let mut link = VLESSLink::parse(&vless_vision_fixture_url("")).unwrap();
+    link.mux = true;
+    link.encryption = vless_encryption_fixture_value();
+    link.export_url()
+}
+
 pub(crate) fn vless_xhttp_parser_fixture_url(mode: &str, alpn: &str, extra: &str) -> String {
     VLESSLink {
         ps: String::new(),
