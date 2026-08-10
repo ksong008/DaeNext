@@ -28,6 +28,11 @@ pub(crate) fn build_vless_proxy_plan(
             "resident dataplane keeps VLESS Encryption with legacy H2 and Meek policy-closed for node {node_tag}; neither is an admitted current-Xray transport"
         ));
     }
+    if encryption.is_some() && vless.mux && is_xtls_rprx_vision_flow(&vless.flow) {
+        return Err(format!(
+            "resident dataplane rejects VLESS Encryption + mux + xtls-rprx-vision for node {node_tag}; a Vision-aware mux/XUDP executor is not admitted"
+        ));
+    }
     if encryption.is_some()
         && (vless.mux && net != "tcp"
             || (!vless.flow.is_empty() && (net != "tcp" || !is_xtls_rprx_vision_flow(&vless.flow))))
