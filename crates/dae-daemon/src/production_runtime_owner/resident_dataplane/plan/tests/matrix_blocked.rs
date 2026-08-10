@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-pub(super) fn vless_encryption_official_tcp_shapes_are_admitted_and_udp_wrappers_fail_closed() {
+pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted() {
     let config = parse_config(
         r#"
         global {
@@ -104,7 +104,7 @@ pub(super) fn vless_encryption_official_tcp_shapes_are_admitted_and_udp_wrappers
         )),
     )
     .unwrap();
-    assert!(websocket.execution_plan().udp.policy_closed());
+    assert!(!websocket.execution_plan().udp.policy_closed());
 
     let httpupgrade = build_resident_proxy_plan_for_node(
         &config,
@@ -123,7 +123,7 @@ pub(super) fn vless_encryption_official_tcp_shapes_are_admitted_and_udp_wrappers
         )),
     )
     .unwrap();
-    assert!(httpupgrade.execution_plan().udp.policy_closed());
+    assert!(!httpupgrade.execution_plan().udp.policy_closed());
 
     let grpc = build_resident_proxy_plan_for_node(
         &config,
@@ -142,7 +142,7 @@ pub(super) fn vless_encryption_official_tcp_shapes_are_admitted_and_udp_wrappers
         )),
     )
     .unwrap();
-    assert!(grpc.execution_plan().udp.policy_closed());
+    assert!(!grpc.execution_plan().udp.policy_closed());
 
     for (tag, mode) in [
         ("stream-one", "stream-one"),
@@ -156,7 +156,7 @@ pub(super) fn vless_encryption_official_tcp_shapes_are_admitted_and_udp_wrappers
             with_vless_encryption(vless_xhttp_parser_fixture_url(mode, "h2,http/1.1", "")),
         )
         .unwrap();
-        assert!(xhttp.execution_plan().udp.policy_closed(), "{tag}");
+        assert!(!xhttp.execution_plan().udp.policy_closed(), "{tag}");
     }
 
     let h2 = VLESSLink::parse(&vless_fixture_url(

@@ -218,14 +218,20 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn write_webso
 /// Exposes decoded WebSocket binary payload bytes as a bounded logical stream.
 /// VLESS Encryption wraps this stream, so HTTP/WebSocket framing stays outside
 /// the encrypted VLESS record layer exactly as it does in Xray.
-pub(crate) fn spawn_websocket_payload_stream(client: AsyncVlessTlsClient) -> SpawnedLogicalStream {
+pub(crate) fn spawn_websocket_payload_stream<S>(client: S) -> SpawnedLogicalStream
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     SpawnedLogicalStream::spawn(move |logical| drive_websocket_payload_stream(logical, client))
 }
 
-async fn drive_websocket_payload_stream(
+async fn drive_websocket_payload_stream<S>(
     logical: tokio::io::DuplexStream,
-    client: AsyncVlessTlsClient,
-) -> Result<(), String> {
+    client: S,
+) -> Result<(), String>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let (mut logical_read, mut logical_write) = tokio::io::split(logical);
     let (mut client_read, mut client_write) = tokio::io::split(client);
     let (control_tx, mut control_rx) = websocket_control_channel();

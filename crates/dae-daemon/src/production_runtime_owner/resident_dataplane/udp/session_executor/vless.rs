@@ -1,4 +1,26 @@
 use super::*;
+use dae_outbound::vless::VlessEncryptedStream;
+use tokio::io::AsyncWriteExt;
+
+async fn write_vless_encrypted_xhttp_bytes(
+    stream: &mut VlessEncryptedStream<SpawnedLogicalStream>,
+    payload: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        stream
+            .write_all(payload)
+            .await
+            .map_err(|err| format!("{label}: {err}"))?;
+        stream
+            .flush()
+            .await
+            .map_err(|err| format!("flush {label}: {err}"))
+    })
+    .await
+    .map_err(|_| format!("{label} timeout"))?
+}
+
 #[derive(Default)]
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXudpStreamSession {
     client: Option<AsyncResidentTlsClient>,
@@ -191,6 +213,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXht
     packet_pipeline: Option<XhttpPacketUpPipeline>,
     stream_upload: Option<XhttpStreamUploadClient>,
     download: Option<XhttpDownloadClient>,
+    encrypted: Option<VlessEncryptedStream<SpawnedLogicalStream>>,
     session_id: Option<String>,
     seq: u64,
     response_header_seen: bool,
@@ -245,7 +268,9 @@ impl VlessXhttpH2UdpSession {
     }
 
     fn is_open(&self) -> bool {
-        self.download.is_some() && (self.packet_upload.is_some() || self.stream_upload.is_some())
+        self.encrypted.is_some()
+            || (self.download.is_some()
+                && (self.packet_upload.is_some() || self.stream_upload.is_some()))
     }
 
     async fn open_with_initial_packet(
@@ -254,44 +279,85 @@ impl VlessXhttpH2UdpSession {
         initial_packet: Bytes,
     ) -> Result<(), String> {
         let proxy = binding.plan();
+        let encryption = proxy.vless_encryption()?;
         match proxy.xhttp_mode {
             ResidentXhttpMode::PacketUp => {
-                let XhttpPacketUpParts {
-                    session_id,
-                    upload,
-                    download,
-                    upload_underlay,
-                    upload_http_version,
-                    ..
-                } = open_xhttp_packet_up_parts(binding, proxy.mptcp).await?;
-                self.packet_pipeline = Some(XhttpPacketUpPipeline::for_upload(&upload));
-                self.packet_upload = Some(upload);
-                self.download = Some(download);
-                self.session_id = Some(session_id);
+                let parts = open_xhttp_packet_up_parts(binding, proxy.mptcp).await?;
+                let upload_underlay = parts.upload_underlay;
+                let upload_http_version = parts.upload_http_version;
                 self.upload_underlay = Some(upload_underlay);
                 self.upload_http_version = Some(upload_http_version);
                 self.xhttp_mode = Some(ResidentXhttpMode::PacketUp);
                 self.reset_response_state();
-                self.send_packet(initial_packet).await
+                if let Some(encryption) = encryption {
+                    let logical = spawn_xhttp_packet_up_payload_stream(parts);
+                    let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+                        .await
+                        .map_err(|err| format!("VLESS Encryption xHTTP UDP handshake: {err}"))?;
+                    write_vless_encrypted_xhttp_bytes(
+                        &mut encrypted,
+                        &initial_packet,
+                        "write VLESS encrypted xHTTP UDP first packet",
+                    )
+                    .await?;
+                    self.encrypted = Some(encrypted);
+                    self.seq = 1;
+                    Ok(())
+                } else {
+                    let XhttpPacketUpParts {
+                        session_id,
+                        upload,
+                        download,
+                        ..
+                    } = parts;
+                    self.packet_pipeline = Some(XhttpPacketUpPipeline::for_upload(&upload));
+                    self.packet_upload = Some(upload);
+                    self.download = Some(download);
+                    self.session_id = Some(session_id);
+                    self.send_packet(initial_packet).await
+                }
             }
             ResidentXhttpMode::StreamUp | ResidentXhttpMode::StreamOne => {
-                let XhttpStreamParts {
-                    session_id,
-                    upload,
-                    download,
-                    upload_underlay,
-                    upload_http_version,
-                    ..
-                } = open_xhttp_stream_parts(binding, proxy.mptcp, initial_packet).await?;
-                self.stream_upload = Some(upload);
-                self.download = Some(download);
-                self.session_id = session_id;
-                self.upload_underlay = Some(upload_underlay);
-                self.upload_http_version = Some(upload_http_version);
-                self.xhttp_mode = Some(proxy.xhttp_mode);
-                self.reset_response_state();
-                self.seq = 1;
-                Ok(())
+                if let Some(encryption) = encryption {
+                    let parts = open_xhttp_stream_parts(binding, proxy.mptcp, Bytes::new()).await?;
+                    let upload_underlay = parts.upload_underlay;
+                    let upload_http_version = parts.upload_http_version;
+                    let logical = spawn_xhttp_stream_payload_stream(parts);
+                    let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+                        .await
+                        .map_err(|err| format!("VLESS Encryption xHTTP UDP handshake: {err}"))?;
+                    write_vless_encrypted_xhttp_bytes(
+                        &mut encrypted,
+                        &initial_packet,
+                        "write VLESS encrypted xHTTP UDP first packet",
+                    )
+                    .await?;
+                    self.encrypted = Some(encrypted);
+                    self.upload_underlay = Some(upload_underlay);
+                    self.upload_http_version = Some(upload_http_version);
+                    self.xhttp_mode = Some(proxy.xhttp_mode);
+                    self.reset_response_state();
+                    self.seq = 1;
+                    Ok(())
+                } else {
+                    let XhttpStreamParts {
+                        session_id,
+                        upload,
+                        download,
+                        upload_underlay,
+                        upload_http_version,
+                        ..
+                    } = open_xhttp_stream_parts(binding, proxy.mptcp, initial_packet).await?;
+                    self.stream_upload = Some(upload);
+                    self.download = Some(download);
+                    self.session_id = session_id;
+                    self.upload_underlay = Some(upload_underlay);
+                    self.upload_http_version = Some(upload_http_version);
+                    self.xhttp_mode = Some(proxy.xhttp_mode);
+                    self.reset_response_state();
+                    self.seq = 1;
+                    Ok(())
+                }
             }
         }
     }
@@ -303,7 +369,16 @@ impl VlessXhttpH2UdpSession {
     }
 
     async fn send_packet(&mut self, payload: Bytes) -> Result<(), String> {
-        if let Some(upload) = self.packet_upload.as_mut() {
+        if let Some(encrypted) = self.encrypted.as_mut() {
+            write_vless_encrypted_xhttp_bytes(
+                encrypted,
+                &payload,
+                "write VLESS encrypted xHTTP UDP packet",
+            )
+            .await?;
+            self.seq = self.seq.saturating_add(1);
+            return Ok(());
+        } else if let Some(upload) = self.packet_upload.as_mut() {
             let session_id = self
                 .session_id
                 .as_deref()
@@ -341,6 +416,27 @@ impl VlessXhttpH2UdpSession {
         }
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
+        }
+        if self.encrypted.is_some() {
+            let mut buf = [0_u8; 8192];
+            let stream = self
+                .encrypted
+                .as_mut()
+                .ok_or_else(|| "VLESS encrypted xHTTP UDP stream disappeared".to_owned())?;
+            let read = read_udp_stream_once(
+                stream,
+                &mut buf,
+                mode,
+                "read VLESS encrypted xHTTP UDP response",
+            )
+            .await?;
+            if let Some(read) = read {
+                self.response_plaintext.extend_from_slice(&buf[..read]);
+                return self
+                    .try_pop_response_payload()
+                    .map(|payload| payload.map(|payload| self.response_result(payload)));
+            }
+            return Ok(None);
         }
         if self.download.is_none() && mode.waits_for_readiness() {
             return std::future::pending().await;
@@ -396,6 +492,9 @@ impl VlessXhttpH2UdpSession {
     }
 
     pub(super) async fn shutdown(&mut self) {
+        if let Some(mut encrypted) = self.encrypted.take() {
+            let _ = encrypted.shutdown().await;
+        }
         self.packet_pipeline.take();
         if let Some(download) = self.download.take() {
             close_xhttp_download_client(download).await;
