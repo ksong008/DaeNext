@@ -199,6 +199,19 @@ impl ResidentUdpExecutorFactory {
             ResidentProxyProtocolPlan::VlessVisionTcpTls {
                 encryption: Some(_),
                 ..
+            } if is_xtls_rprx_vision_flow(&proxy.flow)
+                && matches!(wrapper, ResidentStreamWrapperPlan::None)
+                && security.is_tls_stream() =>
+            {
+                // Xray carries Vision UDP through the VLESS mux/XUDP
+                // command.  Encryption wraps the physical TLS/Reality byte
+                // stream before that request; it is not ordinary UDP-over-
+                // stream framing and therefore uses the Vision executor.
+                Self::VlessVisionXudp
+            }
+            ResidentProxyProtocolPlan::VlessVisionTcpTls {
+                encryption: Some(_),
+                ..
             } if is_xtls_rprx_vision_flow(&proxy.flow) => {
                 Self::PolicyClosed(Closed::VlessUnsupportedShape)
             }
