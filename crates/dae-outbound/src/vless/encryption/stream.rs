@@ -531,14 +531,13 @@ where
         Ok(record)
     }
 
-    fn clear_expired_ticket(&self) {
+    fn evict_ticket(&self) {
         if let Ok(mut guard) = self.client.ticket.lock() {
-            if guard
-                .as_ref()
-                .is_some_and(|ticket| ticket.expires_at <= Instant::now())
-            {
-                *guard = None;
-            }
+            // Xray treats an invalid 0-RTT response as a stale or replayed
+            // ticket and forces the next connection through a full handshake.
+            // Keeping a still-in-TTL ticket after an invalid record would
+            // make every subsequent request reuse the same bad state.
+            *guard = None;
         }
     }
 }
@@ -583,8 +582,16 @@ where
                         }
                         Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                         Poll::Ready(Ok(())) => {
-                            filled += read_buf.filled().len();
+                            let read = read_buf.filled().len();
+                            filled += read;
                             if filled != buffer.len() {
+                                if read == 0 {
+                                    self.read_state = ReadState::Eof;
+                                    return Poll::Ready(Err(Error::new(
+                                        ErrorKind::UnexpectedEof,
+                                        "VLESS Encryption server random truncated",
+                                    )));
+                                }
                                 self.read_state = ReadState::ServerRandom { buffer, filled };
                                 continue;
                             }
@@ -620,8 +627,16 @@ where
                         }
                         Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                         Poll::Ready(Ok(())) => {
-                            filled += read_buf.filled().len();
+                            let read = read_buf.filled().len();
+                            filled += read;
                             if filled != buffer.len() {
+                                if read == 0 {
+                                    self.read_state = ReadState::Eof;
+                                    return Poll::Ready(Err(Error::new(
+                                        ErrorKind::UnexpectedEof,
+                                        "VLESS Encryption peer padding truncated",
+                                    )));
+                                }
                                 self.read_state = ReadState::PeerPadding { buffer, filled };
                                 continue;
                             }
@@ -654,8 +669,19 @@ where
                         }
                         Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                         Poll::Ready(Ok(())) => {
-                            filled += read_buf.filled().len();
+                            let read = read_buf.filled().len();
+                            filled += read;
                             if filled != buffer.len() {
+                                if read == 0 {
+                                    self.read_state = ReadState::Eof;
+                                    if filled == 0 {
+                                        return Poll::Ready(Ok(()));
+                                    }
+                                    return Poll::Ready(Err(Error::new(
+                                        ErrorKind::UnexpectedEof,
+                                        "VLESS Encryption record header truncated",
+                                    )));
+                                }
                                 self.read_state = ReadState::Header { buffer, filled };
                                 continue;
                             }
@@ -665,7 +691,7 @@ where
                             let length = u16::from_be_bytes([buffer[3], buffer[4]]) as usize;
                             if buffer[..3] != [23, 3, 3] || !(17..=MAX_RECORD_LEN).contains(&length)
                             {
-                                self.clear_expired_ticket();
+                                self.evict_ticket();
                                 return Poll::Ready(Err(io_other(
                                     "VLESS Encryption record header invalid; ticket evicted",
                                 )));
@@ -696,8 +722,16 @@ where
                         }
                         Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                         Poll::Ready(Ok(())) => {
-                            filled += read_buf.filled().len();
+                            let read = read_buf.filled().len();
+                            filled += read;
                             if filled != buffer.len() {
+                                if read == 0 {
+                                    self.read_state = ReadState::Eof;
+                                    return Poll::Ready(Err(Error::new(
+                                        ErrorKind::UnexpectedEof,
+                                        "VLESS Encryption record body truncated",
+                                    )));
+                                }
                                 self.read_state = ReadState::Body {
                                     header,
                                     buffer,
@@ -758,7 +792,7 @@ where
         if self.vision_raw_write_handoff_active {
             return Pin::new(&mut self.inner).poll_write(cx, input);
         }
-        if self.pending_offset < self.pending_write.len() {
+        while self.pending_offset < self.pending_write.len() {
             let this = self.as_mut().get_mut();
             let pending = &this.pending_write[this.pending_offset..];
             match Pin::new(&mut this.inner).poll_write(cx, pending) {
@@ -772,14 +806,11 @@ where
                 }
                 Poll::Ready(Ok(written)) => {
                     this.pending_offset += written;
-                    if this.pending_offset != this.pending_write.len() {
-                        return Poll::Pending;
-                    }
-                    this.pending_write.clear();
-                    this.pending_offset = 0;
                 }
             }
         }
+        self.pending_write.clear();
+        self.pending_offset = 0;
         self.as_mut().get_mut().activate_vision_raw_write_handoff();
         if self.vision_raw_write_handoff_active {
             return Pin::new(&mut self.inner).poll_write(cx, input);
@@ -899,4 +930,168 @@ fn encode_len(value: usize) -> [u8; 2] {
 
 fn io_other(message: impl Into<String>) -> io::Error {
     Error::new(ErrorKind::Other, message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use std::task::Poll;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct ChunkedIo {
+        read_data: Vec<u8>,
+        read_offset: usize,
+        writes: Vec<u8>,
+        max_write: usize,
+    }
+
+    impl ChunkedIo {
+        fn new(read_data: Vec<u8>, max_write: usize) -> Self {
+            Self {
+                read_data,
+                read_offset: 0,
+                writes: Vec::new(),
+                max_write: max_write.max(1),
+            }
+        }
+    }
+
+    impl AsyncRead for ChunkedIo {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            target: &mut ReadBuf<'_>,
+        ) -> Poll<Result<()>> {
+            if self.read_offset >= self.read_data.len() {
+                return Poll::Ready(Ok(()));
+            }
+            let available = self.read_data.len() - self.read_offset;
+            let copied = available.min(target.remaining());
+            target.put_slice(&self.read_data[self.read_offset..self.read_offset + copied]);
+            self.read_offset += copied;
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for ChunkedIo {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            input: &[u8],
+        ) -> Poll<Result<usize>> {
+            let copied = input.len().min(self.max_write);
+            self.writes.extend_from_slice(&input[..copied]);
+            Poll::Ready(Ok(copied))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn test_client() -> VlessEncryptionClient {
+        let public_key = URL_SAFE_NO_PAD.encode([0x42_u8; 32]);
+        VlessEncryptionClient::parse(&format!("mlkem768x25519plus.native.1rtt.{public_key}"))
+            .expect("fixture encryption must parse")
+            .expect("fixture encryption must be admitted")
+    }
+
+    fn test_stream(inner: ChunkedIo, read_state: ReadState) -> VlessEncryptedStream<ChunkedIo> {
+        let client = test_client();
+        VlessEncryptedStream {
+            inner,
+            write_aead: AeadState::new(b"fixture-write", &[0x11; 32]),
+            read_aead: Some(AeadState::new(b"fixture-read", &[0x22; 32])),
+            united_key: vec![0x33; 64],
+            write_ctr: None,
+            read_ctr: None,
+            prewrite: Vec::new(),
+            pending_write: Vec::new(),
+            pending_offset: 0,
+            read_state,
+            read_plain: Vec::new(),
+            read_plain_offset: 0,
+            vision_raw_read_handoff_requested: false,
+            vision_raw_read_handoff_active: false,
+            vision_raw_write_handoff_requested: false,
+            vision_raw_write_handoff_active: false,
+            client,
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn partial_inner_writes_are_drained_without_lost_wakeup() {
+        let mut stream = test_stream(ChunkedIo::new(Vec::new(), 1), ReadState::Eof);
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            stream.write_all(b"partial-write-fixture"),
+        )
+        .await
+        .expect("write_all must not wait for a wakeup after a partial write")
+        .expect("write_all must succeed");
+        stream.flush().await.expect("flush must drain the record");
+        assert!(!stream.into_inner().writes.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clean_record_boundary_eof_returns_without_spinning() {
+        let mut stream = test_stream(
+            ChunkedIo::new(Vec::new(), 8),
+            ReadState::Header {
+                buffer: [0; RECORD_HEADER_LEN],
+                filled: 0,
+            },
+        );
+        let mut output = [0_u8; 32];
+        let read = tokio::time::timeout(Duration::from_secs(1), stream.read(&mut output))
+            .await
+            .expect("clean EOF must not spin")
+            .expect("clean EOF read must succeed");
+        assert_eq!(read, 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn partial_record_eof_is_reported_as_unexpected_eof() {
+        let mut stream = test_stream(
+            ChunkedIo::new(vec![23], 8),
+            ReadState::Header {
+                buffer: [0; RECORD_HEADER_LEN],
+                filled: 0,
+            },
+        );
+        let mut output = [0_u8; 32];
+        let error = tokio::time::timeout(Duration::from_secs(1), stream.read(&mut output))
+            .await
+            .expect("partial EOF must not spin")
+            .expect_err("partial record must fail");
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn invalid_record_evicts_a_still_live_zero_rtt_ticket() {
+        let stream = test_stream(ChunkedIo::new(Vec::new(), 8), ReadState::Eof);
+        *stream
+            .client
+            .ticket
+            .lock()
+            .expect("ticket mutex must be available") = Some(VlessEncryptionTicket {
+            expires_at: Instant::now() + Duration::from_secs(600),
+            pfs_key: [0x44; 64],
+            ticket: [0x55; 16],
+        });
+        stream.evict_ticket();
+        assert!(
+            stream
+                .client
+                .ticket
+                .lock()
+                .expect("ticket mutex must be available")
+                .is_none()
+        );
+    }
 }
