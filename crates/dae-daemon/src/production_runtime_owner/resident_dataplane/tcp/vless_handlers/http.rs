@@ -511,6 +511,14 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
                     Ok::<Value, String>(event)
                 });
             }
+            // The stream-up transport is opened with an empty body so that
+            // the upload and download HTTP streams can be established before
+            // the VLESS request is written.  For the plain VLESS shape the
+            // request (including the sniffed initial payload) must then be
+            // sent on the upload stream explicitly.  Omitting this write
+            // makes Xray interpret the first application bytes as the VLESS
+            // UUID and close the connection immediately.
+            write_plain_vless_xhttp_stream_request(&mut upload, request).await?;
             let result = relay_tcp_over_xhttp_stream(
                 inbound,
                 &mut upload,
@@ -586,6 +594,15 @@ pub(crate) async fn handle_vless_xhttp_h2_tcp_connection_async(
             );
             Ok::<Value, String>(event)
         })
+}
+
+async fn write_plain_vless_xhttp_stream_request(
+    upload: &mut XhttpStreamUploadClient,
+    request: Vec<u8>,
+) -> Result<(), String> {
+    send_xhttp_stream_data(upload, Bytes::from(request), false)
+        .await
+        .map_err(|err| format!("write VLESS plain xHTTP stream request: {err}"))
 }
 
 fn encrypted_xhttp_executor_label(version: ResidentXhttpHttpVersion) -> &'static str {
