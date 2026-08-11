@@ -47,14 +47,22 @@ pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted
         with_vless_encryption(vless_vision_fixture_url("")),
     )
     .unwrap();
-    assert!(vision.execution_plan().udp.policy_closed());
-    assert!(
-        vision
-            .execution_plan()
-            .udp
-            .policy_closed_reason()
-            .is_some_and(|reason| reason.contains("Encryption"))
-    );
+    assert!(matches!(
+        vision.execution_plan().udp,
+        ResidentUdpExecutorFactory::VlessVisionXudp
+    ));
+
+    let reality_vision = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_reality_vision".to_owned(),
+        with_vless_encryption(vless_reality_fixture_url()),
+    )
+    .unwrap();
+    assert!(matches!(
+        reality_vision.execution_plan().udp,
+        ResidentUdpExecutorFactory::VlessVisionXudp
+    ));
 
     let mux = build_resident_proxy_plan_for_node(
         &config,

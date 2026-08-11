@@ -24,6 +24,7 @@ async fn write_vless_encrypted_xhttp_bytes(
 #[derive(Default)]
 pub(in crate::production_runtime_owner::resident_dataplane::udp) struct VlessXudpStreamSession {
     client: Option<AsyncResidentTlsClient>,
+    encrypted: Option<VlessEncryptedStream<AsyncResidentTlsClient>>,
     key: Option<[u8; 16]>,
     uuid_sent: bool,
     response_header_seen: bool,
@@ -58,7 +59,11 @@ impl VlessXudpStreamSession {
                 key
             }
         };
-        if self.client.is_none() {
+        // An encrypted session owns the physical TLS/Reality stream in
+        // `encrypted` rather than `client`.  Check both branches so every
+        // subsequent UDP packet reuses the same VLESS Encryption handshake
+        // and record counters instead of renegotiating a new stream.
+        if self.client.is_none() && self.encrypted.is_none() {
             let frame = xudp_new_frame(original_dst, payload)?;
             let mut client =
                 open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
@@ -73,13 +78,26 @@ impl VlessXudpStreamSession {
                 &mut self.uuid_sent,
                 false,
             ));
-            write_async_tls_plain_all(
-                &mut client,
-                &request,
-                "write VLESS XUDP session first packet",
-            )
-            .await?;
-            self.client = Some(client);
+            if let Some(encryption) = proxy.vless_encryption()? {
+                let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
+                    .await
+                    .map_err(|err| format!("VLESS Encryption XUDP handshake: {err}"))?;
+                write_vless_xudp_encrypted_bytes(
+                    &mut encrypted,
+                    &request,
+                    "write VLESS encrypted XUDP session first packet",
+                )
+                .await?;
+                self.encrypted = Some(encrypted);
+            } else {
+                write_async_tls_plain_all(
+                    &mut client,
+                    &request,
+                    "write VLESS XUDP session first packet",
+                )
+                .await?;
+                self.client = Some(client);
+            }
         } else {
             let frame = xudp_keep_frame(payload)?;
             let block = vision_padding_block(
@@ -89,11 +107,21 @@ impl VlessXudpStreamSession {
                 &mut self.uuid_sent,
                 false,
             );
-            let client = self
-                .client
-                .as_mut()
-                .ok_or_else(|| "VLESS XUDP client is not initialized".to_owned())?;
-            write_async_tls_plain_all(client, &block, "write VLESS XUDP session packet").await?;
+            if let Some(encrypted) = self.encrypted.as_mut() {
+                write_vless_xudp_encrypted_bytes(
+                    encrypted,
+                    &block,
+                    "write VLESS encrypted XUDP session packet",
+                )
+                .await?;
+            } else {
+                let client = self
+                    .client
+                    .as_mut()
+                    .ok_or_else(|| "VLESS XUDP client is not initialized".to_owned())?;
+                write_async_tls_plain_all(client, &block, "write VLESS XUDP session packet")
+                    .await?;
+            }
             if let Some(response) = self.poll_response().await? {
                 return Ok(response);
             }
@@ -121,16 +149,25 @@ impl VlessXudpStreamSession {
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
         }
-        if self.client.is_none() && mode.waits_for_readiness() {
+        if self.client.is_none() && self.encrypted.is_none() && mode.waits_for_readiness() {
             return std::future::pending().await;
         }
         let mut buf = [0_u8; 2048];
-        let Some(client) = self.client.as_mut() else {
+        let read = if let Some(encrypted) = self.encrypted.as_mut() {
+            read_udp_stream_once(
+                encrypted,
+                &mut buf,
+                mode,
+                "read VLESS encrypted XUDP session plaintext",
+            )
+            .await?
+        } else if let Some(client) = self.client.as_mut() {
+            read_udp_stream_once(client, &mut buf, mode, "read VLESS XUDP session plaintext")
+                .await?
+        } else {
             return Ok(None);
         };
-        match read_udp_stream_once(client, &mut buf, mode, "read VLESS XUDP session plaintext")
-            .await?
-        {
+        match read {
             None => Ok(None),
             Some(read) => {
                 self.response_plaintext.extend_from_slice(&buf[..read]);
@@ -199,12 +236,35 @@ impl VlessXudpStreamSession {
     }
 
     pub(super) async fn shutdown(&mut self) {
+        if let Some(encrypted) = self.encrypted.as_mut() {
+            let _ = encrypted.shutdown().await;
+        }
         if let Some(client) = self.client.as_mut() {
             client.shutdown().await;
         }
         self.client.take();
+        self.encrypted.take();
         self.fixed_target.clear();
     }
+}
+
+async fn write_vless_xudp_encrypted_bytes(
+    stream: &mut VlessEncryptedStream<AsyncResidentTlsClient>,
+    payload: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        stream
+            .write_all(payload)
+            .await
+            .map_err(|err| format!("{label}: {err}"))?;
+        stream
+            .flush()
+            .await
+            .map_err(|err| format!("flush {label}: {err}"))
+    })
+    .await
+    .map_err(|_| format!("{label} timeout"))?
 }
 
 #[derive(Default)]
