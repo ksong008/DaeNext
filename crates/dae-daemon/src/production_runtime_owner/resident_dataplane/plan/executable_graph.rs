@@ -1,12 +1,14 @@
 use serde_json::{Value, json};
 
+use super::super::client::ResidentTlsSessionCacheScope;
+use super::super::client::{ResidentTlsFactorySelection, ResidentTlsSessionPolicy};
 use super::super::{link_hash, redacted_link_source};
 use super::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentTcpCarrierOwnership,
-    ResidentUdpChainAdmission, ResidentUdpExecutionAgreement, ResidentUtlsFingerprintPlan,
-    ResidentXhttpHttpVersion, ResidentXhttpMode, ResidentXhttpSettingsPlan,
-    resident_udp_chain_admission,
+    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan,
+    ResidentTcpCarrierOwnership, ResidentUdpChainAdmission, ResidentUdpExecutionAgreement,
+    ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
+    ResidentXhttpQuicTlsProvider, ResidentXhttpSettingsPlan, resident_udp_chain_admission,
 };
 
 mod runtime_limits;
@@ -43,6 +45,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     alpn: Vec<String>,
     allow_insecure: bool,
     verification_policy: String,
+    tls_provider: Option<&'static str>,
+    session_policy: ResidentTlsSessionPolicy,
     utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
     chain_parent_count: usize,
     udp_chain_admission: ResidentUdpChainAdmission,
@@ -56,6 +60,10 @@ impl ResidentExecutableGraphDescriptor {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
         let execution = proxy.execution_plan();
         let executor_contract = proxy.executor_contract();
+        let tls_selection = execution.security.is_tls_stream().then(|| {
+            ResidentTlsFactorySelection::from_proxy(proxy)
+                .expect("resident TLS security underlay must have a typed factory selection")
+        });
         Self {
             graph_id: proxy.graph_id.clone(),
             link_hash: proxy.graph_link_hash.clone(),
@@ -89,11 +97,15 @@ impl ResidentExecutableGraphDescriptor {
             flow: proxy.flow.clone(),
             alpn: proxy.alpn.clone(),
             allow_insecure: proxy.allow_insecure,
-            verification_policy: graph_verification_policy(proxy),
+            verification_policy: graph_verification_policy(proxy, tls_selection.as_ref()),
+            tls_provider: tls_selection
+                .as_ref()
+                .map(|selection| selection.provider.evidence_label()),
+            session_policy: graph_session_policy(proxy),
             utls_fingerprint: proxy.utls_fingerprint.clone(),
             chain_parent_count: chain_parent_count(proxy),
             udp_chain_admission: resident_udp_chain_admission(proxy),
-            quic_lifecycle_scope: quic_lifecycle_scope(&proxy.handler),
+            quic_lifecycle_scope: quic_lifecycle_scope(proxy),
             tcp_carrier_ownership: execution.tcp_carrier_ownership(),
             mark: proxy.mark,
             mptcp: proxy.mptcp,
@@ -222,24 +234,46 @@ impl ResidentExecutableGraphDescriptor {
                 "fullUtlsParityDeclared": false,
             })
         });
-        let reality_with_fingerprint =
-            self.security_underlay == "reality" && self.utls_fingerprint.is_some();
-        let provider = if reality_with_fingerprint {
-            "reality-boringssl"
+        let quic_provider = (self.security_underlay == "quic-tls").then(|| {
+            if self.stream_wrapper == "xhttp" {
+                ResidentXhttpQuicTlsProvider::for_primary(self.utls_fingerprint.as_ref())
+                    .map(|provider| {
+                        if provider == ResidentXhttpQuicTlsProvider::Rustls
+                            && cfg!(feature = "test-boringssl-quic")
+                        {
+                            "quinn-boringssl"
+                        } else {
+                            provider.as_str()
+                        }
+                    })
+                    .unwrap_or("unsupported")
+            } else if cfg!(feature = "test-boringssl-quic") {
+                "quinn-boringssl"
+            } else {
+                "quinn-rustls"
+            }
+        });
+        let provider = if let Some(tls_provider) = self.tls_provider {
+            tls_provider
         } else {
             match self.security_underlay.as_str() {
-                "fingerprint-aware-tls" => "boringssl",
-                "reality" => "rustls-reality",
-                "insecure-tls" => "rustls",
-                "tls-fragment" => "rustls",
-                "standard-tls" => "rustls",
-                "quic-tls" => "quinn-rustls",
+                "quic-tls" => quic_provider.unwrap_or("unsupported"),
                 "aead" => "protocol-aead-codec",
                 "aead-2022" => "protocol-aead-2022-codec",
                 "legacy-cipher" => "protocol-legacy-stream-codec",
                 "none" => "plain",
                 _ => "unsupported",
             }
+        };
+        let (tls_provider, quic_crypto_provider) = if self.security_underlay == "quic-tls" {
+            (Value::Null, Value::from(provider))
+        } else if matches!(
+            self.security_underlay.as_str(),
+            "standard-tls" | "insecure-tls" | "tls-fragment" | "fingerprint-aware-tls" | "reality"
+        ) {
+            (Value::from(provider), Value::Null)
+        } else {
+            (Value::Null, Value::Null)
         };
         let status = if provider == "unsupported" {
             "fail-closed"
@@ -255,6 +289,8 @@ impl ResidentExecutableGraphDescriptor {
             "schemaVersion": 1,
             "status": status,
             "provider": provider,
+            "tlsProvider": tls_provider,
+            "quicCryptoProvider": quic_crypto_provider,
             "transportUnderlay": self.transport_underlay,
             "securityUnderlay": self.security_underlay,
             "verificationPolicy": self.verification_policy,
@@ -263,6 +299,11 @@ impl ResidentExecutableGraphDescriptor {
             "flow": self.flow,
             "fingerprint": fingerprint,
             "quicLifecycle": quic_lifecycle_value(self.quic_lifecycle_scope),
+            "sessionPolicy": {
+                "resumption": self.session_policy.resumption_label(),
+                "cacheScope": self.session_policy.cache_scope_label(),
+                "zeroRtt": self.session_policy.zero_rtt_admitted(),
+            },
             "unsupportedReason": unsupported_reason,
         })
     }
@@ -394,6 +435,13 @@ impl ResidentExecutableGraphDescriptor {
             "sharedProviderCaches": shared_provider_cache_labels(
                 &self.stream_wrapper,
                 self.quic_lifecycle_scope,
+                matches!(
+                    self.session_policy,
+                    ResidentTlsSessionPolicy::QuicManaged {
+                        cache_scope: ResidentTlsSessionCacheScope::ReloadGeneration,
+                        ..
+                    }
+                ),
             ),
             "perFlowProviders": per_flow_provider_labels(self.quic_lifecycle_scope),
         })
@@ -571,7 +619,10 @@ fn chain_parent_count(proxy: &ResidentProxyPlan) -> usize {
     count
 }
 
-fn graph_verification_policy(proxy: &ResidentProxyPlan) -> String {
+fn graph_verification_policy(
+    proxy: &ResidentProxyPlan,
+    tls_selection: Option<&ResidentTlsFactorySelection>,
+) -> String {
     match &proxy.handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { tls_identity, .. } => {
             tls_identity.verification_label().to_owned()
@@ -593,7 +644,34 @@ fn graph_verification_policy(proxy: &ResidentProxyPlan) -> String {
         {
             "none".to_owned()
         }
+        _ if tls_selection.is_some() => tls_selection
+            .expect("checked typed TLS factory selection")
+            .policy
+            .verification
+            .evidence_label()
+            .to_owned(),
         _ if proxy.allow_insecure => "explicit-insecure".to_owned(),
         _ => "system-roots".to_owned(),
+    }
+}
+
+fn graph_session_policy(proxy: &ResidentProxyPlan) -> ResidentTlsSessionPolicy {
+    let execution = proxy.execution_plan();
+    if execution.security != ResidentSecurityUnderlayPlan::QuicTls {
+        return ResidentTlsSessionPolicy::ProviderManagedNoEarlyData;
+    }
+    let boring_generation_cache = cfg!(feature = "test-boringssl-quic")
+        && quic_lifecycle_scope(proxy) == QuicLifecycleScope::GenerationOwned;
+    let chrome_boring_generation_cache = quic_lifecycle_scope(proxy)
+        == QuicLifecycleScope::GenerationOwned
+        && ResidentXhttpQuicTlsProvider::for_primary(proxy.utls_fingerprint.as_ref())
+            .is_ok_and(|provider| provider == ResidentXhttpQuicTlsProvider::ChromeBoring);
+    ResidentTlsSessionPolicy::QuicManaged {
+        cache_scope: if boring_generation_cache || chrome_boring_generation_cache {
+            ResidentTlsSessionCacheScope::ReloadGeneration
+        } else {
+            ResidentTlsSessionCacheScope::ProviderConfig
+        },
+        zero_rtt: false,
     }
 }

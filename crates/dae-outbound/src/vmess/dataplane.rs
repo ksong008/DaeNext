@@ -71,6 +71,7 @@ mod response_http;
 mod response_read;
 mod tls_transports;
 mod types;
+#[cfg(any(test, feature = "test-support"))]
 mod xhttp_h3;
 mod xhttp_http2;
 
@@ -81,6 +82,7 @@ pub use read_request::*;
 pub use response_http::*;
 pub use tls_transports::*;
 pub use types::*;
+#[cfg(any(test, feature = "test-support"))]
 pub use xhttp_h3::*;
 pub use xhttp_http2::*;
 

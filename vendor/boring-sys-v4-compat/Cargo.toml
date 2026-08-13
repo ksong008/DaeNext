@@ -9,5 +9,9 @@ publish = false
 name = "boring_sys"
 path = "src/lib.rs"
 
+[features]
+default = []
+fips = ["boring-sys-upstream/fips"]
+
 [dependencies]
 boring-sys-upstream = { package = "boring-sys", version = "5.1" }

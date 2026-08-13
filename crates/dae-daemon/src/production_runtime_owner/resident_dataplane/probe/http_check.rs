@@ -1,6 +1,7 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use boring::ssl::{SslConnector, SslMethod};
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
@@ -46,6 +47,33 @@ pub(crate) async fn read_resident_tcp_probe_https_response_over_stream_async<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    if cfg!(feature = "test-boringssl-tcp-tls") {
+        let connector = resident_tcp_probe_boring_connector()?;
+        let config = connector.configure().map_err(|err| {
+            ResidentTcpProbeHttpError::new(
+                ResidentTcpProbeHttpStage::Security,
+                format!("resident TCP probe configure BoringSSL client: {err}"),
+            )
+        })?;
+        let mut tls = time::timeout(
+            resident_http_probe_remaining(deadline, ResidentTcpProbeHttpStage::Security)?,
+            tokio_boring::connect(config, host, stream),
+        )
+        .await
+        .map_err(|_| {
+            ResidentTcpProbeHttpError::new(
+                ResidentTcpProbeHttpStage::Security,
+                "resident TCP probe HTTPS handshake timeout",
+            )
+        })?
+        .map_err(|err| {
+            ResidentTcpProbeHttpError::new(
+                ResidentTcpProbeHttpStage::Security,
+                format!("resident TCP probe create BoringSSL HTTPS client: {err}"),
+            )
+        })?;
+        return exchange_resident_tcp_probe_https(&mut tls, host, path, method, deadline).await;
+    }
     let config = resident_tcp_probe_tls_config();
     let server_name = ServerName::try_from(host.to_owned()).map_err(|err| {
         ResidentTcpProbeHttpError::new(
@@ -71,6 +99,19 @@ where
             format!("resident TCP probe create HTTPS client: {err}"),
         )
     })?;
+    exchange_resident_tcp_probe_https(&mut tls, host, path, method, deadline).await
+}
+
+async fn exchange_resident_tcp_probe_https<S>(
+    tls: &mut S,
+    host: &str,
+    path: &str,
+    method: &str,
+    deadline: dae_runtime_control::AbsoluteDeadline,
+) -> Result<(), ResidentTcpProbeHttpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let request = resident_tcp_probe_http_request(method, path, host);
     time::timeout(
         resident_http_probe_remaining(deadline, ResidentTcpProbeHttpStage::Write)?,
@@ -106,7 +147,22 @@ where
             format!("flush resident HTTPS probe request: {err}"),
         )
     })?;
-    read_resident_tcp_probe_response_async(&mut tls, path, deadline).await
+    read_resident_tcp_probe_response_async(tls, path, deadline).await
+}
+
+fn resident_tcp_probe_boring_connector() -> Result<&'static SslConnector, ResidentTcpProbeHttpError>
+{
+    static CONFIG: OnceLock<Result<SslConnector, String>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            SslConnector::builder(SslMethod::tls())
+                .map(|builder| builder.build())
+                .map_err(|err| format!("create resident TCP probe BoringSSL connector: {err}"))
+        })
+        .as_ref()
+        .map_err(|detail| {
+            ResidentTcpProbeHttpError::new(ResidentTcpProbeHttpStage::Security, detail.clone())
+        })
 }
 
 pub(crate) fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {

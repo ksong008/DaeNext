@@ -23,9 +23,11 @@ unsafe extern "C" {
 
 pub(super) fn configure_reality_boring_ssl(
     ssl: &mut SslRef,
-    reality: &ResidentRealityUnderlayPlan,
+    verification: &ResidentPeerVerificationPolicy,
 ) -> Result<(), String> {
-    let short_id = reality.short_id.as_slice();
+    let (public_key, short_id) = verification.reality_material().ok_or_else(|| {
+        "VLESS Reality BoringSSL underlay missing typed Reality verification policy".to_owned()
+    })?;
     let short_id_ptr = if short_id.is_empty() {
         std::ptr::null()
     } else {
@@ -35,8 +37,8 @@ pub(super) fn configure_reality_boring_ssl(
     let ok = unsafe {
         DAE_SSL_set1_reality_config(
             ssl.as_ptr(),
-            reality.public_key.as_ptr(),
-            reality.public_key.len(),
+            public_key.as_ptr(),
+            public_key.len(),
             short_id_ptr,
             short_id.len(),
             client_version.as_ptr(),

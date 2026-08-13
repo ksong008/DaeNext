@@ -11,10 +11,9 @@ use crate::error::OutboundError;
 use crate::trojan::{TrojanMetadata, TrojanNetwork};
 
 use super::auth_stream::build_authenticate_header;
-use super::auth_stream_ekm::export_juicity_auth_token;
 use super::certchain::verify_pinned_certchain;
-use super::h3_loopback::{
-    DEFAULT_H3_ALPN, DEFAULT_H3_HANDSHAKE_IDLE_TIMEOUT_SECS, DEFAULT_H3_KEEPALIVE_SECS,
+use super::contract::{
+    RUNTIME_ALPN, RUNTIME_HANDSHAKE_IDLE_TIMEOUT_SECONDS, RUNTIME_KEEPALIVE_SECONDS,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,6 +125,33 @@ pub fn build_juicity_runtime_client_config(
     allow_insecure: bool,
     pinned_certchain_sha256: &str,
 ) -> Result<quinn::ClientConfig, OutboundError> {
+    build_juicity_runtime_client_config_with_session_cache(
+        allow_insecure,
+        pinned_certchain_sha256,
+        None,
+    )
+}
+
+pub fn build_juicity_runtime_client_config_with_session_cache(
+    allow_insecure: bool,
+    pinned_certchain_sha256: &str,
+    session_cache: Option<crate::shared_transport::boring_quic::BoringQuicSessionCache>,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let transport = Arc::new(transport_config()?);
+    if cfg!(feature = "test-boringssl-quic") {
+        let mut policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([
+            RUNTIME_ALPN.as_bytes(),
+        ])?
+        .allow_insecure(allow_insecure)
+        .zero_rtt(false);
+        if !pinned_certchain_sha256.is_empty() {
+            policy = policy.pinned_certchain_sha256(pinned_certchain_sha256);
+        }
+        return crate::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
+            &policy, transport, session_cache,
+        )
+        .map_err(|err| bad_runtime(format!("client BoringSSL QUIC TLS config: {err}")));
+    }
     let mut crypto = if allow_insecure || !pinned_certchain_sha256.is_empty() {
         let verifier = JuicityServerCertVerifier::new(allow_insecure, pinned_certchain_sha256);
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -139,12 +165,12 @@ pub fn build_juicity_runtime_client_config(
             .with_root_certificates(roots)
             .with_no_client_auth()
     };
-    crypto.alpn_protocols = vec![DEFAULT_H3_ALPN.as_bytes().to_vec()];
+    crypto.alpn_protocols = vec![RUNTIME_ALPN.as_bytes().to_vec()];
     let mut config = quinn::ClientConfig::new(Arc::new(
         QuicClientConfig::try_from(crypto)
             .map_err(|err| bad_runtime(format!("client quic tls config: {err}")))?,
     ));
-    config.transport_config(Arc::new(transport_config()?));
+    config.transport_config(transport);
     Ok(config)
 }
 
@@ -208,15 +234,27 @@ pub fn build_juicity_tcp_request(
 
 fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
-    transport.keep_alive_interval(Some(Duration::from_secs(DEFAULT_H3_KEEPALIVE_SECS)));
+    transport.keep_alive_interval(Some(Duration::from_secs(RUNTIME_KEEPALIVE_SECONDS)));
     transport.max_idle_timeout(Some(
-        Duration::from_secs(DEFAULT_H3_HANDSHAKE_IDLE_TIMEOUT_SECS)
+        Duration::from_secs(RUNTIME_HANDSHAKE_IDLE_TIMEOUT_SECONDS)
             .try_into()
             .map_err(|err| bad_runtime(format!("h3 idle timeout config: {err}")))?,
     ));
     transport.datagram_receive_buffer_size(None);
     transport.datagram_send_buffer_size(0);
     Ok(transport)
+}
+
+fn export_juicity_auth_token(
+    connection: &quinn::Connection,
+    uuid: &[u8; 16],
+    password: &[u8],
+) -> Result<[u8; super::auth_stream::JUICITY_AUTHENTICATE_TOKEN_LEN], OutboundError> {
+    let mut token = [0_u8; super::auth_stream::JUICITY_AUTHENTICATE_TOKEN_LEN];
+    connection
+        .export_keying_material(&mut token, uuid, password)
+        .map_err(|err| bad_runtime(format!("export Juicity auth token: {err:?}")))?;
+    Ok(token)
 }
 
 fn parse_juicity_uuid(input: &str) -> Result<[u8; 16], OutboundError> {

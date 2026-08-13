@@ -561,6 +561,8 @@ async fn run_juicity_owner_registry(
     metrics: Arc<JuicityOwnerMetrics>,
     stop: SharedResidentStopSignal,
 ) {
+    let session_cache = cfg!(feature = "test-boringssl-quic")
+        .then(dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache);
     let mut ownership_reconciler = JuicityRegistryOwnershipReconciler::new(Arc::clone(&metrics));
     let mut pools = HashMap::<JuicityOwnerKey, JuicityOwnerPool>::new();
     let mut cooldowns = VecDeque::<(JuicityOwnerKey, Instant)>::new();
@@ -574,7 +576,7 @@ async fn run_juicity_owner_registry(
             _ = stop_listener.cancelled() => break,
             command = receiver.recv() => match command {
                 Some(JuicityOwnerCommand::Acquire(command)) => {
-                    handle_juicity_acquire(
+                        handle_juicity_acquire(
                         command,
                         &mut pools,
                         &mut cooldowns,
@@ -583,6 +585,7 @@ async fn run_juicity_owner_registry(
                         &mut next_instance_id,
                         resources,
                         Arc::clone(&metrics),
+                        session_cache.clone(),
                     );
                 }
                 None => break,
@@ -601,6 +604,7 @@ async fn run_juicity_owner_registry(
                             &mut next_instance_id,
                             resources,
                             Arc::clone(&metrics),
+                            session_cache.clone(),
                         );
                     }
                     Some(Ok(JuicityOwnerTaskCompletion::Closed(event))) => {
@@ -660,6 +664,7 @@ fn handle_juicity_acquire(
     next_instance_id: &mut u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) {
     let now = Instant::now();
     while cooldowns.front().is_some_and(|(_, expiry)| *expiry <= now) {
@@ -739,6 +744,7 @@ fn handle_juicity_acquire(
         next_instance_id,
         resources,
         metrics,
+        session_cache,
     );
 }
 
@@ -749,6 +755,7 @@ fn spawn_juicity_transport_build(
     next_instance_id: &mut u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) {
     pool.building = true;
     *physical_slots += 1;
@@ -774,6 +781,7 @@ fn spawn_juicity_transport_build(
                 instance_id,
                 resources,
                 metrics,
+                session_cache,
             )
             .await,
         })
@@ -790,6 +798,7 @@ fn handle_juicity_build_completion(
     next_instance_id: &mut u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) {
     let Some(pool) = pools.get_mut(&completion.key) else {
         return;
@@ -852,6 +861,7 @@ fn handle_juicity_build_completion(
                         next_instance_id,
                         resources,
                         Arc::clone(&metrics),
+                        session_cache,
                     );
                 }
             }
@@ -897,6 +907,7 @@ async fn build_juicity_transport(
     instance_id: u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<JuicityOwnedTransport, String> {
     let proxy = binding.plan();
     let ResidentProxyProtocolPlan::JuicityQuicTcp {
@@ -918,6 +929,7 @@ async fn build_juicity_transport(
         pinned_certchain_sha256,
         deadline,
         caller,
+        session_cache,
     )
     .await?;
     let Some(remaining) = deadline.remaining_at(Instant::now()) else {

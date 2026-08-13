@@ -2,10 +2,12 @@ mod auth;
 mod capability;
 mod congestion;
 pub mod contract;
+#[cfg(any(test, feature = "test-support"))]
 mod dataplane;
 pub mod link;
 mod padding;
 pub mod port_hopping;
+#[cfg(any(test, feature = "test-support"))]
 mod quic_loopback;
 mod runtime;
 mod tls;
@@ -26,6 +28,7 @@ pub use congestion::{
     Hysteria2EffectiveCongestionController, Hysteria2ServerBandwidthResponse,
     parse_hysteria2_bandwidth,
 };
+#[cfg(any(test, feature = "test-support"))]
 pub use dataplane::{
     DEFAULT_TRUE_QUIC_LINK, DEFAULT_TRUE_QUIC_PORT_HOP_ITERATIONS,
     DEFAULT_TRUE_QUIC_SUBSCRIPTION_TAG, DEFAULT_TRUE_QUIC_UDP_HOP_INTERVAL_MS,
@@ -43,18 +46,19 @@ pub use port_hopping::{
     HYSTERIA2_MIN_PORT_HOP_INTERVAL, Hysteria2PortHopSchedule, build_port_hop_schedule,
     parse_port_union,
 };
+#[cfg(any(test, feature = "test-support"))]
 pub use quic_loopback::{
-    DEFAULT_HYSTERIA2_ALPN, DEFAULT_HYSTERIA2_KEEPALIVE_SECS,
-    DEFAULT_HYSTERIA2_MAX_IDLE_TIMEOUT_SECS, DEFAULT_HYSTERIA2_SERVER_NAME,
-    HYSTERIA2_FRAME_TYPE_TCP_REQUEST, Hysteria2QuicLoopbackOptions, Hysteria2QuicLoopbackReport,
-    run_hysteria2_quic_loopback_smoke,
+    Hysteria2QuicLoopbackOptions, Hysteria2QuicLoopbackReport, run_hysteria2_quic_loopback_smoke,
 };
 pub use runtime::{
     Hysteria2TcpResponseHead, read_hysteria2_tcp_response, write_hysteria2_tcp_request,
 };
 pub use tls::{
-    DEFAULT_HYSTERIA2_MTU_DISCOVERY_UPPER_BOUND, build_hysteria2_runtime_client_config,
+    DEFAULT_HYSTERIA2_ALPN, DEFAULT_HYSTERIA2_KEEPALIVE_SECS,
+    DEFAULT_HYSTERIA2_MAX_IDLE_TIMEOUT_SECS, DEFAULT_HYSTERIA2_MTU_DISCOVERY_UPPER_BOUND,
+    DEFAULT_HYSTERIA2_SERVER_NAME, build_hysteria2_runtime_client_config,
     build_hysteria2_runtime_client_config_with_congestion,
+    build_hysteria2_runtime_client_config_with_session_cache,
     build_hysteria2_runtime_client_config_with_udp_overhead,
 };
 pub use tls_policy::{
@@ -67,7 +71,8 @@ pub use underlay::{
     pin_sha256_matches_raw_cert, raw_cert_sha256_hex, underlay_contract,
 };
 pub use wire::{
-    HYSTERIA2_MAX_UDP_ADDRESS_LENGTH, HYSTERIA2_MAX_UDP_MESSAGE_LENGTH,
-    HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage, decode_hysteria2_udp_message,
-    encode_hysteria2_udp_message, fragment_hysteria2_udp_message, hysteria2_udp_payload_capacity,
+    HYSTERIA2_FRAME_TYPE_TCP_REQUEST, HYSTERIA2_MAX_UDP_ADDRESS_LENGTH,
+    HYSTERIA2_MAX_UDP_MESSAGE_LENGTH, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage,
+    decode_hysteria2_udp_message, encode_hysteria2_udp_message, fragment_hysteria2_udp_message,
+    hysteria2_udp_payload_capacity,
 };

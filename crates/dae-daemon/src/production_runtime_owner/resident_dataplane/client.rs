@@ -39,6 +39,8 @@ use super::{
 
 mod types;
 pub(super) use self::types::*;
+mod policy;
+pub(super) use self::policy::*;
 mod async_client;
 mod open_client;
 pub(super) use self::open_client::*;

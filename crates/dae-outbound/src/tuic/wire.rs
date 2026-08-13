@@ -20,6 +20,7 @@ const ATYP_IPV6: u8 = 2;
 const ATYP_NONE: u8 = 255;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) struct TuicAuthenticateFrame {
     pub(super) version: u8,
     pub(super) uuid: [u8; 16],
@@ -69,6 +70,7 @@ pub(super) fn build_authenticate_frame(
     out
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_authenticate_frame(
     input: &[u8],
 ) -> Result<TuicAuthenticateFrame, OutboundError> {
@@ -90,6 +92,7 @@ pub(super) fn parse_authenticate_frame(
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn build_packet_frame(
     assoc_id: u16,
     packet_id: u16,
@@ -118,6 +121,7 @@ pub(super) fn build_connect_frame(target: &str) -> Result<Vec<u8>, OutboundError
     Ok(out)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_packet_frame(input: &[u8]) -> Result<TuicUdpPacket, OutboundError> {
     decode_tuic_udp_packet(input)
 }

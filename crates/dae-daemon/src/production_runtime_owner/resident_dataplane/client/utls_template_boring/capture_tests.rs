@@ -91,21 +91,22 @@ async fn capture_boring_client_hello(
 
     let client_proxy = proxy.clone();
     let client = tokio::spawn(async move {
+        let policy = ResidentTlsPolicy::from_proxy(&client_proxy);
         let tcp = TcpStream::connect(addr)
             .await
             .map_err(|err| format!("connect local TLS capture listener: {err}"))?;
-        let connector = boring_vless_connector(&client_proxy)?;
+        let connector = boring_vless_connector(&client_proxy, &policy)?;
         let mut config = connector
             .configure()
             .map_err(|err| format!("configure BoringSSL client: {err}"))?;
         configure_utls_template_boring_ssl(&mut config, &client_proxy)?;
-        if let Some(reality) = &client_proxy.reality {
+        if policy.verification.reality_material().is_some() {
             config.set_verify_hostname(false);
             config
                 .set_custom_verify_callback(SslVerifyMode::PEER, verify_reality_boring_server_cert);
-            configure_reality_boring_ssl(&mut config, reality)?;
+            configure_reality_boring_ssl(&mut config, &policy.verification)?;
         }
-        tokio_boring::connect(config, &client_proxy.server_name, tcp)
+        tokio_boring::connect(config, &policy.server_name, tcp)
             .await
             .map(|_| ())
             .map_err(|err| format!("BoringSSL handshake stopped before capture completed: {err}"))

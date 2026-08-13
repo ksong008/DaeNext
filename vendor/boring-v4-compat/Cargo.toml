@@ -9,5 +9,9 @@ publish = false
 name = "boring"
 path = "src/lib.rs"
 
+[features]
+default = []
+fips = ["boring-upstream/fips"]
+
 [dependencies]
 boring-upstream = { package = "boring", version = "5.1" }

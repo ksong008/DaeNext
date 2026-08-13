@@ -27,6 +27,8 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct Hysteria2Quic
     pub(in crate::production_runtime_owner::resident_dataplane) caller: QuicEndpointCallerClass,
     pub(in crate::production_runtime_owner::resident_dataplane) cancellation:
         &'a dae_runtime_control::OwnerCancellationSignal,
+    pub(in crate::production_runtime_owner::resident_dataplane) session_cache:
+        Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 }
 
 pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hysteria2_quic_connection_candidates_async(
@@ -46,6 +48,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
         port_hopping_metrics,
         caller,
         cancellation,
+        session_cache,
     } = request;
     let remote_plan = resolve_hysteria2_quic_remote_plan_async(proxy, port_hop_ports, deadline)
         .await
@@ -67,10 +70,11 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_hyster
             "select Hysteria2 initial remote failed",
         ))
     })?;
-    let client_config = build_hysteria2_runtime_client_config_with_congestion(
+    let client_config = build_hysteria2_runtime_client_config_with_session_cache(
         tls_identity,
         obfs.udp_packet_overhead(),
         Some(congestion),
+        session_cache,
     )
     .map_err(|_| {
         Hysteria2ConnectionFailure::without_endpoint(Hysteria2Failure::new(
@@ -196,12 +200,17 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
     congestion: TuicCongestionController,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
     let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
-    let client_config =
-        build_tuic_runtime_client_config_with_congestion(alpn, allow_insecure, congestion)
-            .map_err(|err| format!("build TUIC QUIC client config: {err}"))?;
+    let client_config = build_tuic_runtime_client_config_with_session_cache(
+        alpn,
+        allow_insecure,
+        congestion,
+        session_cache,
+    )
+    .map_err(|err| format!("build TUIC QUIC client config: {err}"))?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Tuic,
         caller,
@@ -241,12 +250,16 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
     pinned_certchain_sha256: &str,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
     let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
-    let client_config =
-        build_juicity_runtime_client_config(allow_insecure, pinned_certchain_sha256)
-            .map_err(|err| format!("build Juicity QUIC client config: {err}"))?;
+    let client_config = build_juicity_runtime_client_config_with_session_cache(
+        allow_insecure,
+        pinned_certchain_sha256,
+        session_cache,
+    )
+    .map_err(|err| format!("build Juicity QUIC client config: {err}"))?;
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::Juicity,
         caller,

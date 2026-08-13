@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use quinn::crypto::rustls::{HandshakeData, QuicClientConfig, QuicServerConfig};
+use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use rcgen::generate_simple_self_signed;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
@@ -386,11 +386,8 @@ fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {
 }
 
 pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {
-    connection
-        .handshake_data()
-        .and_then(|data| data.downcast::<HandshakeData>().ok())
-        .and_then(|data| data.protocol.clone())
-        .map(|protocol| String::from_utf8_lossy(&protocol).to_string())
+    crate::shared_transport::boring_quic::selected_connection_alpn(connection)
+        .map(|protocol| String::from_utf8_lossy(&protocol).into_owned())
         .unwrap_or_default()
 }
 

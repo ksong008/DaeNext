@@ -28,7 +28,7 @@ pub(super) fn quic_lifecycle_value(scope: QuicLifecycleScope) -> Value {
         QuicLifecycleScope::GenerationOwned => json!({
             "endpointScope": "generation-graph-transport-owner",
             "connectionScope": "generation-graph-transport-owner",
-            "clientConfigScope": "generation-graph-transport-owner",
+            "clientConfigScope": "physical-transport-owner",
             "crossFlowConnectionReuse": true,
             "pooling": "single-flight-physical-owner",
         }),
@@ -88,7 +88,17 @@ pub(super) fn stream_wrapper_runtime_limits_value(
 pub(super) fn shared_provider_cache_labels(
     stream_wrapper: &str,
     quic_scope: QuicLifecycleScope,
+    has_generation_quic_session_cache: bool,
 ) -> &'static [&'static str] {
+    if quic_scope == QuicLifecycleScope::GenerationOwned && has_generation_quic_session_cache {
+        return &[
+            "quic-session-cache",
+            "quic-client-config",
+            "quic-endpoint",
+            "quic-connection",
+            "protocol-transport-owner",
+        ];
+    }
     if quic_scope == QuicLifecycleScope::GenerationOwned {
         return &[
             "quic-client-config",
@@ -98,6 +108,7 @@ pub(super) fn shared_provider_cache_labels(
         ];
     }
     match stream_wrapper {
+        _ if quic_scope == QuicLifecycleScope::PerFlow => &[],
         "connect-udp-h2" => &[
             "tls-client-config",
             "connect-udp-h2-connection-pool",
@@ -120,11 +131,21 @@ pub(super) fn per_flow_provider_labels(scope: QuicLifecycleScope) -> &'static [&
     }
 }
 
-pub(super) fn quic_lifecycle_scope(handler: &ResidentProxyProtocolPlan) -> QuicLifecycleScope {
-    match handler {
+pub(super) fn quic_lifecycle_scope(proxy: &ResidentProxyPlan) -> QuicLifecycleScope {
+    match &proxy.handler {
         ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
         | ResidentProxyProtocolPlan::TuicQuicTcp { .. }
         | ResidentProxyProtocolPlan::JuicityQuicTcp { .. } => QuicLifecycleScope::GenerationOwned,
+        _ if proxy.execution_plan().security == ResidentSecurityUnderlayPlan::QuicTls
+            && proxy.execution_plan().wrapper
+                == ResidentStreamWrapperPlan::Xhttp(ResidentXhttpHttpVersion::H3) =>
+        {
+            if proxy.xhttp_xmux.is_some() {
+                QuicLifecycleScope::GenerationOwned
+            } else {
+                QuicLifecycleScope::PerFlow
+            }
+        }
         _ => QuicLifecycleScope::None,
     }
 }

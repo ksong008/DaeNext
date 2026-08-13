@@ -145,6 +145,18 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     ));
     for proxy in [&hysteria2, &tuic] {
         let graph = proxy.executable_graph_value();
+        assert_eq!(
+            graph["runtimeComponents"]["underlayFactory"]["sessionPolicy"],
+            serde_json::json!({
+                "resumption": "quic-session-cache",
+                "cacheScope": if cfg!(feature = "test-boringssl-quic") {
+                    "reload-generation"
+                } else {
+                    "provider-config"
+                },
+                "zeroRtt": false,
+            })
+        );
         let lifecycle = &graph["runtimeComponents"]["underlayFactory"]["quicLifecycle"];
         assert_eq!(
             lifecycle["endpointScope"],
@@ -154,10 +166,7 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
             lifecycle["connectionScope"],
             "generation-graph-transport-owner"
         );
-        assert_eq!(
-            lifecycle["clientConfigScope"],
-            "generation-graph-transport-owner"
-        );
+        assert_eq!(lifecycle["clientConfigScope"], "physical-transport-owner");
         assert_eq!(lifecycle["crossFlowConnectionReuse"], true);
         assert_eq!(
             graph["runtimeComponents"]["generationCache"]["perFlowProviders"],
@@ -170,9 +179,29 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
                 .iter()
                 .any(|provider| provider == "quic-client-config")
         );
+        assert_eq!(
+            graph["runtimeComponents"]["generationCache"]["sharedProviderCaches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|provider| provider == "quic-session-cache"),
+            cfg!(feature = "test-boringssl-quic")
+        );
     }
 
     let juicity_graph = juicity.executable_graph_value();
+    assert_eq!(
+        juicity_graph["runtimeComponents"]["underlayFactory"]["sessionPolicy"],
+        serde_json::json!({
+            "resumption": "quic-session-cache",
+            "cacheScope": if cfg!(feature = "test-boringssl-quic") {
+                "reload-generation"
+            } else {
+                "provider-config"
+            },
+            "zeroRtt": false,
+        })
+    );
     let juicity_lifecycle = &juicity_graph["runtimeComponents"]["underlayFactory"]["quicLifecycle"];
     assert_eq!(
         juicity_lifecycle["endpointScope"],
@@ -186,6 +215,14 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     assert_eq!(
         juicity_graph["runtimeComponents"]["generationCache"]["perFlowProviders"],
         serde_json::json!([])
+    );
+    assert_eq!(
+        juicity_graph["runtimeComponents"]["generationCache"]["sharedProviderCaches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider == "quic-session-cache"),
+        cfg!(feature = "test-boringssl-quic")
     );
 
     vec![hysteria2, tuic, juicity]

@@ -1,3 +1,4 @@
+pub mod boring_quic;
 pub mod contract;
 pub mod dataplane;
 pub mod grpc;
@@ -16,7 +17,12 @@ pub mod utls_template;
 pub mod utls_wire;
 pub mod utls_wire_builder;
 pub mod xhttp;
+#[cfg(any(test, feature = "test-support"))]
 pub mod xhttp_h3;
+
+pub const XHTTP_H3_ALPN: &str = "h3";
+pub const XHTTP_H3_KEEPALIVE_SECS: u64 = 5;
+pub const XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS: u64 = 8;
 
 pub use dataplane::{
     DEFAULT_WS_KEY, HttpUpgradeOptions, SharedTransportLoopbackReport, SimpleObfsHttpOptions,
@@ -70,10 +76,11 @@ pub use reality_aead::{
     apply_reality_session_id_to_hello_raw, mutate_reality_session_id, reality_auth_key,
     reality_session_id_mutation_report, reality_session_id_plaintext,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use tls::tls_loopback_material;
 pub use tls::{
     DEFAULT_TLS_ALPN, DEFAULT_TLS_SERVER_NAME, TlsLoopbackMaterial, TlsServerObservation,
-    TlsUnderlayOptions, TlsUnderlayReport, tls_client_echo_exchange, tls_loopback_material,
-    tls_server_echo,
+    TlsUnderlayOptions, TlsUnderlayReport, tls_client_echo_exchange, tls_server_echo,
 };
 pub use tls_fragment::{
     SharedTlsFragmentStats, TLS_FRAGMENT_MAX_BUFFERED_RECORD_LEN, TLS_HANDSHAKE_CONTENT_TYPE,
@@ -112,7 +119,5 @@ pub use xhttp::{
     write_xhttp_http2_request, write_xhttp_http2_response, xhttp_packet_exchange,
     xhttp_packet_request, xhttp_request_path,
 };
-pub use xhttp_h3::{
-    XHTTP_H3_ALPN, XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS, XHTTP_H3_KEEPALIVE_SECS,
-    XHttpH3LoopbackOptions, XHttpH3LoopbackReport, xhttp_h3_packet_up_loopback,
-};
+#[cfg(any(test, feature = "test-support"))]
+pub use xhttp_h3::{XHttpH3LoopbackOptions, XHttpH3LoopbackReport, xhttp_h3_packet_up_loopback};

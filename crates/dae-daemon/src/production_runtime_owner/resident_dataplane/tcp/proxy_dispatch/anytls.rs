@@ -176,71 +176,82 @@ pub(crate) async fn relay_tcp_over_anytls_async(
     .await
 }
 
-pub(crate) async fn read_anytls_frame(
-    client: &mut (impl AsyncRead + Unpin),
-) -> Result<AnyTlsFrame, String> {
-    let mut header = [0_u8; anytls_contract::HEADER_OVERHEAD_SIZE];
-    read_resident_tls_plain_exact(client, &mut header, "read AnyTLS frame header").await?;
-    let len = u16::from_be_bytes([header[5], header[6]]) as usize;
-    let mut data = vec![0_u8; len];
-    read_resident_tls_plain_exact(client, &mut data, "read AnyTLS frame data").await?;
-    Ok(AnyTlsFrame {
-        cmd: header[0],
-        sid: u32::from_be_bytes([header[1], header[2], header[3], header[4]]),
-        data,
-    })
+const ANYTLS_FRAME_READ_CHUNK_SIZE: usize = 32 * 1024;
+
+pub(crate) struct AnyTlsFrameReader {
+    buffered: BytesMut,
 }
 
-/// Read one AnyTLS frame while reusing the caller's bounded payload buffer.
-/// The active physical owner receives a continuous stream of frames; keeping
-/// this allocation across iterations removes one Vec allocation/copy lifetime
-/// per frame without changing the frame header or payload contract.
-pub(crate) async fn read_anytls_frame_into(
-    client: &mut (impl AsyncRead + Unpin),
-    data: &mut BytesMut,
-) -> Result<(u8, u32), String> {
-    let mut header = [0_u8; anytls_contract::HEADER_OVERHEAD_SIZE];
-    read_resident_tls_plain_exact(client, &mut header, "read AnyTLS frame header").await?;
-    let len = u16::from_be_bytes([header[5], header[6]]) as usize;
-    data.clear();
-    data.reserve(len);
-    if len != 0 {
-        // `take` preserves the next frame boundary even when the reusable
-        // BytesMut has more spare capacity than this frame.  `read_buf` writes
-        // into uninitialized spare capacity, avoiding a zero-fill pass before
-        // TLS overwrites the complete payload.
-        let mut limited = client.take(len as u64);
-        while data.len() < len {
-            let read = time::timeout(RESIDENT_TCP_IDLE_TIMEOUT, limited.read_buf(data))
-                .await
-                .map_err(|_| "read AnyTLS frame data: timeout".to_owned())?
-                .map_err(|err| format!("read AnyTLS frame data: {err}"))?;
+impl Default for AnyTlsFrameReader {
+    fn default() -> Self {
+        Self {
+            buffered: BytesMut::with_capacity(ANYTLS_FRAME_READ_CHUNK_SIZE),
+        }
+    }
+}
+
+impl AnyTlsFrameReader {
+    pub(crate) async fn read_frame(
+        &mut self,
+        client: &mut (impl AsyncRead + Unpin),
+    ) -> Result<AnyTlsFrame, String> {
+        let mut data = BytesMut::new();
+        let (cmd, sid) = self.read_into(client, &mut data).await?;
+        Ok(AnyTlsFrame {
+            cmd,
+            sid,
+            data: data.to_vec(),
+        })
+    }
+
+    /// Read one frame while retaining plaintext already returned by the TLS
+    /// engine. Small AnyTLS frames commonly arrive in one TLS record; keeping
+    /// that record buffered avoids a separate SSL read for every 7-byte header.
+    pub(crate) async fn read_into(
+        &mut self,
+        client: &mut (impl AsyncRead + Unpin),
+        data: &mut BytesMut,
+    ) -> Result<(u8, u32), String> {
+        loop {
+            if self.buffered.len() >= anytls_contract::HEADER_OVERHEAD_SIZE {
+                let len = u16::from_be_bytes([self.buffered[5], self.buffered[6]]) as usize;
+                let frame_len = anytls_contract::HEADER_OVERHEAD_SIZE + len;
+                if self.buffered.len() >= frame_len {
+                    let frame = self.buffered.split_to(frame_len);
+                    data.clear();
+                    data.reserve(len);
+                    data.extend_from_slice(&frame[anytls_contract::HEADER_OVERHEAD_SIZE..]);
+                    return Ok((
+                        frame[0],
+                        u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]),
+                    ));
+                }
+            }
+
+            let needed = if self.buffered.len() >= anytls_contract::HEADER_OVERHEAD_SIZE {
+                let len = u16::from_be_bytes([self.buffered[5], self.buffered[6]]) as usize;
+                (anytls_contract::HEADER_OVERHEAD_SIZE + len) - self.buffered.len()
+            } else {
+                ANYTLS_FRAME_READ_CHUNK_SIZE
+            };
+            let read_limit = needed.min(ANYTLS_FRAME_READ_CHUNK_SIZE).max(1);
+            self.buffered.reserve(read_limit);
+            let mut limited = client.take(read_limit as u64);
+            let read = time::timeout(
+                RESIDENT_TCP_IDLE_TIMEOUT,
+                limited.read_buf(&mut self.buffered),
+            )
+            .await
+            .map_err(|_| "read AnyTLS frame: timeout".to_owned())?
+            .map_err(|err| format!("read AnyTLS frame: {err}"))?;
             if read == 0 {
-                return Err("read AnyTLS frame data: early eof".to_owned());
+                return Err("read AnyTLS frame: early eof".to_owned());
             }
         }
     }
-    Ok((
-        header[0],
-        u32::from_be_bytes([header[1], header[2], header[3], header[4]]),
-    ))
-}
 
-pub(crate) async fn read_resident_tls_plain_exact(
-    client: &mut (impl AsyncRead + Unpin),
-    buf: &mut [u8],
-    label: &str,
-) -> Result<(), String> {
-    let mut offset = 0_usize;
-    while offset < buf.len() {
-        let read = time::timeout(RESIDENT_TCP_IDLE_TIMEOUT, client.read(&mut buf[offset..]))
-            .await
-            .map_err(|_| format!("{label}: timeout"))?
-            .map_err(|err| format!("{label}: {err}"))?;
-        if read == 0 {
-            return Err(format!("{label}: early eof"));
-        }
-        offset += read;
+    #[cfg(test)]
+    pub(crate) fn buffered_len(&self) -> usize {
+        self.buffered.len()
     }
-    Ok(())
 }

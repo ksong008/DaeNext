@@ -11,7 +11,6 @@ pub use super::tls::{
 };
 use super::tls::{build_hysteria2_server_config, selected_alpn};
 use super::underlay::raw_cert_sha256_hex;
-pub use super::wire::HYSTERIA2_FRAME_TYPE_TCP_REQUEST;
 use super::wire::{
     Hysteria2UdpMessage, build_tcp_request_stream, build_tcp_response_stream,
     decode_hysteria2_udp_message, encode_hysteria2_udp_message, parse_tcp_request_stream,

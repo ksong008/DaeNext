@@ -1,9 +1,14 @@
 use std::io::{Read, Write};
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "test-support"))]
 use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
-use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection};
+#[cfg(any(test, feature = "test-support"))]
+use rustls::RootCertStore;
+use rustls::pki_types::ServerName;
+#[cfg(any(test, feature = "test-support"))]
+use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection};
 
 use crate::error::OutboundError;
 
@@ -77,6 +82,7 @@ pub struct TlsServerObservation {
     pub payload_roundtrip_validated: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn tls_loopback_material(
     options: &TlsUnderlayOptions,
 ) -> Result<TlsLoopbackMaterial, OutboundError> {

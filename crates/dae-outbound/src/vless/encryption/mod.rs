@@ -1,3 +1,4 @@
+mod boring_mlkem;
 mod kdf;
 mod stream;
 
@@ -263,6 +264,15 @@ pub(crate) struct VlessEncryptionTicket {
     pub(crate) expires_at: std::time::Instant,
     pub(crate) pfs_key: [u8; 64],
     pub(crate) ticket: [u8; 16],
+}
+
+impl Drop for VlessEncryptionTicket {
+    fn drop(&mut self) {
+        unsafe {
+            boring_sys::OPENSSL_cleanse(self.pfs_key.as_mut_ptr().cast(), self.pfs_key.len());
+            boring_sys::OPENSSL_cleanse(self.ticket.as_mut_ptr().cast(), self.ticket.len());
+        }
+    }
 }
 
 impl fmt::Debug for VlessEncryptionClient {

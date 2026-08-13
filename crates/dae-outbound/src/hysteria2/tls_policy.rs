@@ -128,6 +128,10 @@ impl Hysteria2TlsPolicy {
         self.leaf_certificate_sha256.is_some()
     }
 
+    pub(crate) fn leaf_certificate_sha256_digest(&self) -> Option<[u8; 32]> {
+        self.leaf_certificate_sha256.as_ref().map(|pin| pin.0)
+    }
+
     pub const fn requires_webpki(&self) -> bool {
         matches!(self.verification, Hysteria2CertificateVerification::WebPki)
     }

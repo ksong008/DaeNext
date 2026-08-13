@@ -25,7 +25,7 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
     ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan,
 };
 use crate::production_runtime_owner::resident_dataplane::tcp::{
-    ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, read_anytls_frame, read_anytls_frame_into,
+    ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, AnyTlsFrameReader,
 };
 
 const ANYTLS_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/anytls-owner/v1";
@@ -1401,6 +1401,7 @@ async fn run_anytls_physical(
     };
     let _physical_guard = AnyTlsPhysicalMetricGuard::new(Arc::clone(&metrics));
     let mut allocator = AnyTlsSidAllocator::new();
+    let mut frame_reader = AnyTlsFrameReader::default();
     let mut padding = AnyTlsPhysicalPadding::new(
         initial_padding_scheme,
         initial.key,
@@ -1410,6 +1411,7 @@ async fn run_anytls_physical(
     );
     let opened = open_anytls_logical_stream(
         &mut client,
+        &mut frame_reader,
         &mut allocator,
         &mut padding,
         initial.target,
@@ -1446,6 +1448,7 @@ async fn run_anytls_physical(
     loop {
         if run_anytls_active_stream(
             &mut client,
+            &mut frame_reader,
             &mut owner_stream,
             current_sid,
             &mut allocator,
@@ -1469,6 +1472,7 @@ async fn run_anytls_physical(
             .await;
         let next = wait_anytls_idle_command(
             &mut client,
+            &mut frame_reader,
             &mut commands,
             &mut allocator,
             &mut padding,
@@ -1482,6 +1486,7 @@ async fn run_anytls_physical(
         };
         let opened = open_anytls_logical_stream(
             &mut client,
+            &mut frame_reader,
             &mut allocator,
             &mut padding,
             target,
@@ -1560,6 +1565,7 @@ async fn build_anytls_physical(
 #[allow(clippy::too_many_arguments)]
 async fn open_anytls_logical_stream(
     client: &mut AsyncResidentTlsClient,
+    frame_reader: &mut AnyTlsFrameReader,
     allocator: &mut AnyTlsSidAllocator,
     padding: &mut AnyTlsPhysicalPadding,
     target: String,
@@ -1621,7 +1627,14 @@ async fn open_anytls_logical_stream(
         .await?;
     }
     let pending_response = wait_anytls_synack_until(
-        client, sid, allocator, padding, resources, deadline, &metrics,
+        client,
+        frame_reader,
+        sid,
+        allocator,
+        padding,
+        resources,
+        deadline,
+        &metrics,
     )
     .await?;
     let charged_buffer_bytes = resources.logical_buffer_bytes().saturating_mul(2);
@@ -1669,6 +1682,7 @@ async fn write_anytls_frame_until(
 
 async fn wait_anytls_synack_until(
     client: &mut AsyncResidentTlsClient,
+    frame_reader: &mut AnyTlsFrameReader,
     sid: u32,
     allocator: &mut AnyTlsSidAllocator,
     padding: &mut AnyTlsPhysicalPadding,
@@ -1681,7 +1695,7 @@ async fn wait_anytls_synack_until(
         let remaining = deadline
             .remaining_at(Instant::now())
             .ok_or_else(|| "wait AnyTLS SYNACK absolute deadline elapsed".to_owned())?;
-        let frame = time::timeout(remaining, read_anytls_frame(client))
+        let frame = time::timeout(remaining, frame_reader.read_frame(client))
             .await
             .map_err(|_| "wait AnyTLS SYNACK absolute deadline elapsed".to_owned())??;
         match frame.cmd {
@@ -1752,6 +1766,7 @@ async fn wait_anytls_synack_until(
 #[allow(clippy::too_many_arguments)]
 async fn run_anytls_active_stream(
     client: &mut AsyncResidentTlsClient,
+    frame_reader: &mut AnyTlsFrameReader,
     logical: &mut DuplexStream,
     sid: u32,
     allocator: &mut AnyTlsSidAllocator,
@@ -1846,8 +1861,9 @@ async fn run_anytls_active_stream(
     let reader = async {
         let mut frame_data = BytesMut::with_capacity(16 * 1024);
         loop {
-            let (cmd, frame_sid) =
-                read_anytls_frame_into(&mut client_read, &mut frame_data).await?;
+            let (cmd, frame_sid) = frame_reader
+                .read_into(&mut client_read, &mut frame_data)
+                .await?;
             match cmd {
                 anytls_contract::CMD_PSH if frame_sid == sid => {
                     if !frame_data.is_empty() {
@@ -1930,6 +1946,7 @@ async fn run_anytls_active_stream(
 
 async fn wait_anytls_idle_command(
     client: &mut AsyncResidentTlsClient,
+    frame_reader: &mut AnyTlsFrameReader,
     commands: &mut mpsc::Receiver<AnyTlsPhysicalCommand>,
     allocator: &mut AnyTlsSidAllocator,
     padding: &mut AnyTlsPhysicalPadding,
@@ -1956,6 +1973,7 @@ async fn wait_anytls_idle_command(
                         metrics.cumulative_idle_probes.fetch_add(1, Ordering::Relaxed);
                         if probe_anytls_idle_session(
                             client,
+                            frame_reader,
                             allocator,
                             padding,
                             resources,
@@ -1979,7 +1997,7 @@ async fn wait_anytls_idle_command(
                 metrics.cumulative_idle_expirations.fetch_add(1, Ordering::Relaxed);
                 return None;
             }
-            frame = read_anytls_frame(client) => match frame {
+            frame = frame_reader.read_frame(client) => match frame {
                 Ok(frame) => match frame.cmd {
                     anytls_contract::CMD_HEART_REQUEST => {
                         if padding.write_frame(
@@ -2022,6 +2040,7 @@ async fn wait_anytls_idle_command(
 
 async fn probe_anytls_idle_session(
     client: &mut AsyncResidentTlsClient,
+    frame_reader: &mut AnyTlsFrameReader,
     allocator: &mut AnyTlsSidAllocator,
     padding: &mut AnyTlsPhysicalPadding,
     resources: AnyTlsOwnerResourceProfile,
@@ -2039,7 +2058,7 @@ async fn probe_anytls_idle_session(
         .await?;
     time::timeout(resources.idle_probe_timeout(), async {
         loop {
-            let frame = read_anytls_frame(client).await?;
+            let frame = frame_reader.read_frame(client).await?;
             match frame.cmd {
                 anytls_contract::CMD_HEART_RESPONSE => return Ok(()),
                 anytls_contract::CMD_HEART_REQUEST => {

@@ -67,7 +67,8 @@ base64 = "0.22"
 blake2 = "0.10"
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 boring = "5.1"
-boring-sys = "5.1"
+boring-sys = { version = "5.1", features = ["mlkem"] }
+boring-v4-compat = { package = "boring", path = "vendor/boring-v4-compat" }
 brotli = "8"
 bytes = "1"
 chacha20poly1305 = "0.10"
@@ -108,7 +109,7 @@ md-5 = "0.10"
 object = { version = "0.36.7", default-features = false, features = ["elf", "read_core", "std"] }
 percent-encoding = "2.3"
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
-quinn-boring = { git = "https://github.com/quinn-rs/quinn-boring.git", rev = "8aeaa43a82ffa75cb4621a7fb1211c10f047d02e", default-features = false }
+quinn-boring = { path = "vendor/quinn-boring", default-features = false }
 quinn-proto = { version = "0.11.14", default-features = false }
 udp = { package = "quinn-udp", version = "0.5", default-features = false, features = ["tracing"] }
 regex = "1"

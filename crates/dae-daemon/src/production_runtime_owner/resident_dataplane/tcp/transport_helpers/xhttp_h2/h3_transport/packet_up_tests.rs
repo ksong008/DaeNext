@@ -89,7 +89,8 @@ async fn delayed_h3_responses_do_not_serialize_packet_up_requests() {
     let endpoint = packet_up_endpoint(server_address);
     let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
     client_endpoint.set_default_client_config(
-        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Rustls).unwrap(),
+        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Rustls, None)
+            .unwrap(),
     );
     let connection = client_endpoint
         .connect(server_address, "localhost")
@@ -176,7 +177,8 @@ async fn low_request_budget_h3_rotation_keeps_the_replacement_lease() {
     let endpoint = packet_up_endpoint(server_address);
     let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
     client_endpoint.set_default_client_config(
-        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Rustls).unwrap(),
+        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Rustls, None)
+            .unwrap(),
     );
     let connection = client_endpoint
         .connect(server_address, "localhost")

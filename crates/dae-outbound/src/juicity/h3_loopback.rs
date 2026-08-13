@@ -7,7 +7,7 @@ use base64::{Engine as _, engine::general_purpose};
 use bytes::{Buf, Bytes};
 use h3::{client, server};
 use http::{Request, Response, StatusCode};
-use quinn::crypto::rustls::{HandshakeData, QuicClientConfig, QuicServerConfig};
+use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use rcgen::generate_simple_self_signed;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
@@ -485,12 +485,9 @@ fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {
     Ok(transport)
 }
 
-fn selected_alpn(connection: &quinn::Connection) -> String {
-    connection
-        .handshake_data()
-        .and_then(|data| data.downcast::<HandshakeData>().ok())
-        .and_then(|data| data.protocol.clone())
-        .map(|protocol| String::from_utf8_lossy(&protocol).to_string())
+pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {
+    crate::shared_transport::boring_quic::selected_connection_alpn(connection)
+        .map(|protocol| String::from_utf8_lossy(&protocol).into_owned())
         .unwrap_or_default()
 }
 

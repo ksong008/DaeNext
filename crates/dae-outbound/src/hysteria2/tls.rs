@@ -1,9 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::crypto::rustls::{HandshakeData, QuicClientConfig, QuicServerConfig};
+use quinn::crypto::rustls::QuicClientConfig;
+#[cfg(any(test, feature = "test-support"))]
+use quinn::crypto::rustls::QuicServerConfig;
+#[cfg(any(test, feature = "test-support"))]
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
+#[cfg(any(test, feature = "test-support"))]
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use crate::error::OutboundError;
@@ -21,6 +25,7 @@ pub const DEFAULT_HYSTERIA2_MAX_IDLE_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_HYSTERIA2_MTU_DISCOVERY_UPPER_BOUND: u16 = 1452;
 const HYSTERIA2_MINIMUM_QUIC_UDP_PAYLOAD: u16 = 1200;
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn build_hysteria2_server_config(
     server_name: &str,
 ) -> Result<(quinn::ServerConfig, CertificateDer<'static>), OutboundError> {
@@ -61,6 +66,40 @@ pub fn build_hysteria2_runtime_client_config_with_congestion(
     udp_packet_overhead: usize,
     congestion: Option<Arc<Hysteria2CongestionRuntime>>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
+    build_hysteria2_runtime_client_config_with_session_cache(
+        identity,
+        udp_packet_overhead,
+        congestion,
+        None,
+    )
+}
+
+pub fn build_hysteria2_runtime_client_config_with_session_cache(
+    identity: &Hysteria2TlsIdentity,
+    udp_packet_overhead: usize,
+    congestion: Option<Arc<Hysteria2CongestionRuntime>>,
+    session_cache: Option<crate::shared_transport::boring_quic::BoringQuicSessionCache>,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let transport = Arc::new(hysteria2_transport_config(
+        udp_packet_overhead,
+        congestion.clone(),
+    )?);
+    if cfg!(feature = "test-boringssl-quic") {
+        let mut policy =
+            crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([identity
+                .application_protocol()
+                .wire_value()
+                .as_bytes()])?
+            .allow_insecure(identity.policy().allow_insecure())
+            .zero_rtt(false);
+        if let Some(pin) = identity.policy().leaf_certificate_sha256_digest() {
+            policy = policy.pinned_leaf_sha256(pin, identity.policy().requires_webpki());
+        }
+        return crate::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
+            &policy, transport, session_cache,
+        )
+        .map_err(|err| bad_tls(format!("Hysteria2 BoringSSL QUIC TLS: {err}")));
+    }
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let crypto = build_hysteria2_rustls_client_config(identity, roots)?;
@@ -68,10 +107,7 @@ pub fn build_hysteria2_runtime_client_config_with_congestion(
         QuicClientConfig::try_from(crypto)
             .map_err(|err| bad_tls(format!("Hysteria2 client QUIC TLS: {err}")))?,
     ));
-    config.transport_config(Arc::new(hysteria2_transport_config(
-        udp_packet_overhead,
-        congestion,
-    )?));
+    config.transport_config(transport);
     Ok(config)
 }
 
@@ -105,12 +141,10 @@ fn build_hysteria2_rustls_client_config(
     Ok(crypto)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {
-    connection
-        .handshake_data()
-        .and_then(|data| data.downcast::<HandshakeData>().ok())
-        .and_then(|data| data.protocol.clone())
-        .map(|protocol| String::from_utf8_lossy(&protocol).to_string())
+    crate::shared_transport::boring_quic::selected_connection_alpn(connection)
+        .map(|protocol| String::from_utf8_lossy(&protocol).into_owned())
         .unwrap_or_default()
 }
 

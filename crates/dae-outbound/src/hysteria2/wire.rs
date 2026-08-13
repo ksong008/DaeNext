@@ -10,6 +10,7 @@ pub const HYSTERIA2_MAX_UDP_MESSAGE_LENGTH: usize = 4096;
 pub const HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH: usize = HYSTERIA2_MAX_UDP_MESSAGE_LENGTH - 10;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) struct TcpRequestFrame {
     pub(super) target: String,
     pub(super) payload: Vec<u8>,
@@ -17,6 +18,7 @@ pub(super) struct TcpRequestFrame {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) struct TcpResponseFrame {
     pub(super) ok: bool,
     pub(super) message: String,
@@ -117,6 +119,7 @@ pub fn hysteria2_udp_payload_capacity(target: &str) -> Result<usize, OutboundErr
         .ok_or_else(|| bad_wire("Hysteria2 UDP target leaves no payload capacity"))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn build_tcp_request_stream(
     target: &str,
     payload: &[u8],
@@ -147,6 +150,7 @@ pub(super) fn build_tcp_request_stream_with_padding(
     Ok(out)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_tcp_request_stream(input: &[u8]) -> Result<TcpRequestFrame, OutboundError> {
     let (frame_type, mut offset) = read_quic_varint(input, 0)?;
     if frame_type != HYSTERIA2_FRAME_TYPE_TCP_REQUEST {
@@ -179,6 +183,7 @@ pub(super) fn parse_tcp_request_stream(input: &[u8]) -> Result<TcpRequestFrame, 
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn build_tcp_response_stream(
     ok: bool,
     message: &str,
@@ -193,6 +198,7 @@ pub(super) fn build_tcp_response_stream(
     Ok(out)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_tcp_response_stream(input: &[u8]) -> Result<TcpResponseFrame, OutboundError> {
     let Some((&status, rest)) = input.split_first() else {
         return Err(bad_wire("Hysteria2 TCP response missing status"));

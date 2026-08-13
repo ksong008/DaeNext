@@ -47,6 +47,7 @@ pub(super) async fn open_xhttp_h3_proxy_client(
             mark,
             QuicEndpointIdentityRole::XhttpPrimary,
             None,
+            None,
         )
         .await?;
         return Ok(XhttpH3EndpointClient {
@@ -58,29 +59,34 @@ pub(super) async fn open_xhttp_h3_proxy_client(
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
     let key = XhttpXmuxKey::primary(binding, endpoint, resolved.identity(), xmux, mark, false)?;
     let provenance_identity = key.quic_provenance_identity();
-    let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || -> XhttpH3OwnerOpenFuture {
-        let owner_proxy = Arc::clone(binding.shared_plan());
-        let owner_generation = binding.runtime_generation();
-        let owner_endpoint = endpoint.clone();
-        let owner_candidates = resolved.candidates().to_vec();
-        Box::pin(async move {
-            let connection = open_xhttp_h3_connection(
-                &owner_proxy,
-                owner_generation,
-                &owner_endpoint,
-                &owner_candidates,
-                mark,
-                QuicEndpointIdentityRole::XhttpPrimary,
-                Some(provenance_identity),
-            )
-            .await?;
-            Ok(XhttpH3EndpointClient {
-                client: connection.client.clone(),
-                connection: Some(connection),
-                xmux_lease: None,
+    let selected = select_xhttp_h3_xmux_client(
+        key,
+        xmux.clone(),
+        |session_cache| -> XhttpH3OwnerOpenFuture {
+            let owner_proxy = Arc::clone(binding.shared_plan());
+            let owner_generation = binding.runtime_generation();
+            let owner_endpoint = endpoint.clone();
+            let owner_candidates = resolved.candidates().to_vec();
+            Box::pin(async move {
+                let connection = open_xhttp_h3_connection(
+                    &owner_proxy,
+                    owner_generation,
+                    &owner_endpoint,
+                    &owner_candidates,
+                    mark,
+                    QuicEndpointIdentityRole::XhttpPrimary,
+                    Some(provenance_identity),
+                    session_cache,
+                )
+                .await?;
+                Ok(XhttpH3EndpointClient {
+                    client: connection.client.clone(),
+                    connection: Some(connection),
+                    xmux_lease: None,
+                })
             })
-        })
-    })
+        },
+    )
     .await?;
     Ok(XhttpH3EndpointClient {
         client: selected.client,
@@ -105,6 +111,7 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
             mark,
             QuicEndpointIdentityRole::XhttpDownload,
             None,
+            None,
         )
         .await?;
         return Ok(XhttpH3EndpointClient {
@@ -116,29 +123,34 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
     let resolved = XhttpResolvedEndpoint::resolve(endpoint).await?;
     let key = XhttpXmuxKey::download(binding, endpoint, resolved.identity(), xmux, mark, false)?;
     let provenance_identity = key.quic_provenance_identity();
-    let selected = select_xhttp_h3_xmux_client(key, xmux.clone(), || -> XhttpH3OwnerOpenFuture {
-        let owner_proxy = Arc::clone(binding.shared_plan());
-        let owner_generation = binding.runtime_generation();
-        let owner_endpoint = endpoint.clone();
-        let owner_candidates = resolved.candidates().to_vec();
-        Box::pin(async move {
-            let connection = open_xhttp_h3_connection(
-                &owner_proxy,
-                owner_generation,
-                &owner_endpoint,
-                &owner_candidates,
-                mark,
-                QuicEndpointIdentityRole::XhttpDownload,
-                Some(provenance_identity),
-            )
-            .await?;
-            Ok(XhttpH3EndpointClient {
-                client: connection.client.clone(),
-                connection: Some(connection),
-                xmux_lease: None,
+    let selected = select_xhttp_h3_xmux_client(
+        key,
+        xmux.clone(),
+        |session_cache| -> XhttpH3OwnerOpenFuture {
+            let owner_proxy = Arc::clone(binding.shared_plan());
+            let owner_generation = binding.runtime_generation();
+            let owner_endpoint = endpoint.clone();
+            let owner_candidates = resolved.candidates().to_vec();
+            Box::pin(async move {
+                let connection = open_xhttp_h3_connection(
+                    &owner_proxy,
+                    owner_generation,
+                    &owner_endpoint,
+                    &owner_candidates,
+                    mark,
+                    QuicEndpointIdentityRole::XhttpDownload,
+                    Some(provenance_identity),
+                    session_cache,
+                )
+                .await?;
+                Ok(XhttpH3EndpointClient {
+                    client: connection.client.clone(),
+                    connection: Some(connection),
+                    xmux_lease: None,
+                })
             })
-        })
-    })
+        },
+    )
     .await?;
     Ok(XhttpH3EndpointClient {
         client: selected.client,
@@ -155,11 +167,12 @@ async fn open_xhttp_h3_connection(
     mark: u32,
     role: QuicEndpointIdentityRole,
     shared_transport_identity: Option<[u8; 32]>,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<XhttpH3Connection, String> {
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
     let tls_provider = xhttp_h3_tls_provider(proxy, role)?;
-    let client_config = build_xhttp_h3_client_config(endpoint, tls_provider)?;
+    let client_config = build_xhttp_h3_client_config(endpoint, tls_provider, session_cache)?;
     let transport_identity = shared_transport_identity
         .unwrap_or_else(|| xhttp_h3_transport_identity(proxy, endpoint, role, tls_provider));
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
@@ -596,9 +609,24 @@ mod packet_up_tests;
 fn build_xhttp_h3_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
     tls_provider: ResidentXhttpQuicTlsProvider,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, String> {
     if tls_provider == ResidentXhttpQuicTlsProvider::ChromeBoring {
-        return build_chrome_boring_xhttp_h3_client_config(endpoint);
+        return build_chrome_boring_xhttp_h3_client_config(endpoint, session_cache);
+    }
+    if cfg!(feature = "test-boringssl-quic") {
+        let policy = dae_outbound::shared_transport::boring_quic::BoringQuicClientPolicy::new([
+            b"h3".as_slice(),
+        ])
+        .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC policy: {err}"))?
+        .allow_insecure(endpoint.allow_insecure)
+        .zero_rtt(false);
+        return dae_outbound::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
+            &policy,
+            Arc::new(xhttp_h3_transport_config()?),
+            session_cache,
+        )
+        .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC config: {err}"));
     }
     let mut crypto = if endpoint.allow_insecure {
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])

@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::poll_fn;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::AsRawFd;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, Bytes};
@@ -25,7 +27,7 @@ use http::Request;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use serde_json::Value;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio::time;
@@ -63,6 +65,65 @@ use super::{
     ResidentDnsResourceProfile, ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries,
     SharedResidentStopSignal, TuicOwnerRegistryHandle, apply_resident_udp_socket_buffer_tuning,
 };
+
+/// One bounded DNS TLS stream type keeps framing, pooling, and HTTP/2 ownership
+/// identical across the staged rustls/BoringSSL A/B. The selected provider is
+/// fixed at handshake construction; errors never trigger a provider fallback.
+pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsTlsStream {
+    Rustls(tokio_rustls::client::TlsStream<TokioTcpStream>),
+    Boring(tokio_boring::SslStream<TokioTcpStream>),
+}
+
+impl AsyncRead for ResidentDnsTlsStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Rustls(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Boring(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for ResidentDnsTlsStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        data: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Self::Rustls(stream) => Pin::new(stream).poll_write(cx, data),
+            Self::Boring(stream) => Pin::new(stream).poll_write(cx, data),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Rustls(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Boring(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Rustls(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Boring(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
+impl ResidentDnsTlsStream {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) fn alpn_protocol(
+        &self,
+    ) -> Option<Vec<u8>> {
+        match self {
+            Self::Rustls(stream) => stream.get_ref().1.alpn_protocol().map(ToOwned::to_owned),
+            Self::Boring(stream) => stream.ssl().selected_alpn_protocol().map(ToOwned::to_owned),
+        }
+    }
+}
 
 mod cache;
 mod domain_routing;

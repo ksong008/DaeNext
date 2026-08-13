@@ -21,6 +21,7 @@ mod grpc_http2;
 mod helpers;
 mod tls_transports;
 mod types;
+#[cfg(any(test, feature = "test-support"))]
 mod xhttp_h3;
 mod xhttp_http2;
 
@@ -28,6 +29,7 @@ pub use grpc_http2::*;
 use helpers::*;
 pub use tls_transports::*;
 pub use types::*;
+#[cfg(any(test, feature = "test-support"))]
 pub use xhttp_h3::*;
 pub use xhttp_http2::*;
 
