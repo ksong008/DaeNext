@@ -9,7 +9,7 @@ use dae_runtime_control::OwnerGeneration;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{DigitallySignedStruct, SignatureScheme};
 use sha2::{Digest, Sha256};
 
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
@@ -606,8 +606,9 @@ fn build_xhttp_h3_client_config(
             .with_custom_certificate_verifier(AcceptAnyXhttpH3Verifier::new())
             .with_no_client_auth()
     } else {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = dae_outbound::shared_transport::system_ca_snapshot()
+            .map_err(|err| format!("load xHTTP H3 system CA bundle: {err}"))?
+            .rustls_roots();
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(roots)
             .with_no_client_auth()

@@ -75,8 +75,9 @@ where
 }
 
 pub(super) fn resident_dns_tls_client_config(alpn: &[&str]) -> Result<Arc<ClientConfig>, String> {
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let roots = dae_outbound::shared_transport::system_ca_snapshot()
+        .map_err(|err| format!("load DNS system CA bundle: {err}"))?
+        .rustls_roots();
     let mut config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
@@ -88,8 +89,9 @@ pub(super) fn resident_dns_tls_client_config(alpn: &[&str]) -> Result<Arc<Client
 }
 
 pub(super) fn resident_dns_quic_client_config(alpn: &str) -> Result<quinn::ClientConfig, String> {
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let roots = dae_outbound::shared_transport::system_ca_snapshot()
+        .map_err(|err| format!("load DNS QUIC system CA bundle: {err}"))?
+        .rustls_roots();
     let mut crypto = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_root_certificates(roots)
         .with_no_client_auth();

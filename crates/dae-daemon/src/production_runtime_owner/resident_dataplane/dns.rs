@@ -23,7 +23,7 @@ use dae_routing::{IpPrefix, Query, RoutingMatcher};
 use dae_runtime_control::ip_to_key;
 use http::Request;
 use quinn::crypto::rustls::QuicClientConfig;
-use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use rustls::{ClientConfig, pki_types::ServerName};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;

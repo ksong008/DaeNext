@@ -4,7 +4,7 @@ use std::time::Duration;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::OutboundError;
@@ -133,8 +133,9 @@ pub fn build_juicity_runtime_client_config(
             .with_custom_certificate_verifier(verifier)
             .with_no_client_auth()
     } else {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = crate::shared_transport::system_ca_snapshot()
+            .map_err(|err| bad_runtime(format!("load Juicity system CA bundle: {err}")))?
+            .rustls_roots();
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(roots)
             .with_no_client_auth()

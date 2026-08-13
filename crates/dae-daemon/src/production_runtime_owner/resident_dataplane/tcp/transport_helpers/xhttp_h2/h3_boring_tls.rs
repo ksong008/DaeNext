@@ -22,6 +22,12 @@ fn build_chrome_boring_xhttp_h3_crypto(
 ) -> Result<quinn_boring::ClientConfig, String> {
     let mut crypto = quinn_boring::ClientConfig::new()
         .map_err(|err| format!("create xHTTP H3 BoringSSL QUIC config: {err}"))?;
+    if !endpoint.allow_insecure {
+        dae_outbound::shared_transport::system_ca_snapshot()
+            .map_err(|err| format!("load xHTTP H3 system CA bundle: {err}"))?
+            .install_boring_context(crypto.ctx_mut())
+            .map_err(|err| format!("install xHTTP H3 system CA bundle: {err}"))?;
+    }
     crypto.verify_peer(!endpoint.allow_insecure);
     crypto
         .set_alpn(&[b"h3".to_vec()])

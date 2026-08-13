@@ -128,5 +128,4 @@ tikv-jemallocator = { version = "0.7", default-features = false, features = ["ba
 tikv-jemalloc-ctl = { version = "0.7", default-features = false, features = ["stats"] }
 tikv-jemalloc-sys = { version = "0.7", default-features = false }
 url = "2"
-webpki-roots = "1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
