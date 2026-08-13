@@ -116,7 +116,7 @@ async fn cancelled_h3_open_releases_the_reserved_slot() {
         let key = key.clone();
         let started = Arc::clone(&started);
         tokio::spawn(async move {
-            select_xhttp_h3_xmux_client(key, cancellation_test_plan(generation), || async move {
+            select_xhttp_h3_xmux_client(key, cancellation_test_plan(generation), |_| async move {
                 started.notify_one();
                 std::future::pending::<Result<XhttpH3EndpointClient, String>>().await
             })

@@ -1455,6 +1455,8 @@ async fn run_hysteria2_owner_registry(
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     stop: SharedResidentStopSignal,
 ) {
+    let session_cache = cfg!(feature = "test-boringssl-quic")
+        .then(dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache);
     let mut ownership_reconciler =
         Hysteria2RegistryOwnershipReconciler::new(Arc::clone(&metrics), Arc::clone(&index));
     let mut tasks = JoinSet::new();
@@ -1468,6 +1470,7 @@ async fn run_hysteria2_owner_registry(
                 Some(Hysteria2OwnerCommand::Build(command)) => {
                     let metrics = Arc::clone(&metrics);
                     let cancellation = cancellation.clone();
+                    let session_cache = session_cache.clone();
                     tasks.spawn(async move {
                         Hysteria2RegistryTaskCompletion::Build(
                             run_hysteria2_owner_build(
@@ -1475,6 +1478,7 @@ async fn run_hysteria2_owner_registry(
                                 resources,
                                 metrics,
                                 cancellation,
+                                session_cache,
                             )
                             .await,
                         )
@@ -1641,6 +1645,7 @@ async fn run_hysteria2_owner_build(
     resources: Hysteria2OwnerResourceProfile,
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     cancellation: OwnerCancellationSignal,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Hysteria2BuildCompletion {
     metrics.cumulative_builds.fetch_add(1, Ordering::Relaxed);
     let result = build_hysteria2_transport(
@@ -1651,6 +1656,7 @@ async fn run_hysteria2_owner_build(
         Arc::clone(&metrics),
         resources,
         cancellation,
+        session_cache,
     )
     .await;
     match result {
@@ -1779,6 +1785,7 @@ async fn build_hysteria2_transport(
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     resources: Hysteria2OwnerResourceProfile,
     cancellation: OwnerCancellationSignal,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<(Hysteria2SharedTransport, Hysteria2AuthenticatedSession), Hysteria2OwnerBuildError> {
     let proxy = binding.plan();
     let ResidentProxyProtocolPlan::Hysteria2QuicTcp {
@@ -1823,6 +1830,7 @@ async fn build_hysteria2_transport(
             port_hopping_metrics: Arc::clone(&metrics.port_hopping),
             caller,
             cancellation: &cancellation,
+            session_cache,
         },
         deadline,
     )

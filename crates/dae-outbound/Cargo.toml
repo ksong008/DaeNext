@@ -5,17 +5,25 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+test-support = ["dep:rcgen"]
+test-boringssl-quic = []
+
 [dependencies]
 aes.workspace = true
 aes-gcm.workspace = true
-aws-lc-rs.workspace = true
 base64.workspace = true
 blake3.workspace = true
 boring.workspace = true
+boring-sys.workspace = true
+boring-v4-compat.workspace = true
+brotli.workspace = true
 bytes.workspace = true
 chacha20poly1305.workspace = true
 dae-core-types.workspace = true
 fastrand.workspace = true
+foreign-types.workspace = true
 getrandom.workspace = true
 h3.workspace = true
 h3-quinn.workspace = true
@@ -24,8 +32,9 @@ hkdf.workspace = true
 md-5.workspace = true
 percent-encoding.workspace = true
 quinn.workspace = true
+quinn-boring.workspace = true
 quinn-proto.workspace = true
-rcgen.workspace = true
+rcgen = { workspace = true, optional = true }
 regex.workspace = true
 rustls.workspace = true
 serde.workspace = true
@@ -39,4 +48,6 @@ webpki-roots.workspace = true
 x25519-dalek.workspace = true
 
 [dev-dependencies]
+aws-lc-rs.workspace = true
 dae-golden.workspace = true
+rcgen.workspace = true

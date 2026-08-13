@@ -26,6 +26,57 @@ fn should_use_cmake_cross_compilation(config: &Config) -> bool {
     }
 }
 
+fn inferred_linux_gnu_cross_compilers(config: &Config) -> Option<(&'static str, &'static str)> {
+    if config.host == config.target || config.target_os != "linux" || config.target_env != "gnu" {
+        return None;
+    }
+    match config.target.as_str() {
+        "aarch64-unknown-linux-gnu" => Some(("aarch64-linux-gnu-gcc", "aarch64-linux-gnu-g++")),
+        "arm-unknown-linux-gnueabi" => Some(("arm-linux-gnueabi-gcc", "arm-linux-gnueabi-g++")),
+        "armv7-unknown-linux-gnueabihf" => {
+            Some(("arm-linux-gnueabihf-gcc", "arm-linux-gnueabihf-g++"))
+        }
+        _ => None,
+    }
+}
+
+fn configure_linux_arm_cross_compilers(config: &Config, cmake: &mut cmake::Config) {
+    if config.host == config.target
+        || config.target_os != "linux"
+        || !matches!(config.target_arch.as_str(), "aarch64" | "arm")
+        || config.features.fips
+    {
+        return;
+    }
+
+    let inferred = inferred_linux_gnu_cross_compilers(config);
+    let cc = config
+        .env
+        .cc
+        .as_ref()
+        .map(OsString::as_os_str)
+        .or_else(|| inferred.map(|(cc, _)| std::ffi::OsStr::new(cc)));
+    let cxx = config
+        .env
+        .cxx
+        .as_ref()
+        .map(OsString::as_os_str)
+        .or_else(|| inferred.map(|(_, cxx)| std::ffi::OsStr::new(cxx)));
+
+    let (Some(cc), Some(cxx)) = (cc, cxx) else {
+        panic!(
+            "BoringSSL cross compilation for {} requires target C and C++ compilers; set CC_{} and CXX_{}",
+            config.target,
+            config.target.replace('-', "_"),
+            config.target.replace('-', "_")
+        );
+    };
+    cmake
+        .define("CMAKE_C_COMPILER", cc)
+        .define("CMAKE_CXX_COMPILER", cxx)
+        .define("CMAKE_ASM_COMPILER", cc);
+}
+
 // Android NDK >= 19.
 const CMAKE_PARAMS_ANDROID_NDK: &[(&str, &[(&str, &str)])] = &[
     ("aarch64", &[("ANDROID_ABI", "arm64-v8a")]),
@@ -245,6 +296,7 @@ fn get_boringssl_cmake_config(config: &Config) -> cmake::Config {
             boringssl_cmake.define("CMAKE_CXX_COMPILER", cxx);
         }
     }
+    configure_linux_arm_cross_compilers(config, &mut boringssl_cmake);
 
     if let Some(sysroot) = &config.env.sysroot {
         boringssl_cmake.define("CMAKE_SYSROOT", sysroot);

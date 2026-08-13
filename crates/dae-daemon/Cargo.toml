@@ -35,6 +35,11 @@ allocator-jemalloc = [
 # A/B. Production builds leave both unset and use bounded syscall batching.
 test-scalar-udp-recv = []
 test-scalar-udp-send = []
+# Build-only provider gate for the staged BoringSSL TCP TLS A/B. This is not a
+# product schema or runtime fallback: a binary has exactly one admitted
+# provider for each TLS shape.
+test-boringssl-tcp-tls = []
+test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
 
 [[bin]]
 name = "daed"

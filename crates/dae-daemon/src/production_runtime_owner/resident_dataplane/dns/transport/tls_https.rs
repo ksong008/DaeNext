@@ -10,6 +10,8 @@ use super::wire::{
     http1_doh_request_bytes, parse_doh_http_response, read_http1_response_message_capped_async,
     read_to_end_capped_async, resident_dns_tls_client_config, restore_dns_response_id,
 };
+use boring::ssl::{SslConnector, SslMethod, SslVerifyMode};
+use std::sync::OnceLock;
 
 mod proxy;
 
@@ -182,8 +184,8 @@ impl ResidentDnsTlsForwarder {
 }
 
 async fn return_tls_stream_to_pool(
-    pool: &AsyncMutex<Vec<tokio_rustls::client::TlsStream<TokioTcpStream>>>,
-    stream: tokio_rustls::client::TlsStream<TokioTcpStream>,
+    pool: &AsyncMutex<Vec<ResidentDnsTlsStream>>,
+    stream: ResidentDnsTlsStream,
 ) {
     let mut idle = pool.lock().await;
     if idle.len() < DNS_STREAM_POOL_MAX_IDLE {
@@ -195,7 +197,10 @@ async fn open_dns_tls_stream_async(
     upstream: &ResidentDnsUpstream,
     stream: TokioTcpStream,
     context: ProxyDnsRequestContext,
-) -> Result<tokio_rustls::client::TlsStream<TokioTcpStream>, String> {
+) -> Result<ResidentDnsTlsStream, String> {
+    if cfg!(feature = "test-boringssl-tcp-tls") {
+        return open_dns_boring_tls_stream_async(upstream, stream, &[], context).await;
+    }
     let config = resident_dns_tls_client_config(&[])?;
     let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
         format!(
@@ -213,7 +218,71 @@ async fn open_dns_tls_stream_async(
                 upstream.tag, upstream.target.authority
             )
         })?;
-    Ok(tls)
+    Ok(ResidentDnsTlsStream::Rustls(tls))
+}
+
+pub(super) async fn open_dns_boring_tls_stream_async(
+    upstream: &ResidentDnsUpstream,
+    stream: TokioTcpStream,
+    alpn: &[&str],
+    context: ProxyDnsRequestContext,
+) -> Result<ResidentDnsTlsStream, String> {
+    let connector = resident_dns_boring_connector(alpn)?;
+    let config = connector
+        .configure()
+        .map_err(|err| format!("configure DNS BoringSSL client: {err}"))?;
+    let tls = time::timeout_at(
+        context.deadline(),
+        tokio_boring::connect(config, &upstream.target.host, stream),
+    )
+    .await
+    .map_err(|_| "DNS BoringSSL handshake timeout".to_owned())?
+    .map_err(|err| {
+        format!(
+            "connect DNS BoringSSL upstream {} {}: {err}",
+            upstream.tag, upstream.target.authority
+        )
+    })?;
+    Ok(ResidentDnsTlsStream::Boring(tls))
+}
+
+fn resident_dns_boring_connector(alpn: &[&str]) -> Result<Arc<SslConnector>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<String, Arc<SslConnector>>>> = OnceLock::new();
+    let key = alpn.join("\0");
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(connector) = cache
+        .lock()
+        .map_err(|_| "DNS BoringSSL connector cache lock poisoned".to_owned())?
+        .get(&key)
+        .cloned()
+    {
+        return Ok(connector);
+    }
+    let mut builder = SslConnector::builder(SslMethod::tls())
+        .map_err(|err| format!("create DNS BoringSSL connector: {err}"))?;
+    builder.set_verify(SslVerifyMode::PEER);
+    if !alpn.is_empty() {
+        let mut wire = Vec::new();
+        for protocol in alpn {
+            let bytes = protocol.as_bytes();
+            if bytes.is_empty() || bytes.len() > u8::MAX as usize {
+                return Err(format!("invalid DNS BoringSSL ALPN item: {protocol}"));
+            }
+            wire.push(bytes.len() as u8);
+            wire.extend_from_slice(bytes);
+        }
+        builder
+            .set_alpn_protos(&wire)
+            .map_err(|err| format!("set DNS BoringSSL ALPN: {err}"))?;
+    }
+    let connector = Arc::new(builder.build());
+    let mut guard = cache
+        .lock()
+        .map_err(|_| "DNS BoringSSL connector cache lock poisoned".to_owned())?;
+    Ok(guard
+        .entry(key)
+        .or_insert_with(|| Arc::clone(&connector))
+        .clone())
 }
 
 pub(super) async fn forward_dns_https_async(
@@ -507,7 +576,10 @@ async fn open_dns_https_tls_stream_async(
     upstream: &ResidentDnsUpstream,
     stream: TokioTcpStream,
     context: ProxyDnsRequestContext,
-) -> Result<tokio_rustls::client::TlsStream<TokioTcpStream>, String> {
+) -> Result<ResidentDnsTlsStream, String> {
+    if cfg!(feature = "test-boringssl-tcp-tls") {
+        return open_dns_boring_tls_stream_async(upstream, stream, &["http/1.1"], context).await;
+    }
     let config = resident_dns_tls_client_config(&["http/1.1"])?;
     let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
         format!(
@@ -525,7 +597,7 @@ async fn open_dns_https_tls_stream_async(
                 upstream.tag, upstream.target.authority
             )
         })?;
-    Ok(tls)
+    Ok(ResidentDnsTlsStream::Rustls(tls))
 }
 
 async fn open_dns_https_h2_forwarder_async(
@@ -562,7 +634,17 @@ async fn open_dns_https_h2_tls_stream_async(
     upstream: &ResidentDnsUpstream,
     stream: TokioTcpStream,
     context: ProxyDnsRequestContext,
-) -> Result<tokio_rustls::client::TlsStream<TokioTcpStream>, String> {
+) -> Result<ResidentDnsTlsStream, String> {
+    if cfg!(feature = "test-boringssl-tcp-tls") {
+        let tls = open_dns_boring_tls_stream_async(upstream, stream, &["h2"], context).await?;
+        if tls.alpn_protocol().as_deref() != Some(b"h2".as_slice()) {
+            return Err(format!(
+                "DNS HTTPS upstream {} {} did not negotiate HTTP/2",
+                upstream.tag, upstream.target.authority
+            ));
+        }
+        return Ok(tls);
+    }
     let config = resident_dns_tls_client_config(&["h2"])?;
     let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|err| {
         format!(
@@ -580,8 +662,9 @@ async fn open_dns_https_h2_tls_stream_async(
                 upstream.tag, upstream.target.authority
             )
         })?;
-    let negotiated = tls.get_ref().1.alpn_protocol();
-    if negotiated != Some(b"h2".as_slice()) {
+    let tls = ResidentDnsTlsStream::Rustls(tls);
+    let negotiated = tls.alpn_protocol();
+    if negotiated.as_deref() != Some(b"h2".as_slice()) {
         return Err(format!(
             "DNS HTTPS upstream {} {} did not negotiate HTTP/2",
             upstream.tag, upstream.target.authority
@@ -673,7 +756,7 @@ async fn forward_dns_https_over_h2_async(
 
 async fn forward_dns_https_over_reusable_stream_async(
     upstream: &ResidentDnsUpstream,
-    tls: &mut tokio_rustls::client::TlsStream<TokioTcpStream>,
+    tls: &mut ResidentDnsTlsStream,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
     let doh = build_doh_request(

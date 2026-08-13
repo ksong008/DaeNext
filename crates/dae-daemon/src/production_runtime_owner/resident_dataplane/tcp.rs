@@ -39,10 +39,10 @@ use dae_outbound::{
     http_proxy::{HttpConnectOptions, request as http_request},
     hysteria2::{
         HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD, Hysteria2CongestionRuntime,
-        build_hysteria2_runtime_client_config_with_congestion, read_hysteria2_tcp_response,
+        build_hysteria2_runtime_client_config_with_session_cache, read_hysteria2_tcp_response,
         write_hysteria2_tcp_request,
     },
-    juicity::{build_juicity_runtime_client_config, write_juicity_tcp_request},
+    juicity::{build_juicity_runtime_client_config_with_session_cache, write_juicity_tcp_request},
     shadowsocks::{
         AeadStreamCodec, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
         SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE, SS2022_TCP_RELAY_PAYLOAD_SIZE,
@@ -65,7 +65,7 @@ use dae_outbound::{
     socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
     tuic::{
-        TuicCongestionController, build_tuic_runtime_client_config_with_congestion,
+        TuicCongestionController, build_tuic_runtime_client_config_with_session_cache,
         write_tuic_connect_request,
     },
     vless::packet,

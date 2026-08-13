@@ -67,7 +67,7 @@ async fn forward_proxy_dns_https(
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, ProxyDnsRequestError> {
     let mut tls = open_proxy_dns_tls_stream(upstream, stream, &["http/1.1"], context).await?;
-    match tls.get_ref().1.alpn_protocol() {
+    match tls.alpn_protocol().as_deref() {
         None | Some(b"http/1.1") => {}
         Some(_) => {
             return Err(ProxyDnsRequestError::new(
@@ -123,7 +123,18 @@ async fn open_proxy_dns_tls_stream(
     stream: TokioTcpStream,
     alpn: &[&str],
     context: ProxyDnsRequestContext,
-) -> Result<tokio_rustls::client::TlsStream<TokioTcpStream>, ProxyDnsRequestError> {
+) -> Result<ResidentDnsTlsStream, ProxyDnsRequestError> {
+    if cfg!(feature = "test-boringssl-tcp-tls") {
+        return super::open_dns_boring_tls_stream_async(upstream, stream, alpn, context)
+            .await
+            .map_err(|error| {
+                ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::Authenticate,
+                    ProxyDnsRequestFailure::Network,
+                    error,
+                )
+            });
+    }
     let config = resident_dns_tls_client_config(alpn).map_err(|error| {
         ProxyDnsRequestError::new(
             ProxyDnsRequestStage::Authenticate,
@@ -149,4 +160,5 @@ async fn open_proxy_dns_tls_stream(
             connector.connect(server_name, stream),
         )
         .await
+        .map(ResidentDnsTlsStream::Rustls)
 }

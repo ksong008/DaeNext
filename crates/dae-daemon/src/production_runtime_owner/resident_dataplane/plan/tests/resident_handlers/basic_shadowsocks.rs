@@ -57,7 +57,7 @@ pub(super) fn assert_basic_and_shadowsocks_handlers(config: &Config) -> Vec<Resi
     assert_eq!(https_graph["packetSemantics"], "protocol-closed");
     assert_eq!(
         https_graph["runtimeComponents"]["underlayFactory"]["provider"],
-        "rustls"
+        expected_resident_tls_provider()
     );
 
     let http_transport = build_resident_proxy_plan_for_node(

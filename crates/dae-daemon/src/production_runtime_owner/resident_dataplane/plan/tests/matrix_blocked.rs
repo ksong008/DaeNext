@@ -427,7 +427,7 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
             "https_insecure",
             https_proxy_insecure_fixture_url(&primary_host, fixture_port(1)),
             "insecure-tls",
-            "rustls",
+            expected_resident_tls_provider(),
             true,
         ),
         (
@@ -441,42 +441,42 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
             "anytls_insecure",
             anytls_insecure_fixture_url(&primary_host, fixture_port(1)),
             "insecure-tls",
-            "rustls",
+            expected_resident_tls_provider(),
             true,
         ),
         (
             "trojan_insecure",
             trojan_insecure_fixture_url("trojan-insecure", &primary_host, fixture_port(1)),
             "insecure-tls",
-            "rustls",
+            expected_resident_tls_provider(),
             true,
         ),
         (
             "trojan_type_tcp",
             trojan_tcp_type_fixture_url("trojan-tcp", &primary_host, fixture_port(1)),
             "standard-tls",
-            "rustls",
+            expected_resident_tls_provider(),
             false,
         ),
         (
             "vless_insecure",
             vless_vision_insecure_fixture_url(""),
             "insecure-tls",
-            "rustls",
+            expected_resident_tls_provider(),
             true,
         ),
         (
             "vless_reality",
             vless_reality_fixture_url(),
             "reality",
-            "rustls-reality",
+            expected_resident_reality_provider(),
             false,
         ),
         (
             "vless_reality_insecure",
             vless_reality_insecure_fixture_url(),
             "reality",
-            "rustls-reality",
+            expected_resident_reality_provider(),
             true,
         ),
     ];
@@ -496,7 +496,9 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
         );
         assert_eq!(
             graph["runtimeComponents"]["underlayFactory"]["verificationPolicy"],
-            if allow_insecure {
+            if tag.starts_with("vless_reality") {
+                "reality-auth-key"
+            } else if allow_insecure {
                 "explicit-insecure"
             } else {
                 "system-roots"
@@ -585,7 +587,7 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     assert_eq!(graph["securityUnderlay"], "tls-fragment");
     assert_eq!(
         graph["runtimeComponents"]["underlayFactory"]["provider"],
-        "rustls"
+        expected_resident_tls_provider()
     );
 
     let plugin = build_resident_proxy_plan_for_node(

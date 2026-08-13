@@ -108,7 +108,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     assert_eq!(vmess_tls_graph["securityUnderlay"], "standard-tls");
     assert_eq!(
         vmess_tls_graph["runtimeComponents"]["underlayFactory"]["provider"],
-        "rustls"
+        expected_resident_tls_provider()
     );
 
     let mut vmess_http_header_link = VMessLink::parse(&vmess_fixture_url(
@@ -232,7 +232,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     );
     assert_eq!(
         vmess_websocket_tls_graph["runtimeComponents"]["underlayFactory"]["provider"],
-        "rustls"
+        expected_resident_tls_provider()
     );
 
     let vmess_websocket_tls_host_sni = build_resident_proxy_plan_for_node(
@@ -333,7 +333,7 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     );
     assert_eq!(
         vmess_httpupgrade_tls_graph["runtimeComponents"]["underlayFactory"]["provider"],
-        "rustls"
+        expected_resident_tls_provider()
     );
 
     let vmess_grpc = build_resident_proxy_plan_for_node(

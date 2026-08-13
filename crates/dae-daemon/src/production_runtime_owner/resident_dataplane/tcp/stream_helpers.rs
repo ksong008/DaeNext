@@ -98,6 +98,12 @@ pub(super) async fn write_all_vectored_header_payload(
     header: &[u8],
     payload: &[u8],
 ) -> std::io::Result<()> {
+    if !stream.is_write_vectored() {
+        let mut frame = Vec::with_capacity(header.len().saturating_add(payload.len()));
+        frame.extend_from_slice(header);
+        frame.extend_from_slice(payload);
+        return stream.write_all(&frame).await;
+    }
     let mut header_offset = 0;
     let mut payload_offset = 0;
     while header_offset < header.len() || payload_offset < payload.len() {

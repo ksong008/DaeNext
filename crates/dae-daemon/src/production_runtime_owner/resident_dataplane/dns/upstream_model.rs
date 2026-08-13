@@ -816,7 +816,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) idle:
-        AsyncMutex<Vec<tokio_rustls::client::TlsStream<TokioTcpStream>>>,
+        AsyncMutex<Vec<ResidentDnsTlsStream>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Semaphore,
 }
 
@@ -827,7 +827,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) http1_idle:
-        AsyncMutex<Vec<tokio_rustls::client::TlsStream<TokioTcpStream>>>,
+        AsyncMutex<Vec<ResidentDnsTlsStream>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) http1_permits: Semaphore,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2_permits: Semaphore,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) h2:

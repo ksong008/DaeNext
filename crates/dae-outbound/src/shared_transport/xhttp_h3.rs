@@ -13,11 +13,10 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, Serve
 use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use crate::error::OutboundError;
-use crate::shared_transport::{XHttpLifecycleOptions, xhttp_request_path};
-
-pub const XHTTP_H3_ALPN: &str = "h3";
-pub const XHTTP_H3_KEEPALIVE_SECS: u64 = 5;
-pub const XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS: u64 = 8;
+use crate::shared_transport::{
+    XHTTP_H3_ALPN, XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS, XHTTP_H3_KEEPALIVE_SECS,
+    XHttpLifecycleOptions, xhttp_request_path,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XHttpH3LoopbackOptions {

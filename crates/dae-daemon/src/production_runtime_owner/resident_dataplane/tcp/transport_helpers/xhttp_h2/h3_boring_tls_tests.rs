@@ -2,11 +2,13 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
+use foreign_types::ForeignType;
 use h3::server;
 use http::{Request, Response, StatusCode};
 use quinn::crypto::rustls::QuicServerConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+use std::os::raw::c_int;
 
 use super::*;
 
@@ -175,7 +177,7 @@ async fn chrome_boring_provider_rejects_untrusted_certificate_without_fallback()
 
     let mut plan = endpoint_plan();
     plan.allow_insecure = false;
-    let client_config = build_chrome_boring_xhttp_h3_client_config(&plan).unwrap();
+    let client_config = build_chrome_boring_xhttp_h3_client_config(&plan, None).unwrap();
     let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
     client_endpoint.set_default_client_config(client_config);
     let error = tokio::time::timeout(

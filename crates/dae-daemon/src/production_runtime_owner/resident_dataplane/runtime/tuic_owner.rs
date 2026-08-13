@@ -1141,6 +1141,8 @@ async fn run_tuic_owner_registry(
     metrics: Arc<TuicOwnerRegistryMetrics>,
     stop: SharedResidentStopSignal,
 ) {
+    let session_cache = cfg!(feature = "test-boringssl-quic")
+        .then(dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache);
     let mut ownership_reconciler =
         TuicRegistryOwnershipReconciler::new(Arc::clone(&metrics), Arc::clone(&index));
     let mut tasks = JoinSet::new();
@@ -1153,9 +1155,10 @@ async fn run_tuic_owner_registry(
             command = receiver.recv() => match command {
                 Some(TuicOwnerCommand::Build(command)) => {
                     let metrics = Arc::clone(&metrics);
+                    let session_cache = session_cache.clone();
                     tasks.spawn(async move {
                         TuicRegistryTaskCompletion::Build(
-                            run_tuic_owner_build(command, resources, metrics).await,
+                            run_tuic_owner_build(command, resources, metrics, session_cache).await,
                         )
                     });
                 }
@@ -1436,6 +1439,7 @@ async fn run_tuic_owner_build(
     command: TuicBuildCommand,
     resources: TuicOwnerResourceProfile,
     metrics: Arc<TuicOwnerRegistryMetrics>,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> TuicBuildCompletion {
     metrics.cumulative_builds.fetch_add(1, Ordering::Relaxed);
     let result = build_tuic_transport(
@@ -1445,6 +1449,7 @@ async fn run_tuic_owner_build(
         command.deadline,
         Arc::clone(&metrics),
         resources,
+        session_cache,
     )
     .await;
     match result {
@@ -1502,6 +1507,7 @@ async fn build_tuic_transport(
     deadline: AbsoluteDeadline,
     metrics: Arc<TuicOwnerRegistryMetrics>,
     resources: TuicOwnerResourceProfile,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<(TuicSharedTransport, mpsc::Receiver<u16>), TuicOwnerBuildError> {
     let proxy = binding.plan();
     let ResidentProxyProtocolPlan::TuicQuicTcp {
@@ -1527,6 +1533,7 @@ async fn build_tuic_transport(
         *congestion,
         deadline,
         caller,
+        session_cache,
     )
     .await
     .map_err(|detail| TuicOwnerBuildError {

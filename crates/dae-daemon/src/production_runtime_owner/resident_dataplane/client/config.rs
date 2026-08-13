@@ -3,81 +3,113 @@ use dae_outbound::shared_transport::reality::reality_client_version;
 
 pub(super) fn boring_vless_connector(
     proxy: &ResidentProxyPlan,
+    policy: &ResidentTlsPolicy,
 ) -> Result<Arc<SslConnector>, String> {
-    let key = ResidentTlsClientConfigKey::from_proxy(proxy);
+    require_tcp_tls_session_policy(policy)?;
+    let key = ResidentTlsClientConfigKey::from_proxy(proxy, policy);
+    let alpn = boring_alpn_wire(proxy, policy)?;
+    boring_connector_cached(
+        key,
+        "VLESS",
+        policy.verification.allow_insecure(),
+        boring_read_ahead_enabled(proxy),
+        proxy.utls_fingerprint.is_none()
+            && (policy.verification.reality_material().is_some()
+                || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision),
+        proxy.utls_fingerprint.as_ref(),
+        &alpn,
+    )
+}
+
+pub(super) fn boring_xhttp_endpoint_connector(
+    policy: &ResidentTlsPolicy,
+) -> Result<Arc<SslConnector>, String> {
+    require_tcp_tls_session_policy(policy)?;
+    let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(policy);
+    let alpn = boring_alpn_wire_from_protocols(&policy.alpn)?;
+    boring_connector_cached(
+        key,
+        "xHTTP",
+        policy.verification.allow_insecure(),
+        true,
+        policy.verification.reality_material().is_some(),
+        None,
+        &alpn,
+    )
+}
+
+fn boring_connector_cached(
+    key: ResidentTlsClientConfigKey,
+    context: &'static str,
+    allow_insecure: bool,
+    read_ahead: bool,
+    tls13_only: bool,
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+    alpn: &[u8],
+) -> Result<Arc<SslConnector>, String> {
     let cache =
         BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
         let mut cache = cache
             .lock()
-            .map_err(|_| "VLESS BoringSSL connector cache lock poisoned".to_owned())?;
+            .map_err(|_| format!("{context} BoringSSL connector cache lock poisoned"))?;
         if let Some(connector) = cache.get(&key) {
             return Ok(connector);
         }
     }
     let mut builder = SslConnector::builder(SslMethod::tls())
-        .map_err(|err| format!("create VLESS BoringSSL connector: {err}"))?;
-    builder.set_verify(if proxy.allow_insecure {
+        .map_err(|err| format!("create {context} BoringSSL connector: {err}"))?;
+    builder.set_verify(if allow_insecure {
         SslVerifyMode::NONE
     } else {
         SslVerifyMode::PEER
     });
-    builder.set_read_ahead(boring_read_ahead_enabled(proxy));
-    if proxy.utls_fingerprint.is_none()
-        && (proxy.reality.is_some()
-            || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision)
-    {
+    builder.set_read_ahead(read_ahead);
+    if tls13_only {
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))
-            .map_err(|err| format!("set VLESS BoringSSL min TLS version: {err}"))?;
+            .map_err(|err| format!("set {context} BoringSSL min TLS version: {err}"))?;
         builder
             .set_max_proto_version(Some(SslVersion::TLS1_3))
-            .map_err(|err| format!("set VLESS BoringSSL max TLS version: {err}"))?;
+            .map_err(|err| format!("set {context} BoringSSL max TLS version: {err}"))?;
     }
-    if let Some(fingerprint) = &proxy.utls_fingerprint {
+    if let Some(fingerprint) = fingerprint {
         configure_boring_fingerprint(&mut builder, fingerprint)?;
         configure_utls_template_boring_context(&mut builder, fingerprint)?;
     }
-    let alpn = boring_alpn_wire(proxy)?;
     if !alpn.is_empty() {
         builder
-            .set_alpn_protos(&alpn)
-            .map_err(|err| format!("set VLESS BoringSSL ALPN: {err}"))?;
+            .set_alpn_protos(alpn)
+            .map_err(|err| format!("set {context} BoringSSL ALPN: {err}"))?;
     }
     let connector = Arc::new(builder.build());
     let mut cache = cache
         .lock()
-        .map_err(|_| "VLESS BoringSSL connector cache lock poisoned".to_owned())?;
+        .map_err(|_| format!("{context} BoringSSL connector cache lock poisoned"))?;
     Ok(cache.insert_or_get(key, connector))
 }
 
 impl ResidentTlsClientConfigKey {
-    pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
+    pub(super) fn from_proxy(proxy: &ResidentProxyPlan, policy: &ResidentTlsPolicy) -> Self {
         Self {
             flow: proxy.flow.clone(),
-            alpn: proxy.alpn.clone(),
-            allow_insecure: proxy.allow_insecure,
+            alpn: policy.alpn.clone(),
+            allow_insecure: policy.verification.allow_insecure(),
             utls_fingerprint: proxy
                 .utls_fingerprint
                 .as_ref()
                 .map(ResidentTlsFingerprintConfigKey::from_plan),
-            reality: proxy
-                .reality
-                .as_ref()
-                .map(ResidentRealityConfigKey::from_plan),
+            reality: ResidentRealityConfigKey::from_verification(&policy.verification),
         }
     }
 
-    pub(super) fn from_xhttp_endpoint(endpoint: &ResidentXhttpEndpointPlan) -> Self {
+    pub(super) fn from_xhttp_endpoint(policy: &ResidentTlsPolicy) -> Self {
         Self {
             flow: String::new(),
-            alpn: endpoint.alpn.clone(),
-            allow_insecure: endpoint.allow_insecure,
+            alpn: policy.alpn.clone(),
+            allow_insecure: policy.verification.allow_insecure(),
             utls_fingerprint: None,
-            reality: endpoint
-                .reality
-                .as_ref()
-                .map(ResidentRealityConfigKey::from_plan),
+            reality: ResidentRealityConfigKey::from_verification(&policy.verification),
         }
     }
 }
@@ -99,21 +131,25 @@ impl ResidentTlsFingerprintConfigKey {
 }
 
 impl ResidentRealityConfigKey {
-    pub(super) fn from_plan(plan: &ResidentRealityUnderlayPlan) -> Self {
-        Self {
-            public_key: plan.public_key,
-            short_id: plan.short_id.clone(),
-        }
+    pub(super) fn from_verification(verification: &ResidentPeerVerificationPolicy) -> Option<Self> {
+        verification
+            .reality_material()
+            .map(|(public_key, short_id)| Self {
+                public_key: *public_key,
+                short_id: short_id.to_vec(),
+            })
     }
 }
 
 pub(super) fn rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
+    policy: &ResidentTlsPolicy,
 ) -> Result<Arc<ClientConfig>, String> {
-    if proxy.reality.is_some() {
-        return build_rustls_vless_client_config(proxy);
+    require_tcp_tls_session_policy(policy)?;
+    if policy.verification.reality_material().is_some() {
+        return build_rustls_vless_client_config(proxy, policy);
     }
-    let key = ResidentTlsClientConfigKey::from_proxy(proxy);
+    let key = ResidentTlsClientConfigKey::from_proxy(proxy, policy);
     let cache =
         RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
@@ -124,7 +160,7 @@ pub(super) fn rustls_vless_client_config(
             return Ok(config);
         }
     }
-    let config = build_rustls_vless_client_config(proxy)?;
+    let config = build_rustls_vless_client_config(proxy, policy)?;
     let mut cache = cache
         .lock()
         .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
@@ -133,8 +169,9 @@ pub(super) fn rustls_vless_client_config(
 
 fn build_rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
+    policy: &ResidentTlsPolicy,
 ) -> Result<Arc<ClientConfig>, String> {
-    let builder = if proxy.reality.is_some() {
+    let builder = if policy.verification.reality_material().is_some() {
         if proxy.utls_fingerprint.is_some() {
             return Err("VLESS Reality with uTLS fingerprint requires a fingerprint-capable Reality TLS underlay; rustls cannot implement uTLS fingerprints".to_owned());
         }
@@ -147,8 +184,8 @@ fn build_rustls_vless_client_config(
     } else {
         ClientConfig::builder()
     };
-    let mut config = if let Some(reality) = &proxy.reality {
-        let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
+    let mut config = if let Some((public_key, short_id)) = policy.verification.reality_material() {
+        let reality_config = RealityConfig::new(*public_key, short_id.to_vec())
             .map_err(|err| format!("create VLESS Reality config: {err}"))?
             .with_client_version(reality_client_version());
         builder
@@ -156,7 +193,7 @@ fn build_rustls_vless_client_config(
             .with_custom_certificate_verifier(ResidentRealityFallbackRejectVerifier::new())
             .with_reality(reality_config)
             .with_no_client_auth()
-    } else if proxy.allow_insecure {
+    } else if policy.verification.allow_insecure() {
         builder
             .dangerous()
             .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
@@ -166,7 +203,7 @@ fn build_rustls_vless_client_config(
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         builder.with_root_certificates(roots).with_no_client_auth()
     };
-    config.alpn_protocols = proxy
+    config.alpn_protocols = policy
         .alpn
         .iter()
         .map(|value| value.as_bytes().to_vec())
@@ -175,12 +212,13 @@ fn build_rustls_vless_client_config(
 }
 
 pub(super) fn rustls_xhttp_endpoint_client_config(
-    endpoint: &ResidentXhttpEndpointPlan,
+    policy: &ResidentTlsPolicy,
 ) -> Result<Arc<ClientConfig>, String> {
-    if endpoint.reality.is_some() {
-        return build_rustls_xhttp_endpoint_client_config(endpoint);
+    require_tcp_tls_session_policy(policy)?;
+    if policy.verification.reality_material().is_some() {
+        return build_rustls_xhttp_endpoint_client_config(policy);
     }
-    let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint);
+    let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(policy);
     let cache =
         RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
@@ -191,7 +229,7 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
             return Ok(config);
         }
     }
-    let config = build_rustls_xhttp_endpoint_client_config(endpoint)?;
+    let config = build_rustls_xhttp_endpoint_client_config(policy)?;
     let mut cache = cache
         .lock()
         .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
@@ -199,9 +237,9 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
 }
 
 fn build_rustls_xhttp_endpoint_client_config(
-    endpoint: &ResidentXhttpEndpointPlan,
+    policy: &ResidentTlsPolicy,
 ) -> Result<Arc<ClientConfig>, String> {
-    let builder = if endpoint.reality.is_some() {
+    let builder = if policy.verification.reality_material().is_some() {
         let provider = rustls_reality_crypto_provider();
         ClientConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
@@ -209,8 +247,8 @@ fn build_rustls_xhttp_endpoint_client_config(
     } else {
         ClientConfig::builder()
     };
-    let mut config = if let Some(reality) = &endpoint.reality {
-        let reality_config = RealityConfig::new(reality.public_key, reality.short_id.clone())
+    let mut config = if let Some((public_key, short_id)) = policy.verification.reality_material() {
+        let reality_config = RealityConfig::new(*public_key, short_id.to_vec())
             .map_err(|err| format!("create xHTTP Reality config: {err}"))?
             .with_client_version(reality_client_version());
         builder
@@ -218,7 +256,7 @@ fn build_rustls_xhttp_endpoint_client_config(
             .with_custom_certificate_verifier(ResidentRealityFallbackRejectVerifier::new())
             .with_reality(reality_config)
             .with_no_client_auth()
-    } else if endpoint.allow_insecure {
+    } else if policy.verification.allow_insecure() {
         builder
             .dangerous()
             .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
@@ -228,7 +266,7 @@ fn build_rustls_xhttp_endpoint_client_config(
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         builder.with_root_certificates(roots).with_no_client_auth()
     };
-    config.alpn_protocols = endpoint
+    config.alpn_protocols = policy
         .alpn
         .iter()
         .map(|value| value.as_bytes().to_vec())
@@ -417,7 +455,10 @@ pub(super) fn configure_boring_fingerprint(
     Ok(())
 }
 
-pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, String> {
+pub(super) fn boring_alpn_wire(
+    proxy: &ResidentProxyPlan,
+    policy: &ResidentTlsPolicy,
+) -> Result<Vec<u8>, String> {
     if proxy
         .utls_fingerprint
         .as_ref()
@@ -425,13 +466,17 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
     {
         return Ok(Vec::new());
     }
-    let mut protocols = proxy.alpn.clone();
+    let mut protocols = policy.alpn.clone();
     if protocols.is_empty()
         && let Some(fingerprint) = proxy.utls_fingerprint.as_ref()
         && fingerprint.alpn_policy == UTLS_ALPN_POLICY_RANDOMIZED_ALPN
     {
         protocols.extend(fingerprint.default_alpn.iter().cloned());
     }
+    boring_alpn_wire_from_protocols(&protocols)
+}
+
+fn boring_alpn_wire_from_protocols(protocols: &[String]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     for protocol in protocols {
         let bytes = protocol.as_bytes();
@@ -449,6 +494,18 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
 
 pub(super) fn boring_read_ahead_enabled(proxy: &ResidentProxyPlan) -> bool {
     proxy.execution_plan().protocol != ResidentProtocolShape::VlessVision
+}
+
+fn require_tcp_tls_session_policy(policy: &ResidentTlsPolicy) -> Result<(), String> {
+    if policy.session == ResidentTlsSessionPolicy::ProviderManagedNoEarlyData {
+        Ok(())
+    } else {
+        Err(format!(
+            "resident TCP TLS factory rejects session policy {} (zero-rtt={})",
+            policy.session.resumption_label(),
+            policy.session.zero_rtt_admitted()
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -529,8 +586,9 @@ mod tests {
         });
         proxy.materialize_execution();
 
-        let first = rustls_vless_client_config(&proxy).unwrap();
-        let second = rustls_vless_client_config(&proxy).unwrap();
+        let policy = ResidentTlsPolicy::from_proxy(&proxy);
+        let first = rustls_vless_client_config(&proxy, &policy).unwrap();
+        let second = rustls_vless_client_config(&proxy, &policy).unwrap();
 
         assert!(!Arc::ptr_eq(&first, &second));
     }
@@ -552,7 +610,8 @@ mod tests {
         ));
         proxy.materialize_execution();
 
-        let err = rustls_vless_client_config(&proxy).unwrap_err();
+        let policy = ResidentTlsPolicy::from_proxy(&proxy);
+        let err = rustls_vless_client_config(&proxy, &policy).unwrap_err();
         assert!(err.contains("rustls cannot implement uTLS fingerprints"));
     }
 
@@ -586,8 +645,9 @@ mod tests {
             encryption: None,
         });
 
-        let first = rustls_vless_client_config(&proxy).unwrap();
-        let second = rustls_vless_client_config(&proxy).unwrap();
+        let policy = ResidentTlsPolicy::from_proxy(&proxy);
+        let first = rustls_vless_client_config(&proxy, &policy).unwrap();
+        let second = rustls_vless_client_config(&proxy, &policy).unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
     }

@@ -7,7 +7,6 @@ use aes::Aes256;
 use aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
-use aws_lc_rs::kem::{Ciphertext, DecapsulationKey, EncapsulationKey, ML_KEM_768};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaChaNonce};
 use getrandom::fill as random_fill;
 use std::io::{self, Error, ErrorKind, Result};
@@ -15,6 +14,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+
+use super::boring_mlkem::{DecapsulationKey, EncapsulationKey};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 const MAX_RECORD_PAYLOAD: usize = 8192;
@@ -293,20 +294,13 @@ where
             }
         }
 
-        let pfs_decapsulation = DecapsulationKey::generate(&ML_KEM_768)
-            .map_err(|_| io_other("generate VLESS ML-KEM-768 ephemeral key failed"))?;
-        let pfs_encapsulation = pfs_decapsulation
-            .encapsulation_key()
-            .map_err(|_| io_other("read VLESS ML-KEM-768 ephemeral public key failed"))?;
-        let pfs_mlkem_public = pfs_encapsulation
-            .key_bytes()
-            .map_err(|_| io_other("serialize VLESS ML-KEM-768 ephemeral public key failed"))?;
+        let (pfs_mlkem_public, pfs_decapsulation) = DecapsulationKey::generate();
         let mut x25519_private_bytes = [0_u8; 32];
         random_fill(&mut x25519_private_bytes).map_err(|error| io_other(error.to_string()))?;
         let x25519_private = StaticSecret::from(x25519_private_bytes);
         let x25519_public = PublicKey::from(&x25519_private);
         let mut pfs_public = Vec::with_capacity(1216);
-        pfs_public.extend_from_slice(pfs_mlkem_public.as_ref());
+        pfs_public.extend_from_slice(&pfs_mlkem_public);
         pfs_public.extend_from_slice(x25519_public.as_bytes());
 
         let padding = spec.padding.encoded_fragment_lengths();
@@ -387,7 +381,7 @@ where
             ));
         }
         let mlkem_secret = pfs_decapsulation
-            .decapsulate(Ciphertext::from(&peer_pfs_plain[..1088]))
+            .decapsulate(&peer_pfs_plain[..1088])
             .map_err(|_| io_other("VLESS ML-KEM-768 decapsulation failed"))?;
         let server_x25519_public = PublicKey::from(
             <[u8; 32]>::try_from(&peer_pfs_plain[1088..1120])
@@ -395,7 +389,7 @@ where
         );
         let x25519_secret = x25519_private.diffie_hellman(&server_x25519_public);
         let mut pfs_key = [0_u8; 64];
-        pfs_key[..32].copy_from_slice(mlkem_secret.as_ref());
+        pfs_key[..32].copy_from_slice(mlkem_secret.as_bytes());
         pfs_key[32..].copy_from_slice(x25519_secret.as_bytes());
         united_key.extend_from_slice(&pfs_key);
         united_key.extend_from_slice(&nfs_key);
@@ -890,13 +884,11 @@ fn build_relays(spec: &VlessEncryptionSpec, iv: &[u8; 16]) -> Result<(Vec<u8>, V
                 ctr.apply(&mut relays[relay_offset..relay_offset + 32]);
             }
         } else {
-            let key = EncapsulationKey::new(&ML_KEM_768, public_key)
+            let key = EncapsulationKey::from_encoded(public_key)
                 .map_err(|_| io_other("invalid VLESS ML-KEM-768 client public key"))?;
-            let (ciphertext, secret) = key
-                .encapsulate()
-                .map_err(|_| io_other("VLESS ML-KEM-768 encapsulation failed"))?;
-            relays.extend_from_slice(ciphertext.as_ref());
-            nfs_key = secret.as_ref().to_vec();
+            let (ciphertext, secret) = key.encapsulate();
+            relays.extend_from_slice(&ciphertext);
+            nfs_key = secret.as_bytes().to_vec();
             if spec.mode.xor_public_key() {
                 let mut ctr = AesCtr::new(public_key, iv);
                 ctr.apply(&mut relays[relay_offset..relay_offset + 1088]);

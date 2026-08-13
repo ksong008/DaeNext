@@ -44,6 +44,34 @@ impl AsyncVlessTlsClient {
         }
     }
 
+    pub(in crate::production_runtime_owner::resident_dataplane) fn poll_plain_write_vectored(
+        &mut self,
+        cx: &mut Context<'_>,
+        buffers: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        match &mut self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                Pin::new(tls).poll_write_vectored(cx, buffers)
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                Pin::new(tls).poll_write_vectored(cx, buffers)
+            }
+        }
+    }
+
+    pub(in crate::production_runtime_owner::resident_dataplane) fn plain_is_write_vectored(
+        &self,
+    ) -> bool {
+        match &self.engine {
+            AsyncVlessTlsEngine::Rustls { tls } | AsyncVlessTlsEngine::RealityRustls { tls } => {
+                tls.is_write_vectored()
+            }
+            AsyncVlessTlsEngine::Boring { tls } | AsyncVlessTlsEngine::RealityBoring { tls } => {
+                tls.is_write_vectored()
+            }
+        }
+    }
+
     pub(in crate::production_runtime_owner::resident_dataplane) fn poll_plain_flush(
         &mut self,
         cx: &mut Context<'_>,
@@ -241,6 +269,18 @@ impl AsyncWrite for AsyncVlessTlsClient {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         self.poll_plain_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffers: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        self.poll_plain_write_vectored(cx, buffers)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.plain_is_write_vectored()
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {

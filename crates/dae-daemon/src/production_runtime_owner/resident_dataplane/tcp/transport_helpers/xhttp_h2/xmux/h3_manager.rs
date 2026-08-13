@@ -8,12 +8,16 @@ use std::time::{Duration, Instant};
 
 pub(super) struct XhttpH3GenerationManagers {
     managers: Mutex<HashMap<XhttpXmuxKey, XhttpXmuxManagerHandle<XhttpXmuxH3Manager>>>,
+    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 }
 
 impl XhttpH3GenerationManagers {
     pub(super) fn new() -> Self {
         Self {
             managers: Mutex::new(HashMap::new()),
+            session_cache: Some(
+                dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache(),
+            ),
         }
     }
 
@@ -432,7 +436,7 @@ pub(in super::super) async fn select_xhttp_h3_xmux_client<F, Fut>(
     new_client: F,
 ) -> Result<XhttpXmuxH3SelectedClient, String>
 where
-    F: FnOnce() -> Fut,
+    F: FnOnce(Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>) -> Fut,
     Fut: Future<Output = Result<XhttpH3EndpointClient, String>> + Send + 'static,
 {
     let generation = xhttp_xmux_generation_owner(key.runtime_generation())?;
@@ -475,7 +479,7 @@ where
                 let Some(new_client) = new_client.take() else {
                     return Err("resident xHTTP H3 xmux new client was already consumed".to_owned());
                 };
-                let open = new_client();
+                let open = new_client(generation.h3.session_cache.clone());
                 let mut client = execute_xhttp_xmux_owner_task(&generation, async move {
                     open.await.map(PendingXhttpH3Client::new)
                 })

@@ -5,6 +5,7 @@ use bytes::Bytes;
 
 use crate::error::OutboundError;
 
+use super::runtime::export_tuic_auth_token;
 pub use super::tls::{
     DEFAULT_TUIC_ALPN, DEFAULT_TUIC_HANDSHAKE_IDLE_TIMEOUT_SECS,
     DEFAULT_TUIC_INITIAL_CONNECTION_RECEIVE_WINDOW, DEFAULT_TUIC_INITIAL_STREAM_RECEIVE_WINDOW,
@@ -15,14 +16,9 @@ pub use super::tls::{
 use super::tls::{
     build_tuic_client_config, build_tuic_server_config, normalize_alpn, selected_alpn,
 };
-pub use super::wire::{
-    TUIC_AUTH_TOKEN_LEN, TUIC_AUTHENTICATE_FRAME_LEN, TUIC_AUTHENTICATE_TYPE, TUIC_CONNECT_TYPE,
-    TUIC_DISSOCIATE_FRAME_LEN, TUIC_DISSOCIATE_TYPE, TUIC_HEARTBEAT_FRAME_LEN, TUIC_HEARTBEAT_TYPE,
-    TUIC_MAX_UDP_PAYLOAD_LENGTH, TUIC_PACKET_TYPE, TUIC_VERSION5,
-};
 use super::wire::{
-    build_authenticate_frame, build_packet_frame, parse_authenticate_frame, parse_packet_frame,
-    parse_uuid,
+    TUIC_AUTHENTICATE_FRAME_LEN, TUIC_VERSION5, build_authenticate_frame, build_packet_frame,
+    parse_authenticate_frame, parse_packet_frame, parse_uuid,
 };
 
 pub const DEFAULT_TUIC_UUID: &str = "01234567-89ab-cdef-0123-456789abcdef";
@@ -428,18 +424,6 @@ async fn run_tuic_quic_server(
         datagram_match_count,
         datagram_send_count,
     })
-}
-
-pub(super) fn export_tuic_auth_token(
-    connection: &quinn::Connection,
-    uuid: &[u8; 16],
-    password: &[u8],
-) -> Result<[u8; TUIC_AUTH_TOKEN_LEN], OutboundError> {
-    let mut token = [0_u8; TUIC_AUTH_TOKEN_LEN];
-    connection
-        .export_keying_material(&mut token, uuid, password)
-        .map_err(|err| bad_quic_loopback(format!("export TUIC auth token: {err:?}")))?;
-    Ok(token)
 }
 
 fn normalize_congestion(input: &str) -> String {

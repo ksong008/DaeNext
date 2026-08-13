@@ -473,17 +473,85 @@ async fn resident_anytls_reused_frame_buffer_keeps_back_to_back_boundaries() {
     writer.write_all(&first).await.unwrap();
     writer.write_all(&second).await.unwrap();
 
+    let mut frames = AnyTlsFrameReader::default();
     let mut data = bytes::BytesMut::with_capacity(16 * 1024);
-    let (cmd, sid) = read_anytls_frame_into(&mut reader, &mut data)
-        .await
-        .unwrap();
+    let (cmd, sid) = frames.read_into(&mut reader, &mut data).await.unwrap();
     assert_eq!((cmd, sid), (dae_outbound::anytls::contract::CMD_PSH, 7));
     assert_eq!(&data[..], b"first");
-    let (cmd, sid) = read_anytls_frame_into(&mut reader, &mut data)
-        .await
-        .unwrap();
+    assert!(frames.buffered_len() >= second.len());
+    let (cmd, sid) = frames.read_into(&mut reader, &mut data).await.unwrap();
     assert_eq!((cmd, sid), (dae_outbound::anytls::contract::CMD_PSH, 9));
     assert_eq!(&data[..], b"second");
+}
+
+#[tokio::test]
+async fn resident_anytls_frame_reader_keeps_idle_control_after_active_fin() {
+    let fin = dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_FIN, 7, &[]);
+    let heartbeat = dae_outbound::anytls::link::frame(
+        dae_outbound::anytls::contract::CMD_HEART_REQUEST,
+        0,
+        &[],
+    );
+    let (mut writer, mut reader) = tokio::io::duplex(fin.len() + heartbeat.len() + 1);
+    writer.write_all(&fin).await.unwrap();
+    writer.write_all(&heartbeat).await.unwrap();
+
+    let mut frames = AnyTlsFrameReader::default();
+    let active_fin = frames.read_frame(&mut reader).await.unwrap();
+    assert_eq!(
+        (active_fin.cmd, active_fin.sid),
+        (dae_outbound::anytls::contract::CMD_FIN, 7)
+    );
+    assert!(active_fin.data.is_empty());
+    assert!(frames.buffered_len() >= heartbeat.len());
+
+    let idle_heartbeat = frames.read_frame(&mut reader).await.unwrap();
+    assert_eq!(
+        (idle_heartbeat.cmd, idle_heartbeat.sid),
+        (dae_outbound::anytls::contract::CMD_HEART_REQUEST, 0)
+    );
+    assert!(idle_heartbeat.data.is_empty());
+}
+
+#[derive(Default)]
+struct NonVectoredCountingWriter {
+    bytes: Vec<u8>,
+    writes: usize,
+}
+
+impl AsyncWrite for NonVectoredCountingWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.writes += 1;
+        self.bytes.extend_from_slice(buffer);
+        Poll::Ready(Ok(buffer.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn resident_non_vectored_header_payload_uses_one_contiguous_write() {
+    let mut writer = NonVectoredCountingWriter::default();
+
+    write_all_vectored_header_payload(&mut writer, b"header", b"payload")
+        .await
+        .unwrap();
+
+    assert_eq!(writer.writes, 1);
+    assert_eq!(writer.bytes, b"headerpayload");
 }
 
 #[test]

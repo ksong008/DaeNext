@@ -1,10 +1,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::crypto::rustls::{HandshakeData, QuicClientConfig, QuicServerConfig};
+use quinn::crypto::rustls::QuicClientConfig;
+#[cfg(any(test, feature = "test-support"))]
+use quinn::crypto::rustls::QuicServerConfig;
+#[cfg(any(test, feature = "test-support"))]
 use rcgen::generate_simple_self_signed;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+#[cfg(any(test, feature = "test-support"))]
+use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
 
 use crate::error::OutboundError;
@@ -107,6 +112,7 @@ impl ServerCertVerifier for AcceptAnyServerCertVerifier {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn build_tuic_server_config(
     server_name: &str,
     alpn: &[String],
@@ -142,6 +148,27 @@ pub(super) fn build_tuic_client_config_with_congestion(
     allow_insecure: bool,
     congestion: TuicCongestionController,
 ) -> Result<quinn::ClientConfig, OutboundError> {
+    build_tuic_client_config_with_session_cache(alpn, allow_insecure, congestion, None)
+}
+
+pub(super) fn build_tuic_client_config_with_session_cache(
+    alpn: &[String],
+    allow_insecure: bool,
+    congestion: TuicCongestionController,
+    session_cache: Option<crate::shared_transport::boring_quic::BoringQuicSessionCache>,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let transport = Arc::new(tuic_transport_config(Some(congestion))?);
+    if cfg!(feature = "test-boringssl-quic") {
+        let policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new(
+            alpn_protocols(alpn),
+        )?
+        .allow_insecure(allow_insecure)
+        .zero_rtt(false);
+        return crate::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
+            &policy, transport, session_cache,
+        )
+        .map_err(|err| bad_tls(format!("TUIC BoringSSL QUIC TLS: {err}")));
+    }
     let mut crypto = if allow_insecure {
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .dangerous()
@@ -159,7 +186,7 @@ pub(super) fn build_tuic_client_config_with_congestion(
         QuicClientConfig::try_from(crypto)
             .map_err(|err| bad_tls(format!("TUIC client QUIC TLS: {err}")))?,
     ));
-    config.transport_config(Arc::new(tuic_transport_config(Some(congestion))?));
+    config.transport_config(transport);
     Ok(config)
 }
 
@@ -171,12 +198,10 @@ pub(super) fn normalize_alpn(alpn: &[String]) -> Vec<String> {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn selected_alpn(connection: &quinn::Connection) -> String {
-    connection
-        .handshake_data()
-        .and_then(|data| data.downcast::<HandshakeData>().ok())
-        .and_then(|data| data.protocol.clone())
-        .map(|protocol| String::from_utf8_lossy(&protocol).to_string())
+    crate::shared_transport::boring_quic::selected_connection_alpn(connection)
+        .map(|protocol| String::from_utf8_lossy(&protocol).into_owned())
         .unwrap_or_default()
 }
 
