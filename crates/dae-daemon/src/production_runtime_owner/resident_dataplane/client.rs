@@ -9,16 +9,16 @@ use boring::ssl::{
     SslVerifyMode, SslVersion,
 };
 use dae_outbound::shared_transport::{
-    TlsFragmentOptions, UTLS_ALPN_POLICY_RANDOMIZED_ALPN, UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN,
-    UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE,
-    UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM,
+    SystemCaIdentity, SystemCaSnapshot, TlsFragmentOptions, UTLS_ALPN_POLICY_RANDOMIZED_ALPN,
+    UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN, UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME,
+    UTLS_FAMILY_EDGE, UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM, system_ca_snapshot,
 };
 use rustls::client::RealityConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{
-    CertificateError, ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore,
-    SignatureScheme, SupportedCipherSuite,
+    CertificateError, ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme,
+    SupportedCipherSuite,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;

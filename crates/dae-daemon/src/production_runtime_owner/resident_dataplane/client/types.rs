@@ -51,6 +51,7 @@ pub(crate) struct ResidentTlsClientConfigKey {
     pub(super) flow: String,
     pub(super) alpn: Vec<String>,
     pub(super) allow_insecure: bool,
+    pub(super) system_ca: Option<SystemCaIdentity>,
     pub(super) utls_fingerprint: Option<ResidentTlsFingerprintConfigKey>,
     pub(super) reality: Option<ResidentRealityConfigKey>,
 }
@@ -181,6 +182,7 @@ pub(crate) fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearR
         .get()
         .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear()))
         .unwrap_or(0);
+    let _ = dae_outbound::shared_transport::invalidate_system_ca_snapshot();
     ResidentTlsConfigCacheClearReport { rustls, boring }
 }
 
@@ -193,6 +195,7 @@ mod tests {
             flow: flow.to_owned(),
             alpn: Vec::new(),
             allow_insecure: false,
+            system_ca: None,
             utls_fingerprint: None,
             reality: None,
         }
@@ -209,5 +212,24 @@ mod tests {
 
         assert_eq!(cache.clear(), 2);
         assert_eq!(cache.clear(), 0);
+    }
+
+    #[test]
+    fn resident_tls_config_cache_partitions_system_ca_identity() {
+        let mut cache = ResidentTlsConfigCache::<usize>::default();
+        let mut first = cache_key("tls");
+        first.system_ca = Some(SystemCaIdentity {
+            path: "/etc/ssl/certs/ca-certificates.crt".into(),
+            sha256: "first".to_owned(),
+            certificate_count: 1,
+        });
+        let mut second = first.clone();
+        second.system_ca.as_mut().unwrap().sha256 = "second".to_owned();
+
+        cache.insert_or_get(first.clone(), Arc::new(1));
+        cache.insert_or_get(second.clone(), Arc::new(2));
+
+        assert_eq!(*cache.get(&first).unwrap(), 1);
+        assert_eq!(*cache.get(&second).unwrap(), 2);
     }
 }

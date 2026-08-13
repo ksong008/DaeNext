@@ -56,7 +56,7 @@ async fn exchange_direct_subscription_request_async(
                 format!("invalid tls server name: {error}"),
             )
         })?;
-        let connector = tokio_rustls::TlsConnector::from(subscription_tls_client_config());
+        let connector = tokio_rustls::TlsConnector::from(subscription_tls_client_config()?);
         let mut stream = wait_for_subscription_io(
             &cancellation,
             connector.connect(server_name, stream),
@@ -216,17 +216,15 @@ where
     }
 }
 
-fn subscription_tls_client_config() -> Arc<ClientConfig> {
-    static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
-    Arc::clone(CONFIG.get_or_init(|| {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        )
-    }))
+fn subscription_tls_client_config() -> io::Result<Arc<ClientConfig>> {
+    let roots = dae_outbound::shared_transport::system_ca_snapshot()
+        .map_err(|err| io::Error::other(format!("load subscription system CA bundle: {err}")))?
+        .rustls_roots();
+    Ok(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ))
 }
 
 fn direct_subscription_control_error(error: ProductControlExecutionError) -> io::Error {
@@ -253,5 +251,8 @@ fn subscription_cancelled() -> io::Error {
 
 #[cfg(test)]
 pub(crate) fn subscription_tls_alpn_protocols() -> Vec<Vec<u8>> {
-    subscription_tls_client_config().alpn_protocols.clone()
+    subscription_tls_client_config()
+        .expect("test host must provide a system CA bundle")
+        .alpn_protocols
+        .clone()
 }

@@ -61,8 +61,13 @@ pub fn build_hysteria2_runtime_client_config_with_congestion(
     udp_packet_overhead: usize,
     congestion: Option<Arc<Hysteria2CongestionRuntime>>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let roots = if identity.policy().requires_webpki() {
+        crate::shared_transport::system_ca_snapshot()
+            .map_err(|err| bad_tls(format!("load Hysteria2 system CA bundle: {err}")))?
+            .rustls_roots()
+    } else {
+        RootCertStore::empty()
+    };
     let crypto = build_hysteria2_rustls_client_config(identity, roots)?;
     let mut config = quinn::ClientConfig::new(Arc::new(
         QuicClientConfig::try_from(crypto)

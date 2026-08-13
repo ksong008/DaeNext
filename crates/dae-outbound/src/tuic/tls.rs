@@ -5,7 +5,7 @@ use quinn::crypto::rustls::{HandshakeData, QuicClientConfig, QuicServerConfig};
 use rcgen::generate_simple_self_signed;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use crate::error::OutboundError;
 
@@ -148,8 +148,9 @@ pub(super) fn build_tuic_client_config_with_congestion(
             .with_custom_certificate_verifier(AcceptAnyServerCertVerifier::new())
             .with_no_client_auth()
     } else {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = crate::shared_transport::system_ca_snapshot()
+            .map_err(|err| bad_tls(format!("load TUIC system CA bundle: {err}")))?
+            .rustls_roots();
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(roots)
             .with_no_client_auth()

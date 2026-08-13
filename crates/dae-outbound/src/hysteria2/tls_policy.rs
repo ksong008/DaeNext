@@ -29,7 +29,7 @@ impl Hysteria2ApplicationProtocol {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Hysteria2TrustAnchorIdentity {
-    BundledWebPki,
+    SystemCaBundle,
     None,
 }
 
@@ -195,7 +195,7 @@ impl Hysteria2TlsIdentity {
             ));
         }
         let trust_anchor = if policy.requires_webpki() {
-            Hysteria2TrustAnchorIdentity::BundledWebPki
+            Hysteria2TrustAnchorIdentity::SystemCaBundle
         } else {
             Hysteria2TrustAnchorIdentity::None
         };
@@ -248,7 +248,7 @@ impl Hysteria2TlsIdentity {
         update_identity_part(
             &mut digest,
             match self.trust_anchor {
-                Hysteria2TrustAnchorIdentity::BundledWebPki => b"bundled-webpki",
+                Hysteria2TrustAnchorIdentity::SystemCaBundle => b"system-ca-bundle",
                 Hysteria2TrustAnchorIdentity::None => b"none",
             },
         );

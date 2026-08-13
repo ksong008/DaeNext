@@ -4,7 +4,8 @@ use dae_outbound::shared_transport::reality::reality_client_version;
 pub(super) fn boring_vless_connector(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<SslConnector>, String> {
-    let key = ResidentTlsClientConfigKey::from_proxy(proxy);
+    let system_ca = proxy_system_ca_snapshot(proxy)?;
+    let key = ResidentTlsClientConfigKey::from_proxy(proxy, system_ca.as_deref());
     let cache =
         BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
@@ -17,6 +18,9 @@ pub(super) fn boring_vless_connector(
     }
     let mut builder = SslConnector::builder(SslMethod::tls())
         .map_err(|err| format!("create VLESS BoringSSL connector: {err}"))?;
+    if let Some(system_ca) = system_ca {
+        system_ca.install_boring_builder(&mut builder);
+    }
     builder.set_verify(if proxy.allow_insecure {
         SslVerifyMode::NONE
     } else {
@@ -52,11 +56,15 @@ pub(super) fn boring_vless_connector(
 }
 
 impl ResidentTlsClientConfigKey {
-    pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
+    pub(super) fn from_proxy(
+        proxy: &ResidentProxyPlan,
+        system_ca: Option<&SystemCaSnapshot>,
+    ) -> Self {
         Self {
             flow: proxy.flow.clone(),
             alpn: proxy.alpn.clone(),
             allow_insecure: proxy.allow_insecure,
+            system_ca: system_ca.map(|snapshot| snapshot.identity().clone()),
             utls_fingerprint: proxy
                 .utls_fingerprint
                 .as_ref()
@@ -68,11 +76,15 @@ impl ResidentTlsClientConfigKey {
         }
     }
 
-    pub(super) fn from_xhttp_endpoint(endpoint: &ResidentXhttpEndpointPlan) -> Self {
+    pub(super) fn from_xhttp_endpoint(
+        endpoint: &ResidentXhttpEndpointPlan,
+        system_ca: Option<&SystemCaSnapshot>,
+    ) -> Self {
         Self {
             flow: String::new(),
             alpn: endpoint.alpn.clone(),
             allow_insecure: endpoint.allow_insecure,
+            system_ca: system_ca.map(|snapshot| snapshot.identity().clone()),
             utls_fingerprint: None,
             reality: endpoint
                 .reality
@@ -111,9 +123,10 @@ pub(super) fn rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<ClientConfig>, String> {
     if proxy.reality.is_some() {
-        return build_rustls_vless_client_config(proxy);
+        return build_rustls_vless_client_config(proxy, None);
     }
-    let key = ResidentTlsClientConfigKey::from_proxy(proxy);
+    let system_ca = proxy_system_ca_snapshot(proxy)?;
+    let key = ResidentTlsClientConfigKey::from_proxy(proxy, system_ca.as_deref());
     let cache =
         RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
@@ -124,7 +137,7 @@ pub(super) fn rustls_vless_client_config(
             return Ok(config);
         }
     }
-    let config = build_rustls_vless_client_config(proxy)?;
+    let config = build_rustls_vless_client_config(proxy, system_ca.as_deref())?;
     let mut cache = cache
         .lock()
         .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
@@ -133,6 +146,7 @@ pub(super) fn rustls_vless_client_config(
 
 fn build_rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
+    system_ca: Option<&SystemCaSnapshot>,
 ) -> Result<Arc<ClientConfig>, String> {
     let builder = if proxy.reality.is_some() {
         if proxy.utls_fingerprint.is_some() {
@@ -162,8 +176,9 @@ fn build_rustls_vless_client_config(
             .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
             .with_no_client_auth()
     } else {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = system_ca
+            .ok_or_else(|| "VLESS secure TLS config is missing system CA snapshot".to_owned())?
+            .rustls_roots();
         builder.with_root_certificates(roots).with_no_client_auth()
     };
     config.alpn_protocols = proxy
@@ -178,9 +193,10 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
 ) -> Result<Arc<ClientConfig>, String> {
     if endpoint.reality.is_some() {
-        return build_rustls_xhttp_endpoint_client_config(endpoint);
+        return build_rustls_xhttp_endpoint_client_config(endpoint, None);
     }
-    let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint);
+    let system_ca = xhttp_endpoint_system_ca_snapshot(endpoint)?;
+    let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint, system_ca.as_deref());
     let cache =
         RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
@@ -191,7 +207,7 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
             return Ok(config);
         }
     }
-    let config = build_rustls_xhttp_endpoint_client_config(endpoint)?;
+    let config = build_rustls_xhttp_endpoint_client_config(endpoint, system_ca.as_deref())?;
     let mut cache = cache
         .lock()
         .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
@@ -200,6 +216,7 @@ pub(super) fn rustls_xhttp_endpoint_client_config(
 
 fn build_rustls_xhttp_endpoint_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
+    system_ca: Option<&SystemCaSnapshot>,
 ) -> Result<Arc<ClientConfig>, String> {
     let builder = if endpoint.reality.is_some() {
         let provider = rustls_reality_crypto_provider();
@@ -224,8 +241,9 @@ fn build_rustls_xhttp_endpoint_client_config(
             .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
             .with_no_client_auth()
     } else {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = system_ca
+            .ok_or_else(|| "xHTTP secure TLS config is missing system CA snapshot".to_owned())?
+            .rustls_roots();
         builder.with_root_certificates(roots).with_no_client_auth()
     };
     config.alpn_protocols = endpoint
@@ -234,6 +252,28 @@ fn build_rustls_xhttp_endpoint_client_config(
         .map(|value| value.as_bytes().to_vec())
         .collect();
     Ok(Arc::new(config))
+}
+
+fn proxy_system_ca_snapshot(
+    proxy: &ResidentProxyPlan,
+) -> Result<Option<Arc<SystemCaSnapshot>>, String> {
+    if proxy.allow_insecure || proxy.reality.is_some() {
+        return Ok(None);
+    }
+    system_ca_snapshot()
+        .map(Some)
+        .map_err(|err| format!("load VLESS system CA bundle: {err}"))
+}
+
+fn xhttp_endpoint_system_ca_snapshot(
+    endpoint: &ResidentXhttpEndpointPlan,
+) -> Result<Option<Arc<SystemCaSnapshot>>, String> {
+    if endpoint.allow_insecure || endpoint.reality.is_some() {
+        return Ok(None);
+    }
+    system_ca_snapshot()
+        .map(Some)
+        .map_err(|err| format!("load xHTTP system CA bundle: {err}"))
 }
 
 pub(super) fn rustls_reality_crypto_provider() -> rustls::crypto::CryptoProvider {
