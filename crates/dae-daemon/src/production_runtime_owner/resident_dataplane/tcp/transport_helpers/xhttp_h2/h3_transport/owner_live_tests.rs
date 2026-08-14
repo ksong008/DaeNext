@@ -55,6 +55,8 @@ fn xhttp_h3_owner_plan(
         xmux: Some(xmux.clone()),
         allow_insecure: true,
         tls_fragment: None,
+        utls_fingerprint: None,
+        ech: None,
         reality: None,
     };
     let proxy = ResidentProxyPlan {
@@ -73,6 +75,7 @@ fn xhttp_h3_owner_plan(
         net: "xhttp".to_owned(),
         stream_host: endpoint.stream_host.clone(),
         stream_path: endpoint.stream_path.clone(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: endpoint.mode,
         xhttp_settings: endpoint.settings.clone(),
@@ -81,6 +84,7 @@ fn xhttp_h3_owner_plan(
         allow_insecure: true,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: endpoint.ech.clone(),
         reality: None,
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [1; 16],

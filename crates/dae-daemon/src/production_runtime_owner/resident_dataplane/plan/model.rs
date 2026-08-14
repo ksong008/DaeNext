@@ -22,8 +22,8 @@ pub(crate) use protocol::{ResidentHysteria2ObfsPlan, ResidentProxyProtocolPlan};
 pub(in crate::production_runtime_owner::resident_dataplane) use security::ResidentSecurityUnderlayPlan;
 pub(in crate::production_runtime_owner::resident_dataplane) use wrapper::ResidentStreamWrapperPlan;
 pub(crate) use xhttp::{
-    ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
-    ResidentXhttpQuicTlsProvider,
+    ResidentEchPlan, ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan,
+    ResidentXhttpEndpointPlan, ResidentXhttpQuicTlsProvider,
 };
 pub(in crate::production_runtime_owner::resident_dataplane) use xhttp::{
     ResidentXhttpHttpVersion, ResidentXhttpMetaPlacement, ResidentXhttpMode,
@@ -84,6 +84,7 @@ pub(crate) struct ResidentProxyPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) net: String,
     pub(in crate::production_runtime_owner::resident_dataplane) stream_host: String,
     pub(in crate::production_runtime_owner::resident_dataplane) stream_path: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) grpc_mode: GrpcMode,
     pub(in crate::production_runtime_owner::resident_dataplane) xhttp_download:
         Option<ResidentXhttpEndpointPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) xhttp_mode: ResidentXhttpMode,
@@ -97,6 +98,7 @@ pub(crate) struct ResidentProxyPlan {
         Option<TlsFragmentOptions>,
     pub(in crate::production_runtime_owner::resident_dataplane) utls_fingerprint:
         Option<ResidentUtlsFingerprintPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) ech: Option<ResidentEchPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) reality:
         Option<ResidentRealityUnderlayPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) handler: ResidentProxyProtocolPlan,

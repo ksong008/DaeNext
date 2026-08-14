@@ -2,11 +2,11 @@ use serde_json::{Value, json};
 
 use super::super::{link_hash, redacted_link_source};
 use super::{
-    RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentTcpCarrierOwnership,
-    ResidentUdpChainAdmission, ResidentUdpExecutionAgreement, ResidentUtlsFingerprintPlan,
-    ResidentXhttpHttpVersion, ResidentXhttpMode, ResidentXhttpSettingsPlan,
-    resident_udp_chain_admission,
+    GrpcMode, Mldsa65VerifyKey, RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY,
+    ResidentEchPlan, ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
+    ResidentTcpCarrierOwnership, ResidentUdpChainAdmission, ResidentUdpExecutionAgreement,
+    ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion, ResidentXhttpMode,
+    ResidentXhttpQuicTlsProvider, ResidentXhttpSettingsPlan, resident_udp_chain_admission,
 };
 
 mod runtime_limits;
@@ -34,16 +34,28 @@ pub(in crate::production_runtime_owner::resident_dataplane) struct ResidentExecu
     stream_host_hash: Option<String>,
     stream_path_present: bool,
     stream_path_hash: Option<String>,
+    grpc_mode: GrpcMode,
     udp_agreement: ResidentUdpExecutionAgreement,
     xhttp_mode: ResidentXhttpMode,
     xhttp_settings: ResidentXhttpSettingsPlan,
     xhttp_download_mode: Option<ResidentXhttpMode>,
     xhttp_download_settings: Option<ResidentXhttpSettingsPlan>,
+    xhttp_primary_http_version: ResidentXhttpHttpVersion,
+    xhttp_primary_quic_tls_provider: Option<ResidentXhttpQuicTlsProvider>,
+    xhttp_download_http_version: Option<ResidentXhttpHttpVersion>,
+    xhttp_download_quic_tls_provider: Option<ResidentXhttpQuicTlsProvider>,
+    xhttp_download_fingerprint: Option<ResidentUtlsFingerprintPlan>,
     flow: String,
     alpn: Vec<String>,
+    quic_congestion_control: Option<&'static str>,
+    tuic_udp_relay_mode: Option<&'static str>,
     allow_insecure: bool,
     verification_policy: String,
     utls_fingerprint: Option<ResidentUtlsFingerprintPlan>,
+    ech_config_list_sha256: Option<String>,
+    xhttp_download_ech_config_list_sha256: Option<String>,
+    reality_mldsa65_sha256: Option<String>,
+    xhttp_download_reality_mldsa65_sha256: Option<String>,
     chain_parent_count: usize,
     udp_chain_admission: ResidentUdpChainAdmission,
     quic_lifecycle_scope: QuicLifecycleScope,
@@ -56,6 +68,27 @@ impl ResidentExecutableGraphDescriptor {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
         let execution = proxy.execution_plan();
         let executor_contract = proxy.executor_contract();
+        let xhttp_primary_http_version = if proxy.net == "xhttp" {
+            ResidentXhttpHttpVersion::from_tls_alpn(&proxy.alpn)
+        } else {
+            ResidentXhttpHttpVersion::H2
+        };
+        let xhttp_primary_quic_tls_provider = (proxy.net == "xhttp"
+            && xhttp_primary_http_version == ResidentXhttpHttpVersion::H3)
+            .then(|| {
+                ResidentXhttpQuicTlsProvider::for_endpoint(proxy.utls_fingerprint.as_ref())
+                    .expect("accepted xHTTP H3 primary endpoint has a supported TLS provider")
+            });
+        let xhttp_download_http_version = proxy
+            .xhttp_download
+            .as_ref()
+            .map(|download| download.http_version());
+        let xhttp_download_quic_tls_provider = proxy.xhttp_download.as_ref().and_then(|download| {
+            (download.http_version() == ResidentXhttpHttpVersion::H3).then(|| {
+                ResidentXhttpQuicTlsProvider::for_endpoint(download.utls_fingerprint.as_ref())
+                    .expect("accepted xHTTP H3 download endpoint has a supported TLS provider")
+            })
+        });
         Self {
             graph_id: proxy.graph_id.clone(),
             link_hash: proxy.graph_link_hash.clone(),
@@ -78,6 +111,7 @@ impl ResidentExecutableGraphDescriptor {
             } else {
                 Some(link_hash(&proxy.stream_path))
             },
+            grpc_mode: proxy.grpc_mode,
             udp_agreement: execution.udp.agreement(),
             xhttp_mode: proxy.xhttp_mode,
             xhttp_settings: proxy.xhttp_settings.clone(),
@@ -86,11 +120,41 @@ impl ResidentExecutableGraphDescriptor {
                 .xhttp_download
                 .as_ref()
                 .map(|download| download.settings.clone()),
+            xhttp_primary_http_version,
+            xhttp_primary_quic_tls_provider,
+            xhttp_download_http_version,
+            xhttp_download_quic_tls_provider,
+            xhttp_download_fingerprint: proxy
+                .xhttp_download
+                .as_ref()
+                .and_then(|download| download.utls_fingerprint.clone()),
             flow: proxy.flow.clone(),
             alpn: proxy.alpn.clone(),
+            quic_congestion_control: graph_quic_congestion_control(&proxy.handler),
+            tuic_udp_relay_mode: graph_tuic_udp_relay_mode(&proxy.handler),
             allow_insecure: proxy.allow_insecure,
             verification_policy: graph_verification_policy(proxy),
             utls_fingerprint: proxy.utls_fingerprint.clone(),
+            ech_config_list_sha256: proxy
+                .ech
+                .as_ref()
+                .map(ResidentEchPlan::config_list_sha256_hex),
+            xhttp_download_ech_config_list_sha256: proxy
+                .xhttp_download
+                .as_ref()
+                .and_then(|download| download.ech.as_ref())
+                .map(ResidentEchPlan::config_list_sha256_hex),
+            reality_mldsa65_sha256: proxy
+                .reality
+                .as_ref()
+                .and_then(|reality| reality.mldsa65_verify.as_ref())
+                .map(Mldsa65VerifyKey::sha256_hex),
+            xhttp_download_reality_mldsa65_sha256: proxy
+                .xhttp_download
+                .as_ref()
+                .and_then(|download| download.reality.as_ref())
+                .and_then(|reality| reality.mldsa65_verify.as_ref())
+                .map(Mldsa65VerifyKey::sha256_hex),
             chain_parent_count: chain_parent_count(proxy),
             udp_chain_admission: resident_udp_chain_admission(proxy),
             quic_lifecycle_scope: quic_lifecycle_scope(&proxy.handler),
@@ -145,6 +209,7 @@ impl ResidentExecutableGraphDescriptor {
             "streamWrapperEndpoint": {
                 "hostHash": self.stream_host_hash,
                 "pathEvidence": self.stream_path_evidence_value(),
+                "grpcMode": self.grpc_mode.link_value(),
             },
             "protocolFraming": self.protocol_framing,
             "tcpExecutor": self.tcp_executor,
@@ -222,25 +287,31 @@ impl ResidentExecutableGraphDescriptor {
                 "fullUtlsParityDeclared": false,
             })
         });
-        let reality_with_fingerprint =
-            self.security_underlay == "reality" && self.utls_fingerprint.is_some();
-        let provider = if reality_with_fingerprint {
-            "reality-boringssl"
-        } else {
-            match self.security_underlay.as_str() {
-                "fingerprint-aware-tls" => "boringssl",
-                "reality" => "rustls-reality",
-                "insecure-tls" => "rustls",
-                "tls-fragment" => "rustls",
-                "standard-tls" => "rustls",
-                "quic-tls" => "quinn-rustls",
-                "aead" => "protocol-aead-codec",
-                "aead-2022" => "protocol-aead-2022-codec",
-                "legacy-cipher" => "protocol-legacy-stream-codec",
-                "none" => "plain",
-                _ => "unsupported",
-            }
-        };
+        let reality_with_boring_features = self.security_underlay == "reality"
+            && (self.utls_fingerprint.is_some() || self.reality_mldsa65_sha256.is_some());
+        let provider =
+            if self.ech_config_list_sha256.is_some() && self.security_underlay != "quic-tls" {
+                "boringssl-ech"
+            } else if reality_with_boring_features {
+                "reality-boringssl"
+            } else {
+                match self.security_underlay.as_str() {
+                    "fingerprint-aware-tls" => "boringssl",
+                    "reality" => "rustls-reality",
+                    "insecure-tls" => "rustls",
+                    "tls-fragment" => "rustls",
+                    "standard-tls" => "rustls",
+                    "quic-tls" => self
+                        .xhttp_primary_quic_tls_provider
+                        .map(ResidentXhttpQuicTlsProvider::as_str)
+                        .unwrap_or("quinn-rustls"),
+                    "aead" => "protocol-aead-codec",
+                    "aead-2022" => "protocol-aead-2022-codec",
+                    "legacy-cipher" => "protocol-legacy-stream-codec",
+                    "none" => "plain",
+                    _ => "unsupported",
+                }
+            };
         let status = if provider == "unsupported" {
             "fail-closed"
         } else {
@@ -260,8 +331,30 @@ impl ResidentExecutableGraphDescriptor {
             "verificationPolicy": self.verification_policy,
             "allowInsecure": self.allow_insecure,
             "alpn": self.alpn,
+            "congestionControl": self.quic_congestion_control,
+            "tuicUdpRelayMode": self.tuic_udp_relay_mode,
             "flow": self.flow,
             "fingerprint": fingerprint,
+            "ech": {
+                "requested": self.ech_config_list_sha256.is_some(),
+                "configListSha256": self.ech_config_list_sha256,
+                "retryPolicy": if self.ech_config_list_sha256.is_some() {
+                    "authenticated-once"
+                } else {
+                    "not-requested"
+                },
+                "nonEchFallback": false,
+            },
+            "realityPqv": {
+                "pqvRequested": self.reality_mldsa65_sha256.is_some(),
+                "mldsa65Verified": Value::Null,
+                "keySha256": self.reality_mldsa65_sha256,
+                "verificationPolicy": if self.reality_mldsa65_sha256.is_some() {
+                    "mandatory-at-handshake"
+                } else {
+                    "not-requested"
+                },
+            },
             "quicLifecycle": quic_lifecycle_value(self.quic_lifecycle_scope),
             "unsupportedReason": unsupported_reason,
         })
@@ -332,14 +425,65 @@ impl ResidentExecutableGraphDescriptor {
                 json!({
                     "primary": xhttp_settings_evidence_value(&self.xhttp_settings),
                     "download": self.xhttp_download_settings.as_ref().map(|settings| {
+                        let declared_provider = self
+                            .xhttp_download_quic_tls_provider
+                            .map(ResidentXhttpQuicTlsProvider::as_str);
                         json!({
                             "mode": self
                                 .xhttp_download_mode
                                 .map(ResidentXhttpMode::as_str)
                                 .unwrap_or("packet-up"),
                             "settings": xhttp_settings_evidence_value(settings),
+                            "endpointRole": "download",
+                            "httpVersion": self
+                                .xhttp_download_http_version
+                                .map(ResidentXhttpHttpVersion::alpn_label),
+                            "declaredTlsProvider": declared_provider,
+                            "factoryTlsProvider": declared_provider,
+                            "fingerprint": self.xhttp_download_fingerprint.as_ref().map(|fingerprint| {
+                                json!({
+                                    "requested": fingerprint.requested,
+                                    "canonical": fingerprint.canonical,
+                                    "family": fingerprint.family,
+                                })
+                            }),
+                            "cacheIdentity": {
+                                "roleScoped": true,
+                                "providerScoped": true,
+                                "systemCaSnapshotScoped": true,
+                                "sessionNamespaceScoped": true,
+                                "xmuxSettingsScoped": true,
+                            },
+                            "echConfigListSha256": self.xhttp_download_ech_config_list_sha256,
+                            "realityPqv": {
+                                "pqvRequested": self.xhttp_download_reality_mldsa65_sha256.is_some(),
+                                "mldsa65Verified": Value::Null,
+                                "keySha256": self.xhttp_download_reality_mldsa65_sha256,
+                                "verificationPolicy": if self.xhttp_download_reality_mldsa65_sha256.is_some() {
+                                    "mandatory-at-handshake"
+                                } else {
+                                    "not-requested"
+                                },
+                            },
                         })
                     }),
+                    "primaryTransport": {
+                        "endpointRole": "primary",
+                        "httpVersion": self.xhttp_primary_http_version.alpn_label(),
+                        "declaredTlsProvider": self
+                            .xhttp_primary_quic_tls_provider
+                            .map(ResidentXhttpQuicTlsProvider::as_str),
+                        "factoryTlsProvider": self
+                            .xhttp_primary_quic_tls_provider
+                            .map(ResidentXhttpQuicTlsProvider::as_str),
+                        "cacheIdentity": {
+                            "roleScoped": true,
+                            "providerScoped": true,
+                            "systemCaSnapshotScoped": true,
+                            "sessionNamespaceScoped": true,
+                            "xmuxSettingsScoped": true,
+                        },
+                    },
                 })
             } else {
                 Value::Null
@@ -484,6 +628,23 @@ impl ResidentExecutableGraphDescriptor {
             },
             "unsupportedReason": Value::Null,
         })
+    }
+}
+
+fn graph_quic_congestion_control(handler: &ResidentProxyProtocolPlan) -> Option<&'static str> {
+    match handler {
+        ResidentProxyProtocolPlan::TuicQuicTcp { congestion, .. } => Some(congestion.as_str()),
+        ResidentProxyProtocolPlan::JuicityQuicTcp { congestion, .. } => Some(congestion.as_str()),
+        _ => None,
+    }
+}
+
+fn graph_tuic_udp_relay_mode(handler: &ResidentProxyProtocolPlan) -> Option<&'static str> {
+    match handler {
+        ResidentProxyProtocolPlan::TuicQuicTcp { udp_relay_mode, .. } => {
+            Some(udp_relay_mode.as_str())
+        }
+        _ => None,
     }
 }
 

@@ -1719,6 +1719,8 @@ struct DAERealityConfig {
   size_t short_id_len = 0;
   uint8_t client_version[3] = {0};
   uint8_t auth_key[32] = {0};
+  Array<uint8_t> client_hello;
+  Array<uint8_t> server_hello;
 };
 
 struct DAEUtlsTemplateConfig {

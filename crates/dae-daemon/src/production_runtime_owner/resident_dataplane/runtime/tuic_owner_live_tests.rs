@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dae_outbound::tuic::{
-    TuicUdpPacket, decode_tuic_udp_packet, encode_tuic_udp_packet, write_tuic_connect_request,
+    TUIC_MAX_UDP_STREAM_FRAME_LEN, TuicUdpPacket, TuicUdpRelayMode, decode_tuic_udp_packet,
+    decode_tuic_udp_stream_packet, encode_tuic_udp_packet, encode_tuic_udp_stream_packet,
+    write_tuic_connect_request,
 };
 use quinn::crypto::rustls::QuicServerConfig;
 use rcgen::generate_simple_self_signed;
@@ -27,6 +29,7 @@ struct TuicServerObservation {
     authentications: AtomicUsize,
     tcp_streams: AtomicUsize,
     udp_packets: AtomicUsize,
+    udp_stream_packets: AtomicUsize,
     dissociations: AtomicUsize,
     heartbeats: AtomicUsize,
     last_connection_id: AtomicU64,
@@ -113,14 +116,33 @@ async fn run_tuic_server_connection(
             stream = connection.accept_uni() => match stream {
                 Ok(mut stream) => {
                     let observation = Arc::clone(&observation);
+                    let response_connection = connection.clone();
                     stream_tasks.spawn(async move {
-                        if let Ok(frame) = stream.read_to_end(64).await {
+                        if let Ok(frame) = stream.read_to_end(TUIC_MAX_UDP_STREAM_FRAME_LEN).await {
                             match frame.as_slice() {
                                 [0x05, 0x00, ..] if frame.len() == 50 => {
                                     observation.authentications.fetch_add(1, Ordering::Relaxed);
                                 }
                                 [0x05, 0x03, _, _] => {
                                     observation.dissociations.fetch_add(1, Ordering::Relaxed);
+                                }
+                                [0x05, 0x02, ..] => {
+                                    if let Ok(packet) = decode_tuic_udp_stream_packet(&frame) {
+                                        observation.udp_stream_packets.fetch_add(1, Ordering::Relaxed);
+                                        if let Some(target) = packet.target()
+                                            && let Ok(response) = TuicUdpPacket::new(
+                                                packet.association_id(),
+                                                packet.packet_id(),
+                                                target,
+                                                packet.payload(),
+                                            )
+                                            && let Ok(response) = encode_tuic_udp_stream_packet(&response)
+                                            && let Ok(mut response_stream) = response_connection.open_uni().await
+                                            && response_stream.write_all(&response).await.is_ok()
+                                        {
+                                            let _ = response_stream.finish();
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }
@@ -214,6 +236,14 @@ fn tuic_server_config() -> quinn::ServerConfig {
 }
 
 fn tuic_proxy(addr: SocketAddr, generation: u64) -> plan::ResidentProxyBinding {
+    tuic_proxy_with_mode(addr, generation, TuicUdpRelayMode::Native)
+}
+
+fn tuic_proxy_with_mode(
+    addr: SocketAddr,
+    generation: u64,
+    udp_relay_mode: TuicUdpRelayMode,
+) -> plan::ResidentProxyBinding {
     let config = dae_config::Config {
         global: dae_config::Global::default(),
         subscription: Vec::new(),
@@ -227,9 +257,10 @@ fn tuic_proxy(addr: SocketAddr, generation: u64) -> plan::ResidentProxyBinding {
         "tuic-owner-test".to_owned(),
         "tuic-owner-node".to_owned(),
         format!(
-            "tuic://{TEST_UUID}:{TEST_PASSWORD}@{}:{}?allow_insecure=1&alpn=h3&congestion_control=bbr#owner-test",
+            "tuic://{TEST_UUID}:{TEST_PASSWORD}@{}:{}?allow_insecure=1&alpn=h3&congestion_control=bbr&udp_relay_mode={}#owner-test",
             addr.ip(),
             addr.port(),
+            udp_relay_mode.as_str(),
         ),
     )
     .unwrap();
@@ -265,16 +296,74 @@ async fn exchange_tuic_udp(
         payload,
     )
     .unwrap();
-    association
-        .connection()
-        .send_datagram(encode_tuic_udp_packet(&packet).unwrap().into())
-        .unwrap();
+    match association.udp_relay_mode() {
+        TuicUdpRelayMode::Native => association
+            .connection()
+            .send_datagram(encode_tuic_udp_packet(&packet).unwrap().into())
+            .unwrap(),
+        TuicUdpRelayMode::Quic => {
+            let mut stream = association.connection().open_uni().await.unwrap();
+            stream
+                .write_all(&encode_tuic_udp_stream_packet(&packet).unwrap())
+                .await
+                .unwrap();
+            stream.finish().unwrap();
+        }
+    }
     association
         .receive_until(Some(Instant::now() + Duration::from_secs(1)))
         .await
         .unwrap()
         .unwrap()
         .into_payload()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tuic_owner_quic_stream_mode_relays_packets_on_unidirectional_streams() {
+    let server = TuicTestServer::start().await;
+    let generation = 78;
+    let proxy = tuic_proxy_with_mode(server.addr, generation, TuicUdpRelayMode::Quic);
+    let stop = ResidentStopSignal::shared();
+    let (registry, owner_thread) =
+        start_tuic_owner_registry(generation, Arc::clone(&stop), 2 * 1024 * 1024).unwrap();
+
+    let lease = registry
+        .acquire(
+            proxy,
+            QuicEndpointCallerClass::UdpData,
+            tuic_owner_deadline(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lease.udp_relay_mode(), TuicUdpRelayMode::Quic);
+    let mut association = lease.open_udp_association().unwrap();
+    assert_eq!(
+        exchange_tuic_udp(&mut association, 41, b"stream-a").await,
+        b"stream-a"
+    );
+    assert_eq!(
+        exchange_tuic_udp(&mut association, 42, b"stream-b").await,
+        b"stream-b"
+    );
+    wait_until(|| {
+        server
+            .observation
+            .udp_stream_packets
+            .load(Ordering::Relaxed)
+            == 2
+    })
+    .await;
+    let metrics = registry.metrics_snapshot();
+    assert_eq!(metrics["cumulativeUdpStreamPackets"], 2);
+    assert_eq!(metrics["cumulativeUdpDatagrams"], 0);
+    assert_eq!(metrics["malformedUdpStreams"], 0);
+
+    drop(association);
+    assert!(
+        stop_tuic_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE
+    );
+    assert_tuic_owner_resources_released(&registry, generation);
+    server.stop().await;
 }
 
 fn tuic_owner_deadline() -> dae_runtime_control::AbsoluteDeadline {

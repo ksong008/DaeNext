@@ -5,13 +5,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use boring::ssl::{
-    CertificateCompressionAlgorithm, CertificateCompressor, SslConnector, SslMethod, SslRef,
-    SslVerifyMode, SslVersion,
+    CertificateCompressionAlgorithm, CertificateCompressor, SslConnector, SslConnectorBuilder,
+    SslMethod, SslRef, SslVerifyMode, SslVersion,
 };
+use boring::x509::{X509StoreContext, X509VerifyError};
 use dae_outbound::shared_transport::{
-    SystemCaIdentity, SystemCaSnapshot, TlsFragmentOptions, UTLS_ALPN_POLICY_RANDOMIZED_ALPN,
-    UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN, UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME,
-    UTLS_FAMILY_EDGE, UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM, system_ca_snapshot,
+    EchConfigList, Mldsa65VerifyKey, SystemCaIdentity, SystemCaSnapshot, TlsFragmentOptions,
+    UTLS_ALPN_POLICY_RANDOMIZED_ALPN, UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN, UTLS_FAMILY_360,
+    UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE, UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ,
+    UTLS_FAMILY_RANDOM, system_ca_snapshot,
 };
 use rustls::client::RealityConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};

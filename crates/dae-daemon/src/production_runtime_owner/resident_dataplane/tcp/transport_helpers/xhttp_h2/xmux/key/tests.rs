@@ -30,6 +30,8 @@ fn endpoint(reality: Option<ResidentRealityUnderlayPlan>) -> ResidentXhttpEndpoi
         xmux: Some(xmux(9)),
         allow_insecure: false,
         tls_fragment: None,
+        utls_fingerprint: None,
+        ech: None,
         reality,
     }
 }
@@ -39,6 +41,7 @@ fn reality(seed: u8) -> ResidentRealityUnderlayPlan {
         public_key: [seed; 32],
         short_id: vec![seed; 8],
         spider_x: format!("/credential-{seed}"),
+        mldsa65_verify: None,
     }
 }
 
@@ -73,6 +76,7 @@ fn test_proxy(endpoint: &ResidentXhttpEndpointPlan) -> ResidentProxyPlan {
         net: "xhttp".to_owned(),
         stream_host: endpoint.stream_host.clone(),
         stream_path: endpoint.stream_path.clone(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: endpoint.mode,
         xhttp_settings: endpoint.settings.clone(),
@@ -84,7 +88,8 @@ fn test_proxy(endpoint: &ResidentXhttpEndpointPlan) -> ResidentProxyPlan {
         },
         allow_insecure: endpoint.allow_insecure,
         tls_fragment: endpoint.tls_fragment.clone(),
-        utls_fingerprint: None,
+        utls_fingerprint: endpoint.utls_fingerprint.clone(),
+        ech: endpoint.ech.clone(),
         reality: endpoint.reality.clone(),
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [7; 16],
@@ -178,13 +183,70 @@ fn primary_h3_quic_tls_provider_partitions_xmux_key() {
     let rustls_proxy = test_proxy(&endpoint);
     let mut boring_proxy = rustls_proxy.clone();
     boring_proxy.utls_fingerprint = Some(chrome_fingerprint());
+    let mut boring_endpoint = endpoint.clone();
+    boring_endpoint.utls_fingerprint = boring_proxy.utls_fingerprint.clone();
     let resolved = resolved(&["192.0.2.30:443"]);
 
     let rustls = primary_key(&rustls_proxy, &endpoint, &resolved, 0, false);
-    let boring = primary_key(&boring_proxy, &endpoint, &resolved, 0, false);
+    let boring = primary_key(&boring_proxy, &boring_endpoint, &resolved, 0, false);
     assert_ne!(rustls, boring);
     assert!(format!("{rustls:?}").contains("quic_tls_provider: Some(Rustls)"));
     assert!(format!("{boring:?}").contains("quic_tls_provider: Some(ChromeBoring)"));
+}
+
+#[test]
+fn download_h3_uses_the_endpoint_fingerprint_provider() {
+    let mut endpoint = endpoint(None);
+    endpoint.alpn = vec!["h3".to_owned()];
+    endpoint.utls_fingerprint = Some(chrome_fingerprint());
+    let proxy = test_proxy(&endpoint);
+    let key = XhttpXmuxKey::download(
+        &test_binding(&proxy),
+        &endpoint,
+        &resolved(&["192.0.2.31:443"]),
+        endpoint.xmux.as_ref().unwrap(),
+        0,
+        false,
+    )
+    .unwrap();
+
+    assert!(format!("{key:?}").contains("quic_tls_provider: Some(ChromeBoring)"));
+}
+
+#[test]
+fn system_ca_snapshot_partitions_security_and_session_identity() {
+    let endpoint = endpoint(None);
+    let first_ca = XhttpSystemCaIdentity {
+        path: "/etc/ssl/first.pem".to_owned(),
+        sha256: "11".repeat(32),
+        certificate_count: 10,
+    };
+    let second_ca = XhttpSystemCaIdentity {
+        path: "/etc/ssl/second.pem".to_owned(),
+        sha256: "22".repeat(32),
+        certificate_count: 11,
+    };
+    let first_security = security_identity(&endpoint, None, None, Some(first_ca.clone()));
+    let second_security = security_identity(&endpoint, None, None, Some(second_ca.clone()));
+    assert_ne!(first_security, second_security);
+    assert_ne!(
+        xhttp_session_namespace(
+            XhttpCarrierRole::Primary,
+            XhttpCarrierProtocol::Http2,
+            &endpoint,
+            None,
+            None,
+            Some(&first_ca),
+        ),
+        xhttp_session_namespace(
+            XhttpCarrierRole::Primary,
+            XhttpCarrierProtocol::Http2,
+            &endpoint,
+            None,
+            None,
+            Some(&second_ca),
+        )
+    );
 }
 
 #[test]
@@ -330,6 +392,14 @@ fn tls_reality_fingerprint_and_request_route_differences_partition() {
         )
     );
 
+    let mut changed_pqv = endpoint.clone();
+    changed_pqv.reality.as_mut().unwrap().mldsa65_verify =
+        Some(dae_outbound::shared_transport::Mldsa65VerifyKey::from_bytes(vec![3; 1952]).unwrap());
+    assert_ne!(
+        base,
+        primary_key(&test_proxy(&changed_pqv), &changed_pqv, &resolved, 0, false)
+    );
+
     let mut changed_sni = endpoint.clone();
     changed_sni.server_name = "other-sni.invalid".to_owned();
     assert_ne!(base, primary_key(&proxy, &changed_sni, &resolved, 0, false));
@@ -356,8 +426,8 @@ fn tls_reality_fingerprint_and_request_route_differences_partition() {
         primary_key(&proxy, &changed_route, &resolved, 0, false)
     );
 
-    let mut fingerprint_proxy = proxy.clone();
-    fingerprint_proxy.utls_fingerprint = Some(ResidentUtlsFingerprintPlan {
+    let mut fingerprint_endpoint = endpoint.clone();
+    fingerprint_endpoint.utls_fingerprint = Some(ResidentUtlsFingerprintPlan {
         source: "source",
         requested: "chrome".to_owned(),
         name: "chrome".to_owned(),
@@ -368,9 +438,16 @@ fn tls_reality_fingerprint_and_request_route_differences_partition() {
         alpn_policy: "configured".to_owned(),
         default_alpn: vec!["h2".to_owned()],
     });
+    let fingerprint_proxy = test_proxy(&fingerprint_endpoint);
     assert_ne!(
         base,
-        primary_key(&fingerprint_proxy, &endpoint, &resolved, 0, false)
+        primary_key(
+            &fingerprint_proxy,
+            &fingerprint_endpoint,
+            &resolved,
+            0,
+            false
+        )
     );
 }
 

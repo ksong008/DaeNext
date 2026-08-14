@@ -30,6 +30,24 @@ pub(crate) enum ResidentTlsProvider {
 
 impl ResidentTlsProvider {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Result<Self, String> {
+        if proxy.ech.is_some() {
+            if proxy.reality.is_some() {
+                return Err("ECH and Reality cannot share one TLS underlay".to_owned());
+            }
+            return match proxy.execution_plan().security {
+                ResidentSecurityUnderlayPlan::StandardTls
+                | ResidentSecurityUnderlayPlan::InsecureTls
+                | ResidentSecurityUnderlayPlan::FragmentedTls
+                | ResidentSecurityUnderlayPlan::FingerprintAwareTls => {
+                    Ok(Self::FingerprintAwareBoring)
+                }
+                other => Err(format!(
+                    "resident ECH factory cannot open security underlay {} for protocol {}",
+                    other.graph_label(),
+                    proxy.protocol
+                )),
+            };
+        }
         match proxy.execution_plan().security {
             ResidentSecurityUnderlayPlan::StandardTls
             | ResidentSecurityUnderlayPlan::InsecureTls
@@ -44,6 +62,34 @@ impl ResidentTlsProvider {
             )),
         }
     }
+
+    pub(super) fn from_xhttp_endpoint(
+        endpoint: &ResidentXhttpEndpointPlan,
+    ) -> Result<Self, String> {
+        if endpoint.ech.is_some() {
+            if endpoint.reality.is_some() {
+                return Err(
+                    "xHTTP endpoint ECH and Reality cannot share one TLS underlay".to_owned(),
+                );
+            }
+            return Ok(Self::FingerprintAwareBoring);
+        }
+        if endpoint.reality.is_some() {
+            if endpoint.utls_fingerprint.is_some()
+                || endpoint
+                    .reality
+                    .as_ref()
+                    .is_some_and(|reality| reality.mldsa65_verify.is_some())
+            {
+                return Ok(Self::RealityFingerprintBoring);
+            }
+            return Ok(Self::RealityRustls);
+        }
+        if endpoint.utls_fingerprint.is_some() {
+            return Ok(Self::FingerprintAwareBoring);
+        }
+        Ok(Self::StandardRustls)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -53,6 +99,7 @@ pub(crate) struct ResidentTlsClientConfigKey {
     pub(super) allow_insecure: bool,
     pub(super) system_ca: Option<SystemCaIdentity>,
     pub(super) utls_fingerprint: Option<ResidentTlsFingerprintConfigKey>,
+    pub(super) ech: Option<[u8; 32]>,
     pub(super) reality: Option<ResidentRealityConfigKey>,
 }
 
@@ -73,6 +120,7 @@ pub(crate) struct ResidentTlsFingerprintConfigKey {
 pub(crate) struct ResidentRealityConfigKey {
     pub(super) public_key: [u8; 32],
     pub(super) short_id: Vec<u8>,
+    pub(super) mldsa65_verify: Option<[u8; 32]>,
 }
 
 pub(crate) static RUSTLS_CLIENT_CONFIG_CACHE: OnceLock<
@@ -197,6 +245,7 @@ mod tests {
             allow_insecure: false,
             system_ca: None,
             utls_fingerprint: None,
+            ech: None,
             reality: None,
         }
     }

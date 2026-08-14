@@ -8,6 +8,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::OutboundError;
+use crate::shared_transport::QuicCongestionController;
 use crate::trojan::{TrojanMetadata, TrojanNetwork};
 
 use super::auth_stream::build_authenticate_header;
@@ -126,6 +127,18 @@ pub fn build_juicity_runtime_client_config(
     allow_insecure: bool,
     pinned_certchain_sha256: &str,
 ) -> Result<quinn::ClientConfig, OutboundError> {
+    build_juicity_runtime_client_config_with_congestion(
+        allow_insecure,
+        pinned_certchain_sha256,
+        QuicCongestionController::Bbr,
+    )
+}
+
+pub fn build_juicity_runtime_client_config_with_congestion(
+    allow_insecure: bool,
+    pinned_certchain_sha256: &str,
+    congestion: QuicCongestionController,
+) -> Result<quinn::ClientConfig, OutboundError> {
     let mut crypto = if allow_insecure || !pinned_certchain_sha256.is_empty() {
         let verifier = JuicityServerCertVerifier::new(allow_insecure, pinned_certchain_sha256);
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -145,7 +158,7 @@ pub fn build_juicity_runtime_client_config(
         QuicClientConfig::try_from(crypto)
             .map_err(|err| bad_runtime(format!("client quic tls config: {err}")))?,
     ));
-    config.transport_config(Arc::new(transport_config()?));
+    config.transport_config(Arc::new(transport_config(congestion)?));
     Ok(config)
 }
 
@@ -207,8 +220,11 @@ pub fn build_juicity_tcp_request(
     Ok(request)
 }
 
-fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {
+fn transport_config(
+    congestion: QuicCongestionController,
+) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
+    congestion.install(&mut transport);
     transport.keep_alive_interval(Some(Duration::from_secs(DEFAULT_H3_KEEPALIVE_SECS)));
     transport.max_idle_timeout(Some(
         Duration::from_secs(DEFAULT_H3_HANDSHAKE_IDLE_TIMEOUT_SECS)

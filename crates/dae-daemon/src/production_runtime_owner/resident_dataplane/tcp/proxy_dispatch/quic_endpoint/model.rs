@@ -74,7 +74,7 @@ pub(crate) enum QuicEndpointIdentityRole {
 }
 
 impl QuicEndpointIdentityRole {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::ProtocolCarrier => "protocol-carrier",
             Self::XhttpPrimary => "xhttp-primary",

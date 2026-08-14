@@ -15,6 +15,7 @@ pub mod stream_packet_congestion;
 pub mod stream_packet_conn;
 pub mod transport_packet_conn;
 
+pub use crate::shared_transport::QuicCongestionController as JuicityCongestionController;
 pub use auth_lifecycle::{
     DEFAULT_AUTH_LIFECYCLE_RECORD_COUNT, DEFAULT_AUTH_LIFECYCLE_TARGETS,
     JuicityAuthLifecycleOptions, JuicityAuthLifecycleReport, run_auth_lifecycle_smoke,
@@ -68,7 +69,8 @@ pub use packet::{
 };
 pub use runtime::{
     JuicityAuthReport, JuicityAuthStream, authenticate_juicity_connection,
-    build_juicity_runtime_client_config, build_juicity_tcp_request, write_juicity_tcp_request,
+    build_juicity_runtime_client_config, build_juicity_runtime_client_config_with_congestion,
+    build_juicity_tcp_request, write_juicity_tcp_request,
 };
 pub use stream_packet_congestion::{
     BBR_INITIAL_CONGESTION_WINDOW_PACKETS, BBR_INITIAL_PACKET_SIZE_IPV4,

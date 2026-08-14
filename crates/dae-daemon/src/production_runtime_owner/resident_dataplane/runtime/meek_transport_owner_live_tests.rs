@@ -268,6 +268,7 @@ fn meek_test_proxy(
         net: "meek".to_owned(),
         stream_host: "localhost".to_owned(),
         stream_path: "/owner-test".to_owned(),
+        grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: plan::ResidentXhttpMode::PacketUp,
         xhttp_settings: plan::ResidentXhttpSettingsPlan::default(),
@@ -276,6 +277,7 @@ fn meek_test_proxy(
         allow_insecure: true,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: plan::ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [9; 16],

@@ -66,16 +66,43 @@ pub(super) fn configure_utls_template_boring_ssl(
     let Some(fingerprint) = proxy.utls_fingerprint.as_ref() else {
         return Ok(());
     };
+    configure_utls_template_boring_ssl_for_fingerprint(
+        ssl,
+        fingerprint,
+        proxy.reality.is_some()
+            || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision,
+        "VLESS",
+    )
+}
+
+pub(super) fn configure_utls_template_boring_ssl_for_xhttp_endpoint(
+    ssl: &mut SslRef,
+    endpoint: &ResidentXhttpEndpointPlan,
+) -> Result<(), String> {
+    let Some(fingerprint) = endpoint.utls_fingerprint.as_ref() else {
+        return Ok(());
+    };
+    configure_utls_template_boring_ssl_for_fingerprint(
+        ssl,
+        fingerprint,
+        endpoint.reality.is_some(),
+        "xHTTP",
+    )
+}
+
+fn configure_utls_template_boring_ssl_for_fingerprint(
+    ssl: &mut SslRef,
+    fingerprint: &ResidentUtlsFingerprintPlan,
+    tls13_only: bool,
+    label: &str,
+) -> Result<(), String> {
     let Some(template) = utls_template_for_plan(fingerprint) else {
         return Ok(());
     };
-    if template.key_share_groups.is_empty()
-        && (proxy.reality.is_some()
-            || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision)
-    {
+    if template.key_share_groups.is_empty() && tls13_only {
         return Err(format!(
-            "uTLS template {} cannot be used with TLS 1.3-only VLESS flow",
-            template.name
+            "uTLS template {} cannot be used with TLS 1.3-only {label} flow",
+            template.name,
         ));
     }
     if template.key_share_groups.is_empty() {
@@ -111,7 +138,7 @@ pub(super) fn configure_utls_template_boring_ssl(
     };
     if ok != 1 {
         return Err(format!(
-            "configure VLESS BoringSSL uTLS template {}: {}",
+            "configure {label} BoringSSL uTLS template {}: {}",
             template.name,
             boring::error::ErrorStack::get()
         ));

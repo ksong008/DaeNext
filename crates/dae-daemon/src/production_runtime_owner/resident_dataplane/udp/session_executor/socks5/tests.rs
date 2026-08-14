@@ -24,6 +24,7 @@ fn socks5_proxy(server: SocketAddr) -> ResidentProxyPlan {
         net: "tcp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -32,6 +33,7 @@ fn socks5_proxy(server: SocketAddr) -> ResidentProxyPlan {
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::Socks5Tcp {
             username: String::new(),

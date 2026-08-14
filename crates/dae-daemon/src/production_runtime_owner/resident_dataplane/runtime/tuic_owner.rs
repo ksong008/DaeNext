@@ -7,8 +7,9 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use dae_outbound::tuic::{
-    TuicAuthReport, TuicUdpPacket, authenticate_tuic_connection, build_tuic_dissociate_frame,
-    build_tuic_heartbeat_frame, decode_tuic_udp_packet,
+    TUIC_MAX_UDP_STREAM_FRAME_LEN, TuicAuthReport, TuicUdpPacket, TuicUdpRelayMode,
+    authenticate_tuic_connection, build_tuic_dissociate_frame, build_tuic_heartbeat_frame,
+    decode_tuic_udp_packet, decode_tuic_udp_stream_packet,
 };
 use dae_runtime_control::{
     AbsoluteDeadline, OwnerCancellationSignal, OwnerDrainReason, OwnerFailureClass,
@@ -34,6 +35,7 @@ use crate::production_runtime_owner::resident_dataplane::tcp::{
 const TUIC_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/tuic-owner/v1";
 const TUIC_OWNER_IDENTITY_NAMESPACE: &str = "tuic-transport";
 const TUIC_CONTROL_STREAM_ERROR_CODE: u32 = 0x104;
+const TUIC_UDP_STREAM_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 struct TuicOwnerKey {
@@ -55,10 +57,20 @@ impl TuicOwnerKey {
     fn for_binding(binding: &ResidentProxyBinding) -> Self {
         let proxy = binding.plan();
         let generation = binding.runtime_generation();
+        let ResidentProxyProtocolPlan::TuicQuicTcp {
+            congestion,
+            udp_relay_mode,
+            ..
+        } = &proxy.handler
+        else {
+            panic!("TUIC owner key received a non-TUIC proxy shape");
+        };
         let mut digest = Sha256::new();
         digest.update(TUIC_OWNER_IDENTITY_DOMAIN);
         update_identity_part(&mut digest, proxy.graph_link_hash.as_bytes());
         update_identity_part(&mut digest, &binding.effective_socket_mark().to_be_bytes());
+        update_identity_part(&mut digest, congestion.as_str().as_bytes());
+        update_identity_part(&mut digest, udp_relay_mode.as_str().as_bytes());
         Self {
             generation,
             digest: digest.finalize().into(),
@@ -108,7 +120,9 @@ struct TuicOwnerRegistryMetrics {
     cumulative_build_failures: AtomicU64,
     cumulative_reuses: AtomicU64,
     cumulative_udp_datagrams: AtomicU64,
+    cumulative_udp_stream_packets: AtomicU64,
     malformed_udp_datagrams: AtomicU64,
+    malformed_udp_streams: AtomicU64,
     unknown_udp_associations: AtomicU64,
     late_udp_associations: AtomicU64,
     association_limit_rejections: AtomicU64,
@@ -474,13 +488,15 @@ impl TuicAssociationManager {
         ))
     }
 
-    fn dispatch(&self, packet: TuicUdpPacket) {
+    fn dispatch(&self, packet: TuicUdpPacket, mode: TuicUdpRelayMode) {
         if self.closed.load(Ordering::Acquire) {
             return;
         }
-        self.metrics
-            .cumulative_udp_datagrams
-            .fetch_add(1, Ordering::Relaxed);
+        match mode {
+            TuicUdpRelayMode::Native => &self.metrics.cumulative_udp_datagrams,
+            TuicUdpRelayMode::Quic => &self.metrics.cumulative_udp_stream_packets,
+        }
+        .fetch_add(1, Ordering::Relaxed);
         let association_id = packet.association_id();
         let bytes = packet.payload().len();
         let now = Instant::now();
@@ -680,6 +696,7 @@ pub(crate) struct TuicSharedTransport {
     connection: quinn::Connection,
     auth_report: TuicAuthReport,
     congestion: dae_outbound::tuic::TuicCongestionController,
+    udp_relay_mode: TuicUdpRelayMode,
     leases: Arc<TuicLogicalLeaseAdmission>,
     udp_associations: Arc<TuicAssociationManager>,
 }
@@ -712,6 +729,10 @@ impl TuicSharedTransport {
         self.congestion
     }
 
+    pub(crate) fn udp_relay_mode(&self) -> TuicUdpRelayMode {
+        self.udp_relay_mode
+    }
+
     fn begin_close(&self) -> ObservedQuicEndpoint {
         self.udp_associations.close();
         self.connection
@@ -740,6 +761,10 @@ pub(crate) struct TuicTransportLease {
 impl TuicTransportLease {
     pub(crate) fn connection(&self) -> &quinn::Connection {
         self.transport.connection()
+    }
+
+    pub(crate) fn udp_relay_mode(&self) -> TuicUdpRelayMode {
+        self.transport.udp_relay_mode()
     }
 
     pub(crate) fn remote(&self) -> SocketAddr {
@@ -782,6 +807,10 @@ impl TuicUdpAssociationLease {
 
     pub(crate) fn connection(&self) -> &quinn::Connection {
         self.transport.connection()
+    }
+
+    pub(crate) fn udp_relay_mode(&self) -> TuicUdpRelayMode {
+        self.transport.udp_relay_mode()
     }
 
     pub(crate) fn try_receive(&mut self) -> Result<Option<TuicUdpPacket>, String> {
@@ -980,7 +1009,9 @@ impl TuicOwnerRegistryHandle {
             "cumulativeBuildFailures": self.metrics.cumulative_build_failures.load(Ordering::Relaxed),
             "cumulativeReuses": self.metrics.cumulative_reuses.load(Ordering::Relaxed),
             "cumulativeUdpDatagrams": self.metrics.cumulative_udp_datagrams.load(Ordering::Relaxed),
+            "cumulativeUdpStreamPackets": self.metrics.cumulative_udp_stream_packets.load(Ordering::Relaxed),
             "malformedUdpDatagrams": self.metrics.malformed_udp_datagrams.load(Ordering::Relaxed),
+            "malformedUdpStreams": self.metrics.malformed_udp_streams.load(Ordering::Relaxed),
             "unknownUdpAssociations": self.metrics.unknown_udp_associations.load(Ordering::Relaxed),
             "lateUdpAssociations": self.metrics.late_udp_associations.load(Ordering::Relaxed),
             "associationLimitRejections": self.metrics.association_limit_rejections.load(Ordering::Relaxed),
@@ -1167,6 +1198,7 @@ async fn run_tuic_owner_registry(
                         if let Some(mut owner) = completion.owner {
                             let connection = owner.shared.connection.clone();
                             let instance_id = owner.shared.instance_id;
+                            let udp_relay_mode = owner.shared.udp_relay_mode;
                             let udp_associations = Arc::clone(&owner.shared.udp_associations);
                             let reader_metrics = Arc::clone(&metrics);
                             let control_receiver = owner
@@ -1196,6 +1228,8 @@ async fn run_tuic_owner_registry(
                                         read_connection,
                                         udp_associations,
                                         reader_metrics,
+                                        udp_relay_mode,
+                                        resources,
                                     )
                                     .await,
                                 )
@@ -1348,10 +1382,34 @@ async fn run_tuic_transport_reader(
     connection: quinn::Connection,
     udp_associations: Arc<TuicAssociationManager>,
     metrics: Arc<TuicOwnerRegistryMetrics>,
+    udp_relay_mode: TuicUdpRelayMode,
+    resources: TuicOwnerResourceProfile,
 ) -> TuicTransportEvent {
+    match udp_relay_mode {
+        TuicUdpRelayMode::Native => {
+            run_tuic_datagram_reader(&connection, &udp_associations, &metrics).await;
+        }
+        TuicUdpRelayMode::Quic => {
+            run_tuic_udp_stream_reader(
+                &connection,
+                &udp_associations,
+                &metrics,
+                resources.udp_association_limit(),
+            )
+            .await;
+        }
+    }
+    TuicTransportEvent::Closed { key, instance_id }
+}
+
+async fn run_tuic_datagram_reader(
+    connection: &quinn::Connection,
+    udp_associations: &TuicAssociationManager,
+    metrics: &TuicOwnerRegistryMetrics,
+) {
     while let Ok(datagram) = connection.read_datagram().await {
         match decode_tuic_udp_packet(&datagram) {
-            Ok(packet) => udp_associations.dispatch(packet),
+            Ok(packet) => udp_associations.dispatch(packet, TuicUdpRelayMode::Native),
             Err(_) => {
                 metrics
                     .malformed_udp_datagrams
@@ -1359,7 +1417,49 @@ async fn run_tuic_transport_reader(
             }
         }
     }
-    TuicTransportEvent::Closed { key, instance_id }
+}
+
+async fn run_tuic_udp_stream_reader(
+    connection: &quinn::Connection,
+    udp_associations: &TuicAssociationManager,
+    metrics: &TuicOwnerRegistryMetrics,
+    concurrent_stream_limit: usize,
+) {
+    let mut readers = JoinSet::new();
+    let concurrent_stream_limit = concurrent_stream_limit.max(1);
+    loop {
+        tokio::select! {
+            stream = connection.accept_uni(), if readers.len() < concurrent_stream_limit => {
+                let Ok(mut stream) = stream else {
+                    break;
+                };
+                readers.spawn(async move {
+                    let frame = time::timeout(
+                        TUIC_UDP_STREAM_READ_TIMEOUT,
+                        stream.read_to_end(TUIC_MAX_UDP_STREAM_FRAME_LEN),
+                    )
+                    .await
+                    .map_err(|_| ())?
+                    .map_err(|_| ())?;
+                    decode_tuic_udp_stream_packet(&frame).map_err(|_| ())
+                });
+            }
+            completed = readers.join_next(), if !readers.is_empty() => {
+                match completed {
+                    Some(Ok(Ok(packet))) => {
+                        udp_associations.dispatch(packet, TuicUdpRelayMode::Quic);
+                    }
+                    Some(_) => {
+                        metrics.malformed_udp_streams.fetch_add(1, Ordering::Relaxed);
+                    }
+                    None => break,
+                }
+            }
+            _ = connection.closed() => break,
+        }
+    }
+    readers.abort_all();
+    while readers.join_next().await.is_some() {}
 }
 
 async fn run_tuic_control_writer(
@@ -1519,12 +1619,12 @@ async fn build_tuic_transport(
             detail: "TUIC owner received a non-TUIC proxy shape".to_owned(),
         });
     };
-    let dae_outbound::tuic::TuicUdpRelayMode::Native = udp_relay_mode;
     let connected = open_tuic_quic_connection_candidates_async(
         &binding,
         alpn,
         *allow_insecure,
         *congestion,
+        *udp_relay_mode,
         deadline,
         caller,
     )
@@ -1604,6 +1704,7 @@ async fn build_tuic_transport(
             connection,
             auth_report,
             congestion: *congestion,
+            udp_relay_mode: *udp_relay_mode,
             leases,
             udp_associations,
         },

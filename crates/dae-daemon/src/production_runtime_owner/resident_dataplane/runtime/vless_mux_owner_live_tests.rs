@@ -240,6 +240,7 @@ fn vless_mux_test_proxy(
         net: "mux".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: plan::ResidentXhttpMode::PacketUp,
         xhttp_settings: plan::ResidentXhttpSettingsPlan::default(),
@@ -248,6 +249,7 @@ fn vless_mux_test_proxy(
         allow_insecure: true,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: plan::ResidentProxyProtocolPlan::VlessMuxTcpTls {
             key: [11; 16],

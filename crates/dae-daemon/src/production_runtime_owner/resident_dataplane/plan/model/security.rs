@@ -28,7 +28,12 @@ impl ResidentSecurityUnderlayPlan {
             return Self::QuicTls;
         }
         if proxy.tls == "reality" {
-            return if proxy.utls_fingerprint.is_some() {
+            return if proxy.utls_fingerprint.is_some()
+                || proxy
+                    .reality
+                    .as_ref()
+                    .is_some_and(|reality| reality.mldsa65_verify.is_some())
+            {
                 Self::RealityFingerprint
             } else {
                 Self::RealityRustls

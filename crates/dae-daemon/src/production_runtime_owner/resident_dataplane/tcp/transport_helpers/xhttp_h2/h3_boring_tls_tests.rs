@@ -26,6 +26,8 @@ pub(in super::super) fn endpoint_plan() -> ResidentXhttpEndpointPlan {
         xmux: None,
         allow_insecure: true,
         tls_fragment: None,
+        utls_fingerprint: None,
+        ech: None,
         reality: None,
     }
 }
@@ -95,7 +97,7 @@ async fn chrome_boring_provider_completes_h3_and_emits_quic_client_hello() {
     });
 
     let plan = endpoint_plan();
-    let mut crypto = build_chrome_boring_xhttp_h3_crypto(&plan).unwrap();
+    let mut crypto = build_chrome_boring_xhttp_h3_crypto(&plan, None).unwrap();
     unsafe {
         boring_sys::SSL_CTX_set_msg_callback(crypto.ctx_mut().as_ptr(), Some(capture_client_hello));
     }
