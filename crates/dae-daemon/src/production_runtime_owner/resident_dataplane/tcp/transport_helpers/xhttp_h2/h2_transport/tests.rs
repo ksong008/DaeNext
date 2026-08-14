@@ -15,6 +15,8 @@ fn packet_up_endpoint() -> ResidentXhttpEndpointPlan {
         xmux: None,
         allow_insecure: false,
         tls_fragment: None,
+        utls_fingerprint: None,
+        ech: None,
         reality: None,
     }
 }

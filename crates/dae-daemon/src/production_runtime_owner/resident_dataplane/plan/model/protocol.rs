@@ -102,6 +102,7 @@ pub(crate) enum ResidentProxyProtocolPlan {
         uuid: String,
         password: String,
         allow_insecure: bool,
+        congestion: dae_outbound::juicity::JuicityCongestionController,
         pinned_certchain_sha256: String,
     },
 }
@@ -272,11 +273,19 @@ impl ResidentProxyProtocolPlan {
                 packet_semantics: "quic-datagram-or-stream",
                 udp_policy_closed: false,
             },
-            Self::TuicQuicTcp { .. } => ResidentProtocolExecutorContract {
-                tcp_executor: "resident-tuic-quic-stream",
-                udp_executor: "resident-tuic-quic-packet",
-                packet_semantics: "quic-datagram-or-stream",
-                udp_policy_closed: false,
+            Self::TuicQuicTcp { udp_relay_mode, .. } => match udp_relay_mode {
+                dae_outbound::tuic::TuicUdpRelayMode::Native => ResidentProtocolExecutorContract {
+                    tcp_executor: "resident-tuic-quic-stream",
+                    udp_executor: "resident-tuic-quic-datagram-packet",
+                    packet_semantics: "quic-datagram",
+                    udp_policy_closed: false,
+                },
+                dae_outbound::tuic::TuicUdpRelayMode::Quic => ResidentProtocolExecutorContract {
+                    tcp_executor: "resident-tuic-quic-stream",
+                    udp_executor: "resident-tuic-quic-unidirectional-stream-packet",
+                    packet_semantics: "quic-stream-packet",
+                    udp_policy_closed: false,
+                },
             },
             Self::JuicityQuicTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-juicity-quic-stream",

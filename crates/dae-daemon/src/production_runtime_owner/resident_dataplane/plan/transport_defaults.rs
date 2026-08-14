@@ -51,9 +51,5 @@ pub(super) fn resident_xhttp_stream_path(path: &str) -> String {
 }
 
 pub(super) fn resident_grpc_service_name(service_name: &str) -> String {
-    if service_name.is_empty() {
-        "GunService".to_owned()
-    } else {
-        service_name.trim_start_matches('/').to_owned()
-    }
+    service_name.to_owned()
 }

@@ -229,6 +229,7 @@ fn h2_test_proxy(
         net: "grpc".to_owned(),
         stream_host: "localhost".to_owned(),
         stream_path: "OwnerTest".to_owned(),
+        grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: plan::ResidentXhttpMode::PacketUp,
         xhttp_settings: plan::ResidentXhttpSettingsPlan::default(),
@@ -237,6 +238,7 @@ fn h2_test_proxy(
         allow_insecure: true,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: plan::ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [7; 16],

@@ -21,15 +21,12 @@ pub(super) fn boring_vless_connector(
     if let Some(system_ca) = system_ca {
         system_ca.install_boring_builder(&mut builder);
     }
-    builder.set_verify(if proxy.allow_insecure {
-        SslVerifyMode::NONE
-    } else {
-        SslVerifyMode::PEER
-    });
+    configure_boring_certificate_verification(&mut builder, proxy.allow_insecure);
     builder.set_read_ahead(boring_read_ahead_enabled(proxy));
-    if proxy.utls_fingerprint.is_none()
-        && (proxy.reality.is_some()
-            || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision)
+    if proxy.ech.is_some()
+        || (proxy.utls_fingerprint.is_none()
+            && (proxy.reality.is_some()
+                || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision))
     {
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))
@@ -55,6 +52,88 @@ pub(super) fn boring_vless_connector(
     Ok(cache.insert_or_get(key, connector))
 }
 
+pub(super) fn boring_xhttp_endpoint_connector(
+    endpoint: &ResidentXhttpEndpointPlan,
+) -> Result<Arc<SslConnector>, String> {
+    let system_ca = xhttp_endpoint_system_ca_snapshot(endpoint)?;
+    let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint, system_ca.as_deref());
+    let cache =
+        BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
+    {
+        let mut cache = cache
+            .lock()
+            .map_err(|_| "xHTTP BoringSSL connector cache lock poisoned".to_owned())?;
+        if let Some(connector) = cache.get(&key) {
+            return Ok(connector);
+        }
+    }
+    let mut builder = SslConnector::builder(SslMethod::tls())
+        .map_err(|err| format!("create xHTTP BoringSSL connector: {err}"))?;
+    if let Some(system_ca) = system_ca {
+        system_ca.install_boring_builder(&mut builder);
+    }
+    configure_boring_certificate_verification(&mut builder, endpoint.allow_insecure);
+    if endpoint.ech.is_some() || endpoint.reality.is_some() {
+        builder
+            .set_min_proto_version(Some(SslVersion::TLS1_3))
+            .map_err(|err| format!("set xHTTP BoringSSL min TLS version: {err}"))?;
+        builder
+            .set_max_proto_version(Some(SslVersion::TLS1_3))
+            .map_err(|err| format!("set xHTTP BoringSSL max TLS version: {err}"))?;
+    }
+    if let Some(fingerprint) = &endpoint.utls_fingerprint {
+        configure_boring_fingerprint(&mut builder, fingerprint)?;
+        configure_utls_template_boring_context(&mut builder, fingerprint)?;
+    }
+    let alpn = encode_boring_alpn_wire(&endpoint.alpn, "xHTTP")?;
+    if !alpn.is_empty() {
+        builder
+            .set_alpn_protos(&alpn)
+            .map_err(|err| format!("set xHTTP BoringSSL ALPN: {err}"))?;
+    }
+    let connector = Arc::new(builder.build());
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "xHTTP BoringSSL connector cache lock poisoned".to_owned())?;
+    Ok(cache.insert_or_get(key, connector))
+}
+
+pub(super) fn configure_boring_certificate_verification(
+    builder: &mut SslConnectorBuilder,
+    allow_insecure: bool,
+) {
+    if allow_insecure {
+        builder.set_verify(SslVerifyMode::NONE);
+        return;
+    }
+    builder.set_verify_callback(SslVerifyMode::PEER, |preverify_ok, context| {
+        if preverify_ok {
+            return true;
+        }
+        if context.error_depth() != 0
+            || context.verify_result() != Err(X509VerifyError::HOSTNAME_MISMATCH)
+        {
+            return false;
+        }
+        let Ok(ssl_index) = X509StoreContext::ssl_idx() else {
+            return false;
+        };
+        let Some(ssl) = context.ex_data(ssl_index) else {
+            return false;
+        };
+        let Some(public_name) = ssl.get_ech_name_override() else {
+            return false;
+        };
+        let Ok(public_name) = std::str::from_utf8(public_name) else {
+            return false;
+        };
+        context
+            .current_cert()
+            .and_then(|certificate| certificate.check_host(public_name).ok())
+            .unwrap_or(false)
+    });
+}
+
 impl ResidentTlsClientConfigKey {
     pub(super) fn from_proxy(
         proxy: &ResidentProxyPlan,
@@ -69,6 +148,7 @@ impl ResidentTlsClientConfigKey {
                 .utls_fingerprint
                 .as_ref()
                 .map(ResidentTlsFingerprintConfigKey::from_plan),
+            ech: proxy.ech.as_ref().map(|ech| *ech.config_list_sha256()),
             reality: proxy
                 .reality
                 .as_ref()
@@ -85,7 +165,11 @@ impl ResidentTlsClientConfigKey {
             alpn: endpoint.alpn.clone(),
             allow_insecure: endpoint.allow_insecure,
             system_ca: system_ca.map(|snapshot| snapshot.identity().clone()),
-            utls_fingerprint: None,
+            utls_fingerprint: endpoint
+                .utls_fingerprint
+                .as_ref()
+                .map(ResidentTlsFingerprintConfigKey::from_plan),
+            ech: endpoint.ech.as_ref().map(|ech| *ech.config_list_sha256()),
             reality: endpoint
                 .reality
                 .as_ref()
@@ -115,6 +199,7 @@ impl ResidentRealityConfigKey {
         Self {
             public_key: plan.public_key,
             short_id: plan.short_id.clone(),
+            mldsa65_verify: plan.mldsa65_verify.as_ref().map(|key| *key.sha256()),
         }
     }
 }
@@ -122,7 +207,17 @@ impl ResidentRealityConfigKey {
 pub(super) fn rustls_vless_client_config(
     proxy: &ResidentProxyPlan,
 ) -> Result<Arc<ClientConfig>, String> {
+    if proxy.ech.is_some() {
+        return Err("VLESS ECH must use the authenticated-retry BoringSSL factory".to_owned());
+    }
     if proxy.reality.is_some() {
+        if proxy
+            .reality
+            .as_ref()
+            .is_some_and(|reality| reality.mldsa65_verify.is_some())
+        {
+            return Err("VLESS Reality PQV requires the BoringSSL Reality engine".to_owned());
+        }
         return build_rustls_vless_client_config(proxy, None);
     }
     let system_ca = proxy_system_ca_snapshot(proxy)?;
@@ -192,7 +287,17 @@ fn build_rustls_vless_client_config(
 pub(super) fn rustls_xhttp_endpoint_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
 ) -> Result<Arc<ClientConfig>, String> {
+    if endpoint.ech.is_some() {
+        return Err("xHTTP ECH must use the authenticated-retry BoringSSL factory".to_owned());
+    }
     if endpoint.reality.is_some() {
+        if endpoint
+            .reality
+            .as_ref()
+            .is_some_and(|reality| reality.mldsa65_verify.is_some())
+        {
+            return Err("xHTTP Reality PQV requires the BoringSSL Reality engine".to_owned());
+        }
         return build_rustls_xhttp_endpoint_client_config(endpoint, None);
     }
     let system_ca = xhttp_endpoint_system_ca_snapshot(endpoint)?;
@@ -472,6 +577,10 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
     {
         protocols.extend(fingerprint.default_alpn.iter().cloned());
     }
+    encode_boring_alpn_wire(&protocols, "VLESS")
+}
+
+fn encode_boring_alpn_wire(protocols: &[String], label: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     for protocol in protocols {
         let bytes = protocol.as_bytes();
@@ -479,7 +588,7 @@ pub(super) fn boring_alpn_wire(proxy: &ResidentProxyPlan) -> Result<Vec<u8>, Str
             continue;
         }
         if bytes.len() > u8::MAX as usize {
-            return Err(format!("VLESS ALPN item too long: {protocol}"));
+            return Err(format!("{label} ALPN item too long: {protocol}"));
         }
         out.push(bytes.len() as u8);
         out.extend_from_slice(bytes);
@@ -495,10 +604,12 @@ pub(super) fn boring_read_ahead_enabled(proxy: &ResidentProxyPlan) -> bool {
 mod tests {
     use super::*;
     use crate::production_runtime_owner::resident_dataplane::plan::{
-        ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan,
+        ResidentEchPlan, ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan,
     };
 
     const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
+    const ECH_CONFIG_LIST: &str =
+        "AD7+DQA6AAAgACC7Lynj4wV+BBnVL8X0QRh3b422HOpP33YHm5NgbFpiSAAIAAEAAQABAAMAB2VjaC5jb20AAA==";
 
     #[test]
     fn boring_read_ahead_stays_disabled_for_vless_vision() {
@@ -566,6 +677,7 @@ mod tests {
             public_key: [7; 32],
             short_id: vec![1, 2, 3, 4],
             spider_x: "/".to_owned(),
+            mldsa65_verify: None,
         });
         proxy.materialize_execution();
 
@@ -586,6 +698,7 @@ mod tests {
             public_key: [7; 32],
             short_id: vec![1, 2, 3, 4],
             spider_x: "/".to_owned(),
+            mldsa65_verify: None,
         });
         proxy.utls_fingerprint = Some(test_fingerprint_plan(
             dae_outbound::shared_transport::UTLS_FAMILY_IOS,
@@ -607,6 +720,7 @@ mod tests {
             public_key: [7; 32],
             short_id: vec![1, 2, 3, 4],
             spider_x: "/".to_owned(),
+            mldsa65_verify: None,
         });
         proxy.utls_fingerprint = Some(test_fingerprint_plan(
             dae_outbound::shared_transport::UTLS_FAMILY_CHROME,
@@ -620,6 +734,57 @@ mod tests {
     }
 
     #[test]
+    fn reality_pqv_without_fingerprint_uses_boring_provider() {
+        let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
+        proxy.tls = "reality".to_owned();
+        proxy.reality = Some(ResidentRealityUnderlayPlan {
+            public_key: [7; 32],
+            short_id: vec![1, 2, 3, 4],
+            spider_x: "/".to_owned(),
+            mldsa65_verify: Some(Mldsa65VerifyKey::from_bytes(vec![9; 1952]).unwrap()),
+        });
+        proxy.materialize_execution();
+
+        assert_eq!(
+            ResidentTlsProvider::from_proxy(&proxy).unwrap(),
+            ResidentTlsProvider::RealityFingerprintBoring
+        );
+        assert!(
+            rustls_vless_client_config(&proxy)
+                .unwrap_err()
+                .contains("PQV requires the BoringSSL Reality engine")
+        );
+    }
+
+    #[test]
+    fn xhttp_endpoint_provider_and_config_key_follow_endpoint_fingerprint() {
+        let proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
+        let mut endpoint = ResidentXhttpEndpointPlan::from_proxy(&proxy);
+        let rustls_key = ResidentTlsClientConfigKey::from_xhttp_endpoint(&endpoint, None);
+        assert_eq!(
+            ResidentTlsProvider::from_xhttp_endpoint(&endpoint).unwrap(),
+            ResidentTlsProvider::StandardRustls
+        );
+
+        endpoint.utls_fingerprint = Some(test_fingerprint_plan(
+            dae_outbound::shared_transport::UTLS_FAMILY_CHROME,
+        ));
+        let boring_key = ResidentTlsClientConfigKey::from_xhttp_endpoint(&endpoint, None);
+        assert_eq!(
+            ResidentTlsProvider::from_xhttp_endpoint(&endpoint).unwrap(),
+            ResidentTlsProvider::FingerprintAwareBoring
+        );
+        assert_ne!(rustls_key, boring_key);
+        assert!(boring_key.utls_fingerprint.is_some());
+    }
+
+    #[test]
     fn standard_rustls_client_config_still_uses_cache() {
         let proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [0; 16],
@@ -630,6 +795,55 @@ mod tests {
         let second = rustls_vless_client_config(&proxy).unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn ech_selects_boring_and_keeps_rustls_fail_closed() {
+        let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
+        proxy.ech = Some(test_ech_plan());
+
+        assert_eq!(
+            ResidentTlsProvider::from_proxy(&proxy).unwrap(),
+            ResidentTlsProvider::FingerprintAwareBoring
+        );
+        assert!(
+            rustls_vless_client_config(&proxy)
+                .unwrap_err()
+                .contains("authenticated-retry BoringSSL factory")
+        );
+    }
+
+    #[test]
+    fn ech_config_identity_partitions_tls_config_keys() {
+        let mut first_proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
+            key: [0; 16],
+            encryption: None,
+        });
+        first_proxy.ech = Some(test_ech_plan());
+        let mut second_proxy = first_proxy.clone();
+        let mut second_bytes = second_proxy
+            .ech
+            .as_ref()
+            .unwrap()
+            .config_list_bytes()
+            .to_vec();
+        let public_name = second_bytes
+            .windows(b"ech.com".len())
+            .position(|window| window == b"ech.com")
+            .unwrap();
+        second_bytes[public_name..public_name + b"alt.com".len()].copy_from_slice(b"alt.com");
+        second_proxy.ech = Some(ResidentEchPlan::new(
+            dae_outbound::shared_transport::EchConfigList::from_bytes(second_bytes).unwrap(),
+        ));
+
+        let first_key = ResidentTlsClientConfigKey::from_proxy(&first_proxy, None);
+        let second_key = ResidentTlsClientConfigKey::from_proxy(&second_proxy, None);
+
+        assert_ne!(first_key.ech, second_key.ech);
+        assert_ne!(first_key, second_key);
     }
 
     #[test]
@@ -670,6 +884,12 @@ mod tests {
         }
     }
 
+    fn test_ech_plan() -> ResidentEchPlan {
+        ResidentEchPlan::new(
+            dae_outbound::shared_transport::EchConfigList::parse_base64(ECH_CONFIG_LIST).unwrap(),
+        )
+    }
+
     fn test_proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
         let mut proxy = ResidentProxyPlan {
             graph_id: "resident-graph:test".to_owned(),
@@ -687,6 +907,7 @@ mod tests {
             net: "tcp".to_owned(),
             stream_host: String::new(),
             stream_path: String::new(),
+            grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
             xhttp_download: None,
             xhttp_mode: ResidentXhttpMode::PacketUp,
             xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -695,6 +916,7 @@ mod tests {
             allow_insecure: false,
             tls_fragment: None,
             utls_fingerprint: None,
+            ech: None,
             reality: None,
             handler,
             execution: None,

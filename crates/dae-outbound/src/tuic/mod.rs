@@ -31,6 +31,7 @@ pub use runtime::{
 pub use tls::TuicCongestionController;
 pub use underlay::{TuicUnderlayAdmissionContract, admission_contract};
 pub use wire::{
-    TuicUdpPacket, build_tuic_dissociate_frame, build_tuic_heartbeat_frame, decode_tuic_udp_packet,
-    encode_tuic_udp_packet, fragment_tuic_udp_packet,
+    TUIC_MAX_UDP_STREAM_FRAME_LEN, TuicUdpPacket, build_tuic_dissociate_frame,
+    build_tuic_heartbeat_frame, decode_tuic_udp_packet, decode_tuic_udp_stream_packet,
+    encode_tuic_udp_packet, encode_tuic_udp_stream_packet, fragment_tuic_udp_packet,
 };

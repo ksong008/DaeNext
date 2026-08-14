@@ -1,4 +1,4 @@
-use super::h3_boring_tls::build_chrome_boring_xhttp_h3_client_config;
+use super::h3_boring_tls::build_chrome_boring_xhttp_h3_client_config_with_system_ca;
 use super::request::{xhttp_h3_packet_up_request, xhttp_h3_request, xhttp_session_path_suffix};
 use super::xmux::{
     XhttpXmuxClientLease, XhttpXmuxKey, XhttpXmuxRequestHandle, note_xhttp_xmux_request,
@@ -158,10 +158,18 @@ async fn open_xhttp_h3_connection(
 ) -> Result<XhttpH3Connection, String> {
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
-    let tls_provider = xhttp_h3_tls_provider(proxy, role)?;
-    let client_config = build_xhttp_h3_client_config(endpoint, tls_provider)?;
-    let transport_identity = shared_transport_identity
-        .unwrap_or_else(|| xhttp_h3_transport_identity(proxy, endpoint, role, tls_provider));
+    let tls_provider = xhttp_h3_tls_provider(endpoint, role)?;
+    let system_ca = xhttp_h3_system_ca_snapshot(endpoint)?;
+    let client_config =
+        build_xhttp_h3_client_config_with_system_ca(endpoint, tls_provider, system_ca.as_deref())?;
+    let transport_identity = shared_transport_identity.unwrap_or_else(|| {
+        xhttp_h3_transport_identity(
+            endpoint,
+            role,
+            tls_provider,
+            system_ca.as_deref().map(|snapshot| snapshot.identity()),
+        )
+    });
     let endpoint_context = QuicEndpointOpenContext::for_proxy(
         QuicEndpointProtocol::XhttpHttp3,
         QuicEndpointCallerClass::TcpData,
@@ -232,14 +240,17 @@ async fn open_xhttp_h3_connection(
 }
 
 fn xhttp_h3_transport_identity(
-    proxy: &ResidentProxyPlan,
     endpoint: &ResidentXhttpEndpointPlan,
     role: QuicEndpointIdentityRole,
     tls_provider: ResidentXhttpQuicTlsProvider,
+    system_ca: Option<&dae_outbound::shared_transport::SystemCaIdentity>,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
-    update_xhttp_h3_identity_part(&mut digest, b"dae/xhttp/h3-transport/v1");
+    update_xhttp_h3_identity_part(&mut digest, b"dae/xhttp/h3-transport/v2");
+    update_xhttp_h3_identity_part(&mut digest, role.as_str().as_bytes());
     update_xhttp_h3_identity_part(&mut digest, tls_provider.as_str().as_bytes());
+    let session_namespace = xhttp_h3_session_namespace(endpoint, role, tls_provider, system_ca);
+    update_xhttp_h3_identity_part(&mut digest, &session_namespace);
     update_xhttp_h3_identity_part(&mut digest, endpoint.server_host.as_bytes());
     update_xhttp_h3_identity_part(&mut digest, &endpoint.server_port.to_be_bytes());
     update_xhttp_h3_identity_part(&mut digest, endpoint.server_name.as_bytes());
@@ -256,14 +267,44 @@ fn xhttp_h3_transport_identity(
         update_xhttp_h3_identity_part(&mut digest, &fragment.min_interval_ms.to_be_bytes());
         update_xhttp_h3_identity_part(&mut digest, &fragment.max_interval_ms.to_be_bytes());
     }
+    digest.finalize().into()
+}
+
+fn xhttp_h3_session_namespace(
+    endpoint: &ResidentXhttpEndpointPlan,
+    role: QuicEndpointIdentityRole,
+    tls_provider: ResidentXhttpQuicTlsProvider,
+    system_ca: Option<&dae_outbound::shared_transport::SystemCaIdentity>,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    update_xhttp_h3_identity_part(&mut digest, b"dae/xhttp/h3-session/v1");
+    update_xhttp_h3_identity_part(&mut digest, role.as_str().as_bytes());
+    update_xhttp_h3_identity_part(&mut digest, tls_provider.as_str().as_bytes());
+    update_xhttp_h3_identity_part(&mut digest, endpoint.server_name.as_bytes());
+    for alpn in &endpoint.alpn {
+        update_xhttp_h3_identity_part(&mut digest, alpn.as_bytes());
+    }
+    update_xhttp_h3_identity_part(&mut digest, &[u8::from(endpoint.allow_insecure)]);
+    if let Some(system_ca) = system_ca {
+        update_xhttp_h3_identity_part(&mut digest, system_ca.path.to_string_lossy().as_bytes());
+        update_xhttp_h3_identity_part(&mut digest, system_ca.sha256.as_bytes());
+        update_xhttp_h3_identity_part(
+            &mut digest,
+            &(system_ca.certificate_count as u64).to_be_bytes(),
+        );
+    }
+    if let Some(ech) = &endpoint.ech {
+        update_xhttp_h3_identity_part(&mut digest, ech.config_list_sha256());
+    }
     if let Some(reality) = &endpoint.reality {
         update_xhttp_h3_identity_part(&mut digest, &reality.public_key);
         update_xhttp_h3_identity_part(&mut digest, &reality.short_id);
         update_xhttp_h3_identity_part(&mut digest, reality.spider_x.as_bytes());
+        if let Some(mldsa65_verify) = &reality.mldsa65_verify {
+            update_xhttp_h3_identity_part(&mut digest, mldsa65_verify.sha256());
+        }
     }
-    if role == QuicEndpointIdentityRole::XhttpPrimary
-        && let Some(fingerprint) = &proxy.utls_fingerprint
-    {
+    if let Some(fingerprint) = &endpoint.utls_fingerprint {
         update_xhttp_h3_identity_part(&mut digest, fingerprint.source.as_bytes());
         update_xhttp_h3_identity_part(&mut digest, fingerprint.requested.as_bytes());
         update_xhttp_h3_identity_part(&mut digest, fingerprint.name.as_bytes());
@@ -280,16 +321,26 @@ fn xhttp_h3_transport_identity(
 }
 
 fn xhttp_h3_tls_provider(
-    proxy: &ResidentProxyPlan,
+    endpoint: &ResidentXhttpEndpointPlan,
     role: QuicEndpointIdentityRole,
 ) -> Result<ResidentXhttpQuicTlsProvider, String> {
     match role {
-        QuicEndpointIdentityRole::XhttpPrimary => {
-            ResidentXhttpQuicTlsProvider::for_primary(proxy.utls_fingerprint.as_ref())
+        QuicEndpointIdentityRole::XhttpPrimary | QuicEndpointIdentityRole::XhttpDownload => {
+            ResidentXhttpQuicTlsProvider::for_endpoint(endpoint.utls_fingerprint.as_ref())
         }
-        QuicEndpointIdentityRole::XhttpDownload => Ok(ResidentXhttpQuicTlsProvider::Rustls),
         _ => Err("xHTTP H3 received a non-xHTTP endpoint identity role".to_owned()),
     }
+}
+
+fn xhttp_h3_system_ca_snapshot(
+    endpoint: &ResidentXhttpEndpointPlan,
+) -> Result<Option<Arc<dae_outbound::shared_transport::SystemCaSnapshot>>, String> {
+    if endpoint.allow_insecure || endpoint.reality.is_some() {
+        return Ok(None);
+    }
+    dae_outbound::shared_transport::system_ca_snapshot()
+        .map(Some)
+        .map_err(|err| format!("load xHTTP H3 system CA bundle: {err}"))
 }
 
 fn update_xhttp_h3_identity_part(digest: &mut Sha256, part: &[u8]) {
@@ -593,12 +644,34 @@ mod owner_live_tests;
 #[cfg(test)]
 mod packet_up_tests;
 
+#[cfg(test)]
 fn build_xhttp_h3_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
     tls_provider: ResidentXhttpQuicTlsProvider,
 ) -> Result<quinn::ClientConfig, String> {
+    let system_ca = xhttp_h3_system_ca_snapshot(endpoint)?;
+    build_xhttp_h3_client_config_with_system_ca(endpoint, tls_provider, system_ca.as_deref())
+}
+
+fn build_xhttp_h3_client_config_with_system_ca(
+    endpoint: &ResidentXhttpEndpointPlan,
+    tls_provider: ResidentXhttpQuicTlsProvider,
+    system_ca: Option<&dae_outbound::shared_transport::SystemCaSnapshot>,
+) -> Result<quinn::ClientConfig, String> {
+    if endpoint.ech.is_some() {
+        return Err(format!(
+            "xHTTP H3 ECH is unavailable with {}: the QUIC TLS provider does not expose per-connection ECH acceptance and authenticated retry configs",
+            tls_provider.as_str()
+        ));
+    }
+    if endpoint.reality.is_some() {
+        return Err(format!(
+            "xHTTP H3 Reality is unavailable with {}: the QUIC TLS carrier has no Reality executor",
+            tls_provider.as_str()
+        ));
+    }
     if tls_provider == ResidentXhttpQuicTlsProvider::ChromeBoring {
-        return build_chrome_boring_xhttp_h3_client_config(endpoint);
+        return build_chrome_boring_xhttp_h3_client_config_with_system_ca(endpoint, system_ca);
     }
     let mut crypto = if endpoint.allow_insecure {
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -606,8 +679,8 @@ fn build_xhttp_h3_client_config(
             .with_custom_certificate_verifier(AcceptAnyXhttpH3Verifier::new())
             .with_no_client_auth()
     } else {
-        let roots = dae_outbound::shared_transport::system_ca_snapshot()
-            .map_err(|err| format!("load xHTTP H3 system CA bundle: {err}"))?
+        let roots = system_ca
+            .ok_or_else(|| "xHTTP H3 rustls config is missing system CA snapshot".to_owned())?
             .rustls_roots();
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(roots)

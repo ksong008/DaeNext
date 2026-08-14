@@ -122,9 +122,9 @@
     "flag_value": 1,
     "common_native_value": 1,
     "common_quic_numeric_value": 0,
-    "protocol_effective_mode": "native",
+    "protocol_effective_mode": "quic",
     "query_value": "quic",
-    "quic_mode_deferred": true
+    "quic_mode_deferred": false
   },
   "underlay_contract": {
     "tcp_request": {

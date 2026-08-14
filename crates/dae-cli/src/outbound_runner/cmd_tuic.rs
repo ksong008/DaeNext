@@ -134,6 +134,10 @@ pub(super) fn run_tuic_smoke(args: &[String]) -> RunnerOutput {
         return RunnerOutput::stdout_error(err.to_string());
     }
     let tcp_underlay = tuic::link::underlay_contract("tcp", 1234, true);
+    let udp_relay_mode = match TuicUdpRelayMode::from_config(&parsed.udp_relay_mode) {
+        Ok(mode) => mode,
+        Err(err) => return RunnerOutput::stdout_error(err.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
@@ -145,7 +149,7 @@ pub(super) fn run_tuic_smoke(args: &[String]) -> RunnerOutput {
             "allowInsecure": parsed.allow_insecure,
             "disable_sni": parsed.disable_sni,
             "udp_relay_mode": parsed.udp_relay_mode,
-            "udp_relay_effective_mode": tuic::contract::UDP_RELAY_MODE_PROTOCOL_EFFECTIVE_MODE,
+            "udp_relay_effective_mode": udp_relay_mode.as_str(),
             "tcp_underlay": {
                 "underlay_network": tcp_underlay.underlay_network,
                 "underlay_mark": tcp_underlay.underlay_mark,

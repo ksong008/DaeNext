@@ -2708,6 +2708,16 @@ OPENSSL_EXPORT int DAE_SSL_get0_reality_auth_key(const SSL *ssl,
                                                  const uint8_t **out_key,
                                                  size_t *out_key_len);
 
+// DAE_SSL_get0_reality_transcript returns the final serialized ClientHello and
+// ServerHello used by a Reality connection. Both values include the TLS
+// handshake message header. The returned pointers are owned by |ssl| and are
+// valid while the handshake config is retained. It returns zero until both
+// messages are available.
+OPENSSL_EXPORT int DAE_SSL_get0_reality_transcript(
+    const SSL *ssl, const uint8_t **out_client_hello,
+    size_t *out_client_hello_len, const uint8_t **out_server_hello,
+    size_t *out_server_hello_len);
+
 // SSL_set1_server_supported_groups_hint, when |ssl| is a client, indicates that
 // the server is likely to support groups listed in |server_groups|, in order of
 // decreasing server preference. This function returns one on success and zero

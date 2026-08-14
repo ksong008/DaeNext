@@ -8,6 +8,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
+    let grpc_mode = response.grpc_mode();
     let mut upload_codec = session.upload;
     let mut vmess_response = VmessAeadResponseBuffer::new(session.request);
     let (progress, activity) = resident_duplex_progress();
@@ -43,7 +44,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
             let wire_len = upload_codec
                 .seal_chunk_in_place(inbound_buf.as_mut(), read)
                 .map_err(|err| format!("encode VMess gRPC upload chunk: {err}"))?;
-            send_grpc_hunk(send_stream, &inbound_buf[..wire_len], false).await?;
+            send_grpc_data(send_stream, &inbound_buf[..wire_len], false, grpc_mode).await?;
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }
@@ -51,7 +52,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
     let download_progress = progress.clone();
     let download = async move {
         let mut inbound_write = inbound_write;
-        let mut response_buf = GrpcHunkReadBuffer::default();
+        let mut response_buf = GrpcHunkReadBuffer::with_mode(grpc_mode);
         loop {
             let Some(bytes) = response.next_data().await? else {
                 if !response_buf.is_empty() {
@@ -95,6 +96,7 @@ pub(crate) async fn relay_tcp_over_vmess_grpc_h2(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dae_outbound::shared_transport::grpc_hunk_frame;
 
     const TEST_UUID: &str = "11111111-1111-4111-8111-111111111111";
     const TEST_TARGET: &str = "example.com:443";

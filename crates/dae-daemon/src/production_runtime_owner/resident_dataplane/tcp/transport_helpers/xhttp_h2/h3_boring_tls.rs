@@ -8,10 +8,26 @@ use foreign_types::ForeignType;
 use super::h3_transport::xhttp_h3_transport_config;
 use super::*;
 
+#[cfg(test)]
 pub(super) fn build_chrome_boring_xhttp_h3_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
 ) -> Result<quinn::ClientConfig, String> {
-    let crypto = build_chrome_boring_xhttp_h3_crypto(endpoint)?;
+    let system_ca = if endpoint.allow_insecure {
+        None
+    } else {
+        Some(
+            dae_outbound::shared_transport::system_ca_snapshot()
+                .map_err(|err| format!("load xHTTP H3 system CA bundle: {err}"))?,
+        )
+    };
+    build_chrome_boring_xhttp_h3_client_config_with_system_ca(endpoint, system_ca.as_deref())
+}
+
+pub(super) fn build_chrome_boring_xhttp_h3_client_config_with_system_ca(
+    endpoint: &ResidentXhttpEndpointPlan,
+    system_ca: Option<&dae_outbound::shared_transport::SystemCaSnapshot>,
+) -> Result<quinn::ClientConfig, String> {
+    let crypto = build_chrome_boring_xhttp_h3_crypto(endpoint, system_ca)?;
     let mut config = quinn::ClientConfig::new(Arc::new(crypto));
     config.transport_config(Arc::new(xhttp_h3_transport_config()?));
     Ok(config)
@@ -19,12 +35,13 @@ pub(super) fn build_chrome_boring_xhttp_h3_client_config(
 
 fn build_chrome_boring_xhttp_h3_crypto(
     endpoint: &ResidentXhttpEndpointPlan,
+    system_ca: Option<&dae_outbound::shared_transport::SystemCaSnapshot>,
 ) -> Result<quinn_boring::ClientConfig, String> {
     let mut crypto = quinn_boring::ClientConfig::new()
         .map_err(|err| format!("create xHTTP H3 BoringSSL QUIC config: {err}"))?;
     if !endpoint.allow_insecure {
-        dae_outbound::shared_transport::system_ca_snapshot()
-            .map_err(|err| format!("load xHTTP H3 system CA bundle: {err}"))?
+        system_ca
+            .ok_or_else(|| "xHTTP H3 BoringSSL config is missing system CA snapshot".to_owned())?
             .install_boring_context(crypto.ctx_mut())
             .map_err(|err| format!("install xHTTP H3 system CA bundle: {err}"))?;
     }

@@ -2311,6 +2311,24 @@ int DAE_SSL_get0_reality_auth_key(const SSL *ssl, const uint8_t **out_key,
   return 1;
 }
 
+int DAE_SSL_get0_reality_transcript(
+    const SSL *ssl, const uint8_t **out_client_hello,
+    size_t *out_client_hello_len, const uint8_t **out_server_hello,
+    size_t *out_server_hello_len) {
+  if (ssl == nullptr || ssl->config == nullptr || out_client_hello == nullptr ||
+      out_client_hello_len == nullptr || out_server_hello == nullptr ||
+      out_server_hello_len == nullptr ||
+      ssl->config->dae_reality.client_hello.empty() ||
+      ssl->config->dae_reality.server_hello.empty()) {
+    return 0;
+  }
+  *out_client_hello = ssl->config->dae_reality.client_hello.data();
+  *out_client_hello_len = ssl->config->dae_reality.client_hello.size();
+  *out_server_hello = ssl->config->dae_reality.server_hello.data();
+  *out_server_hello_len = ssl->config->dae_reality.server_hello.size();
+  return 1;
+}
+
 int SSL_set1_server_supported_groups_hint(SSL *ssl,
                                           const uint16_t *server_groups,
                                           size_t num_server_groups) {

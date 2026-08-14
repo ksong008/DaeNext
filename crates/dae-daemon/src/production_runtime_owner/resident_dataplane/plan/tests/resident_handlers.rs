@@ -406,6 +406,7 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
             uuid: fixture_client_id(),
             password: fixture_secret(),
             allow_insecure: false,
+            congestion: dae_outbound::juicity::JuicityCongestionController::Bbr,
             pinned_certchain_sha256: "sha256:fixture".to_owned(),
         },
     ];

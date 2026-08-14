@@ -854,6 +854,7 @@ fn anytls_owner_identity_partitions_tls_security_and_parent_transport() {
         public_key: [7_u8; 32],
         short_id: vec![1, 2, 3, 4],
         spider_x: "/probe".to_owned(),
+        mldsa65_verify: None,
     });
     assert_ne!(
         base_digest,

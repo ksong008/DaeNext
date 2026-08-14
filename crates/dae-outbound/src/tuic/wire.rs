@@ -13,6 +13,8 @@ pub const TUIC_AUTHENTICATE_FRAME_LEN: usize = 2 + 16 + TUIC_AUTH_TOKEN_LEN;
 pub const TUIC_DISSOCIATE_FRAME_LEN: usize = 4;
 pub const TUIC_HEARTBEAT_FRAME_LEN: usize = 2;
 pub const TUIC_MAX_UDP_PAYLOAD_LENGTH: usize = u16::MAX as usize;
+pub const TUIC_MAX_UDP_STREAM_FRAME_LEN: usize =
+    10 + 1 + 1 + u8::MAX as usize + 2 + TUIC_MAX_UDP_PAYLOAD_LENGTH;
 
 const ATYP_DOMAIN_NAME: u8 = 0;
 const ATYP_IPV4: u8 = 1;
@@ -169,6 +171,21 @@ pub fn decode_tuic_udp_packet(input: &[u8]) -> Result<TuicUdpPacket, OutboundErr
         target,
         input[offset..payload_end].to_vec(),
     )
+}
+
+pub fn encode_tuic_udp_stream_packet(packet: &TuicUdpPacket) -> Result<Vec<u8>, OutboundError> {
+    let encoded = encode_tuic_udp_packet(packet)?;
+    if encoded.len() > TUIC_MAX_UDP_STREAM_FRAME_LEN {
+        return Err(bad_wire("TUIC UDP stream packet exceeds frame limit"));
+    }
+    Ok(encoded)
+}
+
+pub fn decode_tuic_udp_stream_packet(input: &[u8]) -> Result<TuicUdpPacket, OutboundError> {
+    if input.len() > TUIC_MAX_UDP_STREAM_FRAME_LEN {
+        return Err(bad_wire("TUIC UDP stream packet exceeds frame limit"));
+    }
+    decode_tuic_udp_packet(input)
 }
 
 pub fn fragment_tuic_udp_packet(

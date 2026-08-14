@@ -34,6 +34,7 @@ pub(crate) fn build_socks5_proxy_plan(
         net: "tcp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -42,6 +43,7 @@ pub(crate) fn build_socks5_proxy_plan(
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::Socks5Tcp {
             username: parsed.username().to_owned(),
@@ -129,6 +131,7 @@ pub(crate) fn build_http_proxy_plan(
         },
         stream_host: parsed.host.clone(),
         stream_path: parsed.path.clone(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -137,6 +140,7 @@ pub(crate) fn build_http_proxy_plan(
         allow_insecure,
         tls_fragment,
         utls_fingerprint,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::HttpProxyTcp {
             username: parsed.username,

@@ -336,19 +336,24 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
         "rustls"
     );
 
+    let mut vmess_grpc_link = VMessLink::parse(&vmess_fixture_url(
+        "vmess-grpc",
+        &primary_host,
+        fixture_port(5),
+        "grpc",
+        &authority_host,
+        "/official/service/tun|multi",
+        "tls",
+    ))
+    .unwrap();
+    vmess_grpc_link.grpc_mode = dae_outbound::shared_transport::GrpcMode::Multi;
+    vmess_grpc_link.grpc_authority = "vmess-grpc-authority.invalid".to_owned();
+    vmess_grpc_link.alpn = "h2".to_owned();
     let vmess_grpc = build_resident_proxy_plan_for_node(
         config,
         "proxy".to_owned(),
         "vmess_grpc_live".to_owned(),
-        vmess_fixture_url(
-            "vmess-grpc",
-            &primary_host,
-            fixture_port(5),
-            "grpc",
-            &authority_host,
-            "GunService",
-            "tls",
-        ),
+        vmess_grpc_link.export_url(),
     )
     .unwrap();
     assert_eq!(vmess_grpc.protocol, "vmess");
@@ -356,8 +361,12 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     assert_eq!(vmess_grpc.server_host, primary_host);
     assert_eq!(vmess_grpc.server_port, fixture_port(5));
     assert_eq!(vmess_grpc.server_name, primary_host);
-    assert_eq!(vmess_grpc.stream_host, authority_host);
-    assert_eq!(vmess_grpc.stream_path, "GunService");
+    assert_eq!(vmess_grpc.stream_host, "vmess-grpc-authority.invalid");
+    assert_eq!(vmess_grpc.stream_path, "/official/service/tun|multi");
+    assert_eq!(
+        vmess_grpc.grpc_mode,
+        dae_outbound::shared_transport::GrpcMode::Multi
+    );
     assert_eq!(vmess_grpc.tls, "tls");
     assert_eq!(vmess_grpc.alpn, vec!["h2".to_owned()]);
     assert!(matches!(
@@ -366,6 +375,10 @@ pub(super) fn assert_vmess_vless_handlers(config: &Config) -> Vec<ResidentProxyP
     ));
     let vmess_grpc_graph = vmess_grpc.executable_graph_value();
     assert_eq!(vmess_grpc_graph["streamWrapper"], "grpc");
+    assert_eq!(
+        vmess_grpc_graph["streamWrapperEndpoint"]["grpcMode"],
+        "multi"
+    );
     assert_eq!(vmess_grpc_graph["securityUnderlay"], "standard-tls");
     assert_eq!(
         vmess_grpc_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],

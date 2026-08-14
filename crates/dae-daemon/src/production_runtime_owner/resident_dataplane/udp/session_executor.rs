@@ -13,7 +13,7 @@ pub(super) enum UdpSessionExecutor {
     VmessAead(VmessAeadUdpOverTcpSession),
     AnyTls(AnyTlsPacketStreamSession),
     Hysteria2(Hysteria2QuicDatagramSession),
-    Tuic(TuicQuicDatagramSession),
+    Tuic(TuicQuicPacketSession),
     Juicity(JuicityQuicStreamPacketSession),
     FailClosed { reason: String },
 }
@@ -133,7 +133,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) use self::anytls::ex
 #[cfg(test)]
 pub(in crate::production_runtime_owner::resident_dataplane) use self::quic::exercise_juicity_udp_stream_session;
 use self::quic::{
-    Hysteria2QuicDatagramSession, JuicityQuicStreamPacketSession, TuicQuicDatagramSession,
+    Hysteria2QuicDatagramSession, JuicityQuicStreamPacketSession, TuicQuicPacketSession,
 };
 use self::shadowsocks::{Shadowsocks2022DatagramSession, ShadowsocksAeadDatagramSession};
 use self::socks5::Socks5UdpAssociateSession;

@@ -101,8 +101,10 @@ async fn capture_boring_client_hello(
         configure_utls_template_boring_ssl(&mut config, &client_proxy)?;
         if let Some(reality) = &client_proxy.reality {
             config.set_verify_hostname(false);
-            config
-                .set_custom_verify_callback(SslVerifyMode::PEER, verify_reality_boring_server_cert);
+            let mldsa65_verify = reality.mldsa65_verify.clone();
+            config.set_custom_verify_callback(SslVerifyMode::PEER, move |ssl| {
+                verify_reality_boring_server_cert(ssl, mldsa65_verify.as_ref())
+            });
             configure_reality_boring_ssl(&mut config, reality)?;
         }
         tokio_boring::connect(config, &client_proxy.server_name, tcp)
@@ -308,6 +310,7 @@ fn test_reality_proxy(fingerprint: &UtlsFingerprint) -> ResidentProxyPlan {
         public_key: FIXTURE_REALITY_PUBLIC_KEY,
         short_id: vec![1, 2, 3, 4],
         spider_x: "/".to_owned(),
+        mldsa65_verify: None,
     });
     proxy.materialize_execution();
     proxy
@@ -336,6 +339,7 @@ fn base_proxy(
         net: "tcp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -357,6 +361,7 @@ fn base_proxy(
                 .map(|protocol| (*protocol).to_owned())
                 .collect(),
         }),
+        ech: None,
         reality: None,
         handler,
         execution: None,

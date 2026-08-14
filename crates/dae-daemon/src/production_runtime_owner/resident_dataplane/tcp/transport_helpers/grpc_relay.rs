@@ -8,6 +8,7 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
     metrics: &ResidentDataplaneMetrics,
     strip_vless_response_header: bool,
 ) -> Result<DirectTcpRelayStats, String> {
+    let grpc_mode = response.grpc_mode();
     let (progress, activity) = resident_duplex_progress();
     if stats.client_to_direct != 0 {
         progress.record_upload(stats.client_to_direct);
@@ -33,7 +34,7 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
                 }
                 Err(err) => return Err(format!("read inbound TCP for gRPC relay: {err}")),
             };
-            send_grpc_hunk(send_stream, &buffer[..read], false).await?;
+            send_grpc_data(send_stream, &buffer[..read], false, grpc_mode).await?;
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }
@@ -41,7 +42,7 @@ pub(crate) async fn relay_tcp_over_grpc_h2(
     let download_progress = progress.clone();
     let download = async move {
         let mut inbound_write = inbound_write;
-        let mut response_buf = GrpcHunkReadBuffer::default();
+        let mut response_buf = GrpcHunkReadBuffer::with_mode(grpc_mode);
         let mut vless_response_stripper =
             strip_vless_response_header.then(VlessResponseStripper::default);
         loop {

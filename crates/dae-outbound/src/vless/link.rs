@@ -2,6 +2,10 @@ use serde_json::Value;
 use url::Url;
 
 use crate::error::OutboundError;
+use crate::shared_transport::{
+    EchConfigList, GrpcMode, Mldsa65VerifyKey, parse_optional_ech_config_list,
+    parse_optional_mldsa65_verify_key,
+};
 
 use super::contract::is_xtls_rprx_vision_flow;
 
@@ -18,6 +22,8 @@ pub struct VLESSLink {
     pub path: String,
     pub xhttp_mode: String,
     pub xhttp_extra: String,
+    pub grpc_mode: GrpcMode,
+    pub grpc_authority: String,
     pub tls: String,
     pub flow: String,
     pub alpn: String,
@@ -26,6 +32,8 @@ pub struct VLESSLink {
     pub public_key: String,
     pub short_id: String,
     pub spider_x: String,
+    pub ech: Option<EchConfigList>,
+    pub mldsa65_verify: Option<Mldsa65VerifyKey>,
     pub mux: bool,
     /// Xray VLESS Encryption account string.  `none`/empty keeps the
     /// legacy unencrypted VLESS record path; any other value is parsed and
@@ -57,8 +65,10 @@ impl VLESSLink {
             host: query_value(&query, "host").unwrap_or_default(),
             sni: query_value(&query, "sni").unwrap_or_default(),
             path: query_value(&query, "path").unwrap_or_default(),
-            xhttp_mode: query_value(&query, "mode").unwrap_or_default(),
+            xhttp_mode: String::new(),
             xhttp_extra: query_value(&query, "extra").unwrap_or_default(),
+            grpc_mode: GrpcMode::Gun,
+            grpc_authority: String::new(),
             tls: query_value(&query, "security").unwrap_or_default(),
             flow: canonical_flow(&query_value(&query, "flow").unwrap_or_default()),
             alpn: query_value(&query, "alpn").unwrap_or_default(),
@@ -67,6 +77,12 @@ impl VLESSLink {
             public_key: query_value(&query, "pbk").unwrap_or_default(),
             short_id: query_value(&query, "sid").unwrap_or_default(),
             spider_x: query_value(&query, "spx").unwrap_or_default(),
+            ech: parse_optional_ech_config_list(&query_value(&query, "ech").unwrap_or_default())
+                .map_err(|err| OutboundError::BadVless(err.to_string()))?,
+            mldsa65_verify: parse_optional_mldsa65_verify_key(
+                &query_value(&query, "pqv").unwrap_or_default(),
+            )
+            .map_err(|err| OutboundError::BadVless(err.to_string()))?,
             mux: parse_mux_enabled(&query),
             encryption: query_value(&query, "encryption").unwrap_or_default(),
             protocol: "vless".to_owned(),
@@ -76,6 +92,13 @@ impl VLESSLink {
         }
         if parsed.net == "grpc" {
             parsed.path = query_value(&query, "serviceName").unwrap_or_default();
+            parsed.grpc_mode =
+                GrpcMode::parse_link_value(&query_value(&query, "mode").unwrap_or_default())
+                    .map_err(|err| OutboundError::BadVless(err.to_string()))?;
+            parsed.grpc_authority = query_value(&query, "authority").unwrap_or_default();
+        }
+        if parsed.net == "xhttp" {
+            parsed.xhttp_mode = query_value(&query, "mode").unwrap_or_default();
         }
         if parsed.net == "meek" {
             parsed.path = query_value(&query, "url").unwrap_or_default();
@@ -148,7 +171,13 @@ impl VLESSLink {
                 push_if_non_empty(&mut query, "host", &self.host);
                 push_if_non_empty(&mut query, "path", &self.path);
             }
-            "grpc" => push_if_non_empty(&mut query, "serviceName", &self.path),
+            "grpc" => {
+                push_if_non_empty(&mut query, "serviceName", &self.path);
+                if self.grpc_mode != GrpcMode::Gun {
+                    push_if_non_empty(&mut query, "mode", self.grpc_mode.link_value());
+                }
+                push_if_non_empty(&mut query, "authority", &self.grpc_authority);
+            }
             "meek" => push_if_non_empty(&mut query, "url", &self.path),
             _ => {}
         }
@@ -157,6 +186,9 @@ impl VLESSLink {
             push_if_non_empty(&mut query, "alpn", &self.alpn);
             push_if_non_empty(&mut query, "flow", &canonical_flow(&self.flow));
             push_if_non_empty(&mut query, "fp", &self.fingerprint);
+            if let Some(ech) = &self.ech {
+                push_if_non_empty(&mut query, "ech", ech.canonical_base64());
+            }
             query.push((
                 "allowInsecure".to_owned(),
                 if self.allow_insecure { "1" } else { "0" }.to_owned(),
@@ -165,6 +197,9 @@ impl VLESSLink {
                 push_if_non_empty(&mut query, "pbk", &self.public_key);
                 push_if_non_empty(&mut query, "sid", &self.short_id);
                 push_if_non_empty(&mut query, "spx", &self.spider_x);
+                if let Some(mldsa65_verify) = &self.mldsa65_verify {
+                    push_if_non_empty(&mut query, "pqv", mldsa65_verify.canonical_base64());
+                }
             }
         }
         if self.mux {

@@ -948,6 +948,7 @@ mod tests {
             net: "tcp".to_owned(),
             stream_host: String::new(),
             stream_path: String::new(),
+            grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
             xhttp_download: None,
             xhttp_mode: ResidentXhttpMode::PacketUp,
             xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -956,6 +957,7 @@ mod tests {
             allow_insecure: false,
             tls_fragment: None,
             utls_fingerprint: None,
+            ech: None,
             reality: None,
             handler: ResidentProxyProtocolPlan::HttpProxyTcp {
                 username: String::new(),

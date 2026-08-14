@@ -8,7 +8,7 @@ pub(super) fn validate_resident_xhttp_primary_quic_tls_features(
     if http_version != ResidentXhttpHttpVersion::H3 {
         return Ok(());
     }
-    ResidentXhttpQuicTlsProvider::for_primary(fingerprint)
+    ResidentXhttpQuicTlsProvider::for_endpoint(fingerprint)
         .map(|_| ())
         .map_err(|err| format!("resident dataplane vless {err} for node {node_tag}"))
 }

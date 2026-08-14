@@ -1,6 +1,9 @@
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::plan::resident_tcp_check_network_type;
-use dae_outbound::NetworkType;
+use dae_outbound::{
+    NetworkType,
+    shared_transport::{GrpcMode, grpc_multi_hunk_frame},
+};
 use serde_json::json;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::path::Path;
@@ -246,6 +249,87 @@ fn simple_obfs_http_status_accepts_ok_or_switching_protocols() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn shadowsocksr_relay_uploads_before_obfs_response_header() {
+    const CIPHER: &str = "aes-128-cfb";
+    const PASSWORD: &str = "fixture-password";
+    const TARGET: &str = "198.51.100.2:5203";
+    const UPLOAD: &[u8] = b"application-data-before-response";
+    const DOWNLOAD: &[u8] = b"response-after-application-data";
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = listener.local_addr().unwrap();
+    let mut proxy = TokioTcpStream::connect(endpoint).await.unwrap();
+    let (request, mut encoder) = shadowsocksr_http_simple_origin_request(
+        CIPHER,
+        PASSWORD,
+        TARGET,
+        &[],
+        "front.fixture.invalid",
+        endpoint.port(),
+        [0x45; 16],
+    )
+    .unwrap();
+    proxy.write_all(&request).await.unwrap();
+    proxy.flush().await.unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let (_, mut encrypted_upload) = read_http_head_and_leftover_from_async_stream(&mut stream)
+            .await
+            .unwrap();
+        while encrypted_upload.len() < UPLOAD.len() {
+            let mut buffer = [0_u8; 256];
+            let read = stream.read(&mut buffer).await.unwrap();
+            assert_ne!(read, 0, "SSR upload closed before application data");
+            encrypted_upload.extend_from_slice(&buffer[..read]);
+        }
+
+        let mut response_encoder =
+            ShadowsocksRStreamEncoder::new(CIPHER, PASSWORD, [0x95; 16]).unwrap();
+        let encrypted_download = response_encoder.encode(DOWNLOAD).unwrap();
+        stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+        stream.write_all(&encrypted_download).await.unwrap();
+        stream.shutdown().await.unwrap();
+    });
+
+    let (mut application, mut relay_side) = tokio::io::duplex(4096);
+    let stop = ResidentStopSignal::shared();
+    let metrics = ResidentDataplaneMetrics::default();
+    let mut decoder = ShadowsocksRStreamDecoder::new(CIPHER, PASSWORD).unwrap();
+    let relay = tokio::spawn(async move {
+        relay_tcp_shadowsocksr_stream_async(
+            &mut relay_side,
+            &mut proxy,
+            stop,
+            &metrics,
+            &mut encoder,
+            &mut decoder,
+        )
+        .await
+    });
+
+    application.write_all(UPLOAD).await.unwrap();
+    let mut response = vec![0_u8; DOWNLOAD.len()];
+    time::timeout(
+        Duration::from_secs(1),
+        application.read_exact(&mut response),
+    )
+    .await
+    .expect("SSR relay deadlocked before the obfs response")
+    .unwrap();
+    assert_eq!(response, DOWNLOAD);
+
+    server.await.unwrap();
+    let stats = time::timeout(Duration::from_secs(1), relay)
+        .await
+        .expect("SSR relay did not finish")
+        .unwrap()
+        .unwrap();
+    assert_eq!(stats.client_to_direct, UPLOAD.len());
+    assert_eq!(stats.direct_to_client, DOWNLOAD.len());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn simple_obfs_tls_app_data_reader_unwraps_followup_frames() {
     let frame = simple_obfs_tls_application_data_frame(b"tail").unwrap();
     let mut stream = TestAsyncRead::new(frame);
@@ -391,7 +475,7 @@ fn grpc_h2_request_declares_identity_encoding() {
     let mut proxy = dummy_proxy_plan();
     proxy.server_name = "tls.name.invalid".to_owned();
     proxy.stream_host = "edge.transport.invalid".to_owned();
-    proxy.stream_path = "/GunService".to_owned();
+    proxy.stream_path = "GunService".to_owned();
 
     let request = grpc_h2_request(&proxy).unwrap();
 
@@ -416,6 +500,50 @@ fn grpc_h2_request_declares_identity_encoding() {
         request.headers().get(GRPC_ACCEPT_ENCODING_HEADER).unwrap(),
         GRPC_IDENTITY_ENCODING
     );
+}
+
+#[test]
+fn grpc_multi_request_uses_independent_authority_and_tun_multi_path() {
+    let mut proxy = dummy_proxy_plan();
+    proxy.server_host = "dial.invalid".to_owned();
+    proxy.server_name = "sni.invalid".to_owned();
+    proxy.stream_host = "authority.invalid:8443".to_owned();
+    proxy.stream_path = "/my/sample/path/tun|multi".to_owned();
+    proxy.grpc_mode = GrpcMode::Multi;
+
+    let request = grpc_h2_request(&proxy).unwrap();
+
+    assert_eq!(
+        request.uri().to_string(),
+        "https://authority.invalid:8443/my/sample/path/multi"
+    );
+    assert_eq!(request.uri().authority().unwrap(), "authority.invalid:8443");
+}
+
+#[test]
+fn grpc_multi_read_buffer_preserves_official_repeated_payload_boundaries_across_data_splits() {
+    let frame = grpc_multi_hunk_frame(&[b"one", b"two"]).unwrap();
+    let mut buffer = GrpcHunkReadBuffer::with_mode(GrpcMode::Multi);
+    buffer.extend_from_slice(&frame[..7]);
+    assert!(buffer.pop_payload().unwrap().is_none());
+    buffer.extend_from_slice(&frame[7..]);
+    assert_eq!(buffer.pop_payload().unwrap().unwrap(), b"one");
+    assert!(!buffer.is_empty());
+    assert_eq!(buffer.pop_payload().unwrap().unwrap(), b"two");
+    assert!(buffer.is_empty());
+}
+
+#[test]
+fn grpc_multi_read_buffer_does_not_coalesce_large_repeated_payloads() {
+    let first = vec![0x11; 96 * 1024];
+    let second = vec![0x22; 96 * 1024];
+    let frame = grpc_multi_hunk_frame(&[&first, &second]).unwrap();
+    let mut buffer = GrpcHunkReadBuffer::with_mode(GrpcMode::Multi);
+    buffer.extend_from_slice(&frame);
+
+    assert_eq!(buffer.pop_payload().unwrap().unwrap(), first);
+    assert_eq!(buffer.pop_payload().unwrap().unwrap(), second);
+    assert!(buffer.is_empty());
 }
 
 #[test]
@@ -1274,6 +1402,7 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         net: "tcp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -1282,6 +1411,7 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [0; 16],

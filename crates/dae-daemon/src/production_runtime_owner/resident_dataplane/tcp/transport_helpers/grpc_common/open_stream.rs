@@ -9,10 +9,11 @@ pub(crate) struct GrpcH2Response {
     header_deadline: Pin<Box<time::Sleep>>,
     grpc_status_seen: bool,
     completed: bool,
+    mode: GrpcMode,
 }
 
 impl GrpcH2Response {
-    fn new<F>(response: F) -> Self
+    fn new<F>(response: F, mode: GrpcMode) -> Self
     where
         F: Future<Output = Result<http::Response<h2::RecvStream>, h2::Error>> + Send + 'static,
     {
@@ -22,7 +23,12 @@ impl GrpcH2Response {
             header_deadline: Box::pin(time::sleep(RESIDENT_CONNECT_TIMEOUT)),
             grpc_status_seen: false,
             completed: false,
+            mode,
         }
+    }
+
+    pub(crate) const fn grpc_mode(&self) -> GrpcMode {
+        self.mode
     }
 
     pub(crate) async fn next_data(&mut self) -> Result<Option<Bytes>, String> {
@@ -115,9 +121,13 @@ pub(crate) async fn open_grpc_h2_stream(
     let lease = acquire_h2_carrier(binding.clone(), deadline).await?;
     let (response, mut send_stream) = lease.open_request(request, false, deadline, "gRPC").await?;
     if !first_payload.is_empty() {
-        send_grpc_hunk(&mut send_stream, first_payload, false).await?;
+        send_grpc_data(&mut send_stream, first_payload, false, proxy.grpc_mode).await?;
     }
-    Ok((send_stream, GrpcH2Response::new(response), lease))
+    Ok((
+        send_stream,
+        GrpcH2Response::new(response, proxy.grpc_mode),
+        lease,
+    ))
 }
 
 /// Bridges a gRPC byte stream to a bounded logical duplex stream.  The VLESS
@@ -138,6 +148,7 @@ async fn drive_grpc_h2_payload_stream(
     mut response: GrpcH2Response,
     _carrier_lease: H2CarrierLease,
 ) -> Result<(), String> {
+    let grpc_mode = response.grpc_mode();
     let (mut logical_read, mut logical_write) = tokio::io::split(logical);
     let upload = async {
         let mut buffer = [0_u8; 16 * 1024];
@@ -147,14 +158,14 @@ async fn drive_grpc_h2_payload_stream(
                 .await
                 .map_err(|error| format!("read VLESS Encryption gRPC logical stream: {error}"))?;
             if read == 0 {
-                send_grpc_hunk(&mut send_stream, &[], true).await?;
+                send_grpc_data(&mut send_stream, &[], true, grpc_mode).await?;
                 return Ok(());
             }
-            send_grpc_hunk(&mut send_stream, &buffer[..read], false).await?;
+            send_grpc_data(&mut send_stream, &buffer[..read], false, grpc_mode).await?;
         }
     };
     let download = async {
-        let mut response_buf = GrpcHunkReadBuffer::default();
+        let mut response_buf = GrpcHunkReadBuffer::with_mode(grpc_mode);
         loop {
             let Some(data) = response.next_data().await? else {
                 if !response_buf.is_empty() {
@@ -213,5 +224,9 @@ where
         .map_err(|err| format!("send gRPC HTTP/2 request headers: {err}"))?;
     let mut send_stream = send_stream;
     send_grpc_hunk(&mut send_stream, first_payload, false).await?;
-    Ok((send_stream, GrpcH2Response::new(response), connection_task))
+    Ok((
+        send_stream,
+        GrpcH2Response::new(response, GrpcMode::Gun),
+        connection_task,
+    ))
 }

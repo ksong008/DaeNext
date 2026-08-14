@@ -14,12 +14,11 @@ use super::super::super::{
     ResidentDataplaneMetrics,
     tcp::{
         native_websocket_handshake_over_resident_tls_async, open_plain_proxy_tcp_stream_async,
-        read_http_head_and_leftover_from_async_stream, relay_tcp_over_shadowsocks_2022_async,
+        relay_tcp_over_shadowsocks_2022_async,
         relay_tcp_over_shadowsocks_2022_simple_obfs_http_async,
         relay_tcp_over_shadowsocks_aead_async, relay_tcp_over_shadowsocks_simple_obfs_http_async,
         relay_tcp_over_shadowsocks_simple_obfs_tls_async,
         relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws, relay_tcp_shadowsocksr_stream_async,
-        validate_simple_obfs_http_response_status,
     },
 };
 use super::errors::NativeTcpProbeError;
@@ -74,37 +73,12 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
             stream.flush().await.map_err(|err| {
                 NativeTcpProbeError::Open(format!("flush native ShadowsocksR request: {err}"))
             })?;
-            let (response_head, leftover) =
-                read_http_head_and_leftover_from_async_stream(&mut stream)
-                    .await
-                    .map_err(|err| {
-                        NativeTcpProbeError::Open(format!(
-                            "read native ShadowsocksR obfs response: {err}"
-                        ))
-                    })?;
-            validate_simple_obfs_http_response_status(&response_head).map_err(|err| {
-                NativeTcpProbeError::Open(format!(
-                    "validate native ShadowsocksR obfs response: {err}"
-                ))
-            })?;
             let mut decoder = ShadowsocksRStreamDecoder::new(cipher, password).map_err(|err| {
                 NativeTcpProbeError::Open(format!(
                     "create native ShadowsocksR stream decoder: {err}"
                 ))
             })?;
-            let initial_plain = if leftover.is_empty() {
-                Vec::new()
-            } else {
-                decoder.decode(&leftover).map_err(|err| {
-                    NativeTcpProbeError::Open(format!(
-                        "decode native ShadowsocksR initial response: {err}"
-                    ))
-                })?
-            };
             let task = tokio::spawn(async move {
-                if !initial_plain.is_empty() {
-                    let _ = relay_side.write_all(&initial_plain).await;
-                }
                 let _ = relay_tcp_shadowsocksr_stream_async(
                     &mut relay_side,
                     &mut stream,

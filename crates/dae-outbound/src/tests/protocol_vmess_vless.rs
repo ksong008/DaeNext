@@ -89,6 +89,65 @@ fn vmess_body_security_export_retains_only_explicit_source_value() {
 }
 
 #[test]
+fn vmess_grpc_fields_roundtrip_and_unknown_mode_fails_closed() {
+    let mut json = serde_json::json!({
+        "v": "2",
+        "ps": "grpc-fixture",
+        "add": "vmess-grpc.fixture.invalid",
+        "port": "443",
+        "id": "7c12c745-63a5-433d-9e60-022e469b5bd4",
+        "aid": "0",
+        "net": "grpc",
+        "type": "",
+        "host": "grpc-host.fixture.invalid",
+        "path": "service",
+        "tls": "tls",
+        "alpn": "h2",
+        "ech": "AD7+DQA6AAAgACC7Lynj4wV+BBnVL8X0QRh3b422HOpP33YHm5NgbFpiSAAIAAEAAQABAAMAB2VjaC5jb20AAA==",
+        "grpcMode": "multi",
+        "grpcAuthority": "authority.fixture.invalid"
+    });
+    let link = format!("vmess://{}", STANDARD.encode(json.to_string()));
+    let parsed = crate::vmess::VMessLink::parse(&link).unwrap();
+    assert_eq!(parsed.grpc_mode, crate::shared_transport::GrpcMode::Multi);
+    assert_eq!(parsed.grpc_authority, "authority.fixture.invalid");
+    assert_eq!(parsed.alpn, "h2");
+    assert_eq!(
+        parsed.ech.as_ref().unwrap().sha256_hex(),
+        "9af1ab5180107aaa5ea758daf3435f20e4815af6889436ad6d884ea139b0c74f"
+    );
+    assert_eq!(
+        crate::vmess::VMessLink::parse(&parsed.export_url())
+            .unwrap()
+            .grpc_mode,
+        crate::shared_transport::GrpcMode::Multi
+    );
+
+    json["grpcMode"] = Value::String("guna".to_owned());
+    let unsupported = format!("vmess://{}", STANDARD.encode(json.to_string()));
+    assert!(crate::vmess::VMessLink::parse(&unsupported).is_err());
+}
+
+#[test]
+fn vless_grpc_fields_roundtrip_and_unknown_mode_fails_closed() {
+    let link = "vless://uuid@grpc.fixture.invalid:443?authority=authority.fixture.invalid&mode=multi&security=tls&serviceName=%2Fmy%2Fservice&type=grpc#grpc";
+    let parsed = crate::vless::VLESSLink::parse(link).unwrap();
+    assert_eq!(parsed.grpc_mode, crate::shared_transport::GrpcMode::Multi);
+    assert_eq!(parsed.grpc_authority, "authority.fixture.invalid");
+    let roundtrip = crate::vless::VLESSLink::parse(&parsed.export_url()).unwrap();
+    assert_eq!(
+        roundtrip.grpc_mode,
+        crate::shared_transport::GrpcMode::Multi
+    );
+    assert_eq!(roundtrip.grpc_authority, "authority.fixture.invalid");
+
+    assert!(
+        crate::vless::VLESSLink::parse("vless://uuid@grpc.fixture.invalid:443?mode=guna&type=grpc")
+            .is_err()
+    );
+}
+
+#[test]
 fn vmess_rust_native_matches_nativelden_fixture() {
     let fixture = fixture("outbound/protocol/vmess_rust_native.json");
 

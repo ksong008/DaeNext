@@ -191,6 +191,7 @@ pub(crate) fn build_shadowsocks_proxy_plan(
         net,
         stream_host,
         stream_path,
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -203,6 +204,7 @@ pub(crate) fn build_shadowsocks_proxy_plan(
             None
         },
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler,
         execution: None,

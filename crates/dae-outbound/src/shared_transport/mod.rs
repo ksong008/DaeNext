@@ -1,11 +1,14 @@
 pub mod contract;
 pub mod dataplane;
+pub mod ech;
 pub mod grpc;
 pub mod grpc_cache;
 pub mod grpc_http2;
 pub mod ir;
 pub mod meek;
+pub mod mldsa65;
 pub mod mux;
+pub mod quic_congestion;
 pub mod quic_h3;
 pub mod reality;
 pub mod reality_aead;
@@ -29,12 +32,17 @@ pub use dataplane::{
     websocket_client_handshake_key, websocket_client_handshake_request, websocket_client_mask_key,
     websocket_exchange, websocket_handshake_request, websocket_server_binary_frame,
 };
+pub use ech::{
+    ECH_CONFIG_LIST_MAX_BASE64_BYTES, ECH_CONFIG_LIST_MAX_BYTES, EchConfigList, EchConfigListError,
+    parse_optional_ech_config_list,
+};
 pub use grpc::{
     GRPC_ACCEPT_ENCODING_HEADER, GRPC_CONTENT_TYPE_APPLICATION, GRPC_CONTENT_TYPE_HEADER,
     GRPC_ENCODING_HEADER, GRPC_IDENTITY_ENCODING, GRPC_TE_HEADER, GRPC_TE_TRAILERS,
-    GrpcCacheReport, GrpcLifecycleCache, GrpcLifecycleOptions, GrpcLifecycleReport,
-    grpc_hunk_exchange, grpc_hunk_frame, grpc_hunk_frame_len, grpc_hunk_message, grpc_hunk_payload,
-    grpc_hunk_payload_ref, grpc_stream_preface, read_grpc_hunk_frame,
+    GrpcCacheReport, GrpcLifecycleCache, GrpcLifecycleOptions, GrpcLifecycleReport, GrpcMode,
+    grpc_data_frame, grpc_hunk_exchange, grpc_hunk_frame, grpc_hunk_frame_len, grpc_hunk_message,
+    grpc_hunk_payload, grpc_hunk_payload_ref, grpc_multi_hunk_frame, grpc_multi_hunk_payloads,
+    grpc_request_path, grpc_stream_preface, read_grpc_hunk_frame,
 };
 pub use grpc_cache::{
     GrpcCacheCancellationStressReport, GrpcDetachedStreamCancellationReport,
@@ -50,12 +58,17 @@ pub use grpc_http2::{
 pub use meek::{
     MeekRoundTripOptions, MeekRoundTripReport, meek_http_request, meek_polling_exchange,
 };
+pub use mldsa65::{
+    MLDSA65_PUBLIC_KEY_BASE64_BYTES, MLDSA65_PUBLIC_KEY_BYTES, MLDSA65_SIGNATURE_BYTES,
+    Mldsa65VerifyKey, Mldsa65VerifyKeyError, parse_optional_mldsa65_verify_key,
+};
 pub use mux::{
     MUX_DATA_FRAME_HEADER_BYTES, MUX_MAX_FRAME_BYTES, MUX_MAX_METADATA_BYTES,
     MUX_MAX_PAYLOAD_BYTES, MuxFrame, MuxFrameDecoder, MuxFrameOptions, MuxLifecycleReport,
     mux_data_frame, mux_data_frame_header, mux_end_frame, mux_error_frame, mux_frame_exchange,
     mux_new_frame,
 };
+pub use quic_congestion::{QuicCongestionController, QuicCongestionControllerError};
 pub use quic_h3::{
     QuicH3HarnessOptions, QuicH3HarnessReport, parse_quic_h3_datagram, quic_h3_datagram_exchange,
     quic_h3_datagram_packet,

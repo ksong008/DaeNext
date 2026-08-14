@@ -74,6 +74,7 @@ pub(crate) fn build_trojan_proxy_plan(
         net,
         stream_host,
         stream_path,
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -82,6 +83,7 @@ pub(crate) fn build_trojan_proxy_plan(
         allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,
         utls_fingerprint,
+        ech: None,
         reality: None,
         handler: if let Some((inner_cipher, inner_password)) = inner_shadowsocks {
             ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls {

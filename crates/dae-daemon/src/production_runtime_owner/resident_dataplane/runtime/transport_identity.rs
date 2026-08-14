@@ -1,6 +1,8 @@
 use sha2::{Digest, Sha256};
 
-use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyBinding;
+use crate::production_runtime_owner::resident_dataplane::plan::{
+    ResidentProxyBinding, ResidentProxyProtocolPlan,
+};
 
 pub(super) fn resident_transport_binding_identity_digest(
     domain: &[u8],
@@ -27,6 +29,13 @@ fn update_binding_identity(digest: &mut Sha256, binding: &ResidentProxyBinding) 
     update_identity_part(digest, b"server-host", proxy.server_host.as_bytes());
     update_identity_part(digest, b"server-port", &proxy.server_port.to_be_bytes());
     update_identity_part(digest, b"server-name", proxy.server_name.as_bytes());
+    update_identity_part(digest, b"stream-host", proxy.stream_host.as_bytes());
+    update_identity_part(digest, b"stream-path", proxy.stream_path.as_bytes());
+    update_identity_part(
+        digest,
+        b"grpc-mode",
+        proxy.grpc_mode.link_value().as_bytes(),
+    );
     update_identity_part(digest, b"tls", proxy.tls.as_bytes());
     update_identity_part(digest, b"mark", &effective_mark.to_be_bytes());
     update_identity_part(digest, b"mptcp", &[u8::from(proxy.mptcp)]);
@@ -38,6 +47,30 @@ fn update_binding_identity(digest: &mut Sha256, binding: &ResidentProxyBinding) 
     );
     for alpn in &proxy.alpn {
         update_identity_part(digest, b"alpn", alpn.as_bytes());
+    }
+    if let ResidentProxyProtocolPlan::JuicityQuicTcp { congestion, .. } = &proxy.handler {
+        update_identity_part(
+            digest,
+            b"juicity-congestion-control",
+            congestion.as_str().as_bytes(),
+        );
+    }
+    if let ResidentProxyProtocolPlan::TuicQuicTcp {
+        congestion,
+        udp_relay_mode,
+        ..
+    } = &proxy.handler
+    {
+        update_identity_part(
+            digest,
+            b"tuic-congestion-control",
+            congestion.as_str().as_bytes(),
+        );
+        update_identity_part(
+            digest,
+            b"tuic-udp-relay-mode",
+            udp_relay_mode.as_str().as_bytes(),
+        );
     }
     update_identity_part(
         digest,
@@ -97,6 +130,10 @@ fn update_binding_identity(digest: &mut Sha256, binding: &ResidentProxyBinding) 
             update_identity_part(digest, b"fp-default-alpn", alpn.as_bytes());
         }
     }
+    update_identity_part(digest, b"ech-present", &[u8::from(proxy.ech.is_some())]);
+    if let Some(ech) = proxy.ech.as_ref() {
+        update_identity_part(digest, b"ech-config-list-sha256", ech.config_list_sha256());
+    }
     update_identity_part(
         digest,
         b"reality-present",
@@ -106,6 +143,14 @@ fn update_binding_identity(digest: &mut Sha256, binding: &ResidentProxyBinding) 
         update_identity_part(digest, b"reality-public-key", &reality.public_key);
         update_identity_part(digest, b"reality-short-id", &reality.short_id);
         update_identity_part(digest, b"reality-spider-x", reality.spider_x.as_bytes());
+        update_identity_part(
+            digest,
+            b"reality-mldsa65-present",
+            &[u8::from(reality.mldsa65_verify.is_some())],
+        );
+        if let Some(mldsa65_verify) = reality.mldsa65_verify.as_ref() {
+            update_identity_part(digest, b"reality-mldsa65-sha256", mldsa65_verify.sha256());
+        }
     }
     let parent = binding
         .chain_parent()

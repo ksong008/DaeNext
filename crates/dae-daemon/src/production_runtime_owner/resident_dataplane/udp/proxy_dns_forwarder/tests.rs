@@ -30,6 +30,7 @@ fn proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
         net: "tcp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -38,6 +39,7 @@ fn proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::ShadowsocksAeadTcp {
             cipher: TEST_CIPHER.to_owned(),
@@ -61,6 +63,7 @@ fn juicity_proxy_plan(server: SocketAddr) -> ResidentProxyPlan {
         uuid: "00000000-0000-0000-0000-000000000001".to_owned(),
         password: "fixture-password".to_owned(),
         allow_insecure: true,
+        congestion: dae_outbound::juicity::JuicityCongestionController::Bbr,
         pinned_certchain_sha256: String::new(),
     };
     proxy.materialize_execution();
