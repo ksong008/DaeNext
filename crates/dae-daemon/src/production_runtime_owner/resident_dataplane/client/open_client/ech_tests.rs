@@ -100,7 +100,11 @@ async fn client_attempt(
         Ok(_) => Err(ResidentEchHandshakeError::Failed(
             "test handshake completed without required ECH".to_owned(),
         )),
-        Err(error) => Err(classify_boring_ech_handshake_error(error, false, "test")),
+        Err(error) => Err(classify_boring_ech_handshake_error(
+            ResidentBoringTlsConnectError::Handshake(error),
+            false,
+            "test",
+        )),
     }
 }
 

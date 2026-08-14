@@ -1,12 +1,15 @@
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
+use boring::ex_data::Index;
 use boring::ssl::{
-    CertificateCompressionAlgorithm, CertificateCompressor, SslConnector, SslConnectorBuilder,
-    SslMethod, SslRef, SslVerifyMode, SslVersion,
+    CertificateCompressionAlgorithm, CertificateCompressor, ConnectConfiguration, Ssl,
+    SslConnector, SslConnectorBuilder, SslMethod, SslRef, SslSession, SslSessionCacheMode,
+    SslVerifyMode, SslVersion,
 };
 use boring::x509::{X509StoreContext, X509VerifyError};
 use dae_outbound::shared_transport::{
@@ -43,6 +46,8 @@ mod types;
 pub(super) use self::types::*;
 mod policy;
 pub(super) use self::policy::*;
+mod boring_session;
+use self::boring_session::*;
 mod async_client;
 mod open_client;
 pub(super) use self::open_client::*;

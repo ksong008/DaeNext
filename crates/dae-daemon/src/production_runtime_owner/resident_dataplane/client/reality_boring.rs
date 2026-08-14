@@ -21,9 +21,10 @@ pub(crate) async fn open_async_reality_boring_resident_tls_client(
     configure_reality_boring_ssl(&mut config, &policy.verification)?;
 
     let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
+    let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
-        tokio_boring::connect(config, &policy.server_name, tcp),
+        connector.connect(config, session_key, &policy.server_name, tcp),
     )
     .await
     .map_err(|_| "VLESS Reality tokio-boring handshake timeout".to_owned())?
