@@ -182,9 +182,10 @@ async fn open_async_boring_xhttp_endpoint_tls_client_over_stream(
         configure_reality_boring_ssl(&mut config, &policy.verification)?;
     }
     let tcp = AsyncResidentTcpStream::new(tcp, endpoint.tls_fragment.clone());
+    let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
-        tokio_boring::connect(config, &policy.server_name, tcp),
+        connector.connect(config, session_key, &policy.server_name, tcp),
     )
     .await
     .map_err(|_| "xHTTP tokio-boring handshake timeout".to_owned())?
@@ -422,9 +423,10 @@ pub(crate) async fn open_async_boring_resident_tls_client(
         .map_err(|err| format!("configure VLESS BoringSSL client: {err}"))?;
     configure_utls_template_boring_ssl(&mut config, proxy)?;
     let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
+    let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
-        tokio_boring::connect(config, &policy.server_name, tcp),
+        connector.connect(config, session_key, &policy.server_name, tcp),
     )
     .await
     .map_err(|_| "VLESS tokio-boring handshake timeout".to_owned())?
@@ -523,9 +525,11 @@ async fn open_async_boring_ech_resident_tls_attempt(
         ResidentEchHandshakeError::Failed(format!("set VLESS BoringSSL ECHConfigList: {err}"))
     })?;
     let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
+    let session_key =
+        ResidentBoringTlsSessionKey::with_ech_config_list(&proxy.server_name, ech_config_list);
     let result = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
-        tokio_boring::connect(config, &proxy.server_name, tcp),
+        connector.connect(config, session_key, &proxy.server_name, tcp),
     )
     .await
     .map_err(|_| {
@@ -635,9 +639,11 @@ async fn open_async_boring_ech_xhttp_attempt(
         ResidentEchHandshakeError::Failed(format!("set xHTTP BoringSSL ECHConfigList: {err}"))
     })?;
     let tcp = AsyncResidentTcpStream::new(tcp, endpoint.tls_fragment.clone());
+    let session_key =
+        ResidentBoringTlsSessionKey::with_ech_config_list(&endpoint.server_name, ech_config_list);
     let result = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
-        tokio_boring::connect(config, &endpoint.server_name, tcp),
+        connector.connect(config, session_key, &endpoint.server_name, tcp),
     )
     .await
     .map_err(|_| {
@@ -659,12 +665,13 @@ async fn open_async_boring_ech_xhttp_attempt(
 }
 
 fn classify_boring_ech_handshake_error(
-    error: tokio_boring::HandshakeError<AsyncResidentTcpStream>,
+    error: ResidentBoringTlsConnectError<AsyncResidentTcpStream>,
     allow_insecure: bool,
     label: &str,
 ) -> ResidentEchHandshakeError {
     let retry = error
-        .ssl()
+        .handshake_error()
+        .and_then(tokio_boring::HandshakeError::ssl)
         .and_then(SslRef::get_ech_retry_configs)
         .map(ToOwned::to_owned);
     if let Some(retry) = retry {

@@ -4,7 +4,7 @@ use dae_outbound::shared_transport::reality::reality_client_version;
 pub(super) fn boring_vless_connector(
     proxy: &ResidentProxyPlan,
     policy: &ResidentTlsPolicy,
-) -> Result<Arc<SslConnector>, String> {
+) -> Result<Arc<ResidentBoringTlsContextEntry>, String> {
     require_tcp_tls_session_policy(policy)?;
     let system_ca = proxy_system_ca_snapshot(proxy)?;
     let key = ResidentTlsClientConfigKey::from_proxy(proxy, system_ca.as_deref());
@@ -32,7 +32,7 @@ fn boring_connector_cached(
     tls13_only: bool,
     fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     alpn: &[u8],
-) -> Result<Arc<SslConnector>, String> {
+) -> Result<Arc<ResidentBoringTlsContextEntry>, String> {
     let cache =
         BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
@@ -67,7 +67,7 @@ fn boring_connector_cached(
             .set_alpn_protos(alpn)
             .map_err(|err| format!("set {context} BoringSSL ALPN: {err}"))?;
     }
-    let connector = Arc::new(builder.build());
+    let connector = Arc::new(ResidentBoringTlsContextEntry::build(builder, context)?);
     let mut cache = cache
         .lock()
         .map_err(|_| format!("{context} BoringSSL connector cache lock poisoned"))?;
@@ -76,7 +76,7 @@ fn boring_connector_cached(
 
 pub(super) fn boring_xhttp_endpoint_connector(
     endpoint: &ResidentXhttpEndpointPlan,
-) -> Result<Arc<SslConnector>, String> {
+) -> Result<Arc<ResidentBoringTlsContextEntry>, String> {
     let system_ca = xhttp_endpoint_system_ca_snapshot(endpoint)?;
     let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint, system_ca.as_deref());
     let cache =
@@ -113,7 +113,7 @@ pub(super) fn boring_xhttp_endpoint_connector(
             .set_alpn_protos(&alpn)
             .map_err(|err| format!("set xHTTP BoringSSL ALPN: {err}"))?;
     }
-    let connector = Arc::new(builder.build());
+    let connector = Arc::new(ResidentBoringTlsContextEntry::build(builder, "xHTTP")?);
     let mut cache = cache
         .lock()
         .map_err(|_| "xHTTP BoringSSL connector cache lock poisoned".to_owned())?;
@@ -162,6 +162,8 @@ impl ResidentTlsClientConfigKey {
         system_ca: Option<&SystemCaSnapshot>,
     ) -> Self {
         Self {
+            protocol_namespace: proxy.protocol.to_owned(),
+            server_name: proxy.server_name.clone(),
             flow: proxy.flow.clone(),
             alpn: proxy.alpn.clone(),
             allow_insecure: proxy.allow_insecure,
@@ -183,6 +185,8 @@ impl ResidentTlsClientConfigKey {
         system_ca: Option<&SystemCaSnapshot>,
     ) -> Self {
         Self {
+            protocol_namespace: "xhttp-endpoint".to_owned(),
+            server_name: endpoint.server_name.clone(),
             flow: String::new(),
             alpn: endpoint.alpn.clone(),
             allow_insecure: endpoint.allow_insecure,

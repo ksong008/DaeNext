@@ -111,7 +111,9 @@ async fn capture_boring_client_hello(
             });
             configure_reality_boring_ssl(&mut config, &policy.verification)?;
         }
-        tokio_boring::connect(config, &policy.server_name, tcp)
+        let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
+        connector
+            .connect(config, session_key, &policy.server_name, tcp)
             .await
             .map(|_| ())
             .map_err(|err| format!("BoringSSL handshake stopped before capture completed: {err}"))

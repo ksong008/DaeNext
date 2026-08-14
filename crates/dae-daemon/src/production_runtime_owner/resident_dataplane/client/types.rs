@@ -116,6 +116,8 @@ impl ResidentTlsProvider {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) struct ResidentTlsClientConfigKey {
+    pub(super) protocol_namespace: String,
+    pub(super) server_name: String,
     pub(super) flow: String,
     pub(super) alpn: Vec<String>,
     pub(super) allow_insecure: bool,
@@ -145,11 +147,12 @@ pub(crate) struct ResidentRealityConfigKey {
     pub(super) mldsa65_verify: Option<[u8; 32]>,
 }
 
-pub(crate) static RUSTLS_CLIENT_CONFIG_CACHE: OnceLock<
+pub(super) static RUSTLS_CLIENT_CONFIG_CACHE: OnceLock<
     Mutex<ResidentTlsConfigCache<ClientConfig>>,
 > = OnceLock::new();
-pub(crate) static BORING_CONNECTOR_CACHE: OnceLock<Mutex<ResidentTlsConfigCache<SslConnector>>> =
-    OnceLock::new();
+pub(super) static BORING_CONNECTOR_CACHE: OnceLock<
+    Mutex<ResidentTlsConfigCache<ResidentBoringTlsContextEntry>>,
+> = OnceLock::new();
 
 const RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES: usize = 64;
 
@@ -157,6 +160,11 @@ const RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES: usize = 64;
 pub(crate) struct ResidentTlsConfigCacheClearReport {
     pub(crate) rustls: usize,
     pub(crate) boring: usize,
+    pub(crate) boring_sessions: usize,
+    pub(crate) boring_session_attempts: u64,
+    pub(crate) boring_session_reused: u64,
+    pub(crate) boring_session_rejected: u64,
+    pub(crate) boring_session_stored: u64,
 }
 
 #[derive(Debug)]
@@ -243,17 +251,35 @@ impl<T> ResidentTlsConfigCache<T> {
     }
 }
 
+impl ResidentTlsConfigCache<ResidentBoringTlsContextEntry> {
+    fn clear_boring(&mut self) -> (usize, ResidentBoringTlsSessionStats) {
+        let mut sessions = ResidentBoringTlsSessionStats::default();
+        for entry in self.entries.values() {
+            sessions.merge(entry.value.clear_sessions());
+        }
+        (self.clear(), sessions)
+    }
+}
+
 pub(crate) fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearReport {
     let rustls = RUSTLS_CLIENT_CONFIG_CACHE
         .get()
         .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear()))
         .unwrap_or(0);
-    let boring = BORING_CONNECTOR_CACHE
+    let (boring, boring_sessions) = BORING_CONNECTOR_CACHE
         .get()
-        .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear()))
-        .unwrap_or(0);
+        .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear_boring()))
+        .unwrap_or_default();
     let _ = dae_outbound::shared_transport::invalidate_system_ca_snapshot();
-    ResidentTlsConfigCacheClearReport { rustls, boring }
+    ResidentTlsConfigCacheClearReport {
+        rustls,
+        boring,
+        boring_sessions: boring_sessions.entries,
+        boring_session_attempts: boring_sessions.attempted,
+        boring_session_reused: boring_sessions.reused,
+        boring_session_rejected: boring_sessions.rejected,
+        boring_session_stored: boring_sessions.stored,
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +288,8 @@ mod tests {
 
     fn cache_key(flow: &str) -> ResidentTlsClientConfigKey {
         ResidentTlsClientConfigKey {
+            protocol_namespace: "test".to_owned(),
+            server_name: "example.com".to_owned(),
             flow: flow.to_owned(),
             alpn: Vec::new(),
             allow_insecure: false,
@@ -302,5 +330,23 @@ mod tests {
 
         assert_eq!(*cache.get(&first).unwrap(), 1);
         assert_eq!(*cache.get(&second).unwrap(), 2);
+    }
+
+    #[test]
+    fn resident_tls_config_cache_partitions_protocol_and_server_name() {
+        let mut cache = ResidentTlsConfigCache::<usize>::default();
+        let first = cache_key("tls");
+        let mut other_protocol = first.clone();
+        other_protocol.protocol_namespace = "other-protocol".to_owned();
+        let mut other_server = first.clone();
+        other_server.server_name = "other.example".to_owned();
+
+        cache.insert_or_get(first.clone(), Arc::new(1));
+        cache.insert_or_get(other_protocol.clone(), Arc::new(2));
+        cache.insert_or_get(other_server.clone(), Arc::new(3));
+
+        assert_eq!(*cache.get(&first).unwrap(), 1);
+        assert_eq!(*cache.get(&other_protocol).unwrap(), 2);
+        assert_eq!(*cache.get(&other_server).unwrap(), 3);
     }
 }
