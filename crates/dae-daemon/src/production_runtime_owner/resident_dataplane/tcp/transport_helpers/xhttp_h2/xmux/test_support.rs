@@ -28,6 +28,7 @@ pub(super) fn download_test_key(
         public_key: [reality_seed; 32],
         short_id: vec![reality_seed; 8],
         spider_x: format!("/route-{reality_seed}"),
+        mldsa65_verify: None,
     };
     let endpoint = ResidentXhttpEndpointPlan {
         server_host: "download.invalid".to_owned(),
@@ -41,6 +42,8 @@ pub(super) fn download_test_key(
         xmux: Some(plan.clone()),
         allow_insecure: false,
         tls_fragment: None,
+        utls_fingerprint: None,
+        ech: None,
         reality: Some(reality.clone()),
     };
     let mut proxy = ResidentProxyPlan {
@@ -59,6 +62,7 @@ pub(super) fn download_test_key(
         net: "xhttp".to_owned(),
         stream_host: endpoint.stream_host.clone(),
         stream_path: endpoint.stream_path.clone(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: Some(endpoint.clone()),
         xhttp_mode: endpoint.mode,
         xhttp_settings: endpoint.settings.clone(),
@@ -67,6 +71,7 @@ pub(super) fn download_test_key(
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: endpoint.ech.clone(),
         reality: Some(reality),
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [1; 16],

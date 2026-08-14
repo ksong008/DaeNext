@@ -40,26 +40,8 @@ pub(crate) async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
     metrics.add_upload(initial_payload_len);
     drop((request, initial_payload));
 
-    let (response_head, leftover) = read_http_head_and_leftover_from_async_stream(&mut proxy)
-        .await
-        .map_err(|err| format!("read ShadowsocksR obfs response: {err}"))?;
-    validate_simple_obfs_http_response_status(&response_head)
-        .map_err(|err| format!("validate ShadowsocksR obfs response: {err}"))?;
     let mut decoder = ShadowsocksRStreamDecoder::new(cipher, password)
         .map_err(|err| format!("create ShadowsocksR stream decoder: {err}"))?;
-    if !leftover.is_empty() {
-        let decoded = decoder
-            .decode(&leftover)
-            .map_err(|err| format!("decode ShadowsocksR initial response payload: {err}"))?;
-        if !decoded.is_empty() {
-            inbound
-                .write_all(&decoded)
-                .await
-                .map_err(|err| format!("write ShadowsocksR initial response to client: {err}"))?;
-            metrics.add_download(decoded.len());
-        }
-    }
-    drop((response_head, leftover));
 
     relay_tcp_shadowsocksr_stream_async(
         inbound,
@@ -141,6 +123,24 @@ pub(crate) async fn relay_tcp_shadowsocksr_stream_async(
     let download = async move {
         let mut inbound_write = inbound_write;
         let mut proxy_read = proxy_read;
+        let (response_head, mut leftover) =
+            read_http_head_and_leftover_from_async_stream(&mut proxy_read)
+                .await
+                .map_err(|err| format!("read ShadowsocksR obfs response: {err}"))?;
+        validate_simple_obfs_http_response_status(&response_head)
+            .map_err(|err| format!("validate ShadowsocksR obfs response: {err}"))?;
+        if !leftover.is_empty() {
+            let decoded = decoder
+                .decode_in_place(&mut leftover)
+                .map_err(|err| format!("decode ShadowsocksR initial response payload: {err}"))?;
+            if !decoded.is_empty() {
+                inbound_write.write_all(decoded).await.map_err(|err| {
+                    format!("write ShadowsocksR initial response to client: {err}")
+                })?;
+                download_progress.record_download(decoded.len());
+                metrics.add_download(decoded.len());
+            }
+        }
         let mut buffer = [0_u8; 16 * 1024];
         loop {
             let read = match proxy_read.read(&mut buffer).await {

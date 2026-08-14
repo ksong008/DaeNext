@@ -17,17 +17,42 @@ enum XhttpCarrierRole {
     Download,
 }
 
+impl XhttpCarrierRole {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Download => "download",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum XhttpCarrierProtocol {
     Http2,
     Http3,
 }
 
+impl XhttpCarrierProtocol {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http2 => "http2",
+            Self::Http3 => "http3",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum XhttpTrustIdentity {
-    WebPkiRoots,
+    SystemRoots,
     ExplicitInsecure,
     Reality,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct XhttpSystemCaIdentity {
+    path: String,
+    sha256: String,
+    certificate_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -39,6 +64,8 @@ struct XhttpGraphNodeIdentity {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct XhttpSecurityIdentity {
     trust: XhttpTrustIdentity,
+    system_ca: Option<XhttpSystemCaIdentity>,
+    ech: Option<[u8; 32]>,
     reality: Option<[u8; 32]>,
     fingerprint: Option<[u8; 32]>,
     quic_tls_provider: Option<ResidentXhttpQuicTlsProvider>,
@@ -63,6 +90,7 @@ pub(in super::super) struct XhttpXmuxKey {
     server_name: String,
     alpn: Vec<String>,
     security: XhttpSecurityIdentity,
+    session_namespace: [u8; 32],
     request_route_identity: [u8; 32],
     xmux: ResidentXhttpXmuxPlan,
     socket: XhttpSocketIdentity,
@@ -77,13 +105,11 @@ impl XhttpXmuxKey {
         mark: u32,
         mptcp: bool,
     ) -> Result<Self, String> {
-        let proxy = binding.plan();
         Self::new(
             XhttpCarrierRole::Primary,
             binding,
             endpoint,
             resolved_endpoint,
-            proxy.utls_fingerprint.as_ref(),
             xmux,
             XhttpSocketIdentity { mark, mptcp },
         )
@@ -97,15 +123,11 @@ impl XhttpXmuxKey {
         mark: u32,
         mptcp: bool,
     ) -> Result<Self, String> {
-        // Download endpoints use the fixed rustls endpoint client. The primary source fingerprint
-        // remains represented by the full graph hash, while no inactive fingerprint option is
-        // projected as a download transport setting.
         Self::new(
             XhttpCarrierRole::Download,
             binding,
             endpoint,
             resolved_endpoint,
-            None,
             xmux,
             XhttpSocketIdentity { mark, mptcp },
         )
@@ -116,7 +138,6 @@ impl XhttpXmuxKey {
         binding: &ResidentProxyBinding,
         endpoint: &ResidentXhttpEndpointPlan,
         resolved_endpoint: &XhttpResolvedEndpointIdentity,
-        fingerprint: Option<&ResidentUtlsFingerprintPlan>,
         xmux: &ResidentXhttpXmuxPlan,
         socket: XhttpSocketIdentity,
     ) -> Result<Self, String> {
@@ -129,15 +150,22 @@ impl XhttpXmuxKey {
                 XhttpCarrierProtocol::Http2
             }
         };
-        let quic_tls_provider = match (role, carrier_protocol) {
-            (XhttpCarrierRole::Primary, XhttpCarrierProtocol::Http3) => {
-                Some(ResidentXhttpQuicTlsProvider::for_primary(fingerprint)?)
+        let fingerprint = endpoint.utls_fingerprint.as_ref();
+        let quic_tls_provider = match carrier_protocol {
+            XhttpCarrierProtocol::Http3 => {
+                Some(ResidentXhttpQuicTlsProvider::for_endpoint(fingerprint)?)
             }
-            (XhttpCarrierRole::Download, XhttpCarrierProtocol::Http3) => {
-                Some(ResidentXhttpQuicTlsProvider::Rustls)
-            }
-            (_, XhttpCarrierProtocol::Http2) => None,
+            XhttpCarrierProtocol::Http2 => None,
         };
+        let system_ca = xhttp_system_ca_identity(endpoint)?;
+        let session_namespace = xhttp_session_namespace(
+            role,
+            carrier_protocol,
+            endpoint,
+            fingerprint,
+            quic_tls_provider,
+            system_ca.as_ref(),
+        );
         Ok(Self {
             role,
             graph: graph_identity(proxy),
@@ -148,7 +176,8 @@ impl XhttpXmuxKey {
             carrier_protocol,
             server_name: endpoint.server_name.clone(),
             alpn: endpoint.alpn.clone(),
-            security: security_identity(endpoint, fingerprint, quic_tls_provider),
+            security: security_identity(endpoint, fingerprint, quic_tls_provider, system_ca),
+            session_namespace,
             request_route_identity: request_route_identity(endpoint),
             xmux,
             socket,
@@ -192,7 +221,9 @@ impl XhttpXmuxKey {
             server_name: "xmux.invalid".to_owned(),
             alpn: vec![protocol.alpn_label().to_owned()],
             security: XhttpSecurityIdentity {
-                trust: XhttpTrustIdentity::WebPkiRoots,
+                trust: XhttpTrustIdentity::SystemRoots,
+                system_ca: None,
+                ech: None,
                 reality: None,
                 fingerprint: None,
                 quic_tls_provider: match protocol {
@@ -201,6 +232,7 @@ impl XhttpXmuxKey {
                 },
                 tls_fragment: None,
             },
+            session_namespace: identity_digest("xhttp-test-session", &[&nonce.to_be_bytes()]),
             request_route_identity: identity_digest("xhttp-test-route", &[b"/xhttp"]),
             xmux,
             socket: XhttpSocketIdentity {
@@ -257,6 +289,7 @@ fn security_identity(
     endpoint: &ResidentXhttpEndpointPlan,
     fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     quic_tls_provider: Option<ResidentXhttpQuicTlsProvider>,
+    system_ca: Option<XhttpSystemCaIdentity>,
 ) -> XhttpSecurityIdentity {
     XhttpSecurityIdentity {
         trust: if endpoint.reality.is_some() {
@@ -264,8 +297,10 @@ fn security_identity(
         } else if endpoint.allow_insecure {
             XhttpTrustIdentity::ExplicitInsecure
         } else {
-            XhttpTrustIdentity::WebPkiRoots
+            XhttpTrustIdentity::SystemRoots
         },
+        system_ca,
+        ech: endpoint.ech.as_ref().map(|ech| *ech.config_list_sha256()),
         reality: endpoint.reality.as_ref().map(reality_identity),
         fingerprint: fingerprint.map(fingerprint_identity),
         quic_tls_provider,
@@ -280,13 +315,75 @@ fn security_identity(
     }
 }
 
+fn xhttp_system_ca_identity(
+    endpoint: &ResidentXhttpEndpointPlan,
+) -> Result<Option<XhttpSystemCaIdentity>, String> {
+    if endpoint.allow_insecure || endpoint.reality.is_some() {
+        return Ok(None);
+    }
+    let snapshot = dae_outbound::shared_transport::system_ca_snapshot()
+        .map_err(|err| format!("load xHTTP xmux system CA bundle: {err}"))?;
+    let identity = snapshot.identity();
+    Ok(Some(XhttpSystemCaIdentity {
+        path: identity.path.to_string_lossy().into_owned(),
+        sha256: identity.sha256.clone(),
+        certificate_count: identity.certificate_count,
+    }))
+}
+
+fn xhttp_session_namespace(
+    role: XhttpCarrierRole,
+    protocol: XhttpCarrierProtocol,
+    endpoint: &ResidentXhttpEndpointPlan,
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+    quic_tls_provider: Option<ResidentXhttpQuicTlsProvider>,
+    system_ca: Option<&XhttpSystemCaIdentity>,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    update_identity_part(&mut digest, b"dae/xhttp/session-namespace/v1");
+    update_identity_part(&mut digest, role.as_str().as_bytes());
+    update_identity_part(&mut digest, protocol.as_str().as_bytes());
+    update_identity_part(&mut digest, endpoint.server_name.as_bytes());
+    for alpn in &endpoint.alpn {
+        update_identity_part(&mut digest, alpn.as_bytes());
+    }
+    update_identity_part(&mut digest, &[u8::from(endpoint.allow_insecure)]);
+    if let Some(provider) = quic_tls_provider {
+        update_identity_part(&mut digest, provider.as_str().as_bytes());
+    }
+    if let Some(system_ca) = system_ca {
+        update_identity_part(&mut digest, system_ca.path.as_bytes());
+        update_identity_part(&mut digest, system_ca.sha256.as_bytes());
+        update_identity_part(
+            &mut digest,
+            &(system_ca.certificate_count as u64).to_be_bytes(),
+        );
+    }
+    if let Some(ech) = endpoint.ech.as_ref() {
+        update_identity_part(&mut digest, ech.config_list_sha256());
+    }
+    if let Some(reality) = endpoint.reality.as_ref() {
+        update_identity_part(&mut digest, &reality_identity(reality));
+    }
+    if let Some(fingerprint) = fingerprint {
+        update_identity_part(&mut digest, &fingerprint_identity(fingerprint));
+    }
+    digest.finalize().into()
+}
+
 fn reality_identity(reality: &ResidentRealityUnderlayPlan) -> [u8; 32] {
+    let mldsa65_verify = reality
+        .mldsa65_verify
+        .as_ref()
+        .map(|key| key.sha256().as_slice())
+        .unwrap_or_default();
     identity_digest(
         "xhttp-reality",
         &[
             reality.public_key.as_slice(),
             reality.short_id.as_slice(),
             reality.spider_x.as_bytes(),
+            mldsa65_verify,
         ],
     )
 }

@@ -6,10 +6,12 @@ mod fragment_buffer;
 mod hysteria2_datagram;
 mod packet_id;
 mod tuic_datagram;
+mod tuic_stream;
 use self::fragment_buffer::{QuicUdpFragmentBuffer, QuicUdpFragmentOutcome};
 use self::hysteria2_datagram::send_hysteria2_udp_message;
 use self::packet_id::QuicUdpPacketIdAllocator;
 use self::tuic_datagram::send_tuic_udp_packet;
+use self::tuic_stream::send_tuic_udp_stream_packet;
 
 const TUIC_ASSOCIATION_IDENTITY_DOMAIN: &[u8] = b"tuic-v5-association";
 const HYSTERIA2_SESSION_IDENTITY_DOMAIN: &[u8] = b"hysteria2-udp-session";
@@ -236,7 +238,7 @@ impl Hysteria2QuicDatagramSession {
     }
 }
 
-pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuicDatagramSession {
+pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuicPacketSession {
     binding: Option<ResidentProxyBinding>,
     owner_registry: Option<TuicOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
@@ -247,12 +249,14 @@ pub(in crate::production_runtime_owner::resident_dataplane::udp) struct TuicQuic
     packet_ids: QuicUdpPacketIdAllocator,
     resources: QuicUdpDatagramResourceProfile,
     fixed_target: UdpSessionFixedTarget,
+    udp_relay_mode: TuicUdpRelayMode,
 }
 
-impl TuicQuicDatagramSession {
+impl TuicQuicPacketSession {
     pub(super) fn new(
         binding: ResidentProxyBinding,
         owner_registry: Option<TuicOwnerRegistryHandle>,
+        udp_relay_mode: TuicUdpRelayMode,
     ) -> Self {
         let resources = QuicUdpDatagramResourceProfile::selected();
         Self {
@@ -266,6 +270,7 @@ impl TuicQuicDatagramSession {
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
+            udp_relay_mode,
         }
     }
 
@@ -283,6 +288,7 @@ impl TuicQuicDatagramSession {
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
+            udp_relay_mode: TuicUdpRelayMode::Native,
         }
     }
 
@@ -300,7 +306,13 @@ impl TuicQuicDatagramSession {
     ) -> Result<UdpExchangeResult, String> {
         self.fixed_target
             .bind(original_dst, "TUIC UDP association")?;
-        self.ensure_open().await?;
+        let deadline = self.owner_deadline.take().unwrap_or_else(|| {
+            dae_runtime_control::AbsoluteDeadline::from_now(
+                Instant::now(),
+                RESIDENT_UDP_RESPONSE_TIMEOUT,
+            )
+        });
+        self.ensure_open(deadline).await?;
         let connection = self
             .udp_association
             .as_ref()
@@ -310,7 +322,14 @@ impl TuicQuicDatagramSession {
         let request =
             TuicUdpPacket::new(self.assoc_id, packet_id, original_dst.to_string(), payload)
                 .map_err(|err| format!("build TUIC UDP packet: {err}"))?;
-        send_tuic_udp_packet(connection, &request, &mut self.packet_ids, self.resources)?;
+        match self.udp_relay_mode {
+            TuicUdpRelayMode::Native => {
+                send_tuic_udp_packet(connection, &request, &mut self.packet_ids, self.resources)?;
+            }
+            TuicUdpRelayMode::Quic => {
+                send_tuic_udp_stream_packet(connection, &request, deadline).await?;
+            }
+        }
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
         }
@@ -366,10 +385,12 @@ impl TuicQuicDatagramSession {
             &parsed.association_id().to_be_bytes(),
         )
         .expect("static TUIC identity domain and association id are nonempty");
+        let execution_label = self.execution_label();
+        let session_executor = self.session_executor_label();
         let base_response = |payload| {
-            UdpExchangeResult::new(payload, "quic-udp-datagram")
+            UdpExchangeResult::new(payload, execution_label)
                 .with_quic_underlay("quinn")
-                .with_session_executor("tokio-quic-datagram-session")
+                .with_session_executor(session_executor)
                 .with_underlay_reuse("quic-endpoint-and-connection-reused")
         };
         if parsed.association_id() != self.assoc_id {
@@ -451,13 +472,30 @@ impl TuicQuicDatagramSession {
     }
 
     fn pending_response_result(&self) -> UdpExchangeResult {
-        UdpExchangeResult::pending_response("quic-udp-datagram")
+        UdpExchangeResult::pending_response(self.execution_label())
             .with_quic_underlay("quinn")
-            .with_session_executor("tokio-quic-datagram-session")
+            .with_session_executor(self.session_executor_label())
             .with_underlay_reuse("quic-endpoint-and-connection-reused")
     }
 
-    async fn ensure_open(&mut self) -> Result<(), String> {
+    fn execution_label(&self) -> &'static str {
+        match self.udp_relay_mode {
+            TuicUdpRelayMode::Native => "quic-udp-datagram",
+            TuicUdpRelayMode::Quic => "quic-udp-unidirectional-stream-packet",
+        }
+    }
+
+    fn session_executor_label(&self) -> &'static str {
+        match self.udp_relay_mode {
+            TuicUdpRelayMode::Native => "tokio-quic-datagram-session",
+            TuicUdpRelayMode::Quic => "tokio-quic-unidirectional-stream-packet-session",
+        }
+    }
+
+    async fn ensure_open(
+        &mut self,
+        deadline: dae_runtime_control::AbsoluteDeadline,
+    ) -> Result<(), String> {
         if self.udp_association.is_some() {
             return Ok(());
         }
@@ -468,16 +506,15 @@ impl TuicQuicDatagramSession {
             .binding
             .as_ref()
             .ok_or_else(|| "TUIC proxy owner identity is unavailable".to_owned())?;
-        let deadline = self.owner_deadline.take().unwrap_or_else(|| {
-            dae_runtime_control::AbsoluteDeadline::from_now(
-                Instant::now(),
-                RESIDENT_UDP_RESPONSE_TIMEOUT,
-            )
-        });
         let transport = owner_registry
             .acquire(binding.clone(), QuicEndpointCallerClass::UdpData, deadline)
             .await?;
         let udp_association = transport.open_udp_association()?;
+        if udp_association.udp_relay_mode() != self.udp_relay_mode {
+            return Err(
+                "TUIC UDP association relay mode does not match the session plan".to_owned(),
+            );
+        }
         self.assoc_id = udp_association.association_id();
         self.udp_association = Some(udp_association);
         Ok(())
@@ -731,7 +768,7 @@ mod tests {
             Some("quic-endpoint-and-connection-reused")
         );
 
-        let tuic = TuicQuicDatagramSession::new_for_test().pending_response_result();
+        let tuic = TuicQuicPacketSession::new_for_test().pending_response_result();
         assert!(!tuic.reply_forwarded);
         assert!(tuic.payload_for_test().is_empty());
         assert_eq!(tuic.execution_label, "quic-udp-datagram");
@@ -915,7 +952,7 @@ mod tests {
     fn tuic_rejects_cross_association_and_wrong_target_before_reassembly() {
         let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
         let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
-        let mut session = TuicQuicDatagramSession::new_for_test();
+        let mut session = TuicQuicPacketSession::new_for_test();
         session.assoc_id = 7;
         session
             .fixed_target
@@ -953,7 +990,7 @@ mod tests {
     fn tuic_reassembles_out_of_order_fragments_with_first_fragment_source() {
         let target: SocketAddr = "[2001:db8::20]:5353".parse().unwrap();
         let other: SocketAddr = "[2001:db8::21]:5353".parse().unwrap();
-        let mut session = TuicQuicDatagramSession::new_for_test();
+        let mut session = TuicQuicPacketSession::new_for_test();
         session.assoc_id = 7;
         session
             .fixed_target

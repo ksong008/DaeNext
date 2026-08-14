@@ -84,7 +84,9 @@ pub(crate) fn build_vmess_proxy_plan(
             parsed.port
         )
     })?;
-    let stream_host = if matches!(
+    let stream_host = if net == "grpc" && !parsed.grpc_authority.is_empty() {
+        parsed.grpc_authority.clone()
+    } else if matches!(
         net.as_str(),
         "tcp-http-header" | "websocket" | "httpupgrade" | "grpc" | "h2"
     ) {
@@ -112,6 +114,11 @@ pub(crate) fn build_vmess_proxy_plan(
     } else {
         "none"
     };
+    if parsed.ech.is_some() && tls != "tls" {
+        return Err(format!(
+            "resident dataplane ECH requires TLS for VMess node {node_tag}"
+        ));
+    }
     let server_name = if tls == "tls" {
         if net == "websocket" {
             resident_websocket_tls_server_name(&parsed.sni, &parsed.host, &parsed.add)
@@ -133,7 +140,11 @@ pub(crate) fn build_vmess_proxy_plan(
         None
     };
     let alpn = if tls == "tls" {
-        resident_raw_tls_alpn(Vec::new(), net.as_str(), utls_fingerprint.as_ref())
+        resident_raw_tls_alpn(
+            split_alpn(&parsed.alpn),
+            net.as_str(),
+            utls_fingerprint.as_ref(),
+        )
     } else {
         Vec::new()
     };
@@ -158,6 +169,7 @@ pub(crate) fn build_vmess_proxy_plan(
         net,
         stream_host,
         stream_path,
+        grpc_mode: parsed.grpc_mode,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -170,6 +182,7 @@ pub(crate) fn build_vmess_proxy_plan(
             None
         },
         utls_fingerprint,
+        ech: parsed.ech.map(ResidentEchPlan::new),
         reality: None,
         handler: ResidentProxyProtocolPlan::VmessAeadTcp {
             id: parsed.id,

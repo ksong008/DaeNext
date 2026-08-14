@@ -25,6 +25,7 @@ struct JuicityOwnerKey {
     generation: OwnerGeneration,
     graph_link_hash: String,
     mark: u32,
+    congestion: dae_outbound::juicity::JuicityCongestionController,
 }
 
 impl PartialEq for JuicityOwnerKey {
@@ -32,6 +33,7 @@ impl PartialEq for JuicityOwnerKey {
         self.generation == other.generation
             && self.graph_link_hash == other.graph_link_hash
             && self.mark == other.mark
+            && self.congestion == other.congestion
     }
 }
 
@@ -40,25 +42,31 @@ impl Hash for JuicityOwnerKey {
         self.generation.hash(state);
         self.graph_link_hash.hash(state);
         self.mark.hash(state);
+        self.congestion.hash(state);
     }
 }
 
 impl JuicityOwnerKey {
     fn for_binding(binding: &ResidentProxyBinding) -> Self {
         let proxy = binding.plan();
+        let ResidentProxyProtocolPlan::JuicityQuicTcp { congestion, .. } = &proxy.handler else {
+            panic!("Juicity owner key received a non-Juicity proxy shape");
+        };
         Self {
             generation: binding.runtime_generation(),
             graph_link_hash: proxy.graph_link_hash.clone(),
             mark: binding.effective_socket_mark(),
+            congestion: *congestion,
         }
     }
 
     fn report_identity(&self) -> String {
         format!(
-            "generation:{}:graph:{}:mark:{}",
+            "generation:{}:graph:{}:mark:{}:congestion:{}",
             self.generation.get(),
             self.graph_link_hash,
-            self.mark
+            self.mark,
+            self.congestion.as_str()
         )
     }
 }
@@ -914,6 +922,7 @@ async fn build_juicity_transport(
         uuid,
         password,
         allow_insecure,
+        congestion,
         pinned_certchain_sha256,
     } = &proxy.handler
     else {
@@ -927,6 +936,7 @@ async fn build_juicity_transport(
         &binding,
         *allow_insecure,
         pinned_certchain_sha256,
+        *congestion,
         deadline,
         caller,
         session_cache,

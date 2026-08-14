@@ -1,4 +1,7 @@
 use super::*;
+use crate::production_runtime_owner::resident_dataplane::plan::{
+    ResidentEchPlan, ResidentUtlsFingerprintPlan,
+};
 use bytes::Buf;
 use h3::server;
 use quinn::crypto::rustls::QuicServerConfig;
@@ -37,8 +40,67 @@ fn packet_up_endpoint(server: SocketAddr) -> ResidentXhttpEndpointPlan {
         xmux: None,
         allow_insecure: true,
         tls_fragment: None,
+        utls_fingerprint: None,
+        ech: None,
         reality: None,
     }
+}
+
+#[test]
+fn h3_ech_fails_closed_for_every_quic_tls_provider() {
+    const ECH_CONFIG_LIST: &str =
+        "AD7+DQA6AAAgACC7Lynj4wV+BBnVL8X0QRh3b422HOpP33YHm5NgbFpiSAAIAAEAAQABAAMAB2VjaC5jb20AAA==";
+
+    let mut endpoint = packet_up_endpoint("127.0.0.1:443".parse().unwrap());
+    endpoint.ech = Some(ResidentEchPlan::new(
+        dae_outbound::shared_transport::EchConfigList::parse_base64(ECH_CONFIG_LIST).unwrap(),
+    ));
+
+    for provider in [
+        ResidentXhttpQuicTlsProvider::Rustls,
+        ResidentXhttpQuicTlsProvider::ChromeBoring,
+    ] {
+        let error = match build_xhttp_h3_client_config(&endpoint, provider, None) {
+            Ok(_) => panic!("{} silently accepted ECH", provider.as_str()),
+            Err(error) => error,
+        };
+        assert!(error.contains("xHTTP H3 ECH is unavailable"));
+        assert!(error.contains(provider.as_str()));
+        assert!(error.contains("authenticated retry configs"));
+    }
+}
+
+#[test]
+fn h3_download_provider_and_session_namespace_follow_the_endpoint_plan() {
+    let mut endpoint = packet_up_endpoint("127.0.0.1:443".parse().unwrap());
+    endpoint.utls_fingerprint = Some(ResidentUtlsFingerprintPlan {
+        source: "downloadSettings.tlsSettings.fingerprint",
+        requested: "chrome".to_owned(),
+        name: "chrome".to_owned(),
+        canonical: "chrome_auto".to_owned(),
+        family: dae_outbound::shared_transport::UTLS_FAMILY_CHROME.to_owned(),
+        client: "Chrome".to_owned(),
+        randomized: false,
+        alpn_policy: dae_outbound::shared_transport::UTLS_ALPN_POLICY_AUTO.to_owned(),
+        default_alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
+    });
+    let provider =
+        xhttp_h3_tls_provider(&endpoint, QuicEndpointIdentityRole::XhttpDownload).unwrap();
+    assert_eq!(provider, ResidentXhttpQuicTlsProvider::ChromeBoring);
+
+    let primary = xhttp_h3_session_namespace(
+        &endpoint,
+        QuicEndpointIdentityRole::XhttpPrimary,
+        provider,
+        None,
+    );
+    let download = xhttp_h3_session_namespace(
+        &endpoint,
+        QuicEndpointIdentityRole::XhttpDownload,
+        provider,
+        None,
+    );
+    assert_ne!(primary, download);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

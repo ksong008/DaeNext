@@ -285,7 +285,7 @@ fn typed_identity_fixes_the_application_and_client_security_shape() {
     );
     assert_eq!(
         identity.trust_anchor(),
-        crate::hysteria2::Hysteria2TrustAnchorIdentity::BundledWebPki
+        crate::hysteria2::Hysteria2TrustAnchorIdentity::SystemCaBundle
     );
     assert_eq!(
         identity.client_certificate(),

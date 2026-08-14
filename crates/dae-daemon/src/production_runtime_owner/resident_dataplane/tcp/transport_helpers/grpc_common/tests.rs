@@ -1,4 +1,5 @@
 use super::*;
+use dae_outbound::shared_transport::grpc_hunk_frame;
 
 #[test]
 fn prefixed_owned_grpc_hunk_matches_the_allocating_encoder() {

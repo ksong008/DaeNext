@@ -11,13 +11,8 @@ pub(crate) fn grpc_authority(proxy: &ResidentProxyPlan) -> String {
     }
 }
 
-pub(crate) fn grpc_request_path(service_name: &str) -> String {
-    let service_name = if service_name.is_empty() {
-        "GunService"
-    } else {
-        service_name.trim_start_matches('/')
-    };
-    format!("/{service_name}/Tun")
+pub(crate) fn grpc_request_path(service_name: &str, mode: GrpcMode) -> String {
+    official_grpc_request_path(service_name, mode)
 }
 
 pub(crate) fn grpc_h2_request(proxy: &ResidentProxyPlan) -> Result<http::Request<()>, String> {
@@ -25,7 +20,7 @@ pub(crate) fn grpc_h2_request(proxy: &ResidentProxyPlan) -> Result<http::Request
     let uri = format!(
         "https://{}{}",
         authority,
-        grpc_request_path(&proxy.stream_path)
+        grpc_request_path(&proxy.stream_path, proxy.grpc_mode)
     );
     http::Request::builder()
         .method(http::Method::POST)
@@ -45,7 +40,17 @@ pub(crate) async fn send_grpc_hunk(
     payload: &[u8],
     end_stream: bool,
 ) -> Result<(), String> {
-    let hunk = grpc_hunk_frame(payload).map_err(|err| format!("build gRPC hunk: {err}"))?;
+    send_grpc_data(send_stream, payload, end_stream, GrpcMode::Gun).await
+}
+
+pub(crate) async fn send_grpc_data(
+    send_stream: &mut h2::SendStream<Bytes>,
+    payload: &[u8],
+    end_stream: bool,
+    mode: GrpcMode,
+) -> Result<(), String> {
+    let hunk = grpc_data_frame(mode, payload)
+        .map_err(|err| format!("build Xray gRPC {} frame: {err}", mode.link_value()))?;
     send_h2_data(send_stream, Bytes::from(hunk), end_stream).await
 }
 
@@ -150,20 +155,38 @@ pub(crate) async fn send_h2_data_with_context(
     Ok(())
 }
 
-#[derive(Default)]
 pub(crate) struct GrpcHunkReadBuffer {
     bytes: Vec<u8>,
     offset: usize,
+    mode: GrpcMode,
+    decoded: Vec<u8>,
+    pending: VecDeque<Vec<u8>>,
+}
+
+impl Default for GrpcHunkReadBuffer {
+    fn default() -> Self {
+        Self::with_mode(GrpcMode::Gun)
+    }
 }
 
 impl GrpcHunkReadBuffer {
+    pub(crate) fn with_mode(mode: GrpcMode) -> Self {
+        Self {
+            bytes: Vec::new(),
+            offset: 0,
+            mode,
+            decoded: Vec::new(),
+            pending: VecDeque::new(),
+        }
+    }
+
     pub(crate) fn extend_from_slice(&mut self, data: &[u8]) {
         self.compact_if_worthwhile();
         self.bytes.extend_from_slice(data);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.as_slice().is_empty()
+        self.as_slice().is_empty() && self.pending.is_empty()
     }
 
     pub(crate) fn pop_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
@@ -172,7 +195,11 @@ impl GrpcHunkReadBuffer {
     }
 
     pub(crate) fn next_payload(&mut self) -> Result<Option<&[u8]>, String> {
-        let Some((payload_start, payload_len, consumed)) = (|| {
+        if let Some(payload) = self.pending.pop_front() {
+            self.decoded = payload;
+            return Ok(Some(&self.decoded));
+        }
+        let Some((message_start, message_len, consumed)) = (|| {
             let buffer = self.as_slice();
             if buffer.len() < 5 {
                 return Ok(None);
@@ -190,18 +217,31 @@ impl GrpcHunkReadBuffer {
             if buffer.len() < 5 + len {
                 return Ok(None);
             }
-            let payload = grpc_hunk_payload_ref(&buffer[5..5 + len])
-                .map_err(|err| format!("decode gRPC Hunk protobuf payload: {err}"))?;
-            let payload_start = payload.as_ptr() as usize - self.bytes.as_ptr() as usize;
-            Ok(Some((payload_start, payload.len(), 5 + len)))
+            Ok(Some((self.offset + 5, len, 5 + len)))
         })()?
         else {
             return Ok(None);
         };
+        let message = &self.bytes[message_start..message_start + message_len];
+        self.decoded.clear();
+        match self.mode {
+            GrpcMode::Gun => self.decoded.extend_from_slice(
+                grpc_hunk_payload_ref(message)
+                    .map_err(|err| format!("decode gRPC Hunk protobuf payload: {err}"))?,
+            ),
+            GrpcMode::Multi => {
+                for payload in grpc_multi_hunk_payloads(message)
+                    .map_err(|err| format!("decode gRPC MultiHunk protobuf payloads: {err}"))?
+                {
+                    self.pending.push_back(payload.to_vec());
+                }
+            }
+        }
         self.offset += consumed;
-        Ok(Some(
-            &self.bytes[payload_start..payload_start + payload_len],
-        ))
+        if self.mode == GrpcMode::Multi {
+            self.decoded = self.pending.pop_front().unwrap_or_default();
+        }
+        Ok(Some(&self.decoded))
     }
 
     fn as_slice(&self) -> &[u8] {

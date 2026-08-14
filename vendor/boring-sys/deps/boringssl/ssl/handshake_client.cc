@@ -738,6 +738,11 @@ bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
     }
     OPENSSL_memcpy(msg.data() + session_id_offset, hs->session_id.data(),
                    hs->session_id.size());
+    if (!hs->config->dae_reality.client_hello.CopyFrom(Span(msg))) {
+      OPENSSL_PUT_ERROR(SSL, ERR_R_MALLOC_FAILURE);
+      hs->session_id = std::move(original_session_id);
+      return false;
+    }
   }
 
   // Now that the length prefixes have been computed, fill in the placeholder

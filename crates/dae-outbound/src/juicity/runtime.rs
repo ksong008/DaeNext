@@ -4,10 +4,11 @@ use std::time::Duration;
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::OutboundError;
+use crate::shared_transport::QuicCongestionController;
 use crate::trojan::{TrojanMetadata, TrojanNetwork};
 
 use super::auth_stream::build_authenticate_header;
@@ -137,7 +138,34 @@ pub fn build_juicity_runtime_client_config_with_session_cache(
     pinned_certchain_sha256: &str,
     session_cache: Option<crate::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let transport = Arc::new(transport_config()?);
+    build_juicity_runtime_client_config_with_congestion_and_session_cache(
+        allow_insecure,
+        pinned_certchain_sha256,
+        QuicCongestionController::Bbr,
+        session_cache,
+    )
+}
+
+pub fn build_juicity_runtime_client_config_with_congestion(
+    allow_insecure: bool,
+    pinned_certchain_sha256: &str,
+    congestion: QuicCongestionController,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    build_juicity_runtime_client_config_with_congestion_and_session_cache(
+        allow_insecure,
+        pinned_certchain_sha256,
+        congestion,
+        None,
+    )
+}
+
+pub fn build_juicity_runtime_client_config_with_congestion_and_session_cache(
+    allow_insecure: bool,
+    pinned_certchain_sha256: &str,
+    congestion: QuicCongestionController,
+    session_cache: Option<crate::shared_transport::boring_quic::BoringQuicSessionCache>,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let transport = Arc::new(transport_config(congestion)?);
     if cfg!(feature = "test-boringssl-quic") {
         let mut policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([
             RUNTIME_ALPN.as_bytes(),
@@ -159,8 +187,9 @@ pub fn build_juicity_runtime_client_config_with_session_cache(
             .with_custom_certificate_verifier(verifier)
             .with_no_client_auth()
     } else {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = crate::shared_transport::system_ca_snapshot()
+            .map_err(|err| bad_runtime(format!("load Juicity system CA bundle: {err}")))?
+            .rustls_roots();
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(roots)
             .with_no_client_auth()
@@ -232,8 +261,11 @@ pub fn build_juicity_tcp_request(
     Ok(request)
 }
 
-fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {
+fn transport_config(
+    congestion: QuicCongestionController,
+) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
+    congestion.install(&mut transport);
     transport.keep_alive_interval(Some(Duration::from_secs(RUNTIME_KEEPALIVE_SECONDS)));
     transport.max_idle_timeout(Some(
         Duration::from_secs(RUNTIME_HANDSHAKE_IDLE_TIMEOUT_SECONDS)

@@ -49,6 +49,7 @@ pub(crate) fn build_tuic_proxy_plan(
         net: "udp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -57,6 +58,7 @@ pub(crate) fn build_tuic_proxy_plan(
         allow_insecure,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::TuicQuicTcp {
             uuid: parsed.user,
@@ -170,6 +172,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
         net: "udp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -178,6 +181,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
         allow_insecure,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::Hysteria2QuicTcp {
             auth,
@@ -252,6 +256,11 @@ pub(crate) fn build_juicity_proxy_plan(
         ));
     }
     let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
+    let congestion =
+        dae_outbound::juicity::JuicityCongestionController::from_config(&parsed.congestion_control)
+            .map_err(|err| {
+                format!("validate Juicity congestion controller for {node_tag}: {err}")
+            })?;
     let server_name = if parsed.sni.is_empty() {
         parsed.server.clone()
     } else {
@@ -274,6 +283,7 @@ pub(crate) fn build_juicity_proxy_plan(
         net: "udp".to_owned(),
         stream_host: String::new(),
         stream_path: String::new(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -282,11 +292,13 @@ pub(crate) fn build_juicity_proxy_plan(
         allow_insecure,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::JuicityQuicTcp {
             uuid: parsed.user,
             password: parsed.password,
             allow_insecure,
+            congestion,
             pinned_certchain_sha256: parsed.pinned_certchain_sha256,
         },
         execution: None,

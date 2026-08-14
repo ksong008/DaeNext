@@ -102,7 +102,6 @@ tikv-jemallocator = { workspace = true, optional = true }
 tikv-jemalloc-ctl = { workspace = true, optional = true }
 tikv-jemalloc-sys = { workspace = true, optional = true }
 url.workspace = true
-webpki-roots.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true

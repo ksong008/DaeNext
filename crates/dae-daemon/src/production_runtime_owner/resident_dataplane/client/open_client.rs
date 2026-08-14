@@ -5,6 +5,9 @@ pub(crate) async fn open_async_resident_tls_client_with_binding(
     mptcp: bool,
 ) -> Result<AsyncResidentTlsClient, String> {
     let tcp = open_proxy_tcp_stream_with_binding(binding, mptcp).await?;
+    if binding.plan().ech.is_some() {
+        return open_async_boring_ech_resident_tls_client_with_binding(binding, mptcp, tcp).await;
+    }
     open_async_resident_tls_client_over_stream(binding.plan(), tcp).await
 }
 
@@ -21,6 +24,12 @@ pub(crate) async fn open_async_vless_tls_client_with_flow_at_candidates(
         );
     }
     let tcp = open_proxy_tcp_stream_at_candidates(proxy, candidates, mark, mptcp).await?;
+    if proxy.ech.is_some() {
+        return open_async_boring_ech_resident_tls_client_at_candidates(
+            proxy, candidates, mark, mptcp, tcp,
+        )
+        .await;
+    }
     open_async_resident_tls_client_over_stream(proxy, tcp).await
 }
 
@@ -71,6 +80,9 @@ pub(crate) async fn open_async_xhttp_endpoint_tls_client(
     mptcp: bool,
 ) -> Result<AsyncResidentTlsClient, String> {
     let tcp = open_xhttp_endpoint_tcp_stream_async(endpoint, mark, mptcp).await?;
+    if endpoint.ech.is_some() {
+        return open_async_boring_ech_xhttp_client(endpoint, mark, mptcp, tcp).await;
+    }
     open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp).await
 }
 
@@ -82,6 +94,12 @@ pub(crate) async fn open_async_xhttp_endpoint_tls_client_at_candidates(
 ) -> Result<AsyncResidentTlsClient, String> {
     let tcp =
         open_xhttp_endpoint_tcp_stream_at_candidates(endpoint, candidates, mark, mptcp).await?;
+    if endpoint.ech.is_some() {
+        return open_async_boring_ech_xhttp_client_at_candidates(
+            endpoint, candidates, mark, mptcp, tcp,
+        )
+        .await;
+    }
     open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp).await
 }
 
@@ -89,7 +107,7 @@ async fn open_async_xhttp_endpoint_tls_client_over_stream(
     endpoint: &ResidentXhttpEndpointPlan,
     tcp: TokioTcpStream,
 ) -> Result<AsyncResidentTlsClient, String> {
-    let selection = ResidentTlsFactorySelection::from_xhttp_endpoint(endpoint);
+    let selection = ResidentTlsFactorySelection::from_xhttp_endpoint(endpoint)?;
     match selection.provider {
         ResidentTlsProvider::FingerprintAwareBoring
         | ResidentTlsProvider::RealityFingerprintBoring => {
@@ -116,7 +134,7 @@ async fn open_async_rustls_xhttp_endpoint_tls_client_over_stream(
     policy: &ResidentTlsPolicy,
     tcp: TokioTcpStream,
 ) -> Result<AsyncResidentTlsClient, String> {
-    let config = rustls_xhttp_endpoint_client_config(policy)?;
+    let config = rustls_xhttp_endpoint_client_config(endpoint, policy)?;
     let server_name = ServerName::try_from(policy.server_name.clone()).map_err(|err| {
         format!(
             "invalid xHTTP TLS server name {}: {err}",
@@ -133,7 +151,11 @@ async fn open_async_rustls_xhttp_endpoint_tls_client_over_stream(
     .map_err(|_| "xHTTP tokio-rustls handshake timeout".to_owned())?
     .map_err(|err| format!("connect xHTTP tokio-rustls client: {err}"))?;
     Ok(AsyncVlessTlsClient {
-        engine: AsyncVlessTlsEngine::Rustls { tls },
+        engine: if endpoint.reality.is_some() {
+            AsyncVlessTlsEngine::RealityRustls { tls }
+        } else {
+            AsyncVlessTlsEngine::Rustls { tls }
+        },
     })
 }
 
@@ -142,14 +164,21 @@ async fn open_async_boring_xhttp_endpoint_tls_client_over_stream(
     policy: &ResidentTlsPolicy,
     tcp: TokioTcpStream,
 ) -> Result<AsyncResidentTlsClient, String> {
-    let connector = boring_xhttp_endpoint_connector(policy)?;
+    let connector = boring_xhttp_endpoint_connector(endpoint)?;
     let mut config = connector
         .configure()
         .map_err(|err| format!("configure xHTTP BoringSSL client: {err}"))?;
+    configure_utls_template_boring_ssl_for_xhttp_endpoint(&mut config, endpoint)?;
     let reality = policy.verification.reality_material().is_some();
     if reality {
         config.set_verify_hostname(false);
-        config.set_custom_verify_callback(SslVerifyMode::PEER, verify_reality_boring_server_cert);
+        let mldsa65_verify = endpoint
+            .reality
+            .as_ref()
+            .and_then(|reality| reality.mldsa65_verify.clone());
+        config.set_custom_verify_callback(SslVerifyMode::PEER, move |ssl| {
+            verify_reality_boring_server_cert(ssl, mldsa65_verify.as_ref())
+        });
         configure_reality_boring_ssl(&mut config, &policy.verification)?;
     }
     let tcp = AsyncResidentTcpStream::new(tcp, endpoint.tls_fragment.clone());
@@ -404,3 +433,256 @@ pub(crate) async fn open_async_boring_resident_tls_client(
         engine: AsyncVlessTlsEngine::Boring { tls },
     })
 }
+
+#[derive(Debug)]
+enum ResidentEchHandshakeError {
+    Rejected(Vec<u8>),
+    Failed(String),
+}
+
+async fn open_async_boring_ech_resident_tls_client_with_binding(
+    binding: &ResidentProxyBinding,
+    mptcp: bool,
+    initial_tcp: TokioTcpStream,
+) -> Result<AsyncResidentTlsClient, String> {
+    let proxy = binding.plan();
+    let initial = proxy
+        .ech
+        .as_ref()
+        .ok_or_else(|| "resident ECH plan missing config list".to_owned())?;
+    match open_async_boring_ech_resident_tls_attempt(
+        proxy,
+        initial_tcp,
+        initial.config_list_bytes(),
+    )
+    .await
+    {
+        Ok(client) => Ok(client),
+        Err(ResidentEchHandshakeError::Rejected(retry)) => {
+            let retry = validated_ech_retry_config(retry)?;
+            let tcp = open_proxy_tcp_stream_with_binding(binding, mptcp).await?;
+            finish_boring_ech_resident_retry(proxy, tcp, &retry).await
+        }
+        Err(ResidentEchHandshakeError::Failed(error)) => Err(error),
+    }
+}
+
+async fn open_async_boring_ech_resident_tls_client_at_candidates(
+    proxy: &ResidentProxyPlan,
+    candidates: &[SocketAddr],
+    mark: u32,
+    mptcp: bool,
+    initial_tcp: TokioTcpStream,
+) -> Result<AsyncResidentTlsClient, String> {
+    let initial = proxy
+        .ech
+        .as_ref()
+        .ok_or_else(|| "resident ECH plan missing config list".to_owned())?;
+    match open_async_boring_ech_resident_tls_attempt(
+        proxy,
+        initial_tcp,
+        initial.config_list_bytes(),
+    )
+    .await
+    {
+        Ok(client) => Ok(client),
+        Err(ResidentEchHandshakeError::Rejected(retry)) => {
+            let retry = validated_ech_retry_config(retry)?;
+            let tcp = open_proxy_tcp_stream_at_candidates(proxy, candidates, mark, mptcp).await?;
+            finish_boring_ech_resident_retry(proxy, tcp, &retry).await
+        }
+        Err(ResidentEchHandshakeError::Failed(error)) => Err(error),
+    }
+}
+
+async fn finish_boring_ech_resident_retry(
+    proxy: &ResidentProxyPlan,
+    tcp: TokioTcpStream,
+    retry: &EchConfigList,
+) -> Result<AsyncResidentTlsClient, String> {
+    finish_boring_ech_retry_result(
+        open_async_boring_ech_resident_tls_attempt(proxy, tcp, retry.bytes()).await,
+        "VLESS",
+    )
+}
+
+async fn open_async_boring_ech_resident_tls_attempt(
+    proxy: &ResidentProxyPlan,
+    tcp: TokioTcpStream,
+    ech_config_list: &[u8],
+) -> Result<AsyncResidentTlsClient, ResidentEchHandshakeError> {
+    let policy = ResidentTlsPolicy::from_proxy(proxy);
+    let connector =
+        boring_vless_connector(proxy, &policy).map_err(ResidentEchHandshakeError::Failed)?;
+    let mut config = connector.configure().map_err(|err| {
+        ResidentEchHandshakeError::Failed(format!("configure VLESS ECH BoringSSL client: {err}"))
+    })?;
+    configure_utls_template_boring_ssl(&mut config, proxy)
+        .map_err(ResidentEchHandshakeError::Failed)?;
+    config.set_ech_config_list(ech_config_list).map_err(|err| {
+        ResidentEchHandshakeError::Failed(format!("set VLESS BoringSSL ECHConfigList: {err}"))
+    })?;
+    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
+    let result = time::timeout(
+        RESIDENT_CONNECT_TIMEOUT,
+        tokio_boring::connect(config, &proxy.server_name, tcp),
+    )
+    .await
+    .map_err(|_| {
+        ResidentEchHandshakeError::Failed("VLESS BoringSSL ECH handshake timeout".to_owned())
+    })?;
+    match result {
+        Ok(tls) if tls.ssl().ech_accepted() => Ok(AsyncVlessTlsClient {
+            engine: AsyncVlessTlsEngine::Boring { tls },
+        }),
+        Ok(_) => Err(ResidentEchHandshakeError::Failed(
+            "VLESS BoringSSL handshake completed without accepting required ECH".to_owned(),
+        )),
+        Err(error) => Err(classify_boring_ech_handshake_error(
+            error,
+            proxy.allow_insecure,
+            "VLESS",
+        )),
+    }
+}
+
+async fn open_async_boring_ech_xhttp_client(
+    endpoint: &ResidentXhttpEndpointPlan,
+    mark: u32,
+    mptcp: bool,
+    initial_tcp: TokioTcpStream,
+) -> Result<AsyncResidentTlsClient, String> {
+    let initial = endpoint
+        .ech
+        .as_ref()
+        .ok_or_else(|| "xHTTP ECH plan missing config list".to_owned())?;
+    match open_async_boring_ech_xhttp_attempt(endpoint, initial_tcp, initial.config_list_bytes())
+        .await
+    {
+        Ok(client) => Ok(client),
+        Err(ResidentEchHandshakeError::Rejected(retry)) => {
+            let retry = validated_ech_retry_config(retry)?;
+            let tcp = open_xhttp_endpoint_tcp_stream_async(endpoint, mark, mptcp).await?;
+            finish_boring_ech_xhttp_retry(endpoint, tcp, &retry).await
+        }
+        Err(ResidentEchHandshakeError::Failed(error)) => Err(error),
+    }
+}
+
+async fn open_async_boring_ech_xhttp_client_at_candidates(
+    endpoint: &ResidentXhttpEndpointPlan,
+    candidates: &[SocketAddr],
+    mark: u32,
+    mptcp: bool,
+    initial_tcp: TokioTcpStream,
+) -> Result<AsyncResidentTlsClient, String> {
+    let initial = endpoint
+        .ech
+        .as_ref()
+        .ok_or_else(|| "xHTTP ECH plan missing config list".to_owned())?;
+    match open_async_boring_ech_xhttp_attempt(endpoint, initial_tcp, initial.config_list_bytes())
+        .await
+    {
+        Ok(client) => Ok(client),
+        Err(ResidentEchHandshakeError::Rejected(retry)) => {
+            let retry = validated_ech_retry_config(retry)?;
+            let tcp =
+                open_xhttp_endpoint_tcp_stream_at_candidates(endpoint, candidates, mark, mptcp)
+                    .await?;
+            finish_boring_ech_xhttp_retry(endpoint, tcp, &retry).await
+        }
+        Err(ResidentEchHandshakeError::Failed(error)) => Err(error),
+    }
+}
+
+async fn finish_boring_ech_xhttp_retry(
+    endpoint: &ResidentXhttpEndpointPlan,
+    tcp: TokioTcpStream,
+    retry: &EchConfigList,
+) -> Result<AsyncResidentTlsClient, String> {
+    finish_boring_ech_retry_result(
+        open_async_boring_ech_xhttp_attempt(endpoint, tcp, retry.bytes()).await,
+        "xHTTP",
+    )
+}
+
+fn finish_boring_ech_retry_result<T>(
+    result: Result<T, ResidentEchHandshakeError>,
+    label: &str,
+) -> Result<T, String> {
+    match result {
+        Ok(client) => Ok(client),
+        Err(ResidentEchHandshakeError::Rejected(_)) => Err(format!(
+            "{label} BoringSSL ECH rejected after one authenticated retry"
+        )),
+        Err(ResidentEchHandshakeError::Failed(error)) => Err(error),
+    }
+}
+
+async fn open_async_boring_ech_xhttp_attempt(
+    endpoint: &ResidentXhttpEndpointPlan,
+    tcp: TokioTcpStream,
+    ech_config_list: &[u8],
+) -> Result<AsyncResidentTlsClient, ResidentEchHandshakeError> {
+    let connector =
+        boring_xhttp_endpoint_connector(endpoint).map_err(ResidentEchHandshakeError::Failed)?;
+    let mut config = connector.configure().map_err(|err| {
+        ResidentEchHandshakeError::Failed(format!("configure xHTTP ECH BoringSSL client: {err}"))
+    })?;
+    configure_utls_template_boring_ssl_for_xhttp_endpoint(&mut config, endpoint)
+        .map_err(ResidentEchHandshakeError::Failed)?;
+    config.set_ech_config_list(ech_config_list).map_err(|err| {
+        ResidentEchHandshakeError::Failed(format!("set xHTTP BoringSSL ECHConfigList: {err}"))
+    })?;
+    let tcp = AsyncResidentTcpStream::new(tcp, endpoint.tls_fragment.clone());
+    let result = time::timeout(
+        RESIDENT_CONNECT_TIMEOUT,
+        tokio_boring::connect(config, &endpoint.server_name, tcp),
+    )
+    .await
+    .map_err(|_| {
+        ResidentEchHandshakeError::Failed("xHTTP BoringSSL ECH handshake timeout".to_owned())
+    })?;
+    match result {
+        Ok(tls) if tls.ssl().ech_accepted() => Ok(AsyncVlessTlsClient {
+            engine: AsyncVlessTlsEngine::Boring { tls },
+        }),
+        Ok(_) => Err(ResidentEchHandshakeError::Failed(
+            "xHTTP BoringSSL handshake completed without accepting required ECH".to_owned(),
+        )),
+        Err(error) => Err(classify_boring_ech_handshake_error(
+            error,
+            endpoint.allow_insecure,
+            "xHTTP",
+        )),
+    }
+}
+
+fn classify_boring_ech_handshake_error(
+    error: tokio_boring::HandshakeError<AsyncResidentTcpStream>,
+    allow_insecure: bool,
+    label: &str,
+) -> ResidentEchHandshakeError {
+    let retry = error
+        .ssl()
+        .and_then(SslRef::get_ech_retry_configs)
+        .map(ToOwned::to_owned);
+    if let Some(retry) = retry {
+        if allow_insecure {
+            return ResidentEchHandshakeError::Failed(format!(
+                "{label} BoringSSL ECH rejection supplied unauthenticated retry configs while allowInsecure is enabled"
+            ));
+        }
+        return ResidentEchHandshakeError::Rejected(retry);
+    }
+    ResidentEchHandshakeError::Failed(format!("connect {label} BoringSSL ECH client: {error}"))
+}
+
+fn validated_ech_retry_config(bytes: Vec<u8>) -> Result<EchConfigList, String> {
+    EchConfigList::from_bytes(bytes)
+        .map_err(|err| format!("server returned invalid ECH retry config list: {err}"))
+}
+
+#[cfg(test)]
+#[path = "open_client/ech_tests.rs"]
+mod ech_tests;

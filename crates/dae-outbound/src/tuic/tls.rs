@@ -10,9 +10,10 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 #[cfg(any(test, feature = "test-support"))]
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use crate::error::OutboundError;
+use crate::shared_transport::QuicCongestionController;
 
 pub const DEFAULT_TUIC_ALPN: &str = "h3";
 pub const DEFAULT_TUIC_SERVER_NAME: &str = "localhost";
@@ -24,33 +25,7 @@ pub const DEFAULT_TUIC_INITIAL_CONNECTION_RECEIVE_WINDOW: u64 = 32 * 1024 * 1024
 pub const DEFAULT_TUIC_MAX_CONNECTION_RECEIVE_WINDOW: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_TUIC_MAX_UDP_RELAY_PACKET_SIZE: usize = 1400;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TuicCongestionController {
-    Bbr,
-    Cubic,
-    NewReno,
-}
-
-impl TuicCongestionController {
-    pub fn from_config(value: &str) -> Result<Self, OutboundError> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "" | "bbr" => Ok(Self::Bbr),
-            "cubic" => Ok(Self::Cubic),
-            "new_reno" | "new-reno" | "reno" => Ok(Self::NewReno),
-            _ => Err(bad_tls(
-                "TUIC congestion controller is not supported by the resident QUIC executor",
-            )),
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Bbr => "bbr",
-            Self::Cubic => "cubic",
-            Self::NewReno => "new_reno",
-        }
-    }
-}
+pub type TuicCongestionController = QuicCongestionController;
 
 #[derive(Debug)]
 struct AcceptAnyServerCertVerifier {
@@ -175,8 +150,9 @@ pub(super) fn build_tuic_client_config_with_session_cache(
             .with_custom_certificate_verifier(AcceptAnyServerCertVerifier::new())
             .with_no_client_auth()
     } else {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = crate::shared_transport::system_ca_snapshot()
+            .map_err(|err| bad_tls(format!("load TUIC system CA bundle: {err}")))?
+            .rustls_roots();
         rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(roots)
             .with_no_client_auth()
@@ -217,15 +193,7 @@ fn tuic_transport_config(
 ) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
     if let Some(congestion) = congestion {
-        match congestion {
-            TuicCongestionController::Bbr => transport
-                .congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default())),
-            TuicCongestionController::Cubic => transport
-                .congestion_controller_factory(Arc::new(quinn::congestion::CubicConfig::default())),
-            TuicCongestionController::NewReno => transport.congestion_controller_factory(Arc::new(
-                quinn::congestion::NewRenoConfig::default(),
-            )),
-        };
+        congestion.install(&mut transport);
     }
     transport.keep_alive_interval(Some(Duration::from_secs(DEFAULT_TUIC_KEEPALIVE_SECS)));
     transport.max_idle_timeout(Some(

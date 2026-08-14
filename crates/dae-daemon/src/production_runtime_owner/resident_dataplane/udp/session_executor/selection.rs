@@ -139,11 +139,12 @@ impl UdpSessionExecutor {
                 owner_registry,
             )),
             (
-                ResidentProxyProtocolPlan::TuicQuicTcp { .. },
-                ResidentUdpExecutorFactory::TuicPacket,
-            ) => Self::Tuic(TuicQuicDatagramSession::new(
+                ResidentProxyProtocolPlan::TuicQuicTcp { udp_relay_mode, .. },
+                ResidentUdpExecutorFactory::TuicPacket(factory_mode),
+            ) if *udp_relay_mode == factory_mode => Self::Tuic(TuicQuicPacketSession::new(
                 binding.clone(),
                 tuic_owner_registry,
+                *udp_relay_mode,
             )),
             (
                 ResidentProxyProtocolPlan::JuicityQuicTcp { .. },

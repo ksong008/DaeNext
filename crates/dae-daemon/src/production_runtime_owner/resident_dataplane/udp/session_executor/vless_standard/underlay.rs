@@ -321,11 +321,12 @@ impl VlessStandardUdpUnderlay {
                         tls_underlay,
                     })
                 } else {
+                    let grpc_mode = response.grpc_mode();
                     Ok(Self::GrpcTls {
                         send_stream,
                         response,
                         _carrier_lease: carrier_lease,
-                        response_buf: GrpcHunkReadBuffer::default(),
+                        response_buf: GrpcHunkReadBuffer::with_mode(grpc_mode),
                         tls_underlay,
                     })
                 }
@@ -422,7 +423,11 @@ impl VlessStandardUdpUnderlay {
                 )
                 .await
             }
-            Self::GrpcTls { send_stream, .. } => send_grpc_hunk(send_stream, payload, false).await,
+            Self::GrpcTls {
+                send_stream,
+                response,
+                ..
+            } => send_grpc_data(send_stream, payload, false, response.grpc_mode()).await,
             Self::EncryptedGrpcTls { stream, .. } => {
                 write_vless_stream_bytes(stream, payload, "write VLESS encrypted gRPC UDP packet")
                     .await
@@ -567,8 +572,12 @@ impl VlessStandardUdpUnderlay {
             Self::EncryptedHttpUpgradeTls { client, .. } => {
                 let _ = client.shutdown().await;
             }
-            Self::GrpcTls { send_stream, .. } => {
-                let _ = send_grpc_hunk(send_stream, &[], true).await;
+            Self::GrpcTls {
+                send_stream,
+                response,
+                ..
+            } => {
+                let _ = send_grpc_data(send_stream, &[], true, response.grpc_mode()).await;
             }
             Self::H2Tls { send_stream, .. } => {
                 let _ = send_h2_data_with_context(send_stream, Bytes::new(), true, "VLESS H2 UDP")
