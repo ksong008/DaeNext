@@ -347,7 +347,7 @@ async fn fetch_resident_proxy_https_response_async(
 ) -> Result<Vec<u8>, String> {
     let server_name = ServerName::try_from(host.to_owned())
         .map_err(|err| format!("resident proxy fetch invalid HTTPS server name {host}: {err}"))?;
-    let connector = tokio_rustls::TlsConnector::from(resident_tcp_probe_tls_config());
+    let connector = tokio_rustls::TlsConnector::from(resident_tcp_probe_tls_config()?);
     let mut tls = time::timeout(timeout, connector.connect(server_name, stream))
         .await
         .map_err(|_| "resident proxy fetch HTTPS handshake timeout".to_owned())?

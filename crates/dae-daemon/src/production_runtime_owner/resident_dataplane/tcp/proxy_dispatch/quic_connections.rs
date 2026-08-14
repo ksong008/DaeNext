@@ -198,6 +198,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
     alpn: &[String],
     allow_insecure: bool,
     congestion: TuicCongestionController,
+    udp_relay_mode: dae_outbound::tuic::TuicUdpRelayMode,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
     session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
@@ -217,7 +218,10 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_tuic_q
         binding.runtime_generation(),
         proxy,
         QuicEndpointIdentityRole::ProtocolCarrier,
-        &[],
+        &[
+            congestion.as_str().as_bytes(),
+            udp_relay_mode.as_str().as_bytes(),
+        ],
     );
     let (remote, endpoint, connection) = connect_quic_endpoint_candidates_async(
         &candidates,
@@ -248,15 +252,17 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
     binding: &ResidentProxyBinding,
     allow_insecure: bool,
     pinned_certchain_sha256: &str,
+    congestion: dae_outbound::juicity::JuicityCongestionController,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
     session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
     let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
-    let client_config = build_juicity_runtime_client_config_with_session_cache(
+    let client_config = dae_outbound::juicity::build_juicity_runtime_client_config_with_congestion_and_session_cache(
         allow_insecure,
         pinned_certchain_sha256,
+        congestion,
         session_cache,
     )
     .map_err(|err| format!("build Juicity QUIC client config: {err}"))?;
@@ -266,7 +272,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) async fn open_juicit
         binding.runtime_generation(),
         proxy,
         QuicEndpointIdentityRole::ProtocolCarrier,
-        &[],
+        &[congestion.as_str().as_bytes()],
     );
     let (remote, endpoint, connection) = connect_quic_endpoint_candidates_async(
         &candidates,

@@ -299,7 +299,7 @@ mod tests {
         }
         for factory in [
             ResidentUdpExecutorFactory::Hysteria2Datagram,
-            ResidentUdpExecutorFactory::TuicPacket,
+            ResidentUdpExecutorFactory::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Native),
         ] {
             assert_eq!(
                 factory.source_contract().wire_identity(),
@@ -317,7 +317,8 @@ mod tests {
             ResidentUdpExecutorFactory::Vmess(Stream::WebSocketTls),
             ResidentUdpExecutorFactory::AnyTlsPacketStream,
             ResidentUdpExecutorFactory::Hysteria2Datagram,
-            ResidentUdpExecutorFactory::TuicPacket,
+            ResidentUdpExecutorFactory::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Native),
+            ResidentUdpExecutorFactory::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Quic),
             ResidentUdpExecutorFactory::JuicityStreamPacket,
         ];
         for factory in admitted {

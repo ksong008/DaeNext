@@ -15,6 +15,7 @@ use foreign_types::ForeignType;
 use quinn_boring::QuicSslContext;
 use sha2::{Digest, Sha256};
 
+use super::{SystemCaIdentity, system_ca_snapshot};
 use crate::OutboundError;
 
 pub const BORING_QUIC_PROVIDER_EVIDENCE: &str = "quinn-boringssl";
@@ -168,9 +169,27 @@ fn build_boring_quic_client_crypto_with_session_cache(
     session_cache: Option<BoringQuicSessionCache>,
 ) -> Result<quinn_boring::ClientConfig, OutboundError> {
     validate_alpn(&policy.alpn)?;
+    let system_ca = if verification_requires_system_roots(&policy.verification) {
+        Some(system_ca_snapshot().map_err(|err| {
+            OutboundError::BadSharedTransport(format!(
+                "load BoringSSL QUIC system CA bundle: {err}"
+            ))
+        })?)
+    } else {
+        None
+    };
     let mut crypto = quinn_boring::ClientConfig::new().map_err(|err| {
         OutboundError::BadSharedTransport(format!("create BoringSSL QUIC config: {err}"))
     })?;
+    if let Some(system_ca) = &system_ca {
+        system_ca
+            .install_boring_context(crypto.ctx_mut())
+            .map_err(|err| {
+                OutboundError::BadSharedTransport(format!(
+                    "install BoringSSL QUIC system CA bundle: {err}"
+                ))
+            })?;
+    }
     let verify_peer = !matches!(
         policy.verification,
         BoringQuicVerificationPolicy::ExplicitInsecure
@@ -240,13 +259,30 @@ fn build_boring_quic_client_crypto_with_session_cache(
     if let Some(session_cache) = session_cache {
         crypto.set_session_cache(session_cache);
     }
-    crypto.set_session_cache_namespace(session_cache_namespace(policy));
+    crypto.set_session_cache_namespace(session_cache_namespace(
+        policy,
+        system_ca.as_deref().map(|snapshot| snapshot.identity()),
+    ));
     Ok(crypto)
 }
 
-fn session_cache_namespace(policy: &BoringQuicClientPolicy) -> Vec<u8> {
+fn verification_requires_system_roots(policy: &BoringQuicVerificationPolicy) -> bool {
+    matches!(
+        policy,
+        BoringQuicVerificationPolicy::SystemRoots
+            | BoringQuicVerificationPolicy::PinnedLeafSha256 {
+                require_webpki: true,
+                ..
+            }
+    )
+}
+
+fn session_cache_namespace(
+    policy: &BoringQuicClientPolicy,
+    system_ca: Option<&SystemCaIdentity>,
+) -> Vec<u8> {
     let mut digest = Sha256::new();
-    digest.update(b"dae/boring-quic-session-policy/v1");
+    digest.update(b"dae/boring-quic-session-policy/v2");
     digest.update([match policy.client_hello {
         BoringQuicClientHelloProfile::Generic => 0,
         BoringQuicClientHelloProfile::Chrome => 1,
@@ -272,7 +308,23 @@ fn session_cache_namespace(policy: &BoringQuicClientPolicy) -> Vec<u8> {
             digest.update(pin);
         }
     }
+    if let Some(system_ca) = system_ca {
+        update_session_cache_namespace_part(
+            &mut digest,
+            system_ca.path.to_string_lossy().as_bytes(),
+        );
+        update_session_cache_namespace_part(&mut digest, system_ca.sha256.as_bytes());
+        update_session_cache_namespace_part(
+            &mut digest,
+            &(system_ca.certificate_count as u64).to_be_bytes(),
+        );
+    }
     digest.finalize().to_vec()
+}
+
+fn update_session_cache_namespace_part(digest: &mut Sha256, part: &[u8]) {
+    digest.update((part.len() as u64).to_be_bytes());
+    digest.update(part);
 }
 
 fn configure_client_hello_profile(
@@ -362,6 +414,8 @@ fn validate_alpn(alpn: &[Vec<u8>]) -> Result<(), OutboundError> {
 
 #[cfg(test)]
 mod tests {
+    use foreign_types::ForeignTypeRef;
+
     use super::*;
 
     #[test]
@@ -386,9 +440,14 @@ mod tests {
     #[test]
     fn factory_builds_quinn_config_with_boring_crypto() {
         let policy = BoringQuicClientPolicy::new([b"h3".as_slice()]).unwrap();
-        let _config =
-            build_boring_quic_client_config(&policy, Arc::new(quinn::TransportConfig::default()))
-                .unwrap();
+        let system_ca = system_ca_snapshot().unwrap();
+        let expected_store = system_ca.boring_store();
+        let mut crypto = build_boring_quic_client_crypto(&policy).unwrap();
+
+        assert_eq!(
+            crypto.ctx_mut().cert_store().as_ptr(),
+            expected_store.as_ptr()
+        );
     }
 
     #[test]
@@ -401,9 +460,55 @@ mod tests {
             .clone()
             .client_hello_profile(BoringQuicClientHelloProfile::Chrome);
 
-        let base_key = session_cache_namespace(&base);
+        let base_key = session_cache_namespace(&base, None);
         for other in [insecure, other_alpn, early, chrome] {
-            assert_ne!(base_key, session_cache_namespace(&other));
+            assert_ne!(base_key, session_cache_namespace(&other, None));
         }
+    }
+
+    #[test]
+    fn webpki_policies_require_system_roots() {
+        let pin = [7; 32];
+        assert!(verification_requires_system_roots(
+            &BoringQuicVerificationPolicy::SystemRoots
+        ));
+        assert!(verification_requires_system_roots(
+            &BoringQuicVerificationPolicy::PinnedLeafSha256 {
+                digest: pin,
+                require_webpki: true,
+            }
+        ));
+        assert!(!verification_requires_system_roots(
+            &BoringQuicVerificationPolicy::ExplicitInsecure
+        ));
+        assert!(!verification_requires_system_roots(
+            &BoringQuicVerificationPolicy::PinnedCertChainSha256("pin".to_owned())
+        ));
+        assert!(!verification_requires_system_roots(
+            &BoringQuicVerificationPolicy::PinnedLeafSha256 {
+                digest: pin,
+                require_webpki: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn cache_namespace_separates_system_ca_snapshots() {
+        let policy = BoringQuicClientPolicy::new([b"h3".as_slice()]).unwrap();
+        let first = SystemCaIdentity {
+            path: "/etc/ssl/first.pem".into(),
+            sha256: "11".repeat(32),
+            certificate_count: 1,
+        };
+        let second = SystemCaIdentity {
+            path: "/etc/ssl/second.pem".into(),
+            sha256: "22".repeat(32),
+            certificate_count: 2,
+        };
+
+        assert_ne!(
+            session_cache_namespace(&policy, Some(&first)),
+            session_cache_namespace(&policy, Some(&second))
+        );
     }
 }

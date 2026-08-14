@@ -133,24 +133,37 @@ pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted
     .unwrap();
     assert!(!httpupgrade.execution_plan().udp.policy_closed());
 
+    let mut grpc_link = VLESSLink::parse(&vless_fixture_url(
+        "vless-encryption-grpc",
+        &primary,
+        fixture_authority_port(),
+        "grpc",
+        "",
+        "/official/service/tun|multi",
+        &authority,
+        "",
+        "",
+    ))
+    .unwrap();
+    grpc_link.grpc_mode = dae_outbound::shared_transport::GrpcMode::Multi;
+    grpc_link.grpc_authority = "vless-grpc-authority.invalid".to_owned();
     let grpc = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "vless_encryption_grpc".to_owned(),
-        with_vless_encryption(vless_fixture_url(
-            "vless-encryption-grpc",
-            &primary,
-            fixture_authority_port(),
-            "grpc",
-            "",
-            "vless-service",
-            &authority,
-            "",
-            "",
-        )),
+        with_vless_encryption(grpc_link.export_url()),
     )
     .unwrap();
     assert!(!grpc.execution_plan().udp.policy_closed());
+    assert_eq!(
+        grpc.grpc_mode,
+        dae_outbound::shared_transport::GrpcMode::Multi
+    );
+    assert_eq!(grpc.stream_host, "vless-grpc-authority.invalid");
+    assert_eq!(
+        grpc.executable_graph_value()["streamWrapperEndpoint"]["grpcMode"],
+        "multi"
+    );
 
     for (tag, mode) in [
         ("stream-one", "stream-one"),
@@ -1185,7 +1198,7 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_download_settings() {
         vless_xhttp_parser_fixture_url(
             "packet-up",
             "h2",
-            r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["h3"],"allowInsecure":true},"xhttpSettings":{"host":"download.host.invalid","path":"/down?ed=4096","mode":"packet-up"}}}"#,
+            r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["h3"],"allowInsecure":true,"echConfigList":"AD7+DQA6AAAgACC7Lynj4wV+BBnVL8X0QRh3b422HOpP33YHm5NgbFpiSAAIAAEAAQABAAMAB2VjaC5jb20AAA=="},"xhttpSettings":{"host":"download.host.invalid","path":"/down?ed=4096","mode":"packet-up"}}}"#,
         ),
     )
     .unwrap();
@@ -1198,6 +1211,15 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_download_settings() {
     assert_eq!(download.stream_host, "download.host.invalid");
     assert_eq!(download.stream_path, "/down/?ed=4096");
     assert!(download.allow_insecure);
+    assert_eq!(
+        download.ech.as_ref().unwrap().config_list_sha256_hex(),
+        "9af1ab5180107aaa5ea758daf3435f20e4815af6889436ad6d884ea139b0c74f"
+    );
+    assert_eq!(
+        proxy.executable_graph_value()["runtimeComponents"]["streamWrapperFactory"]["xhttpExtendedSettings"]
+            ["download"]["echConfigListSha256"],
+        "9af1ab5180107aaa5ea758daf3435f20e4815af6889436ad6d884ea139b0c74f"
+    );
 
     let proxy = build_resident_proxy_plan_for_node(
         &config,
@@ -1249,6 +1271,11 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settin
         .encode([FixtureEndpoint::Primary.slot() as u8; 32]);
     let download_public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode([FixtureEndpoint::Secondary.slot() as u8; 32]);
+    let primary_mldsa65_verify =
+        Mldsa65VerifyKey::from_bytes(vec![FixtureEndpoint::Primary.slot() as u8; 1952]).unwrap();
+    let download_mldsa65_verify =
+        Mldsa65VerifyKey::from_bytes(vec![FixtureEndpoint::Secondary.slot() as u8; 1952]).unwrap();
+    let download_mldsa65_verify_base64 = download_mldsa65_verify.canonical_base64();
     let link = VLESSLink {
         ps: String::new(),
         add: fixture_host(FixtureEndpoint::Primary),
@@ -1261,8 +1288,10 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settin
         path: "/resource?ed=2048".to_owned(),
         xhttp_mode: "packet-up".to_owned(),
         xhttp_extra: format!(
-            r#"{{"downloadSettings":{{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"reality","realitySettings":{{"serverName":"download.sni.invalid","alpn":["h2"],"allowInsecure":true,"publicKey":"{download_public_key}","shortId":"01020304","spiderX":"/download"}},"xhttpSettings":{{"host":"download.host.invalid","path":"/down?ed=4096","mode":"packet-up"}}}}}}"#
+            r#"{{"downloadSettings":{{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"reality","realitySettings":{{"serverName":"download.sni.invalid","alpn":["h2"],"allowInsecure":true,"fingerprint":"chrome","publicKey":"{download_public_key}","shortId":"01020304","spiderX":"/download","mldsa65Verify":"{download_mldsa65_verify_base64}"}},"xhttpSettings":{{"host":"download.host.invalid","path":"/down?ed=4096","mode":"packet-up"}}}}}}"#
         ),
+        grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
+        grpc_authority: String::new(),
         tls: "reality".to_owned(),
         flow: String::new(),
         alpn: "h2".to_owned(),
@@ -1271,6 +1300,8 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settin
         public_key: primary_public_key,
         short_id: "05060708".to_owned(),
         spider_x: "/primary".to_owned(),
+        ech: None,
+        mldsa65_verify: Some(primary_mldsa65_verify.clone()),
         mux: false,
         encryption: String::new(),
         protocol: "vless".to_owned(),
@@ -1286,7 +1317,13 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settin
     .unwrap();
 
     assert_eq!(proxy.tls, "reality");
-    assert!(proxy.reality.is_some());
+    assert_eq!(
+        proxy
+            .reality
+            .as_ref()
+            .and_then(|reality| reality.mldsa65_verify.as_ref()),
+        Some(&primary_mldsa65_verify)
+    );
     let download = proxy.xhttp_download.as_ref().unwrap();
     assert_eq!(download.server_host, "download.transport.invalid");
     assert_eq!(download.server_name, "download.sni.invalid");
@@ -1294,6 +1331,10 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settin
     assert_eq!(download.stream_host, "download.host.invalid");
     assert_eq!(download.stream_path, "/down/?ed=4096");
     assert!(download.allow_insecure);
+    assert_eq!(
+        download.utls_fingerprint.as_ref().unwrap().canonical,
+        "chrome_auto"
+    );
     let reality = download.reality.as_ref().unwrap();
     assert_eq!(
         reality.public_key,
@@ -1301,6 +1342,24 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settin
     );
     assert_eq!(reality.short_id, vec![1, 2, 3, 4]);
     assert_eq!(reality.spider_x, "/download");
+    assert_eq!(
+        reality.mldsa65_verify.as_ref(),
+        Some(&download_mldsa65_verify)
+    );
+    let graph = proxy.executable_graph_value();
+    assert_eq!(
+        graph["runtimeComponents"]["underlayFactory"]["provider"],
+        "reality-boringssl"
+    );
+    assert_eq!(
+        graph["runtimeComponents"]["underlayFactory"]["realityPqv"]["keySha256"],
+        primary_mldsa65_verify.sha256_hex()
+    );
+    assert_eq!(
+        graph["runtimeComponents"]["streamWrapperFactory"]["xhttpExtendedSettings"]["download"]["realityPqv"]
+            ["keySha256"],
+        download_mldsa65_verify.sha256_hex()
+    );
 }
 
 #[test]

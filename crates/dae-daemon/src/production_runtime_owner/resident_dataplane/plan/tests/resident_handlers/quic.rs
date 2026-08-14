@@ -141,7 +141,10 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
     assert_eq!(juicity.tls, "quic");
     assert!(matches!(
         juicity.handler,
-        ResidentProxyProtocolPlan::JuicityQuicTcp { .. }
+        ResidentProxyProtocolPlan::JuicityQuicTcp {
+            congestion: dae_outbound::juicity::JuicityCongestionController::Bbr,
+            ..
+        }
     ));
     for proxy in [&hysteria2, &tuic] {
         let graph = proxy.executable_graph_value();
@@ -202,6 +205,10 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
             "zeroRtt": false,
         })
     );
+    assert_eq!(
+        juicity_graph["runtimeComponents"]["underlayFactory"]["congestionControl"],
+        "bbr"
+    );
     let juicity_lifecycle = &juicity_graph["runtimeComponents"]["underlayFactory"]["quicLifecycle"];
     assert_eq!(
         juicity_lifecycle["endpointScope"],
@@ -229,7 +236,72 @@ pub(super) fn assert_quic_handlers(config: &Config) -> Vec<ResidentProxyPlan> {
 }
 
 #[test]
-fn tuic_stream_relay_mode_and_unknown_values_fail_before_runtime_construction() {
+fn juicity_congestion_controller_is_typed_and_partitions_graph_identity() {
+    let config = resident_tcp_handler_config();
+    let base = juicity_fixture_url(
+        "juicity",
+        &fixture_host(FixtureEndpoint::Primary),
+        fixture_port(3),
+        true,
+    );
+    let mut cubic_link = JuicityLink::parse(&base).unwrap();
+    cubic_link.congestion_control = "cubic".to_owned();
+    let cubic = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "juicity_cubic".to_owned(),
+        cubic_link.export_url(),
+    )
+    .unwrap();
+    let mut reno_link = JuicityLink::parse(&base).unwrap();
+    reno_link.congestion_control = "new-reno".to_owned();
+    let reno = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "juicity_reno".to_owned(),
+        reno_link.export_url(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        cubic.handler,
+        ResidentProxyProtocolPlan::JuicityQuicTcp {
+            congestion: dae_outbound::juicity::JuicityCongestionController::Cubic,
+            ..
+        }
+    ));
+    assert!(matches!(
+        reno.handler,
+        ResidentProxyProtocolPlan::JuicityQuicTcp {
+            congestion: dae_outbound::juicity::JuicityCongestionController::NewReno,
+            ..
+        }
+    ));
+    assert_ne!(cubic.graph_link_hash, reno.graph_link_hash);
+    assert_eq!(
+        cubic.executable_graph_value()["runtimeComponents"]["underlayFactory"]["congestionControl"],
+        "cubic"
+    );
+    assert_eq!(
+        reno.executable_graph_value()["runtimeComponents"]["underlayFactory"]["congestionControl"],
+        "new_reno"
+    );
+
+    let mut invalid_link = JuicityLink::parse(&base).unwrap();
+    invalid_link.congestion_control = "brutal".to_owned();
+    let error = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "juicity_invalid".to_owned(),
+        invalid_link.export_url(),
+    )
+    .unwrap_err();
+    assert!(error.contains("validate Juicity congestion controller"));
+    assert!(!error.contains("brutal"));
+}
+
+#[test]
+fn tuic_stream_relay_mode_is_materialized_and_unknown_values_fail_closed() {
     let config = resident_tcp_handler_config();
     let mut link = TuicLink::parse(&tuic_fixture_url(
         "tuic",
@@ -240,14 +312,30 @@ fn tuic_stream_relay_mode_and_unknown_values_fail_before_runtime_construction() 
     .unwrap();
 
     link.udp_relay_mode = "quic".to_owned();
-    let stream_error = build_resident_proxy_plan_for_node(
+    let stream = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "tuic_stream_mode".to_owned(),
         link.export_url(),
     )
-    .unwrap_err();
-    assert!(stream_error.contains("QUIC stream UDP relay mode is not supported"));
+    .unwrap();
+    assert!(matches!(
+        stream.handler,
+        ResidentProxyProtocolPlan::TuicQuicTcp {
+            udp_relay_mode: dae_outbound::tuic::TuicUdpRelayMode::Quic,
+            ..
+        }
+    ));
+    let graph = stream.executable_graph_value();
+    assert_eq!(graph["packetSemantics"], "quic-stream-packet");
+    assert_eq!(
+        graph["runtimeComponents"]["underlayFactory"]["tuicUdpRelayMode"],
+        "quic"
+    );
+    assert_eq!(
+        graph["runtimeComponents"]["udpExecutionAgreement"]["executor"],
+        "resident-tuic-quic-unidirectional-stream-packet"
+    );
 
     let private_mode = "private-relay-token";
     link.udp_relay_mode = private_mode.to_owned();

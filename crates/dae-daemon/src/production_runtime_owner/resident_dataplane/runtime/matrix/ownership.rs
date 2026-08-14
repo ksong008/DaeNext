@@ -167,7 +167,7 @@ mod tests {
             Protocol::Tuic,
             Security::QuicTls,
             Wrapper::QuicStream,
-            Udp::TuicPacket,
+            Udp::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Native),
         ));
         let juicity = materialized_runtime_ownership(execution(
             Protocol::Juicity,
@@ -219,7 +219,7 @@ mod tests {
                 Protocol::Hysteria2,
                 Security::QuicTls,
                 Wrapper::QuicStream,
-                Udp::TuicPacket,
+                Udp::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Native),
             ),
             execution(
                 Protocol::Tuic,

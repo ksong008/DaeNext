@@ -4,6 +4,7 @@ use serde_json::Value;
 use url::Url;
 
 use crate::error::OutboundError;
+use crate::shared_transport::{EchConfigList, GrpcMode, parse_optional_ech_config_list};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VMessLink {
@@ -17,7 +18,11 @@ pub struct VMessLink {
     pub host: String,
     pub sni: String,
     pub path: String,
+    pub grpc_mode: GrpcMode,
+    pub grpc_authority: String,
     pub tls: String,
+    pub alpn: String,
+    pub ech: Option<EchConfigList>,
     pub security: String,
     pub allow_insecure: bool,
     pub fingerprint: String,
@@ -114,8 +119,24 @@ impl VMessLink {
         } else {
             format!(",\"scy\":{}", json_string(&self.security))
         };
+        let alpn = optional_json_string_field("alpn", &self.alpn);
+        let ech = self
+            .ech
+            .as_ref()
+            .map(|ech| optional_json_string_field("ech", ech.canonical_base64()))
+            .unwrap_or_default();
+        let grpc_mode = if self.net == "grpc" && self.grpc_mode != GrpcMode::Gun {
+            optional_json_string_field("grpcMode", self.grpc_mode.link_value())
+        } else {
+            String::new()
+        };
+        let grpc_authority = if self.net == "grpc" {
+            optional_json_string_field("grpcAuthority", &self.grpc_authority)
+        } else {
+            String::new()
+        };
         let json = format!(
-            "{{\"ps\":{},\"add\":{},\"port\":{},\"id\":{},\"aid\":{},\"net\":{},\"type\":{},\"host\":{},\"sni\":{},\"path\":{},\"tls\":{},\"allowInsecure\":{},\"Fingerprint\":{},\"v\":{},\"protocol\":{}{}}}",
+            "{{\"ps\":{},\"add\":{},\"port\":{},\"id\":{},\"aid\":{},\"net\":{},\"type\":{},\"host\":{},\"sni\":{},\"path\":{},\"tls\":{},\"allowInsecure\":{},\"Fingerprint\":{},\"v\":{},\"protocol\":{}{}{}{}{}{}}}",
             json_string(&self.ps),
             json_string(&self.add),
             json_string(&self.port),
@@ -132,6 +153,10 @@ impl VMessLink {
             json_string("2"),
             json_string("vmess"),
             security,
+            alpn,
+            ech,
+            grpc_mode,
+            grpc_authority,
         );
         let mut encoded = base64::engine::general_purpose::STANDARD.encode(json);
         if encoded.ends_with('=') {
@@ -158,6 +183,12 @@ fn parse_json(raw: &str) -> Result<VMessLink, OutboundError> {
         serde_json::from_str(raw).map_err(|err| OutboundError::BadVmess(err.to_string()))?;
     let fingerprint = fields.fingerprint.or_else_empty(fields.fp);
     let security = fields.scy.or_else_empty(fields.security);
+    let grpc_mode = if fields.net == "grpc" {
+        GrpcMode::parse_link_value(&fields.grpc_mode)
+            .map_err(|err| OutboundError::BadVmess(err.to_string()))?
+    } else {
+        GrpcMode::Gun
+    };
     Ok(VMessLink {
         ps: fields.ps,
         add: fields.add,
@@ -169,7 +200,12 @@ fn parse_json(raw: &str) -> Result<VMessLink, OutboundError> {
         host: fields.host,
         sni: fields.sni,
         path: fields.path,
+        grpc_mode,
+        grpc_authority: fields.grpc_authority,
         tls: fields.tls,
+        alpn: fields.alpn,
+        ech: parse_optional_ech_config_list(&fields.ech)
+            .map_err(|err| OutboundError::BadVmess(err.to_string()))?,
         security,
         allow_insecure: fields.allow_insecure,
         fingerprint,
@@ -200,8 +236,16 @@ struct VMessJsonFields {
     sni: String,
     #[serde(default)]
     path: String,
+    #[serde(default, rename = "grpcMode", alias = "mode")]
+    grpc_mode: String,
+    #[serde(default, rename = "grpcAuthority", alias = "authority")]
+    grpc_authority: String,
     #[serde(default)]
     tls: String,
+    #[serde(default)]
+    alpn: String,
+    #[serde(default)]
+    ech: String,
     #[serde(default)]
     scy: String,
     #[serde(default)]
@@ -277,7 +321,11 @@ fn parse_legacy(raw_url: &str, decoded: &str) -> Result<VMessLink, OutboundError
         host,
         sni: query_value(&query, "peer").unwrap_or_default(),
         path,
+        grpc_mode: GrpcMode::Gun,
+        grpc_authority: String::new(),
         tls,
+        alpn: String::new(),
+        ech: None,
         security,
         allow_insecure: false,
         fingerprint: String::new(),
@@ -337,6 +385,14 @@ fn json_key(input: &str, key: &str) -> Option<String> {
 
 fn json_string(input: &str) -> String {
     serde_json::to_string(input).unwrap_or_else(|_| "\"\"".to_owned())
+}
+
+fn optional_json_string_field(key: &str, value: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else {
+        format!(",{}:{}", json_string(key), json_string(value))
+    }
 }
 
 fn format_authority(host: &str, port: &str) -> String {

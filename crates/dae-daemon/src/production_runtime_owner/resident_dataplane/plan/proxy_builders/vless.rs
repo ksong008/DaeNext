@@ -76,6 +76,11 @@ pub(crate) fn build_vless_proxy_plan(
             vless.tls
         ));
     }
+    if vless.ech.is_some() && vless.tls != "tls" {
+        return Err(format!(
+            "resident dataplane ECH requires security=tls for VLESS node {node_tag}"
+        ));
+    }
     if vless.tls == "none" && (net != "tcp" || vless.mux || !vless.flow.is_empty()) {
         return Err(format!(
             "resident dataplane vless security=none currently admits native tcp empty-flow endpoints only for node {node_tag}; got net={net}, mux={}, flow='{}'",
@@ -116,6 +121,7 @@ pub(crate) fn build_vless_proxy_plan(
     };
     let reality = resident_reality_underlay_plan(&vless)
         .map_err(|err| format!("validate VLESS Reality for {node_tag}: {err}"))?;
+    let ech = vless.ech.clone().map(ResidentEchPlan::new);
     let allow_insecure = requested_allow_insecure;
     let tls_fragment =
         if vless.tls == "tls" && xhttp_primary_http_version != Some(ResidentXhttpHttpVersion::H3) {
@@ -159,6 +165,7 @@ pub(crate) fn build_vless_proxy_plan(
             &vless.xhttp_extra,
             &server_name,
             reality.as_ref(),
+            utls_fingerprint.as_ref(),
             config.global.allow_insecure,
             &node_tag,
         )?
@@ -202,7 +209,9 @@ pub(crate) fn build_vless_proxy_plan(
     let alpn = resident_vless_alpn(&vless, &net, utls_fingerprint.as_ref());
     validate_resident_h2_carrier_alpn(&alpn, &net, &node_tag)?;
     validate_resident_meek_carrier_alpn(&alpn, &net, &node_tag)?;
-    let stream_host = if let Some(meek_options) = &meek_options {
+    let stream_host = if net == "grpc" && !vless.grpc_authority.is_empty() {
+        vless.grpc_authority.clone()
+    } else if let Some(meek_options) = &meek_options {
         meek_options.host.clone()
     } else if matches!(
         net.as_str(),
@@ -257,6 +266,7 @@ pub(crate) fn build_vless_proxy_plan(
         net,
         stream_host,
         stream_path,
+        grpc_mode: vless.grpc_mode,
         xhttp_download: xhttp_extra.download,
         xhttp_mode,
         xhttp_settings: xhttp_extra.settings,
@@ -265,6 +275,7 @@ pub(crate) fn build_vless_proxy_plan(
         allow_insecure,
         tls_fragment,
         utls_fingerprint,
+        ech,
         reality,
         handler,
         execution: None,
@@ -278,6 +289,9 @@ fn resident_reality_underlay_plan(
     vless: &VLESSLink,
 ) -> Result<Option<ResidentRealityUnderlayPlan>, String> {
     if vless.tls != "reality" {
+        if vless.mldsa65_verify.is_some() {
+            return Err("Reality pqv requires security=reality".to_owned());
+        }
         return Ok(None);
     }
     if vless.public_key.is_empty() {
@@ -292,6 +306,7 @@ fn resident_reality_underlay_plan(
         public_key,
         short_id,
         spider_x: vless.spider_x.clone(),
+        mldsa65_verify: vless.mldsa65_verify.clone(),
     }))
 }
 

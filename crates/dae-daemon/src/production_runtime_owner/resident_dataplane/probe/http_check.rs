@@ -2,7 +2,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use boring::ssl::{SslConnector, SslMethod};
-use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use rustls::{ClientConfig, pki_types::ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
 
@@ -74,7 +74,8 @@ where
         })?;
         return exchange_resident_tcp_probe_https(&mut tls, host, path, method, deadline).await;
     }
-    let config = resident_tcp_probe_tls_config();
+    let config = resident_tcp_probe_tls_config()
+        .map_err(|err| ResidentTcpProbeHttpError::new(ResidentTcpProbeHttpStage::Security, err))?;
     let server_name = ServerName::try_from(host.to_owned()).map_err(|err| {
         ResidentTcpProbeHttpError::new(
             ResidentTcpProbeHttpStage::Security,
@@ -155,9 +156,12 @@ fn resident_tcp_probe_boring_connector() -> Result<&'static SslConnector, Reside
     static CONFIG: OnceLock<Result<SslConnector, String>> = OnceLock::new();
     CONFIG
         .get_or_init(|| {
-            SslConnector::builder(SslMethod::tls())
-                .map(|builder| builder.build())
-                .map_err(|err| format!("create resident TCP probe BoringSSL connector: {err}"))
+            let system_ca = dae_outbound::shared_transport::system_ca_snapshot()
+                .map_err(|err| format!("load HTTP probe system CA bundle: {err}"))?;
+            let mut builder = SslConnector::builder(SslMethod::tls())
+                .map_err(|err| format!("create resident TCP probe BoringSSL connector: {err}"))?;
+            system_ca.install_boring_builder(&mut builder);
+            Ok(builder.build())
         })
         .as_ref()
         .map_err(|detail| {
@@ -165,17 +169,15 @@ fn resident_tcp_probe_boring_connector() -> Result<&'static SslConnector, Reside
         })
 }
 
-pub(crate) fn resident_tcp_probe_tls_config() -> Arc<ClientConfig> {
-    static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
-    Arc::clone(CONFIG.get_or_init(|| {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        )
-    }))
+pub(crate) fn resident_tcp_probe_tls_config() -> Result<Arc<ClientConfig>, String> {
+    let roots = dae_outbound::shared_transport::system_ca_snapshot()
+        .map_err(|err| format!("load HTTP probe system CA bundle: {err}"))?
+        .rustls_roots();
+    Ok(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ))
 }
 
 pub(crate) async fn read_resident_tcp_probe_response_async<S>(

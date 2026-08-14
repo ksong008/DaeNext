@@ -68,6 +68,7 @@ pub(super) fn resident_xhttp_extra_plan(
     extra: &str,
     primary_server_name: &str,
     primary_reality: Option<&ResidentRealityUnderlayPlan>,
+    primary_fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     global_allow_insecure: bool,
     node_tag: &str,
 ) -> Result<ResidentXhttpExtraPlan, String> {
@@ -153,34 +154,47 @@ pub(super) fn resident_xhttp_extra_plan(
     )?
     .unwrap_or_default()
     .to_ascii_lowercase();
-    let (server_name, alpn, allow_insecure, reality) = match security.as_str() {
+    let (server_name, alpn, allow_insecure, fingerprint, ech, reality) = match security.as_str() {
         "tls" => {
             let tls_settings = optional_object(
                 download.get("tlsSettings"),
                 "downloadSettings.tlsSettings",
                 node_tag,
             )?;
-            let (server_name, alpn, allow_insecure) = resident_xhttp_download_tls_settings(
-                tls_settings,
-                &server_host,
-                primary_server_name,
-                global_allow_insecure,
-                node_tag,
-            )?;
-            (server_name, alpn, allow_insecure, None)
+            let (server_name, alpn, allow_insecure, fingerprint, ech) =
+                resident_xhttp_download_tls_settings(
+                    tls_settings,
+                    &server_host,
+                    primary_server_name,
+                    global_allow_insecure,
+                    node_tag,
+                )?;
+            (server_name, alpn, allow_insecure, fingerprint, ech, None)
         }
-        "reality" => resident_xhttp_download_reality_settings(
-            optional_object(
-                download.get("realitySettings"),
-                "downloadSettings.realitySettings",
-                node_tag,
-            )?,
-            &server_host,
-            primary_server_name,
-            primary_reality,
-            global_allow_insecure,
-            node_tag,
-        )?,
+        "reality" => {
+            let (server_name, alpn, allow_insecure, fingerprint, reality) =
+                resident_xhttp_download_reality_settings(
+                    optional_object(
+                        download.get("realitySettings"),
+                        "downloadSettings.realitySettings",
+                        node_tag,
+                    )?,
+                    &server_host,
+                    primary_server_name,
+                    primary_reality,
+                    primary_fingerprint,
+                    global_allow_insecure,
+                    node_tag,
+                )?;
+            (
+                server_name,
+                alpn,
+                allow_insecure,
+                fingerprint,
+                None,
+                reality,
+            )
+        }
         other => {
             return Err(format!(
                 "resident dataplane vless xHTTP downloadSettings admits security=tls or security=reality for node {node_tag}; got {other}"
@@ -188,6 +202,11 @@ pub(super) fn resident_xhttp_extra_plan(
         }
     };
     let xhttp_settings = resident_xhttp_download_transport_settings(download, &security, node_tag)?;
+    if ResidentXhttpHttpVersion::from_tls_alpn(&alpn) == ResidentXhttpHttpVersion::H3 {
+        ResidentXhttpQuicTlsProvider::for_endpoint(fingerprint.as_ref()).map_err(|err| {
+            format!("resident dataplane vless download {err} for node {node_tag}")
+        })?;
+    }
     Ok(ResidentXhttpExtraPlan {
         download: Some(ResidentXhttpEndpointPlan {
             server_host,
@@ -201,6 +220,8 @@ pub(super) fn resident_xhttp_extra_plan(
             xmux: xhttp_settings.xmux,
             allow_insecure,
             tls_fragment: None,
+            utls_fingerprint: fingerprint,
+            ech,
             reality,
         }),
         settings: parsed_settings.settings,
@@ -214,7 +235,16 @@ fn resident_xhttp_download_tls_settings(
     primary_server_name: &str,
     global_allow_insecure: bool,
     node_tag: &str,
-) -> Result<(String, Vec<String>, bool), String> {
+) -> Result<
+    (
+        String,
+        Vec<String>,
+        bool,
+        Option<ResidentUtlsFingerprintPlan>,
+        Option<ResidentEchPlan>,
+    ),
+    String,
+> {
     let Some(tls_settings) = tls_settings else {
         return Ok((
             if primary_server_name.is_empty() {
@@ -224,11 +254,19 @@ fn resident_xhttp_download_tls_settings(
             },
             vec!["h2".to_owned()],
             global_allow_insecure,
+            None,
+            None,
         ));
     };
     reject_unknown_object_fields(
         tls_settings,
-        &["allowInsecure", "serverName", "alpn"],
+        &[
+            "allowInsecure",
+            "serverName",
+            "alpn",
+            "fingerprint",
+            "echConfigList",
+        ],
         "resident dataplane vless xHTTP downloadSettings.tlsSettings",
         node_tag,
     )?;
@@ -255,7 +293,33 @@ fn resident_xhttp_download_tls_settings(
             node_tag,
         )?
         .unwrap_or(false);
-    Ok((server_name, alpn, allow_insecure))
+    let fingerprint = optional_string(
+        tls_settings.get("fingerprint"),
+        "tlsSettings.fingerprint",
+        node_tag,
+    )?
+    .filter(|value| !value.trim().is_empty())
+    .map(|value| {
+        resolve_optional_resident_utls_fingerprint(
+            "downloadSettings.tlsSettings.fingerprint",
+            value.trim(),
+        )
+    })
+    .transpose()?
+    .flatten();
+    let ech = optional_string(
+        tls_settings.get("echConfigList"),
+        "tlsSettings.echConfigList",
+        node_tag,
+    )?
+    .map(|value| {
+        parse_optional_ech_config_list(&value)
+            .map_err(|err| err.to_string())
+            .map(|ech| ech.map(ResidentEchPlan::new))
+    })
+    .transpose()?
+    .flatten();
+    Ok((server_name, alpn, allow_insecure, fingerprint, ech))
 }
 
 fn resident_xhttp_download_reality_settings(
@@ -263,6 +327,7 @@ fn resident_xhttp_download_reality_settings(
     server_host: &str,
     primary_server_name: &str,
     primary_reality: Option<&ResidentRealityUnderlayPlan>,
+    primary_fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     global_allow_insecure: bool,
     node_tag: &str,
 ) -> Result<
@@ -270,6 +335,7 @@ fn resident_xhttp_download_reality_settings(
         String,
         Vec<String>,
         bool,
+        Option<ResidentUtlsFingerprintPlan>,
         Option<ResidentRealityUnderlayPlan>,
     ),
     String,
@@ -288,6 +354,7 @@ fn resident_xhttp_download_reality_settings(
             },
             vec!["h2".to_owned()],
             global_allow_insecure,
+            primary_fingerprint.cloned(),
             Some(primary_reality.clone()),
         ));
     };
@@ -297,9 +364,11 @@ fn resident_xhttp_download_reality_settings(
             "allowInsecure",
             "serverName",
             "alpn",
+            "fingerprint",
             "publicKey",
             "shortId",
             "spiderX",
+            "mldsa65Verify",
         ],
         "resident dataplane vless xHTTP downloadSettings.realitySettings",
         node_tag,
@@ -337,6 +406,21 @@ fn resident_xhttp_download_reality_settings(
             node_tag,
         )?
         .unwrap_or(false);
+    let fingerprint = optional_string(
+        reality_settings.get("fingerprint"),
+        "realitySettings.fingerprint",
+        node_tag,
+    )?
+    .filter(|value| !value.trim().is_empty())
+    .map(|value| {
+        resolve_optional_resident_utls_fingerprint(
+            "downloadSettings.realitySettings.fingerprint",
+            value.trim(),
+        )
+    })
+    .transpose()?
+    .flatten()
+    .or_else(|| primary_fingerprint.cloned());
     let public_key = optional_string(
         reality_settings.get("publicKey"),
         "realitySettings.publicKey",
@@ -372,14 +456,25 @@ fn resident_xhttp_download_reality_settings(
     )?
     .or_else(|| primary_reality.map(|reality| reality.spider_x.clone()))
     .unwrap_or_else(|| "/".to_owned());
+    let mldsa65_verify = optional_string(
+        reality_settings.get("mldsa65Verify"),
+        "realitySettings.mldsa65Verify",
+        node_tag,
+    )?
+    .map(|value| parse_optional_mldsa65_verify_key(&value).map_err(|err| err.to_string()))
+    .transpose()?
+    .flatten()
+    .or_else(|| primary_reality.and_then(|reality| reality.mldsa65_verify.as_ref().cloned()));
     Ok((
         server_name,
         alpn,
         allow_insecure,
+        fingerprint,
         Some(ResidentRealityUnderlayPlan {
             public_key,
             short_id,
             spider_x,
+            mldsa65_verify,
         }),
     ))
 }

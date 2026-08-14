@@ -171,7 +171,7 @@ fn udp_dimension(udp: plan::ResidentUdpExecutorFactory) -> UdpDimension {
         Udp::Vmess(transport) => UdpDimension::Vmess(stream_packet_dimension(transport)),
         Udp::AnyTlsPacketStream => UdpDimension::AnyTls,
         Udp::Hysteria2Datagram => UdpDimension::Hysteria2,
-        Udp::TuicPacket => UdpDimension::Tuic,
+        Udp::TuicPacket(_) => UdpDimension::Tuic,
         Udp::JuicityStreamPacket => UdpDimension::Juicity,
         Udp::PolicyClosed(reason) => UdpDimension::PolicyClosed(policy_closed_dimension(reason)),
     }

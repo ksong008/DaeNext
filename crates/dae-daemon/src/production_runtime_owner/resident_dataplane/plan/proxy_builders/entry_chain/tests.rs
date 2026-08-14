@@ -17,6 +17,7 @@ fn xhttp_child() -> ResidentProxyPlan {
         net: "xhttp".to_owned(),
         stream_host: "child.invalid".to_owned(),
         stream_path: "/xhttp".to_owned(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -25,6 +26,7 @@ fn xhttp_child() -> ResidentProxyPlan {
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [1; 16],

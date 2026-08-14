@@ -147,20 +147,13 @@ impl ResidentTlsFactorySelection {
         })
     }
 
-    pub(crate) fn from_xhttp_endpoint(endpoint: &ResidentXhttpEndpointPlan) -> Self {
-        let provider = match (
-            cfg!(feature = "test-boringssl-tcp-tls"),
-            endpoint.reality.is_some(),
-        ) {
-            (true, true) => ResidentTlsProvider::RealityFingerprintBoring,
-            (true, false) => ResidentTlsProvider::FingerprintAwareBoring,
-            (false, true) => ResidentTlsProvider::RealityRustls,
-            (false, false) => ResidentTlsProvider::StandardRustls,
-        };
-        Self {
-            provider,
+    pub(crate) fn from_xhttp_endpoint(
+        endpoint: &ResidentXhttpEndpointPlan,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            provider: ResidentTlsProvider::from_xhttp_endpoint(endpoint)?,
             policy: ResidentTlsPolicy::from_xhttp_endpoint(endpoint),
-        }
+        })
     }
 }
 
@@ -210,6 +203,7 @@ mod tests {
             public_key: [7; 32],
             short_id: vec![1, 2, 3, 4],
             spider_x: "/".to_owned(),
+            mldsa65_verify: None,
         });
         proxy.materialize_execution();
 
@@ -244,7 +238,7 @@ mod tests {
         proxy.allow_insecure = true;
         proxy.alpn = vec!["h2".to_owned()];
         let endpoint = ResidentXhttpEndpointPlan::from_proxy(&proxy);
-        let selection = ResidentTlsFactorySelection::from_xhttp_endpoint(&endpoint);
+        let selection = ResidentTlsFactorySelection::from_xhttp_endpoint(&endpoint).unwrap();
 
         assert_eq!(selection.policy.alpn, vec!["h2"]);
         assert_eq!(
@@ -278,6 +272,7 @@ mod tests {
             net: "tcp".to_owned(),
             stream_host: String::new(),
             stream_path: String::new(),
+            grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
             xhttp_download: None,
             xhttp_mode: ResidentXhttpMode::PacketUp,
             xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -286,6 +281,7 @@ mod tests {
             allow_insecure: false,
             tls_fragment: None,
             utls_fingerprint: None,
+            ech: None,
             reality: None,
             handler,
             execution: None,

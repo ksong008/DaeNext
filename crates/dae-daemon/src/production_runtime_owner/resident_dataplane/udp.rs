@@ -37,13 +37,16 @@ use dae_outbound::{
         ss2022_udp_unix_timestamp_now,
     },
     shared_transport::{
-        HttpUpgradeOptions, http_upgrade_request, validate_http_status,
+        GrpcMode, HttpUpgradeOptions, http_upgrade_request, validate_http_status,
         validate_websocket_handshake_response, websocket_client_binary_frame_with_random_mask,
         websocket_client_handshake,
     },
     socks5::{Socks5Address, udp_packet},
     trojan::packet as trojan_packet,
-    tuic::{TuicUdpPacket, encode_tuic_udp_packet, fragment_tuic_udp_packet},
+    tuic::{
+        TuicUdpPacket, TuicUdpRelayMode, encode_tuic_udp_packet, encode_tuic_udp_stream_packet,
+        fragment_tuic_udp_packet,
+    },
     vless::packet,
     vmess,
 };
@@ -90,7 +93,7 @@ use super::tcp::{
     close_xhttp_upload_client, httpupgrade_handshake_over_resident_tls_async,
     inherit_quic_endpoint_observation, open_grpc_h2_stream, open_h2_body_stream,
     open_vmess_http_header_stream, open_xhttp_packet_up_parts, open_xhttp_stream_parts,
-    poll_xhttp_download_data, read_xhttp_download_data, send_grpc_hunk, send_h2_data,
+    poll_xhttp_download_data, read_xhttp_download_data, send_grpc_data, send_grpc_hunk,
     send_h2_data_with_context, send_xhttp_stream_data, set_socket_mark,
     spawn_grpc_h2_payload_stream, spawn_websocket_payload_stream,
     spawn_xhttp_packet_up_payload_stream, spawn_xhttp_stream_payload_stream,

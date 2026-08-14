@@ -25,7 +25,7 @@ use dae_datapath::{
 use regex::Regex;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection, RootCertStore};
+use rustls::{ClientConfig, ClientConnection};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use sha3::{

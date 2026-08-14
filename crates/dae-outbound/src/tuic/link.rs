@@ -23,15 +23,14 @@ pub struct TuicLink {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TuicUdpRelayMode {
     Native,
+    Quic,
 }
 
 impl TuicUdpRelayMode {
     pub fn from_config(value: &str) -> Result<Self, OutboundError> {
         match value.trim().to_ascii_lowercase().as_str() {
             "" | "native" => Ok(Self::Native),
-            "quic" => Err(OutboundError::BadTuic(
-                "QUIC stream UDP relay mode is not supported by this executor".to_owned(),
-            )),
+            "quic" => Ok(Self::Quic),
             _ => Err(OutboundError::BadTuic(
                 "unsupported UDP relay mode".to_owned(),
             )),
@@ -41,6 +40,7 @@ impl TuicUdpRelayMode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Native => "native",
+            Self::Quic => "quic",
         }
     }
 }
@@ -310,7 +310,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn udp_relay_mode_admits_native_and_normalized_default() {
+    fn udp_relay_mode_admits_official_modes_and_normalized_default() {
         assert_eq!(
             TuicUdpRelayMode::from_config("").unwrap(),
             TuicUdpRelayMode::Native
@@ -320,15 +320,15 @@ mod tests {
             TuicUdpRelayMode::Native
         );
         assert_eq!(TuicUdpRelayMode::Native.as_str(), "native");
+        assert_eq!(
+            TuicUdpRelayMode::from_config(" QUIC ").unwrap(),
+            TuicUdpRelayMode::Quic
+        );
+        assert_eq!(TuicUdpRelayMode::Quic.as_str(), "quic");
     }
 
     #[test]
-    fn udp_relay_mode_rejects_unimplemented_stream_mode_and_redacts_unknown_values() {
-        let stream_error = TuicUdpRelayMode::from_config("quic")
-            .unwrap_err()
-            .to_string();
-        assert!(stream_error.contains("not supported"));
-
+    fn udp_relay_mode_redacts_unknown_values() {
         let unknown = "private-relay-token";
         let unknown_error = TuicUdpRelayMode::from_config(unknown)
             .unwrap_err()

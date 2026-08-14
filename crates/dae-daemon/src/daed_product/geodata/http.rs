@@ -182,8 +182,9 @@ fn fetch_geodata_url_once(
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
     let response = if tls {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = dae_outbound::shared_transport::system_ca_snapshot()
+            .map_err(|err| io::Error::other(format!("load geodata system CA bundle: {err}")))?
+            .rustls_roots();
         let config = Arc::new(
             ClientConfig::builder()
                 .with_root_certificates(roots)
@@ -257,8 +258,9 @@ fn fetch_geodata_url_to_file_once(
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
     if tls {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = dae_outbound::shared_transport::system_ca_snapshot()
+            .map_err(|err| io::Error::other(format!("load geodata system CA bundle: {err}")))?
+            .rustls_roots();
         let config = Arc::new(
             ClientConfig::builder()
                 .with_root_certificates(roots)

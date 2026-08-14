@@ -389,8 +389,10 @@ async fn open_vmess_underlay(
             let (send_stream, response, carrier_lease) =
                 open_grpc_h2_stream(binding, first_write).await?;
             let tls_underlay = carrier_lease.tls_underlay();
+            let grpc_mode = response.grpc_mode();
             Ok(VmessAeadUdpUnderlay::GrpcTls {
                 send_stream,
+                grpc_mode,
                 response: Some(response),
                 _carrier_lease: carrier_lease,
                 response_rx: None,
@@ -493,6 +495,7 @@ enum VmessAeadUdpUnderlay {
     },
     GrpcTls {
         send_stream: h2::SendStream<Bytes>,
+        grpc_mode: GrpcMode,
         response: Option<GrpcH2Response>,
         _carrier_lease: H2CarrierLease,
         response_rx: Option<tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
@@ -572,11 +575,12 @@ impl VmessAeadUdpUnderlay {
             }
             Self::GrpcTls {
                 send_stream,
+                grpc_mode,
                 response_rx,
                 response_reader,
                 ..
             } => {
-                let _ = send_h2_data(send_stream, Bytes::new(), true).await;
+                let _ = send_grpc_data(send_stream, &[], true, *grpc_mode).await;
                 response_rx.take();
                 if let Some(reader) = response_reader.take() {
                     reader.abort();
@@ -634,9 +638,11 @@ async fn write_vmess_wrapped_bytes(
             )
             .await
         }
-        VmessAeadUdpUnderlay::GrpcTls { send_stream, .. } => {
-            send_grpc_hunk(send_stream, payload, false).await
-        }
+        VmessAeadUdpUnderlay::GrpcTls {
+            send_stream,
+            grpc_mode,
+            ..
+        } => send_grpc_data(send_stream, payload, false, *grpc_mode).await,
     }
 }
 
@@ -800,7 +806,8 @@ async fn run_vmess_grpc_response_reader(
     request: vmess::VMessAeadTcpRequest,
     tx: tokio::sync::mpsc::Sender<Result<Vec<u8>, String>>,
 ) {
-    let mut hunk_buffer = GrpcHunkReadBuffer::default();
+    let grpc_mode = response.grpc_mode();
+    let mut hunk_buffer = GrpcHunkReadBuffer::with_mode(grpc_mode);
     let mut encrypted = Vec::new();
     let mut decoder = None;
     let result: Result<(), String> = async {

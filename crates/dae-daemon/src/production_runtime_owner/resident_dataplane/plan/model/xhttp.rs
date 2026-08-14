@@ -24,7 +24,7 @@ pub(crate) enum ResidentXhttpQuicTlsProvider {
 }
 
 impl ResidentXhttpQuicTlsProvider {
-    pub(in crate::production_runtime_owner::resident_dataplane) fn for_primary(
+    pub(in crate::production_runtime_owner::resident_dataplane) fn for_endpoint(
         fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     ) -> Result<Self, String> {
         let Some(fingerprint) = fingerprint else {
@@ -56,6 +56,31 @@ pub(crate) struct ResidentRealityUnderlayPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) public_key: [u8; 32],
     pub(in crate::production_runtime_owner::resident_dataplane) short_id: Vec<u8>,
     pub(in crate::production_runtime_owner::resident_dataplane) spider_x: String,
+    pub(in crate::production_runtime_owner::resident_dataplane) mldsa65_verify:
+        Option<Mldsa65VerifyKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentEchPlan {
+    config_list: EchConfigList,
+}
+
+impl ResidentEchPlan {
+    pub(crate) const fn new(config_list: EchConfigList) -> Self {
+        Self { config_list }
+    }
+
+    pub(crate) fn config_list_bytes(&self) -> &[u8] {
+        self.config_list.bytes()
+    }
+
+    pub(crate) const fn config_list_sha256(&self) -> &[u8; 32] {
+        self.config_list.sha256()
+    }
+
+    pub(crate) fn config_list_sha256_hex(&self) -> String {
+        self.config_list.sha256_hex()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,6 +97,9 @@ pub(crate) struct ResidentXhttpEndpointPlan {
     pub(in crate::production_runtime_owner::resident_dataplane) allow_insecure: bool,
     pub(in crate::production_runtime_owner::resident_dataplane) tls_fragment:
         Option<TlsFragmentOptions>,
+    pub(in crate::production_runtime_owner::resident_dataplane) utls_fingerprint:
+        Option<ResidentUtlsFingerprintPlan>,
+    pub(in crate::production_runtime_owner::resident_dataplane) ech: Option<ResidentEchPlan>,
     pub(in crate::production_runtime_owner::resident_dataplane) reality:
         Option<ResidentRealityUnderlayPlan>,
 }
@@ -554,6 +582,8 @@ impl ResidentXhttpEndpointPlan {
             xmux: proxy.xhttp_xmux.clone(),
             allow_insecure: proxy.allow_insecure,
             tls_fragment: proxy.tls_fragment.clone(),
+            utls_fingerprint: proxy.utls_fingerprint.clone(),
+            ech: proxy.ech.clone(),
             reality: proxy.reality.clone(),
         }
     }
@@ -573,6 +603,9 @@ impl ResidentXhttpEndpointPlan {
         self.settings.compact_allocations();
         if let Some(reality) = &mut self.reality {
             reality.compact_allocations();
+        }
+        if let Some(fingerprint) = &mut self.utls_fingerprint {
+            fingerprint.compact_allocations();
         }
     }
 }

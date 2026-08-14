@@ -21,10 +21,10 @@ pub const CONGESTION_DEFAULT_OR_UNKNOWN_USES: &str = "bbr";
 pub const UDP_RELAY_MODE_QUERY_VALUE: &str = "quic";
 pub const UDP_RELAY_MODE_ADAPTER_SETS_FLAG: bool = true;
 pub const UDP_RELAY_MODE_FLAG_VALUE: u64 = 1;
-pub const UDP_RELAY_MODE_PROTOCOL_EFFECTIVE_MODE: &str = "native";
+pub const UDP_RELAY_MODE_PROTOCOL_EFFECTIVE_MODE: &str = "quic";
 pub const UDP_RELAY_MODE_COMMON_QUIC_NUMERIC_VALUE: u8 = 0;
 pub const UDP_RELAY_MODE_COMMON_NATIVE_VALUE: u8 = 1;
-pub const UDP_RELAY_MODE_QUIC_DEFERRED: bool = true;
+pub const UDP_RELAY_MODE_QUIC_DEFERRED: bool = false;
 
 pub const TCP_UNDERLAY_USES_UDP: bool = true;
 pub const TCP_UNDERLAY_PRESERVES_MARK: bool = true;

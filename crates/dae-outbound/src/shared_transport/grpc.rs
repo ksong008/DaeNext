@@ -14,6 +14,81 @@ pub const GRPC_ENCODING_HEADER: &str = "grpc-encoding";
 pub const GRPC_ACCEPT_ENCODING_HEADER: &str = "grpc-accept-encoding";
 pub const GRPC_IDENTITY_ENCODING: &str = "identity";
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum GrpcMode {
+    #[default]
+    Gun,
+    Multi,
+}
+
+impl GrpcMode {
+    pub fn parse_link_value(value: &str) -> Result<Self, OutboundError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "gun" => Ok(Self::Gun),
+            "multi" => Ok(Self::Multi),
+            value => Err(OutboundError::BadSharedTransport(format!(
+                "unsupported Xray gRPC mode: {value}"
+            ))),
+        }
+    }
+
+    pub const fn link_value(self) -> &'static str {
+        match self {
+            Self::Gun => "gun",
+            Self::Multi => "multi",
+        }
+    }
+
+    pub const fn stream_method(self) -> &'static str {
+        match self {
+            Self::Gun => "Tun",
+            Self::Multi => "TunMulti",
+        }
+    }
+}
+
+pub fn grpc_request_path(service_name: &str, mode: GrpcMode) -> String {
+    let (service, method) = if let Some(custom_path) = service_name.strip_prefix('/') {
+        let (service, methods) = custom_path.rsplit_once('/').unwrap_or(("", custom_path));
+        let method = match mode {
+            GrpcMode::Gun => methods.split('|').next().unwrap_or_default(),
+            GrpcMode::Multi => methods.split_once('|').map_or(methods, |(_, multi)| multi),
+        };
+        (
+            service
+                .split('/')
+                .map(xray_path_escape)
+                .collect::<Vec<_>>()
+                .join("/"),
+            xray_path_escape(method),
+        )
+    } else {
+        (
+            xray_path_escape(service_name),
+            mode.stream_method().to_owned(),
+        )
+    };
+    format!("/{service}/{method}")
+}
+
+fn xray_path_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'_' | b'.' | b'~' | b'+' | b':' | b'@' | b'&' | b'$' | b'='
+            )
+        {
+            escaped.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(escaped, "%{byte:02X}").expect("writing to a String cannot fail");
+        }
+    }
+    escaped
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GrpcLifecycleOptions {
     pub address: String,
@@ -146,6 +221,23 @@ pub fn grpc_hunk_frame(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
     Ok(frame)
 }
 
+pub fn grpc_multi_hunk_frame(payloads: &[&[u8]]) -> Result<Vec<u8>, OutboundError> {
+    let mut message = Vec::new();
+    for payload in payloads {
+        message.push(0x0a);
+        push_grpc_varint(payload.len() as u64, &mut message);
+        message.extend_from_slice(payload);
+    }
+    grpc_frame_message(message, "grpc MultiHunk")
+}
+
+pub fn grpc_data_frame(mode: GrpcMode, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    match mode {
+        GrpcMode::Gun => grpc_hunk_frame(payload),
+        GrpcMode::Multi => grpc_multi_hunk_frame(&[payload]),
+    }
+}
+
 pub fn grpc_hunk_frame_len(payload: &[u8]) -> Result<usize, OutboundError> {
     Ok(grpc_hunk_frame(payload)?.len())
 }
@@ -231,6 +323,44 @@ pub fn grpc_hunk_payload_ref(message: &[u8]) -> Result<&[u8], OutboundError> {
         }
     }
     Ok(data.unwrap_or_default())
+}
+
+pub fn grpc_multi_hunk_payloads(message: &[u8]) -> Result<Vec<&[u8]>, OutboundError> {
+    let mut cursor = 0;
+    let mut payloads = Vec::new();
+    while cursor < message.len() {
+        let tag = read_grpc_varint(message, &mut cursor)?;
+        if tag != 0x0a {
+            return Err(OutboundError::BadSharedTransport(format!(
+                "unsupported grpc MultiHunk protobuf tag {tag}"
+            )));
+        }
+        let len = grpc_len_as_usize(read_grpc_varint(message, &mut cursor)?)?;
+        let end = cursor.checked_add(len).ok_or_else(|| {
+            OutboundError::BadSharedTransport("grpc MultiHunk data length overflows".to_owned())
+        })?;
+        if end > message.len() {
+            return Err(OutboundError::BadSharedTransport(
+                "grpc MultiHunk data is truncated".to_owned(),
+            ));
+        }
+        payloads.push(&message[cursor..end]);
+        cursor = end;
+    }
+    Ok(payloads)
+}
+
+fn grpc_frame_message(message: Vec<u8>, context: &str) -> Result<Vec<u8>, OutboundError> {
+    if message.len() > u32::MAX as usize {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "{context} too large"
+        )));
+    }
+    let mut frame = Vec::with_capacity(message.len() + 5);
+    frame.push(0);
+    frame.extend_from_slice(&(message.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&message);
+    Ok(frame)
 }
 
 pub fn read_grpc_hunk_frame(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
@@ -332,4 +462,48 @@ fn grpc_len_as_usize(value: u64) -> Result<usize, OutboundError> {
     usize::try_from(value).map_err(|_| {
         OutboundError::BadSharedTransport("grpc Hunk protobuf length exceeds usize".to_owned())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xray_official_grpc_paths_match_upstream_vectors() {
+        assert_eq!(grpc_request_path("hello", GrpcMode::Gun), "/hello/Tun");
+        assert_eq!(
+            grpc_request_path("hello", GrpcMode::Multi),
+            "/hello/TunMulti"
+        );
+        assert_eq!(
+            grpc_request_path("hello/world!", GrpcMode::Gun),
+            "/hello%2Fworld%21/Tun"
+        );
+        assert_eq!(
+            grpc_request_path("/my/sample/path/tun_service|multi_service", GrpcMode::Gun),
+            "/my/sample/path/tun_service"
+        );
+        assert_eq!(
+            grpc_request_path("/my/sample/path/tun_service|multi_service", GrpcMode::Multi),
+            "/my/sample/path/multi_service"
+        );
+        assert_eq!(
+            grpc_request_path("/hello /world!/a|b", GrpcMode::Multi),
+            "/hello%20/world%21/b"
+        );
+    }
+
+    #[test]
+    fn multi_hunk_uses_official_repeated_bytes_wire_shape() {
+        let frame = grpc_multi_hunk_frame(&[b"a", b"bc"]).unwrap();
+        assert_eq!(frame, [0, 0, 0, 0, 7, 0x0a, 1, b'a', 0x0a, 2, b'b', b'c']);
+        let payloads = grpc_multi_hunk_payloads(&frame[5..]).unwrap();
+        assert_eq!(payloads, [b"a".as_slice(), b"bc".as_slice()]);
+    }
+
+    #[test]
+    fn unknown_grpc_mode_fails_closed() {
+        assert!(GrpcMode::parse_link_value("guna").is_err());
+        assert!(GrpcMode::parse_link_value("custom").is_err());
+    }
 }

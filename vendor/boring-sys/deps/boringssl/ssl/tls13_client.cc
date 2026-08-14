@@ -393,6 +393,14 @@ static enum ssl_hs_wait_t do_read_server_hello(SSL_HANDSHAKE *hs) {
     return ssl_hs_error;
   }
 
+  if (hs->config->dae_reality.enabled &&
+      !hs->config->dae_reality.server_hello.CopyFrom(
+          Span(CBS_data(&msg.raw), CBS_len(&msg.raw)))) {
+    OPENSSL_PUT_ERROR(SSL, ERR_R_MALLOC_FAILURE);
+    ssl_send_alert(ssl, SSL3_AL_FATAL, SSL_AD_INTERNAL_ERROR);
+    return ssl_hs_error;
+  }
+
   // Check the cipher suite, in case this is after HelloRetryRequest.
   if (SSL_CIPHER_get_protocol_id(hs->new_cipher) != server_hello.cipher_suite) {
     OPENSSL_PUT_ERROR(SSL, SSL_R_WRONG_CIPHER_RETURNED);

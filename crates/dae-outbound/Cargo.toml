@@ -19,6 +19,7 @@ boring.workspace = true
 boring-sys.workspace = true
 boring-v4-compat.workspace = true
 brotli.workspace = true
+aws-lc-rs.workspace = true
 bytes.workspace = true
 chacha20poly1305.workspace = true
 dae-core-types.workspace = true
@@ -44,7 +45,6 @@ sha2.workspace = true
 sha3.workspace = true
 tokio.workspace = true
 url.workspace = true
-webpki-roots.workspace = true
 x25519-dalek.workspace = true
 
 [dev-dependencies]

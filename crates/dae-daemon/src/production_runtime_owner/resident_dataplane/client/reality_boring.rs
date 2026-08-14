@@ -11,7 +11,13 @@ pub(crate) async fn open_async_reality_boring_resident_tls_client(
         .map_err(|err| format!("configure VLESS Reality BoringSSL client: {err}"))?;
     configure_utls_template_boring_ssl(&mut config, proxy)?;
     config.set_verify_hostname(false);
-    config.set_custom_verify_callback(SslVerifyMode::PEER, verify_reality_boring_server_cert);
+    let mldsa65_verify = proxy
+        .reality
+        .as_ref()
+        .and_then(|reality| reality.mldsa65_verify.clone());
+    config.set_custom_verify_callback(SslVerifyMode::PEER, move |ssl| {
+        verify_reality_boring_server_cert(ssl, mldsa65_verify.as_ref())
+    });
     configure_reality_boring_ssl(&mut config, &policy.verification)?;
 
     let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);

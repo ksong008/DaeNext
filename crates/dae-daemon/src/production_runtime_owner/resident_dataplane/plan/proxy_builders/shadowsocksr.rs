@@ -47,6 +47,7 @@ pub(crate) fn build_shadowsocksr_proxy_plan(
         net: "legacy-obfs".to_owned(),
         stream_host: obfs_host.clone(),
         stream_path: String::new(),
+        grpc_mode: GrpcMode::Gun,
         xhttp_download: None,
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -55,6 +56,7 @@ pub(crate) fn build_shadowsocksr_proxy_plan(
         allow_insecure: false,
         tls_fragment: None,
         utls_fingerprint: None,
+        ech: None,
         reality: None,
         handler: ResidentProxyProtocolPlan::ShadowsocksRHttpSimpleTcp {
             cipher: parsed.cipher,
