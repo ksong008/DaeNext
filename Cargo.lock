@@ -805,6 +805,7 @@ name = "dae-dns"
 version = "3.1.0"
 dependencies = [
  "base64",
+ "dae-core-types",
  "dae-golden",
  "dae-routing",
  "hashbrown 0.15.5",

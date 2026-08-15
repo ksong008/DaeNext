@@ -1,7 +1,7 @@
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DnsRequestOutboundIndex(pub i16);
+pub struct DnsRequestOutboundIndex(pub u8);
 
 impl DnsRequestOutboundIndex {
     pub const REJECT: Self = Self(0xFC);
@@ -9,10 +9,27 @@ impl DnsRequestOutboundIndex {
     pub const LOGICAL_OR: Self = Self(0xFE);
     pub const LOGICAL_AND: Self = Self(0xFF);
     pub const LOGICAL_MASK: Self = Self(0xFE);
+    pub const USER_DEFINED_MIN: Self = Self(0);
     pub const USER_DEFINED_MAX: Self = Self(Self::REJECT.0 - 1);
 
-    pub const fn value(self) -> i16 {
+    pub const fn value(self) -> u8 {
         self.0
+    }
+
+    pub const fn is_reserved(self) -> bool {
+        self.0 > Self::USER_DEFINED_MAX.0
+    }
+}
+
+impl TryFrom<usize> for DnsRequestOutboundIndex {
+    type Error = DnsUserDefinedOutboundIndexError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        if value <= Self::USER_DEFINED_MAX.0 as usize {
+            Ok(Self(value as u8))
+        } else {
+            Err(DnsUserDefinedOutboundIndexError { value })
+        }
     }
 }
 
@@ -37,16 +54,47 @@ impl DnsResponseOutboundIndex {
     pub const LOGICAL_OR: Self = Self(0xFE);
     pub const LOGICAL_AND: Self = Self(0xFF);
     pub const LOGICAL_MASK: Self = Self(0xFE);
+    pub const USER_DEFINED_MIN: Self = Self(0);
     pub const USER_DEFINED_MAX: Self = Self(Self::ACCEPT.0 - 1);
 
     pub const fn value(self) -> u8 {
         self.0
     }
 
-    pub fn is_reserved(self) -> bool {
-        !self.to_string().starts_with("<index: ")
+    pub const fn is_reserved(self) -> bool {
+        self.0 > Self::USER_DEFINED_MAX.0
     }
 }
+
+impl TryFrom<usize> for DnsResponseOutboundIndex {
+    type Error = DnsUserDefinedOutboundIndexError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        if value <= Self::USER_DEFINED_MAX.0 as usize {
+            Ok(Self(value as u8))
+        } else {
+            Err(DnsUserDefinedOutboundIndexError { value })
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DnsUserDefinedOutboundIndexError {
+    value: usize,
+}
+
+impl fmt::Display for DnsUserDefinedOutboundIndexError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "DNS user-defined outbound index {} exceeds {}",
+            self.value,
+            DnsRequestOutboundIndex::USER_DEFINED_MAX.value()
+        )
+    }
+}
+
+impl std::error::Error for DnsUserDefinedOutboundIndexError {}
 
 impl fmt::Display for DnsResponseOutboundIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -79,16 +127,17 @@ mod tests {
         );
         assert_eq!(
             DnsRequestOutboundIndex::LOGICAL_MASK.value(),
-            request["logical_mask"]["value"].as_i64().unwrap() as i16
+            request["logical_mask"]["value"].as_u64().unwrap() as u8
         );
         assert_eq!(
             DnsRequestOutboundIndex::USER_DEFINED_MAX.value(),
-            request["user_defined_max"].as_i64().unwrap() as i16
+            request["user_defined_max"].as_u64().unwrap() as u8
         );
         assert_eq!(
             DnsRequestOutboundIndex(2).to_string(),
             request["example_user_defined"]["string"].as_str().unwrap()
         );
+        assert!(!DnsRequestOutboundIndex(2).is_reserved());
     }
 
     #[test]
@@ -127,8 +176,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dns_user_defined_indices_enforce_the_byte_range() {
+        assert_eq!(
+            DnsRequestOutboundIndex::try_from(0_usize).unwrap(),
+            DnsRequestOutboundIndex::USER_DEFINED_MIN
+        );
+        assert_eq!(
+            DnsRequestOutboundIndex::try_from(251_usize).unwrap(),
+            DnsRequestOutboundIndex::USER_DEFINED_MAX
+        );
+        assert!(DnsRequestOutboundIndex::try_from(252_usize).is_err());
+        assert_eq!(
+            DnsResponseOutboundIndex::try_from(251_usize).unwrap(),
+            DnsResponseOutboundIndex::USER_DEFINED_MAX
+        );
+        assert!(DnsResponseOutboundIndex::try_from(252_usize).is_err());
+        assert!(DnsResponseOutboundIndex::try_from(usize::MAX).is_err());
+    }
+
     fn assert_request_index(index: DnsRequestOutboundIndex, fixture: &Value) {
-        assert_eq!(index.value(), fixture["value"].as_i64().unwrap() as i16);
+        assert_eq!(index.value(), fixture["value"].as_u64().unwrap() as u8);
         assert_eq!(index.to_string(), fixture["string"].as_str().unwrap());
     }
 
