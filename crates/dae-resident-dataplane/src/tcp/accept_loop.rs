@@ -53,16 +53,17 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             continue;
         }
         if !reserved_generation.admission_is_open() {
-            tokio::select! {
-                _ = stop_listener.cancelled() => break,
-                _ = publication_listener.changed() => continue,
-                completed = flows.join_next(), if !flows.is_empty() => {
-                    if let Some(completed) = completed {
-                        record_resident_task_completion(&mut flow_shutdown, completed);
-                    }
-                }
-                _ = tokio::task::yield_now() => continue,
+            if wait_while_tcp_admission_is_closed(
+                &mut stop_listener,
+                &mut publication_listener,
+                &mut flows,
+                &mut flow_shutdown,
+            )
+            .await
+            {
+                break;
             }
+            continue;
         }
         let permit = loop {
             tokio::select! {
@@ -195,6 +196,24 @@ pub(crate) async fn resident_tcp_accept_loop_async(
     );
 }
 
+async fn wait_while_tcp_admission_is_closed(
+    stop_listener: &mut crate::ResidentStopListener,
+    publication_listener: &mut tokio::sync::watch::Receiver<u64>,
+    flows: &mut tokio::task::JoinSet<()>,
+    flow_shutdown: &mut ResidentTaskSetShutdown,
+) -> bool {
+    tokio::select! {
+        _ = stop_listener.cancelled() => true,
+        _ = publication_listener.changed() => false,
+        completed = flows.join_next(), if !flows.is_empty() => {
+            if let Some(completed) = completed {
+                record_resident_task_completion(flow_shutdown, completed);
+            }
+            false
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_async_tcp_flow(
     flows: &mut tokio::task::JoinSet<()>,
@@ -239,6 +258,45 @@ fn spawn_async_tcp_flow(
             ),
         }
     });
+}
+
+#[cfg(test)]
+mod accept_loop_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn closed_tcp_admission_waits_for_a_real_state_change() {
+        let stop = ResidentStopSignal::shared();
+        let mut stop_listener = stop.listener();
+        let (publication, mut publication_listener) = tokio::sync::watch::channel(1_u64);
+        let mut flows = tokio::task::JoinSet::new();
+        let mut shutdown = ResidentTaskSetShutdown::default();
+
+        assert!(
+            time::timeout(
+                Duration::from_millis(25),
+                wait_while_tcp_admission_is_closed(
+                    &mut stop_listener,
+                    &mut publication_listener,
+                    &mut flows,
+                    &mut shutdown,
+                ),
+            )
+            .await
+            .is_err()
+        );
+
+        publication.send_replace(2);
+        assert!(
+            !wait_while_tcp_admission_is_closed(
+                &mut stop_listener,
+                &mut publication_listener,
+                &mut flows,
+                &mut shutdown,
+            )
+            .await
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
