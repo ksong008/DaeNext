@@ -78,7 +78,7 @@ pub fn param_to_object_bytes(param: BpfDaeParam) -> [u8; DAE_PARAM_SYMBOL_SIZE] 
     bytes[12..16].copy_from_slice(&param.dae_netns_id.to_le_bytes());
     bytes[16..22].copy_from_slice(&param.dae0peer_mac);
     bytes[22] = param.has_bpf_get_current_task;
-    bytes[23] = param.padding;
+    bytes[23] = param.tproxy_port_protect;
     bytes[24..28].copy_from_slice(&param.task_struct_mm_offset.to_le_bytes());
     bytes[28..32].copy_from_slice(&param.mm_struct_arg_start_offset.to_le_bytes());
     bytes[32..36].copy_from_slice(&param.abi_version.to_le_bytes());
@@ -104,7 +104,7 @@ pub fn param_from_object_bytes(bytes: &[u8]) -> io::Result<BpfDaeParam> {
         dae_netns_id: u32::from_le_bytes(copy4(&bytes[12..16])?),
         dae0peer_mac: mac,
         has_bpf_get_current_task: bytes[22],
-        padding: bytes[23],
+        tproxy_port_protect: bytes[23],
         task_struct_mm_offset: u32::from_le_bytes(copy4(&bytes[24..28])?),
         mm_struct_arg_start_offset: u32::from_le_bytes(copy4(&bytes[28..32])?),
         abi_version: u32::from_le_bytes(copy4(&bytes[32..36])?),

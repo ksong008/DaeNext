@@ -7,10 +7,11 @@ repository.workspace = true
 
 [features]
 default = []
-aya-loader = ["dep:aya"]
+aya-loader = ["dep:aya", "dae-ebpf-abi/aya-pod"]
 
 [dependencies]
 aya = { workspace = true, optional = true }
+dae-ebpf-abi.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
