@@ -13,10 +13,13 @@ use tokio::net::{
 use tokio::sync::Semaphore;
 use tokio::time;
 
+#[cfg(test)]
+use super::dns::read_dns_tcp_payload_async;
 use super::dns::{
-    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsQueryResult, ResidentDnsTraceSummary,
-    ResidentDnsTransportTrace, build_dns_server_failure_response, fit_dns_response_to_udp_request,
-    handle_resident_dns_local_trace_async, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
+    DNS_MAX_UDP_MESSAGE_SIZE, DnsTcpFrameReader, ResidentDnsPlan, ResidentDnsQueryResult,
+    ResidentDnsTraceSummary, ResidentDnsTransportTrace, build_dns_server_failure_response,
+    fit_dns_response_to_udp_request, handle_resident_dns_local_trace_async,
+    write_dns_tcp_payload_async,
 };
 #[cfg(test)]
 use super::dns::{
@@ -704,6 +707,7 @@ async fn handle_resident_dns_tcp_bind_connection_async(
     let mut writer_finished = false;
     let mut stop_listener = stop.listener();
     let outstanding_ids = Arc::new(Mutex::new(BTreeSet::new()));
+    let mut frame_reader = DnsTcpFrameReader::default();
 
     loop {
         if !accepting && tasks.is_empty() {
@@ -733,7 +737,7 @@ async fn handle_resident_dns_tcp_bind_connection_async(
                 break;
             }
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
-            received = read_dns_tcp_payload_bind_timeout_async(&mut reader),
+            received = read_dns_tcp_payload_bind_timeout_async(&mut frame_reader, &mut reader),
                 if accepting && tasks.len() < resources.bind_tcp_queries_per_connection() =>
             {
                 let request = match received {
@@ -984,19 +988,21 @@ async fn write_resident_dns_tcp_bind_failure_response(
 }
 
 async fn read_dns_tcp_payload_bind_timeout_async(
+    frame_reader: &mut DnsTcpFrameReader,
     stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<Option<Vec<u8>>, String> {
-    read_dns_tcp_payload_with_timeout_async(stream, DNS_BIND_TCP_IO_TIMEOUT).await
+    read_dns_tcp_payload_with_timeout_async(frame_reader, stream, DNS_BIND_TCP_IO_TIMEOUT).await
 }
 
 async fn read_dns_tcp_payload_with_timeout_async<S>(
+    frame_reader: &mut DnsTcpFrameReader,
     stream: &mut S,
     timeout: std::time::Duration,
 ) -> Result<Option<Vec<u8>>, String>
 where
     S: AsyncRead + Unpin,
 {
-    time::timeout(timeout, read_dns_tcp_payload_async(stream))
+    time::timeout(timeout, frame_reader.read_frame(stream))
         .await
         .map_err(|_| "DNS TCP bind read timeout".to_owned())?
 }
@@ -1355,9 +1361,14 @@ mod tests {
     async fn dns_bind_tcp_read_timeout_closes_slow_client() {
         let (_client, mut server) = tokio::io::duplex(64);
 
-        let err = read_dns_tcp_payload_with_timeout_async(&mut server, Duration::from_millis(1))
-            .await
-            .unwrap_err();
+        let mut frame_reader = DnsTcpFrameReader::default();
+        let err = read_dns_tcp_payload_with_timeout_async(
+            &mut frame_reader,
+            &mut server,
+            Duration::from_millis(1),
+        )
+        .await
+        .unwrap_err();
 
         assert!(err.contains("read timeout"));
     }
@@ -1382,14 +1393,9 @@ mod tests {
         let upstream_addr = upstream_listener.local_addr().unwrap();
         let upstream_server = tokio::spawn(async move {
             let (mut stream, _) = upstream_listener.accept().await.unwrap();
-            let first = read_dns_tcp_payload_async(&mut stream)
-                .await
-                .unwrap()
-                .unwrap();
-            let second = read_dns_tcp_payload_async(&mut stream)
-                .await
-                .unwrap()
-                .unwrap();
+            let mut frame_reader = DnsTcpFrameReader::default();
+            let first = frame_reader.read_frame(&mut stream).await.unwrap().unwrap();
+            let second = frame_reader.read_frame(&mut stream).await.unwrap().unwrap();
             let fast = if dns_packet_id_for_test(&first) == 0x2222 {
                 first
             } else {

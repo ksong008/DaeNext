@@ -27,11 +27,22 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     write_dns_tcp_message_async(stream, payload).await?;
-    stream
-        .flush()
-        .await
-        .map_err(|err| format!("flush DNS framed request: {err}"))?;
     read_dns_tcp_message_async(stream).await
+}
+
+pub(super) async fn forward_dns_framed_stream_with_reader_async<S>(
+    reader: &mut DnsTcpFrameReader,
+    stream: &mut S,
+    payload: &[u8],
+) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    write_dns_tcp_message_async(stream, payload).await?;
+    reader
+        .read_frame(stream)
+        .await?
+        .ok_or_else(|| "read DNS framed response: early eof".to_owned())
 }
 
 pub(super) async fn write_dns_tcp_message_async<S>(
@@ -41,16 +52,9 @@ pub(super) async fn write_dns_tcp_message_async<S>(
 where
     S: AsyncWrite + Unpin,
 {
-    let len = u16::try_from(payload.len())
-        .map_err(|_| format!("DNS request exceeds TCP frame limit: {}", payload.len()))?;
-    stream
-        .write_all(&len.to_be_bytes())
+    super::super::write_dns_tcp_payload_async(stream, payload)
         .await
-        .map_err(|err| format!("write DNS TCP frame length: {err}"))?;
-    stream
-        .write_all(payload)
-        .await
-        .map_err(|err| format!("write DNS TCP frame payload: {err}"))
+        .map_err(|err| err.replace("DNS response", "DNS request"))
 }
 
 pub(super) async fn read_dns_tcp_message_async<S>(stream: &mut S) -> Result<Vec<u8>, String>
@@ -74,43 +78,19 @@ where
     Ok(response)
 }
 
-pub(super) fn resident_dns_tls_client_config(alpn: &[&str]) -> Result<Arc<ClientConfig>, String> {
-    let roots = dae_outbound::shared_transport::system_ca_snapshot()
-        .map_err(|err| format!("load DNS system CA bundle: {err}"))?
-        .rustls_roots();
-    let mut config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    config.alpn_protocols = alpn
-        .iter()
-        .map(|protocol| protocol.as_bytes().to_vec())
-        .collect();
-    Ok(Arc::new(config))
-}
-
-pub(super) fn resident_dns_quic_client_config(alpn: &str) -> Result<quinn::ClientConfig, String> {
-    if cfg!(feature = "test-boringssl-quic") {
-        let policy = dae_outbound::shared_transport::boring_quic::BoringQuicClientPolicy::new([
-            alpn.as_bytes(),
-        ])
-        .map_err(|err| format!("build DNS BoringSSL QUIC policy: {err}"))?;
-        return dae_outbound::shared_transport::boring_quic::build_boring_quic_client_config(
-            &policy,
-            Arc::new(quinn::TransportConfig::default()),
-        )
-        .map_err(|err| format!("build DNS BoringSSL QUIC client config: {err}"));
-    }
-    let roots = dae_outbound::shared_transport::system_ca_snapshot()
-        .map_err(|err| format!("load DNS QUIC system CA bundle: {err}"))?
-        .rustls_roots();
-    let mut crypto = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    crypto.alpn_protocols = vec![alpn.as_bytes().to_vec()];
-    Ok(quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)
-            .map_err(|err| format!("build DNS QUIC client TLS config: {err}"))?,
-    )))
+pub(super) fn resident_dns_quic_client_config(
+    alpn: &str,
+    session_cache: dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache,
+) -> Result<quinn::ClientConfig, String> {
+    let policy =
+        dae_outbound::shared_transport::boring_quic::BoringQuicClientPolicy::new([alpn.as_bytes()])
+            .map_err(|err| format!("build DNS BoringSSL QUIC policy: {err}"))?;
+    dae_outbound::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
+        &policy,
+        Arc::new(quinn::TransportConfig::default()),
+        Some(session_cache),
+    )
+    .map_err(|err| format!("build DNS BoringSSL QUIC client config: {err}"))
 }
 
 pub(super) fn http1_doh_request_bytes(doh: &dae_dns::DohRequest, target: &str) -> Vec<u8> {

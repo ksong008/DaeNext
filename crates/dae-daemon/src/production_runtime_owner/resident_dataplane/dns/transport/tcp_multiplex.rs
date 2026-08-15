@@ -420,8 +420,9 @@ async fn run_resident_dns_tcp_reader(
     mut reader: tokio::net::tcp::OwnedReadHalf,
     responses: tokio::sync::mpsc::Sender<ResidentDnsTcpRead>,
 ) {
+    let mut frame_reader = DnsTcpFrameReader::default();
     loop {
-        let response = match read_dns_tcp_payload_async(&mut reader).await {
+        let response = match frame_reader.read_frame(&mut reader).await {
             Ok(Some(response)) => ResidentDnsTcpRead::Response(response),
             Ok(None) => ResidentDnsTcpRead::Closed,
             Err(error) => {

@@ -101,14 +101,25 @@ pub(super) struct SubscriptionFetchFailure {
 impl SubscriptionFetchFailure {
     pub(super) fn from_io_error(error: &io::Error) -> Self {
         let message = error.to_string().to_ascii_lowercase();
-        let kind = if rustls_certificate_error(error).is_some_and(|certificate| {
-            matches!(certificate, rustls::CertificateError::UnknownIssuer)
-        }) || message.contains("unknownissuer")
+        let tls_kind = tls_client_error(error).map(|error| error.kind());
+        let kind = if tls_kind == Some(crate::boring_tls::TlsClientErrorKind::UnknownIssuer)
+            || message.contains("unknownissuer")
+            || message.contains("unknown ca")
+            || message.contains("unable to get local issuer")
         {
             SubscriptionFetchFailureKind::TlsUnknownIssuer
-        } else if rustls_certificate_error(error).is_some()
-            || message.contains("invalid peer certificate")
+        } else if matches!(
+            tls_kind,
+            Some(
+                crate::boring_tls::TlsClientErrorKind::HostnameMismatch
+                    | crate::boring_tls::TlsClientErrorKind::Expired
+                    | crate::boring_tls::TlsClientErrorKind::NotYetValid
+                    | crate::boring_tls::TlsClientErrorKind::Certificate
+            )
+        ) || message.contains("invalid peer certificate")
             || message.contains("certificate validation")
+            || message.contains("certificate verify failed")
+            || message.contains("certificate verify error")
         {
             SubscriptionFetchFailureKind::TlsCertificate
         } else if message.contains("redirect") {
@@ -178,13 +189,12 @@ impl SubscriptionFetchFailure {
     }
 }
 
-fn rustls_certificate_error(error: &io::Error) -> Option<&rustls::CertificateError> {
-    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+fn tls_client_error(error: &io::Error) -> Option<&crate::boring_tls::TlsClientError> {
+    let inner = error.get_ref()?;
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(inner);
     while let Some(candidate) = current {
-        if let Some(rustls::Error::InvalidCertificate(certificate)) =
-            candidate.downcast_ref::<rustls::Error>()
-        {
-            return Some(certificate);
+        if let Some(error) = candidate.downcast_ref::<crate::boring_tls::TlsClientError>() {
+            return Some(error);
         }
         current = candidate.source();
     }
@@ -199,7 +209,7 @@ mod tests {
     fn unknown_issuer_is_a_tls_fetch_failure() {
         let error = io::Error::new(
             io::ErrorKind::InvalidData,
-            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+            "BoringSSL TLS handshake: unknown ca",
         );
         let failure = SubscriptionFetchFailure::from_io_error(&error);
         assert_eq!(failure.kind, SubscriptionFetchFailureKind::TlsUnknownIssuer);

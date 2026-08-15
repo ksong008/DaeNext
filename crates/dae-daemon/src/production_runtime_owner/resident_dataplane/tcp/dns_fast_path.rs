@@ -3,7 +3,7 @@ use dae_dns::DNS_DEFAULT_PORT;
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use crate::production_runtime_owner::resident_dataplane::dns::{
-    build_dns_server_failure_response, handle_resident_dns_tcp_async, read_dns_tcp_payload_async,
+    DnsTcpFrameReader, build_dns_server_failure_response, handle_resident_dns_tcp_async,
     write_dns_tcp_payload_async,
 };
 
@@ -27,11 +27,12 @@ pub(super) async fn handle_transparent_tcp_dns_fast_path_async(
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<(), String> {
     let _tcp_guard = ResidentTcpConnectionGuard::new(Arc::clone(&metrics));
+    let mut frame_reader = DnsTcpFrameReader::default();
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let Some(request) = read_dns_tcp_payload_async(inbound).await? else {
+        let Some(request) = frame_reader.read_frame(inbound).await? else {
             return Ok(());
         };
         metrics.add_upload(request.len());

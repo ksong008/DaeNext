@@ -1,5 +1,9 @@
 use super::*;
 
+use crate::boring_tls::{
+    BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async,
+};
+
 pub(crate) const RESIDENT_TCP_FAILED_HANDLER_JOIN_GRACE: Duration = Duration::from_millis(100);
 
 mod dns;
@@ -345,13 +349,12 @@ async fn fetch_resident_proxy_https_response_async(
     response_limit: usize,
     timeout: Duration,
 ) -> Result<Vec<u8>, String> {
-    let server_name = ServerName::try_from(host.to_owned())
-        .map_err(|err| format!("resident proxy fetch invalid HTTPS server name {host}: {err}"))?;
-    let connector = tokio_rustls::TlsConnector::from(resident_tcp_probe_tls_config()?);
-    let mut tls = time::timeout(timeout, connector.connect(server_name, stream))
+    let context = build_boring_tls_context(BoringTlsVerification::SystemRoots)
+        .map_err(|error| format!("resident proxy fetch create BoringSSL context: {error}"))?;
+    let mut tls = time::timeout(timeout, connect_boring_tls_async(&context, host, stream))
         .await
         .map_err(|_| "resident proxy fetch HTTPS handshake timeout".to_owned())?
-        .map_err(|err| format!("resident proxy fetch create HTTPS client: {err}"))?;
+        .map_err(|err| format!("resident proxy fetch BoringSSL handshake: {err}"))?;
     time::timeout(timeout, tls.write_all(request))
         .await
         .map_err(|_| "write resident proxy fetch HTTPS request: timeout".to_owned())?

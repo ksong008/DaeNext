@@ -24,8 +24,6 @@ use dae_routing::{IpPrefix, Query, RoutingMatcher};
 #[cfg(test)]
 use dae_runtime_control::ip_to_key;
 use http::Request;
-use quinn::crypto::rustls::QuicClientConfig;
-use rustls::{ClientConfig, pki_types::ServerName};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
@@ -67,11 +65,15 @@ use super::{
 };
 
 /// One bounded DNS TLS stream type keeps framing, pooling, and HTTP/2 ownership
-/// identical across the staged rustls/BoringSSL A/B. The selected provider is
-/// fixed at handshake construction; errors never trigger a provider fallback.
+/// identical across all DNS TLS transports. BoringSSL is selected at handshake
+/// construction and errors never trigger a provider fallback.
 pub(in crate::production_runtime_owner::resident_dataplane::dns) enum ResidentDnsTlsStream {
-    Rustls(tokio_rustls::client::TlsStream<TokioTcpStream>),
     Boring(tokio_boring::SslStream<TokioTcpStream>),
+}
+
+pub(in crate::production_runtime_owner::resident_dataplane::dns) struct ResidentDnsTlsConnection {
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) tls: ResidentDnsTlsStream,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) reader: DnsTcpFrameReader,
 }
 
 impl AsyncRead for ResidentDnsTlsStream {
@@ -80,10 +82,8 @@ impl AsyncRead for ResidentDnsTlsStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        match self.get_mut() {
-            Self::Rustls(stream) => Pin::new(stream).poll_read(cx, buf),
-            Self::Boring(stream) => Pin::new(stream).poll_read(cx, buf),
-        }
+        let Self::Boring(stream) = self.get_mut();
+        Pin::new(stream).poll_read(cx, buf)
     }
 }
 
@@ -93,24 +93,32 @@ impl AsyncWrite for ResidentDnsTlsStream {
         cx: &mut Context<'_>,
         data: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        match self.get_mut() {
-            Self::Rustls(stream) => Pin::new(stream).poll_write(cx, data),
-            Self::Boring(stream) => Pin::new(stream).poll_write(cx, data),
-        }
+        let Self::Boring(stream) = self.get_mut();
+        Pin::new(stream).poll_write(cx, data)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffers: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        let Self::Boring(stream) = self.get_mut();
+        Pin::new(stream).poll_write_vectored(cx, buffers)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        let Self::Boring(stream) = self;
+        stream.is_write_vectored()
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match self.get_mut() {
-            Self::Rustls(stream) => Pin::new(stream).poll_flush(cx),
-            Self::Boring(stream) => Pin::new(stream).poll_flush(cx),
-        }
+        let Self::Boring(stream) = self.get_mut();
+        Pin::new(stream).poll_flush(cx)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match self.get_mut() {
-            Self::Rustls(stream) => Pin::new(stream).poll_shutdown(cx),
-            Self::Boring(stream) => Pin::new(stream).poll_shutdown(cx),
-        }
+        let Self::Boring(stream) = self.get_mut();
+        Pin::new(stream).poll_shutdown(cx)
     }
 }
 
@@ -118,10 +126,8 @@ impl ResidentDnsTlsStream {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn alpn_protocol(
         &self,
     ) -> Option<Vec<u8>> {
-        match self {
-            Self::Rustls(stream) => stream.get_ref().1.alpn_protocol().map(ToOwned::to_owned),
-            Self::Boring(stream) => stream.ssl().selected_alpn_protocol().map(ToOwned::to_owned),
-        }
+        let Self::Boring(stream) = self;
+        stream.ssl().selected_alpn_protocol().map(ToOwned::to_owned)
     }
 }
 
@@ -169,7 +175,9 @@ use self::routing::{
     parse_request_default_action, parse_response_default_action, select_request_action,
     select_response_action, select_response_action_for_upstream,
 };
-pub(super) use self::tcp_wire::{read_dns_tcp_payload_async, write_dns_tcp_payload_async};
+#[cfg(test)]
+pub(super) use self::tcp_wire::read_dns_tcp_payload_async;
+pub(super) use self::tcp_wire::{DnsTcpFrameReader, write_dns_tcp_payload_async};
 pub(super) use self::trace_summary::{ResidentDnsTraceSummary, ResidentDnsTransportTrace};
 use self::trace_summary::{
     ResidentDnsTransportTraceInput, capture_dns_transport_trace_async, record_dns_transport_trace,

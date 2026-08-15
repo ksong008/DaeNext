@@ -124,41 +124,11 @@ async fn open_proxy_dns_tls_stream(
     alpn: &[&str],
     context: ProxyDnsRequestContext,
 ) -> Result<ResidentDnsTlsStream, ProxyDnsRequestError> {
-    if cfg!(feature = "test-boringssl-tcp-tls") {
-        return super::open_dns_boring_tls_stream_async(upstream, stream, alpn, context)
-            .await
-            .map_err(|error| {
-                ProxyDnsRequestError::new(
-                    ProxyDnsRequestStage::Authenticate,
-                    ProxyDnsRequestFailure::Network,
-                    error,
-                )
-            });
-    }
-    let config = resident_dns_tls_client_config(alpn).map_err(|error| {
-        ProxyDnsRequestError::new(
-            ProxyDnsRequestStage::Authenticate,
-            ProxyDnsRequestFailure::Protocol,
-            error,
-        )
-    })?;
-    let server_name = ServerName::try_from(upstream.target.host.clone()).map_err(|error| {
-        ProxyDnsRequestError::new(
-            ProxyDnsRequestStage::Authenticate,
-            ProxyDnsRequestFailure::Protocol,
-            format!(
-                "invalid proxy DNS TLS server name {}: {error}",
-                upstream.target.host
-            ),
-        )
-    })?;
-    let connector = tokio_rustls::TlsConnector::from(config);
     context
         .run(
             ProxyDnsRequestStage::Authenticate,
             ProxyDnsRequestFailure::Network,
-            connector.connect(server_name, stream),
+            super::open_dns_boring_tls_stream_async(upstream, stream, alpn, context),
         )
         .await
-        .map(ResidentDnsTlsStream::Rustls)
 }

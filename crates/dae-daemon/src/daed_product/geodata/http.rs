@@ -5,6 +5,8 @@ use super::types::{
 };
 use super::*;
 
+use crate::boring_tls::{BoringTlsVerification, build_boring_tls_context, connect_boring_tls_sync};
+
 pub(super) fn fetch_geodata_url(
     control_runtime: &ProductControlRuntime,
     url: &url::Url,
@@ -182,23 +184,8 @@ fn fetch_geodata_url_once(
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
     let response = if tls {
-        let roots = dae_outbound::shared_transport::system_ca_snapshot()
-            .map_err(|err| io::Error::other(format!("load geodata system CA bundle: {err}")))?
-            .rustls_roots();
-        let config = Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        );
-        let server_name = ServerName::try_from(host.to_owned()).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid geodata tls server name: {err}"),
-            )
-        })?;
-        let conn = ClientConnection::new(config, server_name)
-            .map_err(|err| io::Error::other(format!("geodata tls connect: {err}")))?;
-        let mut tls_stream = rustls::StreamOwned::new(conn, stream);
+        let context = build_boring_tls_context(BoringTlsVerification::SystemRoots)?;
+        let mut tls_stream = connect_boring_tls_sync(&context, host, stream)?;
         tls_stream.write_all(request.as_bytes())?;
         tls_stream.flush()?;
         read_geodata_http_response(&mut tls_stream)?
@@ -258,23 +245,8 @@ fn fetch_geodata_url_to_file_once(
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
     if tls {
-        let roots = dae_outbound::shared_transport::system_ca_snapshot()
-            .map_err(|err| io::Error::other(format!("load geodata system CA bundle: {err}")))?
-            .rustls_roots();
-        let config = Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        );
-        let server_name = ServerName::try_from(host.to_owned()).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid geodata tls server name: {err}"),
-            )
-        })?;
-        let conn = ClientConnection::new(config, server_name)
-            .map_err(|err| io::Error::other(format!("geodata tls connect: {err}")))?;
-        let mut tls_stream = rustls::StreamOwned::new(conn, stream);
+        let context = build_boring_tls_context(BoringTlsVerification::SystemRoots)?;
+        let mut tls_stream = connect_boring_tls_sync(&context, host, stream)?;
         tls_stream.write_all(request.as_bytes())?;
         tls_stream.flush()?;
         read_geodata_http_response_to_file(url, &mut tls_stream, output_path)
