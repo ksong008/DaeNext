@@ -6,7 +6,10 @@ use super::route::{
 };
 use super::udp_multiplex::ResidentDnsUdpMultiplexHandle;
 use super::wire::{forward_dns_framed_stream_async, open_dns_tcp_stream_async};
+#[cfg(test)]
+use std::os::fd::AsRawFd;
 
+#[cfg(test)]
 const DNS_UDP_MAX_STALE_RESPONSES: usize = 8;
 
 pub(super) async fn forward_dns_udp_upstream_async(
@@ -48,22 +51,7 @@ pub(super) async fn forward_dns_udp_upstream_async(
     .await
 }
 
-pub(in crate::dns) async fn forward_dns_udp_async(
-    target: SocketAddr,
-    payload: &[u8],
-    mark: u32,
-) -> Result<Vec<u8>, String> {
-    let runtime = ResidentDnsUdpRuntimeConfig::standalone();
-    forward_dns_udp_with_attempts_async(
-        target,
-        payload,
-        mark,
-        runtime.attempts,
-        runtime.attempt_timeout,
-    )
-    .await
-}
-
+#[cfg(test)]
 async fn forward_dns_udp_with_attempts_async(
     target: SocketAddr,
     payload: &[u8],
@@ -89,6 +77,7 @@ async fn forward_dns_udp_with_attempts_async(
     let socket = tokio::net::UdpSocket::from_std(socket)
         .map_err(|err| format!("adopt async DNS UDP socket: {err}"))?;
     let request = DnsPacketView::parse(payload).ok();
+    let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
     for _ in 0..attempts {
         socket
             .send_to(payload, target)
@@ -101,12 +90,18 @@ async fn forward_dns_udp_with_attempts_async(
             if now >= deadline {
                 break;
             }
-            let mut response = vec![0_u8; DNS_RESPONSE_READ_LIMIT];
             match time::timeout(deadline - now, socket.recv_from(&mut response)).await {
                 Ok(Ok((read, peer))) => {
-                    response.truncate(read);
-                    match validate_dns_udp_response(target, peer, request.as_ref(), &response) {
-                        Ok(()) => return Ok(response),
+                    match validate_dns_udp_response(
+                        target,
+                        peer,
+                        request.as_ref(),
+                        &response[..read],
+                    ) {
+                        Ok(()) => {
+                            response.truncate(read);
+                            return Ok(response);
+                        }
                         Err(err) => {
                             stale_responses += 1;
                             if stale_responses > DNS_UDP_MAX_STALE_RESPONSES {
@@ -127,6 +122,7 @@ async fn forward_dns_udp_with_attempts_async(
     ))
 }
 
+#[cfg(test)]
 fn validate_dns_udp_response(
     target: SocketAddr,
     peer: SocketAddr,
@@ -255,7 +251,7 @@ impl Drop for ResidentDnsUdpShardLease<'_> {
 }
 
 impl ResidentDnsUdpForwarder {
-    async fn exchange(
+    pub(in crate::dns) async fn exchange(
         &self,
         payload: &[u8],
         context: ProxyDnsRequestContext,
@@ -745,7 +741,7 @@ mod tests {
                 Duration::from_secs(60),
             ),
             scheme: ResidentDnsUpstreamScheme::Tcp,
-            path: String::new(),
+            path: Arc::from(""),
         }
     }
 
@@ -1106,7 +1102,7 @@ mod tests {
             index: 0,
             tag: "test".to_owned(),
             target: ResidentDnsUpstreamTarget {
-                authority: "test.example:53".to_owned(),
+                authority: Arc::from("test.example:53"),
                 host: "test.example".to_owned(),
                 port: 53,
                 literal_addr: None,
@@ -1115,7 +1111,7 @@ mod tests {
                 resolved_addrs: Arc::default(),
             },
             scheme: ResidentDnsUpstreamScheme::Tcp,
-            path: String::new(),
+            path: Arc::from(""),
         };
         upstream
             .target
@@ -1170,7 +1166,7 @@ mod tests {
             index: 0,
             tag: "proxied-pipeline".to_owned(),
             target: ResidentDnsUpstreamTarget {
-                authority: target.to_string(),
+                authority: Arc::from(target.to_string()),
                 host: target.ip().to_string(),
                 port: target.port(),
                 literal_addr: Some(target),
@@ -1179,7 +1175,7 @@ mod tests {
                 resolved_addrs: Arc::default(),
             },
             scheme: ResidentDnsUpstreamScheme::Tcp,
-            path: String::new(),
+            path: Arc::from(""),
         };
         let binding = dns_proxy_binding(socks5_dns_proxy(relay.address()), 1);
         let selection = ResidentDnsUpstreamSelection::Proxy { binding };
@@ -1247,7 +1243,7 @@ mod tests {
             index: 0,
             tag: "proxied-pool".to_owned(),
             target: ResidentDnsUpstreamTarget {
-                authority: target.to_string(),
+                authority: Arc::from(target.to_string()),
                 host: target.ip().to_string(),
                 port: target.port(),
                 literal_addr: Some(target),
@@ -1256,7 +1252,7 @@ mod tests {
                 resolved_addrs: Arc::default(),
             },
             scheme: ResidentDnsUpstreamScheme::Tcp,
-            path: String::new(),
+            path: Arc::from(""),
         };
         let forwarder = Arc::new(ResidentDnsTcpForwarder {
             owner_observation: ResidentDnsTransportOwnerObservation::new(
@@ -1367,7 +1363,7 @@ mod tests {
             index: 0,
             tag: "direct-pool".to_owned(),
             target: ResidentDnsUpstreamTarget {
-                authority: target.to_string(),
+                authority: Arc::from(target.to_string()),
                 host: target.ip().to_string(),
                 port: target.port(),
                 literal_addr: Some(target),
@@ -1376,7 +1372,7 @@ mod tests {
                 resolved_addrs: Arc::default(),
             },
             scheme: ResidentDnsUpstreamScheme::Tcp,
-            path: String::new(),
+            path: Arc::from(""),
         };
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
         let forwarder = ResidentDnsTcpForwarder {

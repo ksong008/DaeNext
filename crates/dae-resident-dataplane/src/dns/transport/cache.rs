@@ -326,38 +326,63 @@ impl ResidentDnsForwarderCache {
         self.get_or_insert_forwarder_lazy(
             key,
             "UDP",
-            || {
-                let shard_count = self.udp_runtime.direct_shards.max(1);
-                Ok(Arc::new(ResidentDnsUdpForwarder {
-                    owner_observation:
-                        ResidentDnsTransportOwnerObservation::new(
-                            Arc::clone(&self.metrics),
-                            std::mem::size_of::<ResidentDnsUdpForwarder>().saturating_add(
-                                shard_count.saturating_mul(std::mem::size_of::<
-                                    ResidentDnsUdpForwarderShard,
-                                >()),
-                            ),
-                        ),
-                    target,
-                    mark,
-                    next_shard: std::sync::atomic::AtomicUsize::new(0),
-                    executor: Arc::clone(&self.udp_executor),
-                    shards: (0..shard_count)
-                        .map(|_| ResidentDnsUdpForwarderShard {
-                            handle: AsyncMutex::new(None),
-                            opened: std::sync::atomic::AtomicBool::new(false),
-                            inflight: std::sync::atomic::AtomicUsize::new(0),
-                        })
-                        .collect(),
-                    runtime_config: self.udp_runtime.clone(),
-                }))
-            },
+            || Ok(self.build_udp_forwarder(target, mark)),
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::Udp(forwarder) => Some(Arc::clone(forwarder)),
                 _ => None,
             },
             ResidentDnsForwarderEntryKind::Udp,
         )
+    }
+
+    pub(in crate::dns) fn asis_udp_forwarder(
+        &self,
+        target: SocketAddr,
+        mark: u32,
+    ) -> Result<Arc<ResidentDnsUdpForwarder>, String> {
+        let key = ResidentDnsForwarderKey {
+            scheme: ResidentDnsUpstreamScheme::Udp,
+            authority: empty_dns_forwarder_key_component(),
+            path: empty_dns_forwarder_key_component(),
+            mark,
+            target: Some(target),
+            selection: ResidentDnsForwarderSelectionKey::Direct,
+            transport: ResidentDnsForwarderTransport::AsisUdp,
+        };
+        self.get_or_insert_forwarder_lazy(
+            key,
+            "asis UDP",
+            || Ok(self.build_udp_forwarder(target, mark)),
+            |kind| match kind {
+                ResidentDnsForwarderEntryKind::Udp(forwarder) => Some(Arc::clone(forwarder)),
+                _ => None,
+            },
+            ResidentDnsForwarderEntryKind::Udp,
+        )
+    }
+
+    fn build_udp_forwarder(&self, target: SocketAddr, mark: u32) -> Arc<ResidentDnsUdpForwarder> {
+        let shard_count = self.udp_runtime.direct_shards.max(1);
+        Arc::new(ResidentDnsUdpForwarder {
+            owner_observation: ResidentDnsTransportOwnerObservation::new(
+                Arc::clone(&self.metrics),
+                std::mem::size_of::<ResidentDnsUdpForwarder>().saturating_add(
+                    shard_count.saturating_mul(std::mem::size_of::<ResidentDnsUdpForwarderShard>()),
+                ),
+            ),
+            target,
+            mark,
+            next_shard: std::sync::atomic::AtomicUsize::new(0),
+            executor: Arc::clone(&self.udp_executor),
+            shards: (0..shard_count)
+                .map(|_| ResidentDnsUdpForwarderShard {
+                    handle: AsyncMutex::new(None),
+                    opened: std::sync::atomic::AtomicBool::new(false),
+                    inflight: std::sync::atomic::AtomicUsize::new(0),
+                })
+                .collect(),
+            runtime_config: self.udp_runtime.clone(),
+        })
     }
 
     pub(in crate::dns) fn proxy_udp_forwarder(
@@ -635,16 +660,14 @@ impl ResidentDnsForwarderCache {
             return Err("resident DNS forwarder cache is closing".to_owned());
         }
         if let Some(entry) = state.entries.get(&key) {
-            let previous_tick = entry.last_used;
             let forwarder = extract(&entry.kind).ok_or_else(|| {
                 format!("resident DNS forwarder cache kind mismatch for {kind_name}")
             })?;
             let last_used = next_dns_forwarder_tick(&mut state);
-            state.lru.remove(&(previous_tick, key.clone()));
             if let Some(entry) = state.entries.get_mut(&key) {
                 entry.last_used = last_used;
             }
-            state.lru.insert((last_used, key));
+            debug_assert!(state.lru.iter().any(|(_, indexed_key)| indexed_key == &key));
             return Ok(forwarder);
         }
         if state.entries.len() >= DNS_FORWARDER_CACHE_MAX_ENTRIES {
@@ -876,13 +899,21 @@ fn routed_dns_forwarder_key(
     }
 }
 
+fn empty_dns_forwarder_key_component() -> Arc<str> {
+    static EMPTY: std::sync::OnceLock<Arc<str>> = std::sync::OnceLock::new();
+    Arc::clone(EMPTY.get_or_init(|| Arc::from("")))
+}
+
 fn evict_oldest_dns_forwarder(state: &mut ResidentDnsForwarderCacheState) {
     state.retired.retain(ResidentDnsRetiredForwarder::is_alive);
     while let Some((last_used, key)) = state.lru.pop_first() {
-        if state
-            .entries
-            .get(&key)
-            .is_some_and(|entry| entry.last_used == last_used)
+        let Some(current_last_used) = state.entries.get(&key).map(|entry| entry.last_used) else {
+            continue;
+        };
+        if current_last_used != last_used {
+            state.lru.insert((current_last_used, key));
+            continue;
+        }
         {
             if let Some(entry) = state.entries.remove(&key)
                 && entry.kind.retained_outside_cache()
@@ -996,6 +1027,60 @@ mod tests {
             .tcp_forwarder(&upstream, target, 0, &selection)
             .unwrap();
         assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn asis_udp_forwarder_is_reused_by_target_and_mark() {
+        let cache = ResidentDnsForwarderCache::default();
+        let target = "127.0.0.1:53".parse().unwrap();
+
+        let first = cache.asis_udp_forwarder(target, 0x1234).unwrap();
+        let second = cache.asis_udp_forwarder(target, 0x1234).unwrap();
+        let different_mark = cache.asis_udp_forwarder(target, 0x5678).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &different_mark));
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn cache_hit_reuses_key_strings_without_rewriting_lru_tree() {
+        let cache = ResidentDnsForwarderCache::default();
+        let upstream = parse_dns_upstream(
+            0,
+            "shared-key",
+            "udp://127.0.0.1:53",
+            "127.0.0.1:53".parse().unwrap(),
+            0,
+        )
+        .unwrap();
+        let target = "127.0.0.1:53".parse().unwrap();
+        let selection = ResidentDnsUpstreamSelection::Direct { mark: 0 };
+
+        cache
+            .udp_forwarder(&upstream, target, 0, &selection)
+            .unwrap();
+        cache
+            .udp_forwarder(&upstream, target, 0, &selection)
+            .unwrap();
+        cache
+            .udp_forwarder(&upstream, target, 0, &selection)
+            .unwrap();
+        cache
+            .udp_forwarder(&upstream, target, 0, &selection)
+            .unwrap();
+
+        let state = cache.state.lock().unwrap();
+        assert_eq!(state.entries.len(), 1);
+        assert_eq!(state.lru.len(), 1);
+        let (indexed_tick, indexed_key) = state.lru.first().unwrap();
+        let entry = state.entries.get(indexed_key).unwrap();
+        assert!(entry.last_used > *indexed_tick);
+        assert!(Arc::ptr_eq(
+            &indexed_key.authority,
+            &upstream.target.authority
+        ));
+        assert!(Arc::ptr_eq(&indexed_key.path, &upstream.path));
     }
 
     #[test]

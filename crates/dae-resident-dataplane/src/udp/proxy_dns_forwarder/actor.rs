@@ -1,4 +1,5 @@
-use std::collections::{HashMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 
 use super::*;
 use crate::dns::{
@@ -14,9 +15,9 @@ mod transaction;
 
 use self::executor_state::{reset_proxy_dns_udp_executor, wait_proxy_dns_udp_response};
 use self::pending::{
-    expire_proxy_dns_udp_requests, fail_proxy_dns_udp_requests, fail_queued_proxy_dns_udp_requests,
-    insert_proxy_dns_udp_deadline, next_proxy_dns_udp_deadline, remove_proxy_dns_udp_deadline,
-    wait_proxy_dns_udp_cancellation, wait_proxy_dns_udp_deadline,
+    cancel_abandoned_proxy_dns_udp_requests, expire_proxy_dns_udp_requests,
+    fail_proxy_dns_udp_requests, fail_queued_proxy_dns_udp_requests, insert_proxy_dns_udp_deadline,
+    next_proxy_dns_udp_deadline, wait_proxy_dns_udp_deadline,
 };
 use self::transaction::{
     PendingProxyDnsDeadline, PendingProxyDnsUdpRequest, handle_proxy_dns_udp_request,
@@ -26,6 +27,7 @@ use self::transaction::{
 #[derive(Clone)]
 pub(super) struct ResidentProxyDnsUdpActorHandle {
     sender: tokio::sync::mpsc::Sender<ResidentProxyDnsUdpRequest>,
+    cancellation_notify: Arc<tokio::sync::Notify>,
     lifecycle: Arc<ResidentDnsUdpActorLifecycle>,
     metrics: Arc<ResidentDataplaneMetrics>,
     payload_admission: ResidentUdpPayloadAdmission,
@@ -44,6 +46,19 @@ pub(super) struct ResidentProxyDnsUdpRequest {
 struct ResidentProxyDnsUdpActorMetricGuard {
     metrics: Arc<ResidentDataplaneMetrics>,
     fatal: bool,
+}
+
+struct ResidentProxyDnsUdpCancellationGuard {
+    notify: Arc<tokio::sync::Notify>,
+    armed: bool,
+}
+
+impl Drop for ResidentProxyDnsUdpCancellationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.notify.notify_one();
+        }
+    }
 }
 
 impl Drop for ResidentProxyDnsUdpActorMetricGuard {
@@ -72,11 +87,13 @@ pub(super) fn start_proxy_dns_udp_actor(
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
 ) -> ResidentDnsUdpActorRegistration<ResidentProxyDnsUdpActorHandle> {
     let (sender, receiver) = tokio::sync::mpsc::channel(runtime_config.queue_depth.max(1));
+    let cancellation_notify = Arc::new(tokio::sync::Notify::new());
     let (lifecycle, stop_receiver) = ResidentDnsUdpActorLifecycle::new();
     let completion = ResidentDnsUdpActorCompletion::new();
     metrics.dns_udp_actor_opened();
     let task_metrics = Arc::clone(&metrics);
     let actor_config = runtime_config.clone();
+    let task_cancellation_notify = Arc::clone(&cancellation_notify);
     let task = tokio::spawn(async move {
         let mut metric_guard = ResidentProxyDnsUdpActorMetricGuard {
             metrics: task_metrics,
@@ -87,6 +104,7 @@ pub(super) fn start_proxy_dns_udp_actor(
             original_dst,
             receiver,
             stop_receiver,
+            task_cancellation_notify,
             actor_config,
             Arc::clone(&metric_guard.metrics),
             hysteria2_owner_registry,
@@ -101,6 +119,7 @@ pub(super) fn start_proxy_dns_udp_actor(
     ResidentDnsUdpActorRegistration {
         handle: ResidentProxyDnsUdpActorHandle {
             sender,
+            cancellation_notify,
             lifecycle: Arc::clone(&lifecycle),
             metrics,
             payload_admission: runtime_config.payload_admission.clone(),
@@ -180,7 +199,15 @@ impl ResidentProxyDnsUdpActorHandle {
             bytes,
             response: response_tx,
         });
-        match time::timeout_at(context.deadline(), response_rx).await {
+        let mut cancellation = ResidentProxyDnsUdpCancellationGuard {
+            notify: Arc::clone(&self.cancellation_notify),
+            armed: true,
+        };
+        let result = time::timeout_at(context.deadline(), response_rx).await;
+        if result.is_ok() {
+            cancellation.armed = false;
+        }
+        match result {
             Ok(Ok(result)) => result.map(ProxyDnsResponseBytes::into_payload),
             Ok(Err(_)) => Err(ProxyDnsRequestError::new(
                 ProxyDnsRequestStage::Read,
@@ -198,6 +225,7 @@ async fn run_proxy_dns_udp_actor(
     original_dst: SocketAddr,
     mut receiver: tokio::sync::mpsc::Receiver<ResidentProxyDnsUdpRequest>,
     mut stop: tokio::sync::oneshot::Receiver<()>,
+    cancellation_notify: Arc<tokio::sync::Notify>,
     runtime_config: ResidentDnsUdpRuntimeConfig,
     metrics: Arc<ResidentDataplaneMetrics>,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
@@ -207,7 +235,7 @@ async fn run_proxy_dns_udp_actor(
 ) -> bool {
     let pending_limit = runtime_config.pending_limit.max(1);
     let mut pending = HashMap::<u16, PendingProxyDnsUdpRequest>::new();
-    let mut deadlines = VecDeque::<PendingProxyDnsDeadline>::new();
+    let mut deadlines = BinaryHeap::<Reverse<PendingProxyDnsDeadline>>::new();
     let mut id_allocator = DnsRequestIdAllocator::new(runtime_config.attempt_timeout);
     // Protocol executors contain mutually exclusive transport state. Keep the selected
     // executor off the actor worker stack so adding one protocol variant cannot silently
@@ -226,7 +254,7 @@ async fn run_proxy_dns_udp_actor(
             response = wait_proxy_dns_udp_response(&mut executor, !pending.is_empty()) => {
                 ResidentProxyDnsUdpActorEvent::Response(response)
             }
-            _ = wait_proxy_dns_udp_cancellation(&mut pending), if !pending.is_empty() => {
+            _ = cancellation_notify.notified(), if !pending.is_empty() => {
                 ResidentProxyDnsUdpActorEvent::Cancelled
             }
             request = receiver.recv(), if pending.len() < pending_limit => {
@@ -296,7 +324,6 @@ async fn run_proxy_dns_udp_actor(
             ResidentProxyDnsUdpActorEvent::Response(Ok(Some((_, response)))) => {
                 if let Err(error) = handle_proxy_dns_udp_response(
                     &mut pending,
-                    &mut deadlines,
                     &mut id_allocator,
                     original_dst,
                     response,
@@ -339,7 +366,11 @@ async fn run_proxy_dns_udp_actor(
                 reset_proxy_dns_udp_executor(&mut executor, reset_deadline, &metrics).await;
             }
             ResidentProxyDnsUdpActorEvent::Cancelled => {
-                expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);
+                cancel_abandoned_proxy_dns_udp_requests(
+                    &mut pending,
+                    &mut deadlines,
+                    &mut id_allocator,
+                );
             }
             ResidentProxyDnsUdpActorEvent::Deadline => {
                 expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);

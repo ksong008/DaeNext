@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::poll_fn;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -188,7 +187,6 @@ pub(crate) use self::transport::udp_multiplex::{
 };
 use self::transport::{
     ResidentDnsTcpMultiplexHandle, forward_dns_tcp_asis_async, forward_dns_to_upstream_async,
-    forward_dns_udp_async,
 };
 pub(super) use self::udp_response::fit_dns_response_to_udp_request;
 pub(crate) use self::upstream_model::ResidentDnsTransportOwnerObservation;
@@ -754,6 +752,7 @@ async fn handle_resident_dns_request_without_preference(
                 payload,
                 plan.mark,
                 asis_transport.expect("asis transport checked before forwarding"),
+                &plan.forwarders,
                 context,
             )
             .await?;
@@ -853,6 +852,7 @@ async fn handle_resident_dns_request_without_preference_trace(
                 payload,
                 plan.mark,
                 asis_transport.expect("asis transport checked before forwarding"),
+                &plan.forwarders,
                 context,
             )
             .await?;
@@ -914,16 +914,17 @@ async fn forward_dns_asis_async(
     payload: &[u8],
     mark: u32,
     transport: ResidentDnsAsisTransport,
+    forwarders: &Arc<ResidentDnsForwarderCache>,
     context: ProxyDnsRequestContext,
 ) -> Result<Vec<u8>, String> {
     match transport {
-        ResidentDnsAsisTransport::Udp => time::timeout_at(
-            context.deadline(),
-            forward_dns_udp_async(original_dst, payload, mark),
-        )
-        .await
-        .map_err(|_| "DNS UDP asis absolute deadline expired".to_owned())?
-        .map_err(|err| format!("forward DNS UDP asis to {original_dst}: {err}")),
+        ResidentDnsAsisTransport::Udp => {
+            let forwarder = forwarders.asis_udp_forwarder(original_dst, mark)?;
+            forwarder
+                .exchange(payload, context)
+                .await
+                .map_err(|err| format!("forward DNS UDP asis to {original_dst}: {err}"))
+        }
         ResidentDnsAsisTransport::Tcp => {
             forward_dns_tcp_asis_async(original_dst, payload, mark, context)
                 .await

@@ -102,8 +102,8 @@ impl ResidentDnsResponseCacheScope {
         Self::Upstream {
             index: upstream.index,
             scheme: upstream.scheme,
-            authority: upstream.target.authority.clone(),
-            path: upstream.path.clone(),
+            authority: upstream.target.authority.to_string(),
+            path: upstream.path.to_string(),
         }
     }
 }

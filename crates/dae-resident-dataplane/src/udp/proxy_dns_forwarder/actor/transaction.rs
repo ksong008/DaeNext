@@ -56,11 +56,11 @@ struct PendingProxyDnsQuestion {
     qclass: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct PendingProxyDnsDeadline {
-    pub(super) id: u16,
-    pub(super) generation: u64,
     pub(super) deadline: time::Instant,
+    pub(super) generation: u64,
+    pub(super) id: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -90,7 +90,7 @@ pub(super) async fn handle_proxy_dns_udp_request(
     original_dst: SocketAddr,
     mut request: ResidentProxyDnsUdpRequest,
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
-    deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
+    deadlines: &mut BinaryHeap<Reverse<PendingProxyDnsDeadline>>,
     id_allocator: &mut DnsRequestIdAllocator,
     next_generation: &mut u64,
     executor: &mut Option<Box<UdpSessionExecutor>>,
@@ -335,7 +335,6 @@ pub(super) async fn handle_proxy_dns_udp_request(
     if response.reply_forwarded {
         handle_proxy_dns_udp_response(
             pending,
-            deadlines,
             id_allocator,
             original_dst,
             response,
