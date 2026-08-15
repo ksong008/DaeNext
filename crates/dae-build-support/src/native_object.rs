@@ -6,6 +6,7 @@ use std::process::Command;
 
 const STRIP_TOOL_ENV: &str = "DAE_RUST_NATIVE_BPF_STRIP";
 const REQUIRED_SECTIONS: [&str; 6] = [".BTF", ".BTF.ext", "maps", ".maps", ".symtab", ".strtab"];
+const REQUIRED_BTF_IDENTIFIERS: [&[u8]; 2] = [b"bpf_timer\0", b"__opaque\0"];
 
 #[derive(Debug, Eq, PartialEq)]
 struct NativeObjectShape {
@@ -52,6 +53,32 @@ fn parse_shape(path: &Path, require_stripped: bool) -> NativeObjectShape {
         panic!(
             "native eBPF object is missing loader-required sections {}: {}",
             missing.join(", "),
+            path.display()
+        );
+    }
+    let btf = file
+        .section_by_name(".BTF")
+        .expect("required .BTF section was checked above")
+        .data()
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to read native eBPF BTF section {}: {error}",
+                path.display()
+            )
+        });
+    let missing_btf_identifiers = REQUIRED_BTF_IDENTIFIERS
+        .iter()
+        .filter(|identifier| !contains_bytes(btf, identifier))
+        .map(|identifier| {
+            String::from_utf8_lossy(identifier)
+                .trim_end_matches('\0')
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    if !missing_btf_identifiers.is_empty() {
+        panic!(
+            "native eBPF object is missing kernel-required BTF identifiers {}: {}",
+            missing_btf_identifiers.join(", "),
             path.display()
         );
     }
@@ -116,6 +143,13 @@ fn parse_shape(path: &Path, require_stripped: bool) -> NativeObjectShape {
         maps,
         relocations,
     }
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 fn run_strip_tool(path: &Path) {
@@ -183,5 +217,13 @@ mod tests {
         assert!(is_debug_section(".rel.debug_line"));
         assert!(!is_debug_section(".BTF"));
         assert!(!is_debug_section(".BTF.ext"));
+    }
+
+    #[test]
+    fn btf_identifier_match_requires_a_nul_terminated_name() {
+        let btf_strings = b"\0BpfUdpConnState\0bpf_timer\0__opaque\0";
+        assert!(contains_bytes(btf_strings, b"bpf_timer\0"));
+        assert!(contains_bytes(btf_strings, b"__opaque\0"));
+        assert!(!contains_bytes(btf_strings, b"timer_missing\0"));
     }
 }
