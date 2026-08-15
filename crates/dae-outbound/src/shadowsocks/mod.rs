@@ -14,13 +14,14 @@ pub mod ssr_link;
 mod ssr_stream;
 
 pub use aead::{
-    AeadCipherSpec, AeadStreamCodec, AeadTcpSalts, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
-    SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE, ShadowsocksAeadTcpExchangeReport,
-    ShadowsocksAeadUdpPacket, TAG_LEN, aead_cipher_specs, cipher_spec, decode_client_initial,
-    decode_udp_packet, encode_client_initial, encode_server_payload, encode_udp_packet,
-    read_client_initial_from_stream, read_encrypted_chunk_from_async_stream,
-    read_encrypted_chunk_from_stream, read_encrypted_chunk_in_place_from_async_stream,
-    tcp_exchange, tcp_exchange_over_stream,
+    AeadCipherSpec, AeadStreamCodec, AeadStreamFrameReader, AeadTcpSalts,
+    SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
+    SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE, SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE,
+    ShadowsocksAeadTcpExchangeReport, ShadowsocksAeadUdpPacket, TAG_LEN, aead_cipher_specs,
+    cipher_spec, decode_client_initial, decode_udp_packet, encode_client_initial,
+    encode_server_payload, encode_udp_packet, read_client_initial_from_stream,
+    read_encrypted_chunk_from_async_stream, read_encrypted_chunk_from_stream,
+    read_encrypted_chunk_in_place_from_async_stream, tcp_exchange, tcp_exchange_over_stream,
 };
 pub use cipher::{CipherFamily, CipherInfo, classify_cipher};
 pub use link::{ShadowsocksLink, Sip003, Sip003Opts};
