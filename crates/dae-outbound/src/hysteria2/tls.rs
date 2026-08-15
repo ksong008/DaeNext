@@ -1,22 +1,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::crypto::rustls::QuicClientConfig;
 #[cfg(any(test, feature = "test-support"))]
 use quinn::crypto::rustls::QuicServerConfig;
 #[cfg(any(test, feature = "test-support"))]
 use rcgen::generate_simple_self_signed;
-use rustls::RootCertStore;
 #[cfg(any(test, feature = "test-support"))]
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use crate::error::OutboundError;
 
 use super::Hysteria2CongestionRuntime;
-use super::tls_policy::{
-    Hysteria2ApplicationProtocol, Hysteria2CertificateVerification, Hysteria2TlsIdentity,
-};
-use super::tls_verifier::Hysteria2ServerCertVerifier;
+use super::tls_policy::{Hysteria2ApplicationProtocol, Hysteria2TlsIdentity};
 
 pub const DEFAULT_HYSTERIA2_ALPN: &str = Hysteria2ApplicationProtocol::Http3.wire_value();
 pub const DEFAULT_HYSTERIA2_SERVER_NAME: &str = "localhost";
@@ -84,66 +79,50 @@ pub fn build_hysteria2_runtime_client_config_with_session_cache(
         udp_packet_overhead,
         congestion.clone(),
     )?);
-    if cfg!(feature = "test-boringssl-quic") {
-        let mut policy =
-            crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([identity
-                .application_protocol()
-                .wire_value()
-                .as_bytes()])?
-            .allow_insecure(identity.policy().allow_insecure())
-            .zero_rtt(false);
-        if let Some(pin) = identity.policy().leaf_certificate_sha256_digest() {
-            policy = policy.pinned_leaf_sha256(pin, identity.policy().requires_webpki());
-        }
-        return crate::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
-            &policy, transport, session_cache,
-        )
-        .map_err(|err| bad_tls(format!("Hysteria2 BoringSSL QUIC TLS: {err}")));
+    let mut policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([identity
+        .application_protocol()
+        .wire_value()
+        .as_bytes()])?
+    .allow_insecure(identity.policy().allow_insecure())
+    .zero_rtt(false);
+    if let Some(pin) = identity.policy().leaf_certificate_sha256_digest() {
+        policy = policy.pinned_leaf_sha256(pin, identity.policy().requires_webpki());
     }
-    let roots = if identity.policy().requires_webpki() {
-        crate::shared_transport::system_ca_snapshot()
-            .map_err(|err| bad_tls(format!("load Hysteria2 system CA bundle: {err}")))?
-            .rustls_roots()
-    } else {
-        RootCertStore::empty()
-    };
-    let crypto = build_hysteria2_rustls_client_config(identity, roots)?;
-    let mut config = quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)
-            .map_err(|err| bad_tls(format!("Hysteria2 client QUIC TLS: {err}")))?,
-    ));
-    config.transport_config(transport);
-    Ok(config)
+    crate::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
+        &policy,
+        transport,
+        session_cache,
+    )
+    .map_err(|err| bad_tls(format!("Hysteria2 BoringSSL QUIC TLS: {err}")))
 }
 
-fn build_hysteria2_rustls_client_config(
+#[cfg(test)]
+fn build_hysteria2_test_client_config(
     identity: &Hysteria2TlsIdentity,
-    roots: RootCertStore,
-) -> Result<rustls::ClientConfig, OutboundError> {
-    let builder = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13]);
-    let mut crypto = match (
-        identity.policy().verification(),
-        identity.policy().has_leaf_certificate_pin(),
-    ) {
-        (Hysteria2CertificateVerification::WebPki, false) => {
-            builder.with_root_certificates(roots).with_no_client_auth()
-        }
-        _ => builder
-            .dangerous()
-            .with_custom_certificate_verifier(Hysteria2ServerCertVerifier::new(
-                identity.policy(),
-                Arc::new(roots),
-            )?)
-            .with_no_client_auth(),
-    };
-    crypto.alpn_protocols = vec![
-        identity
-            .application_protocol()
-            .wire_value()
-            .as_bytes()
-            .to_vec(),
-    ];
-    Ok(crypto)
+    system_ca: Option<Arc<crate::shared_transport::SystemCaSnapshot>>,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let transport = Arc::new(hysteria2_transport_config(0, None)?);
+    let mut policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([identity
+        .application_protocol()
+        .wire_value()
+        .as_bytes()])?
+    .allow_insecure(identity.policy().allow_insecure())
+    .zero_rtt(false);
+    if let Some(pin) = identity.policy().leaf_certificate_sha256_digest() {
+        policy = policy.pinned_leaf_sha256(pin, identity.policy().requires_webpki());
+    }
+    match system_ca {
+        Some(system_ca) => crate::shared_transport::boring_quic::build_boring_quic_client_config_with_system_ca_snapshot(
+            &policy,
+            transport,
+            system_ca,
+        ),
+        None => crate::shared_transport::boring_quic::build_boring_quic_client_config(
+            &policy,
+            transport,
+        ),
+    }
+    .map_err(|err| bad_tls(format!("Hysteria2 BoringSSL QUIC TLS test: {err}")))
 }
 
 #[cfg(any(test, feature = "test-support"))]

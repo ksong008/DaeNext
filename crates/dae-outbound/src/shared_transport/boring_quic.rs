@@ -15,7 +15,7 @@ use foreign_types::ForeignType;
 use quinn_boring::QuicSslContext;
 use sha2::{Digest, Sha256};
 
-use super::{SystemCaIdentity, system_ca_snapshot};
+use super::{SystemCaIdentity, SystemCaSnapshot, system_ca_snapshot};
 use crate::OutboundError;
 
 pub const BORING_QUIC_PROVIDER_EVIDENCE: &str = "quinn-boringssl";
@@ -120,14 +120,13 @@ impl BoringQuicClientPolicy {
     }
 }
 
-/// Reads the negotiated ALPN from a live Quinn connection regardless of which
-/// TLS provider owns the crypto session. A connection has exactly one crypto
-/// provider, so only one of these downcasts can succeed.
+/// Reads the negotiated ALPN from a live BoringSSL-backed Quinn connection.
 pub fn selected_connection_alpn(connection: &quinn::Connection) -> Option<Vec<u8>> {
     if let Some(data) = connection.handshake_data() {
         if let Some(boring) = data.downcast_ref::<quinn_boring::HandshakeData>() {
             return boring.protocol.clone();
         }
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(rustls) = data.downcast_ref::<quinn::crypto::rustls::HandshakeData>() {
             return rustls.protocol.clone();
         }
@@ -147,10 +146,37 @@ pub fn build_boring_quic_client_config_with_session_cache(
     transport: Arc<quinn::TransportConfig>,
     session_cache: Option<BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let crypto = build_boring_quic_client_crypto_with_session_cache(policy, session_cache)?;
+    let crypto = build_boring_quic_client_crypto_with_session_cache(policy, session_cache, None)?;
     let mut config = quinn::ClientConfig::new(Arc::new(crypto));
     config.transport_config(transport);
     Ok(config)
+}
+
+pub fn build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
+    policy: &BoringQuicClientPolicy,
+    transport: Arc<quinn::TransportConfig>,
+    session_cache: Option<BoringQuicSessionCache>,
+    system_ca: Option<Arc<SystemCaSnapshot>>,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let crypto =
+        build_boring_quic_client_crypto_with_session_cache(policy, session_cache, system_ca)?;
+    let mut config = quinn::ClientConfig::new(Arc::new(crypto));
+    config.transport_config(transport);
+    Ok(config)
+}
+
+#[cfg(test)]
+pub(crate) fn build_boring_quic_client_config_with_system_ca_snapshot(
+    policy: &BoringQuicClientPolicy,
+    transport: Arc<quinn::TransportConfig>,
+    system_ca: Arc<SystemCaSnapshot>,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
+        policy,
+        transport,
+        None,
+        Some(system_ca),
+    )
 }
 
 /// Builds only the Quinn crypto object. Protocol code should normally use
@@ -161,20 +187,24 @@ pub fn build_boring_quic_client_config_with_session_cache(
 pub fn build_boring_quic_client_crypto(
     policy: &BoringQuicClientPolicy,
 ) -> Result<quinn_boring::ClientConfig, OutboundError> {
-    build_boring_quic_client_crypto_with_session_cache(policy, None)
+    build_boring_quic_client_crypto_with_session_cache(policy, None, None)
 }
 
 fn build_boring_quic_client_crypto_with_session_cache(
     policy: &BoringQuicClientPolicy,
     session_cache: Option<BoringQuicSessionCache>,
+    system_ca_override: Option<Arc<SystemCaSnapshot>>,
 ) -> Result<quinn_boring::ClientConfig, OutboundError> {
     validate_alpn(&policy.alpn)?;
     let system_ca = if verification_requires_system_roots(&policy.verification) {
-        Some(system_ca_snapshot().map_err(|err| {
-            OutboundError::BadSharedTransport(format!(
-                "load BoringSSL QUIC system CA bundle: {err}"
-            ))
-        })?)
+        Some(match system_ca_override {
+            Some(system_ca) => system_ca,
+            None => system_ca_snapshot().map_err(|err| {
+                OutboundError::BadSharedTransport(format!(
+                    "load BoringSSL QUIC system CA bundle: {err}"
+                ))
+            })?,
+        })
     } else {
         None
     };
@@ -258,6 +288,8 @@ fn build_boring_quic_client_crypto_with_session_cache(
     crypto.ctx_mut().enable_early_data(policy.zero_rtt);
     if let Some(session_cache) = session_cache {
         crypto.set_session_cache(session_cache);
+    } else {
+        crypto.set_session_cache(Arc::new(quinn_boring::NoSessionCache));
     }
     crypto.set_session_cache_namespace(session_cache_namespace(
         policy,

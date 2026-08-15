@@ -1,7 +1,4 @@
-use super::h3_boring_tls::{
-    build_chrome_boring_xhttp_h3_client_config,
-    build_chrome_boring_xhttp_h3_client_config_with_system_ca,
-};
+use super::h3_boring_tls::build_chrome_boring_xhttp_h3_client_config_with_system_ca;
 use super::request::{xhttp_h3_packet_up_request, xhttp_h3_request, xhttp_session_path_suffix};
 use super::xmux::{
     XhttpXmuxClientLease, XhttpXmuxKey, XhttpXmuxRequestHandle, note_xhttp_xmux_request,
@@ -9,10 +6,6 @@ use super::xmux::{
 };
 use super::*;
 use dae_runtime_control::OwnerGeneration;
-use quinn::crypto::rustls::QuicClientConfig;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
 use sha2::{Digest, Sha256};
 
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
@@ -179,7 +172,7 @@ async fn open_xhttp_h3_connection(
     let client_config = build_xhttp_h3_client_config_with_system_ca(
         endpoint,
         tls_provider,
-        system_ca.as_deref(),
+        system_ca.clone(),
         session_cache,
     )?;
     let transport_identity = shared_transport_identity.unwrap_or_else(|| {
@@ -671,18 +664,13 @@ fn build_xhttp_h3_client_config(
     session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, String> {
     let system_ca = xhttp_h3_system_ca_snapshot(endpoint)?;
-    build_xhttp_h3_client_config_with_system_ca(
-        endpoint,
-        tls_provider,
-        system_ca.as_deref(),
-        session_cache,
-    )
+    build_xhttp_h3_client_config_with_system_ca(endpoint, tls_provider, system_ca, session_cache)
 }
 
 fn build_xhttp_h3_client_config_with_system_ca(
     endpoint: &ResidentXhttpEndpointPlan,
     tls_provider: ResidentXhttpQuicTlsProvider,
-    system_ca: Option<&dae_outbound::shared_transport::SystemCaSnapshot>,
+    system_ca: Option<Arc<dae_outbound::shared_transport::SystemCaSnapshot>>,
     session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, String> {
     if endpoint.ech.is_some() {
@@ -698,45 +686,26 @@ fn build_xhttp_h3_client_config_with_system_ca(
         ));
     }
     if tls_provider == ResidentXhttpQuicTlsProvider::ChromeBoring {
-        if cfg!(feature = "test-boringssl-quic") {
-            return build_chrome_boring_xhttp_h3_client_config(endpoint, session_cache);
-        }
-        return build_chrome_boring_xhttp_h3_client_config_with_system_ca(endpoint, system_ca);
+        return build_chrome_boring_xhttp_h3_client_config_with_system_ca(
+            endpoint,
+            system_ca,
+            session_cache,
+        );
     }
-    if cfg!(feature = "test-boringssl-quic") {
-        let policy = dae_outbound::shared_transport::boring_quic::BoringQuicClientPolicy::new([
-            b"h3".as_slice(),
-        ])
+    let policy =
+        dae_outbound::shared_transport::boring_quic::BoringQuicClientPolicy::new(
+            [b"h3".as_slice()],
+        )
         .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC policy: {err}"))?
         .allow_insecure(endpoint.allow_insecure)
         .zero_rtt(false);
-        return dae_outbound::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
-            &policy,
-            Arc::new(xhttp_h3_transport_config()?),
-            session_cache,
-        )
-        .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC config: {err}"));
-    }
-    let mut crypto = if endpoint.allow_insecure {
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .dangerous()
-            .with_custom_certificate_verifier(AcceptAnyXhttpH3Verifier::new())
-            .with_no_client_auth()
-    } else {
-        let roots = system_ca
-            .ok_or_else(|| "xHTTP H3 rustls config is missing system CA snapshot".to_owned())?
-            .rustls_roots();
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(roots)
-            .with_no_client_auth()
-    };
-    crypto.alpn_protocols = vec![b"h3".to_vec()];
-    let mut config = quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)
-            .map_err(|err| format!("xHTTP H3 client QUIC TLS config: {err}"))?,
-    ));
-    config.transport_config(Arc::new(xhttp_h3_transport_config()?));
-    Ok(config)
+    dae_outbound::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
+        &policy,
+        Arc::new(xhttp_h3_transport_config()?),
+        session_cache,
+        system_ca,
+    )
+    .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC config: {err}"))
 }
 
 pub(super) fn xhttp_h3_transport_config() -> Result<quinn::TransportConfig, String> {
@@ -752,64 +721,4 @@ pub(super) fn xhttp_h3_transport_config() -> Result<quinn::TransportConfig, Stri
     transport.datagram_receive_buffer_size(None);
     transport.datagram_send_buffer_size(0);
     Ok(transport)
-}
-
-#[derive(Debug)]
-struct AcceptAnyXhttpH3Verifier {
-    provider: Arc<rustls::crypto::CryptoProvider>,
-}
-
-impl AcceptAnyXhttpH3Verifier {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-        })
-    }
-}
-
-impl ServerCertVerifier for AcceptAnyXhttpH3Verifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
 }

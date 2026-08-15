@@ -34,7 +34,7 @@ fn open_test_quic_endpoint(
 
 #[test]
 fn receive_slab_charge_uses_quinn_runtime_dimensions() {
-    let config = quinn::EndpointConfig::default();
+    let config = quinn_boring::helpers::default_endpoint_config();
     let ordinary = QuicEndpointCharge::for_socket(&config, 64, true).unwrap();
     let salamander = QuicEndpointCharge::for_socket(&config, 1, true).unwrap();
 
@@ -64,7 +64,7 @@ fn receive_slab_charge_uses_quinn_runtime_dimensions() {
 
 #[test]
 fn pure_quic_omits_only_the_http3_component() {
-    let config = quinn::EndpointConfig::default();
+    let config = quinn_boring::helpers::default_endpoint_config();
     let charge = QuicEndpointCharge::for_socket(&config, 1, false).unwrap();
     assert_eq!(charge.http3_bytes, 0);
     assert!(charge.quic_transport_bytes > 0);
@@ -112,7 +112,8 @@ async fn task_scoped_caller_and_generation_do_not_cross_requests() {
         scoped_context(QuicEndpointCallerClass::BackgroundHealth, health_generation,),
     );
     let charge =
-        QuicEndpointCharge::for_socket(&quinn::EndpointConfig::default(), 1, false).unwrap();
+        QuicEndpointCharge::for_socket(&quinn_boring::helpers::default_endpoint_config(), 1, false)
+            .unwrap();
     let remote = "127.0.0.1:443".parse().unwrap();
     let bind = "0.0.0.0:0".parse().unwrap();
     let manual = manual.finalize(
@@ -177,7 +178,8 @@ async fn inherited_task_observation_survives_spawn() {
     )
     .await;
     let charge =
-        QuicEndpointCharge::for_socket(&quinn::EndpointConfig::default(), 1, true).unwrap();
+        QuicEndpointCharge::for_socket(&quinn_boring::helpers::default_endpoint_config(), 1, true)
+            .unwrap();
     let provenance = context.finalize(
         "127.0.0.1:443".parse().unwrap(),
         "0.0.0.0:0".parse().unwrap(),
@@ -199,7 +201,8 @@ fn redacted_key_partitions_socket_mark_and_bind_policy() {
         b"socket-policy-partition",
     );
     let charge =
-        QuicEndpointCharge::for_socket(&quinn::EndpointConfig::default(), 1, false).unwrap();
+        QuicEndpointCharge::for_socket(&quinn_boring::helpers::default_endpoint_config(), 1, false)
+            .unwrap();
     let remote = "192.0.2.10:443".parse().unwrap();
     let wildcard_bind = "0.0.0.0:0".parse().unwrap();
     let explicit_bind = "192.0.2.20:0".parse().unwrap();

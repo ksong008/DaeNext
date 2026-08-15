@@ -19,7 +19,7 @@ pub trait SessionCache: Send + Sync {
     fn remove(&self, key: Bytes);
 
     /// Removes all entries from the cache.
-    fn clear(&self);
+    fn clear(&self) -> usize;
 }
 
 /// A utility for combining an [SslSession] and server [TransportParameters] as a
@@ -118,7 +118,9 @@ impl SessionCache for NoSessionCache {
 
     fn remove(&self, _: Bytes) {}
 
-    fn clear(&self) {}
+    fn clear(&self) -> usize {
+        0
+    }
 }
 
 pub struct SimpleCache {
@@ -146,8 +148,11 @@ impl SessionCache for SimpleCache {
         let _ = self.cache.lock().unwrap().pop(&key);
     }
 
-    fn clear(&self) {
-        self.cache.lock().unwrap().clear()
+    fn clear(&self) -> usize {
+        let mut cache = self.cache.lock().unwrap();
+        let count = cache.len();
+        cache.clear();
+        count
     }
 }
 

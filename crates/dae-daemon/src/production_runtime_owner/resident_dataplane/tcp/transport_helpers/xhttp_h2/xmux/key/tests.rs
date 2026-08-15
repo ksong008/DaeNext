@@ -180,18 +180,18 @@ fn equivalent_primary_endpoints_reuse_the_same_key() {
 fn primary_h3_quic_tls_provider_partitions_xmux_key() {
     let mut endpoint = endpoint(None);
     endpoint.alpn = vec!["h3".to_owned()];
-    let rustls_proxy = test_proxy(&endpoint);
-    let mut boring_proxy = rustls_proxy.clone();
-    boring_proxy.utls_fingerprint = Some(chrome_fingerprint());
-    let mut boring_endpoint = endpoint.clone();
-    boring_endpoint.utls_fingerprint = boring_proxy.utls_fingerprint.clone();
+    let standard_proxy = test_proxy(&endpoint);
+    let mut chrome_proxy = standard_proxy.clone();
+    chrome_proxy.utls_fingerprint = Some(chrome_fingerprint());
+    let mut chrome_endpoint = endpoint.clone();
+    chrome_endpoint.utls_fingerprint = chrome_proxy.utls_fingerprint.clone();
     let resolved = resolved(&["192.0.2.30:443"]);
 
-    let rustls = primary_key(&rustls_proxy, &endpoint, &resolved, 0, false);
-    let boring = primary_key(&boring_proxy, &boring_endpoint, &resolved, 0, false);
-    assert_ne!(rustls, boring);
-    assert!(format!("{rustls:?}").contains("quic_tls_provider: Some(Rustls)"));
-    assert!(format!("{boring:?}").contains("quic_tls_provider: Some(ChromeBoring)"));
+    let standard = primary_key(&standard_proxy, &endpoint, &resolved, 0, false);
+    let chrome = primary_key(&chrome_proxy, &chrome_endpoint, &resolved, 0, false);
+    assert_ne!(standard, chrome);
+    assert!(format!("{standard:?}").contains("quic_tls_provider: Some(Boring)"));
+    assert!(format!("{chrome:?}").contains("quic_tls_provider: Some(ChromeBoring)"));
 }
 
 #[test]

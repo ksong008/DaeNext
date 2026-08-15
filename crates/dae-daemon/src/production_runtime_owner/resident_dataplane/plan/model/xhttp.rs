@@ -19,7 +19,7 @@ pub(crate) struct ResidentUtlsFingerprintPlan {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ResidentXhttpQuicTlsProvider {
-    Rustls,
+    Boring,
     ChromeBoring,
 }
 
@@ -28,7 +28,7 @@ impl ResidentXhttpQuicTlsProvider {
         fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     ) -> Result<Self, String> {
         let Some(fingerprint) = fingerprint else {
-            return Ok(Self::Rustls);
+            return Ok(Self::Boring);
         };
         if fingerprint.family == dae_outbound::shared_transport::UTLS_FAMILY_CHROME
             && fingerprint.canonical == "chrome_auto"
@@ -45,7 +45,7 @@ impl ResidentXhttpQuicTlsProvider {
 
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::Rustls => "quinn-rustls",
+            Self::Boring => "quinn-boringssl",
             Self::ChromeBoring => "quinn-boringssl-chrome",
         }
     }

@@ -171,6 +171,7 @@ impl ResidentDataplaneRuntime {
             "cleanup": "reply dispatcher stopped and joined with UDP manager",
         }));
         let tls_caches = client::clear_resident_tls_config_caches();
+        let boring_io_profile = client::take_boring_tls_io_profile_snapshot();
         steps.push(json!({
             "name": "clear-resident-tls-config-caches",
             "status": "pass",
@@ -182,6 +183,7 @@ impl ResidentDataplaneRuntime {
             "boringSessionReused": tls_caches.boring_session_reused,
             "boringSessionRejected": tls_caches.boring_session_rejected,
             "boringSessionStored": tls_caches.boring_session_stored,
+            "boringIoProfile": boring_io_profile,
         }));
     }
 

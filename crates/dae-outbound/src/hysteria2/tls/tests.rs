@@ -2,12 +2,11 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
+use quinn::crypto::rustls::QuicServerConfig;
 use rcgen::{
-    BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
-    date_time_ymd,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyPair, KeyUsagePurpose, date_time_ymd,
 };
-use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use super::*;
@@ -26,7 +25,7 @@ enum LeafValidity {
 }
 
 struct CertificateChain {
-    root_der: CertificateDer<'static>,
+    root_pem: String,
     leaf_der: CertificateDer<'static>,
     leaf_key_der: Vec<u8>,
 }
@@ -35,6 +34,9 @@ impl CertificateChain {
     fn signed(server_name: &str, validity: LeafValidity) -> Self {
         let root_key = KeyPair::generate().unwrap();
         let mut root_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        let mut root_name = DistinguishedName::new();
+        root_name.push(DnType::CommonName, "DaeNext Hysteria2 test root");
+        root_params.distinguished_name = root_name;
         root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         root_params.key_usages = vec![
             KeyUsagePurpose::DigitalSignature,
@@ -45,6 +47,9 @@ impl CertificateChain {
 
         let leaf_key = KeyPair::generate().unwrap();
         let mut leaf_params = CertificateParams::new(vec![server_name.to_owned()]).unwrap();
+        let mut leaf_name = DistinguishedName::new();
+        leaf_name.push(DnType::CommonName, server_name);
+        leaf_params.distinguished_name = leaf_name;
         leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         match validity {
             LeafValidity::Current => {}
@@ -59,7 +64,7 @@ impl CertificateChain {
         }
         let leaf = leaf_params.signed_by(&leaf_key, &root, &root_key).unwrap();
         Self {
-            root_der: root.der().clone(),
+            root_pem: root.pem(),
             leaf_der: leaf.der().clone(),
             leaf_key_der: leaf_key.serialize_der(),
         }
@@ -84,6 +89,20 @@ impl CertificateChain {
                 .unwrap();
         crypto.alpn_protocols = vec![DEFAULT_HYSTERIA2_ALPN.as_bytes().to_vec()];
         quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()))
+    }
+
+    fn system_ca_snapshot(&self) -> Arc<crate::shared_transport::SystemCaSnapshot> {
+        let path = std::env::temp_dir().join(format!(
+            "daenext-hysteria2-ca-{}-{}.pem",
+            std::process::id(),
+            fastrand::u64(..)
+        ));
+        std::fs::write(&path, &self.root_pem).unwrap();
+        let snapshot = crate::shared_transport::SystemCaSnapshot::load_from_path(path.clone())
+            .map(Arc::new)
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+        snapshot
     }
 }
 
@@ -123,16 +142,11 @@ async fn completes_handshake(
         server_endpoint.wait_idle().await;
     });
 
-    let mut roots = RootCertStore::empty();
-    if trust_fixture_root {
-        roots.add(chain.root_der.clone()).unwrap();
-    }
-    let Ok(crypto) = build_hysteria2_rustls_client_config(identity, roots) else {
+    let system_ca = trust_fixture_root.then(|| chain.system_ca_snapshot());
+    let Ok(client_config) = build_hysteria2_test_client_config(identity, system_ca) else {
         server_task.abort();
         return false;
     };
-    let client_config =
-        quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).unwrap()));
     let mut client_endpoint =
         quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
     client_endpoint.set_default_client_config(client_config);

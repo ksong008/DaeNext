@@ -901,8 +901,7 @@ fn classify_hysteria2_connection_error(
     requires_webpki: bool,
 ) -> Hysteria2Failure {
     if let Some(code) = hysteria2_crypto_error_code(error) {
-        let pin_alert =
-            quinn::TransportErrorCode::crypto(u8::from(rustls::AlertDescription::AccessDenied));
+        let pin_alert = quinn::TransportErrorCode::crypto(TLS_ALERT_ACCESS_DENIED);
         if has_certificate_pin && (!requires_webpki || code == pin_alert) {
             return Hysteria2Failure::new(
                 Hysteria2FailureClass::TlsPin,
@@ -941,6 +940,10 @@ fn classify_hysteria2_connection_error(
     };
     Hysteria2Failure::new(class, operation, detail)
 }
+
+#[cfg(test)]
+const TLS_ALERT_UNKNOWN_CA: u8 = 48;
+const TLS_ALERT_ACCESS_DENIED: u8 = 49;
 
 fn hysteria2_crypto_error_code(
     error: &quinn::ConnectionError,
@@ -1036,9 +1039,7 @@ mod tests {
     #[test]
     fn hysteria2_tls_failures_are_terminal_and_redacted() {
         let certificate = quinn::ConnectionError::ConnectionClosed(quinn::ConnectionClose {
-            error_code: quinn::TransportErrorCode::crypto(u8::from(
-                rustls::AlertDescription::UnknownCA,
-            )),
+            error_code: quinn::TransportErrorCode::crypto(TLS_ALERT_UNKNOWN_CA),
             frame_type: None,
             reason: Bytes::from_static(b"private.example certificate canary"),
         });
@@ -1051,9 +1052,7 @@ mod tests {
         assert!(!certificate.to_string().contains("private.example"));
 
         let pin = quinn::ConnectionError::ConnectionClosed(quinn::ConnectionClose {
-            error_code: quinn::TransportErrorCode::crypto(u8::from(
-                rustls::AlertDescription::AccessDenied,
-            )),
+            error_code: quinn::TransportErrorCode::crypto(TLS_ALERT_ACCESS_DENIED),
             frame_type: None,
             reason: Bytes::from_static(b"0123456789abcdef pin canary"),
         });
@@ -1139,7 +1138,7 @@ mod tests {
         assert_eq!(charge["receiveSegments"], 1);
         assert_eq!(
             charge["receiveSlab"],
-            quinn::EndpointConfig::default()
+            quinn_boring::helpers::default_endpoint_config()
                 .get_max_udp_payload_size()
                 .min(64 * 1024)
                 * quinn::udp::BATCH_SIZE as u64

@@ -12,7 +12,6 @@ mod quic_loopback;
 mod runtime;
 mod tls;
 mod tls_policy;
-mod tls_verifier;
 mod underlay;
 mod wire;
 

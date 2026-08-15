@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn pre_socket_charge_covers_wrapped_socket_segment_counts() {
-        let config = quinn::EndpointConfig::default();
+        let config = quinn_boring::helpers::default_endpoint_config();
         let ordinary =
             QuicEndpointCharge::before_socket(&config, QuicEndpointUnderlay::Ordinary, true)
                 .unwrap();
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn port_hopping_charges_one_receive_slab_and_independent_underlay_sockets() {
-        let config = quinn::EndpointConfig::default();
+        let config = quinn_boring::helpers::default_endpoint_config();
         for (receive_segments, ordinary, hopping) in [
             (
                 conservative_platform_receive_segments(),

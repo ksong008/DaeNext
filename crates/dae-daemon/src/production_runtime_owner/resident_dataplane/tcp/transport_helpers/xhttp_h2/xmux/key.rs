@@ -227,7 +227,7 @@ impl XhttpXmuxKey {
                 reality: None,
                 fingerprint: None,
                 quic_tls_provider: match protocol {
-                    ResidentXhttpHttpVersion::H3 => Some(ResidentXhttpQuicTlsProvider::Rustls),
+                    ResidentXhttpHttpVersion::H3 => Some(ResidentXhttpQuicTlsProvider::Boring),
                     ResidentXhttpHttpVersion::H1 | ResidentXhttpHttpVersion::H2 => None,
                 },
                 tls_fragment: None,
