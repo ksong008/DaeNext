@@ -77,7 +77,7 @@ pub fn security_underlay_capability_rows() -> &'static [SecurityUnderlayCapabili
 const SECURITY_UNDERLAY_CAPABILITY_ROWS: [SecurityUnderlayCapabilityRow; 8] = [
     admitted_row(
         "standard-tls-common-underlay",
-        "rustls",
+        "boringssl",
         "standard-tls",
         "system-roots",
         "explicit-alpn",
@@ -98,13 +98,13 @@ const SECURITY_UNDERLAY_CAPABILITY_ROWS: [SecurityUnderlayCapabilityRow; 8] = [
         &[
             "fingerprint-resolution",
             "boring-runtime-factory",
-            "no-silent-rustls-downgrade",
+            "no-silent-nonboring-downgrade",
             "large-page-live",
         ],
     ),
     admitted_row(
         "reality-common-underlay",
-        "rustls-reality",
+        "boringssl-reality",
         "reality",
         "reality-peer-verification",
         "explicit-alpn",
@@ -177,7 +177,7 @@ const SECURITY_UNDERLAY_CAPABILITY_ROWS: [SecurityUnderlayCapabilityRow; 8] = [
         "fingerprint-aware-alpn",
         "required-sni",
         "preserved-by-resident-dialer",
-        &["negative-fixture", "no-silent-rustls-downgrade"],
+        &["negative-fixture", "no-silent-nonboring-downgrade"],
     ),
 ];
 

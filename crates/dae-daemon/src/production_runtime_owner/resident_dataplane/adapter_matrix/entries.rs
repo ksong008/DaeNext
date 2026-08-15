@@ -23,7 +23,7 @@ pub(crate) const RESIDENT_LIVE_ADAPTER_MATRIX_ENTRIES: [ResidentLiveAdapterMatri
             "resident_dataplane::plan admits only the live adapter shape",
             "resident_dataplane::tcp opens the fingerprint-aware VLESS/TLS client",
             "resident_dataplane::udp uses the same admitted proxy plan for XUDP",
-            "resident dataplane event field tls_underlay records boring/rustls underlay choice",
+            "resident dataplane event field tls_underlay records the BoringSSL underlay shape",
             "live-evidence-ledger must record a remote UDP matrix echo before this row is live-ready",
             "live-evidence-ledger must record remote TCP/page-load evidence before this row is live-ready",
         ],

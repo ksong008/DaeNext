@@ -126,10 +126,6 @@ pub fn selected_connection_alpn(connection: &quinn::Connection) -> Option<Vec<u8
         if let Some(boring) = data.downcast_ref::<quinn_boring::HandshakeData>() {
             return boring.protocol.clone();
         }
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(rustls) = data.downcast_ref::<quinn::crypto::rustls::HandshakeData>() {
-            return rustls.protocol.clone();
-        }
     }
     None
 }

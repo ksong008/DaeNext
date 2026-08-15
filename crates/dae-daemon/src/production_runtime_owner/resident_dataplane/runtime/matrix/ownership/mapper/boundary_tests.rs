@@ -173,7 +173,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
         (
             shape(
                 Protocol::VlessStandard,
-                Security::RealityRustls,
+                Security::RealityBoring,
                 Wrapper::H2,
                 Udp::Vless(Stream::H2Tls),
             ),
@@ -200,7 +200,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
         (
             shape(
                 Protocol::VlessStandard,
-                Security::RealityRustls,
+                Security::RealityBoring,
                 Wrapper::XhttpH2,
                 Udp::Vless(Stream::XhttpH2),
             ),
@@ -227,7 +227,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
         (
             shape(
                 Protocol::VlessStandard,
-                Security::RealityRustls,
+                Security::RealityBoring,
                 Wrapper::XhttpH1,
                 Udp::Vless(Stream::XhttpH1),
             ),
@@ -236,7 +236,7 @@ fn h2_xhttp_and_vmess_h2_security_boundaries_are_explicit() {
         (
             shape(
                 Protocol::VlessStandard,
-                Security::RealityRustls,
+                Security::RealityBoring,
                 Wrapper::XhttpH3,
                 Udp::Vless(Stream::XhttpH3),
             ),

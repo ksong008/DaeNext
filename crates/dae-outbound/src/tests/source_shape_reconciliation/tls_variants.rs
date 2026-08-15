@@ -51,7 +51,7 @@ const STREAM_TLS_WITHOUT_FINGERPRINT_VARIANTS: &[MaterializedTlsVariant] = &[
 
 const REALITY_TLS_VARIANTS: &[MaterializedTlsVariant] = &[
     tls_variant(
-        MaterializedSecurity::RealityRustls,
+        MaterializedSecurity::RealityBoring,
         MaterializedTlsFeatures::NONE,
     ),
     tls_variant(

@@ -10,7 +10,7 @@ fn case_trojan_httpupgrade_tcp_dataplane_echoes_payload() {
     let material = shared_transport::tls_loopback_material(&tls_options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let password = "fixture-password";
     let target = "fixture-trojan.fixture.invalid:443";
     let httpupgrade_host = "fixture-upgrade-host.fixture.invalid";
@@ -19,8 +19,7 @@ fn case_trojan_httpupgrade_tcp_dataplane_echoes_payload() {
     let server_payload = payload.clone();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let conn = rustls::ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         let request_head = shared_transport::read_http_head(&mut tls).unwrap();
         let request_head = String::from_utf8(request_head).unwrap();
         assert!(request_head.starts_with(&format!("GET {httpupgrade_path} HTTP/1.1\r\n")));
@@ -39,10 +38,7 @@ fn case_trojan_httpupgrade_tcp_dataplane_echoes_payload() {
         assert_eq!(request.target, target);
         assert_eq!(request.payload, server_payload);
         tls.write_all(&request.payload).unwrap();
-        tls.conn
-            .alpn_protocol()
-            .map(|value| String::from_utf8_lossy(value).to_string())
-            .unwrap_or_default()
+        shared_transport::test_support::selected_tls_alpn(tls.ssl())
     });
 
     let report = trojan::tcp_exchange_over_httpupgrade_tls_stream(

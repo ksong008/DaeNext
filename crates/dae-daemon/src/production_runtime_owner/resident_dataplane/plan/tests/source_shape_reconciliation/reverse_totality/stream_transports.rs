@@ -63,7 +63,7 @@ fn meek_url() -> String {
 fn reality_variant(fingerprint: &str) -> MaterializedTlsVariant {
     if fingerprint.is_empty() {
         MaterializedTlsVariant::new(
-            MaterializedSecurity::RealityRustls,
+            MaterializedSecurity::RealityBoring,
             MaterializedTlsFeatures::NONE,
         )
     } else {

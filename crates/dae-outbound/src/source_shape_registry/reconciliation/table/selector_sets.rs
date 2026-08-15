@@ -34,7 +34,7 @@ const INSECURE_FRAGMENTED_FINGERPRINT_TLS_VARIANT: MaterializedTlsVariant =
         MaterializedTlsFeatures::ALLOW_INSECURE_FRAGMENT_FINGERPRINT,
     );
 const REALITY_TLS_VARIANT: MaterializedTlsVariant = MaterializedTlsVariant::new(
-    MaterializedSecurity::RealityRustls,
+    MaterializedSecurity::RealityBoring,
     MaterializedTlsFeatures::NONE,
 );
 const REALITY_FINGERPRINT_TLS_VARIANT: MaterializedTlsVariant = MaterializedTlsVariant::new(

@@ -4,14 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::{Engine as _, engine::general_purpose};
+use boring_v4_compat::ssl::{NameType, SslAlert, SslVerifyError, SslVerifyMode};
 use bytes::{Buf, Bytes};
 use h3::{client, server};
 use http::{Request, Response, StatusCode};
-use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
-use rcgen::generate_simple_self_signed;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use crate::error::OutboundError;
 
@@ -92,106 +88,6 @@ struct CertCallbackState {
     pin_error: Option<String>,
 }
 
-#[derive(Debug)]
-struct RecordingServerCertVerifier {
-    provider: Arc<rustls::crypto::CryptoProvider>,
-    state: Arc<Mutex<CertCallbackState>>,
-    pinned_certchain_sha256: Option<String>,
-}
-
-impl RecordingServerCertVerifier {
-    fn new(
-        state: Arc<Mutex<CertCallbackState>>,
-        pinned_certchain_sha256: Option<String>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-            state,
-            pinned_certchain_sha256,
-        })
-    }
-}
-
-impl ServerCertVerifier for RecordingServerCertVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
-        server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        let mut raw_certs: Vec<&[u8]> = Vec::with_capacity(intermediates.len() + 1);
-        raw_certs.push(end_entity.as_ref());
-        raw_certs.extend(intermediates.iter().map(|cert| cert.as_ref()));
-        let chain_hash = generate_cert_chain_hash(&raw_certs);
-        let pin_check = self
-            .pinned_certchain_sha256
-            .as_deref()
-            .map(|pin| verify_pinned_certchain(&raw_certs, pin));
-        if let Ok(mut state) = self.state.lock() {
-            state.observed = true;
-            state.cert_count = raw_certs.len();
-            state.chain_hash_hex = hex_encode(&chain_hash);
-            state.server_name = server_name.to_str().into_owned();
-            if let Some(check) = &pin_check {
-                match check {
-                    Ok(check) => {
-                        state.pin_format = Some(check.pin_format.clone());
-                        state.pin_matched = check.matched;
-                        state.pin_error = None;
-                    }
-                    Err(err) => {
-                        state.pin_format = None;
-                        state.pin_matched = false;
-                        state.pin_error = Some(err.to_string());
-                    }
-                }
-            }
-        }
-        if let Some(Err(err)) = pin_check {
-            return Err(rustls::Error::General(format!(
-                "juicity pinned certchain verification failed: {err}"
-            )));
-        }
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
-}
-
 pub fn run_h3_loopback_smoke(
     options: &JuicityH3LoopbackOptions,
 ) -> Result<JuicityH3LoopbackReport, OutboundError> {
@@ -224,7 +120,7 @@ async fn run_h3_loopback_smoke_async(
     let pinned_certchain_sha256 = options
         .verify_pinned_certchain
         .then(|| encode_live_certchain_pin_url_base64(&cert_der));
-    let server_endpoint = quinn::Endpoint::server(
+    let server_endpoint = crate::shared_transport::test_support::boring_quic_server_endpoint(
         server_config,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
     )
@@ -241,9 +137,10 @@ async fn run_h3_loopback_smoke_async(
     let verifier_state = Arc::new(Mutex::new(CertCallbackState::default()));
     let client_config =
         build_client_config(Arc::clone(&verifier_state), pinned_certchain_sha256.clone())?;
-    let mut client_endpoint =
-        quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-            .map_err(|err| bad_loopback(format!("create client endpoint: {err}")))?;
+    let mut client_endpoint = crate::shared_transport::test_support::boring_quic_client_endpoint(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .map_err(|err| bad_loopback(format!("create client endpoint: {err}")))?;
     client_endpoint.set_default_client_config(client_config);
     let client_connection = client_endpoint
         .connect(loopback_addr, &options.server_name)
@@ -315,7 +212,7 @@ async fn run_h3_loopback_smoke_async(
     let quic_handshake_validated =
         client_selected_alpn == DEFAULT_H3_ALPN && server_selected_alpn == DEFAULT_H3_ALPN;
     let certificate_chain_der_count = if callback.cert_count == 0 {
-        usize::from(!cert_der.as_ref().is_empty())
+        usize::from(!cert_der.is_empty())
     } else {
         callback.cert_count
     };
@@ -425,25 +322,18 @@ async fn run_h3_loopback_server(
     Ok((selected_alpn, accepted, echoed))
 }
 
-fn build_server_config(
-    server_name: &str,
-) -> Result<(quinn::ServerConfig, CertificateDer<'static>), OutboundError> {
-    let certified = generate_simple_self_signed(vec![server_name.to_owned()])
-        .map_err(|err| bad_loopback(format!("generate h3 cert: {err}")))?;
-    let cert_der = certified.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der.clone()], key_der)
-            .map_err(|err| bad_loopback(format!("server cert config: {err}")))?;
-    crypto.alpn_protocols = vec![DEFAULT_H3_ALPN.as_bytes().to_vec()];
-    let mut config = quinn::ServerConfig::with_crypto(Arc::new(
-        QuicServerConfig::try_from(crypto)
-            .map_err(|err| bad_loopback(format!("server quic tls config: {err}")))?,
-    ));
-    config.transport_config(Arc::new(transport_config()?));
+fn build_server_config(server_name: &str) -> Result<(quinn::ServerConfig, Vec<u8>), OutboundError> {
+    let identity = crate::shared_transport::test_support::self_signed_tls_identity(&[server_name])
+        .map_err(|err| bad_loopback(format!("generate h3 BoringSSL cert: {err}")))?;
+    let cert_der = identity
+        .certificate_der()
+        .map_err(|err| bad_loopback(format!("encode h3 BoringSSL cert: {err}")))?;
+    let config = crate::shared_transport::test_support::boring_quic_server_config(
+        &identity,
+        &[DEFAULT_H3_ALPN.as_bytes().to_vec()],
+        Arc::new(transport_config()?),
+    )
+    .map_err(|err| bad_loopback(format!("BoringSSL server QUIC TLS: {err}")))?;
     Ok((config, cert_der))
 }
 
@@ -451,23 +341,67 @@ fn build_client_config(
     verifier_state: Arc<Mutex<CertCallbackState>>,
     pinned_certchain_sha256: Option<String>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let verifier = RecordingServerCertVerifier::new(verifier_state, pinned_certchain_sha256);
-    let mut crypto =
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
-    crypto.alpn_protocols = vec![DEFAULT_H3_ALPN.as_bytes().to_vec()];
-    let mut config = quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)
-            .map_err(|err| bad_loopback(format!("client quic tls config: {err}")))?,
-    ));
+    let policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([
+        DEFAULT_H3_ALPN.as_bytes(),
+    ])?
+    .allow_insecure(true);
+    let mut crypto = crate::shared_transport::boring_quic::build_boring_quic_client_crypto(&policy)
+        .map_err(|err| bad_loopback(format!("BoringSSL client QUIC TLS: {err}")))?;
+    crypto.set_custom_verify_callback(SslVerifyMode::PEER, move |ssl| {
+        let raw_certs = if let Some(chain) = ssl.peer_cert_chain() {
+            chain
+                .iter()
+                .map(|cert| cert.to_der())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| SslVerifyError::Invalid(SslAlert::CERTIFICATE_UNKNOWN))?
+        } else if let Some(cert) = ssl.peer_certificate() {
+            vec![
+                cert.to_der()
+                    .map_err(|_| SslVerifyError::Invalid(SslAlert::CERTIFICATE_UNKNOWN))?,
+            ]
+        } else {
+            return Err(SslVerifyError::Invalid(SslAlert::CERTIFICATE_UNKNOWN));
+        };
+        let raw_cert_refs = raw_certs.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let chain_hash = generate_cert_chain_hash(&raw_cert_refs);
+        let pin_check = pinned_certchain_sha256
+            .as_deref()
+            .map(|pin| verify_pinned_certchain(&raw_cert_refs, pin));
+        if let Ok(mut state) = verifier_state.lock() {
+            state.observed = true;
+            state.cert_count = raw_cert_refs.len();
+            state.chain_hash_hex = hex_encode(&chain_hash);
+            state.server_name = ssl
+                .servername(NameType::HOST_NAME)
+                .unwrap_or_default()
+                .to_owned();
+            if let Some(check) = &pin_check {
+                match check {
+                    Ok(check) => {
+                        state.pin_format = Some(check.pin_format.clone());
+                        state.pin_matched = check.matched;
+                        state.pin_error = None;
+                    }
+                    Err(err) => {
+                        state.pin_format = None;
+                        state.pin_matched = false;
+                        state.pin_error = Some(err.to_string());
+                    }
+                }
+            }
+        }
+        if pin_check.is_some_and(|check| check.is_err()) {
+            return Err(SslVerifyError::Invalid(SslAlert::CERTIFICATE_UNKNOWN));
+        }
+        Ok(())
+    });
+    let mut config = quinn::ClientConfig::new(Arc::new(crypto));
     config.transport_config(Arc::new(transport_config()?));
     Ok(config)
 }
 
-fn encode_live_certchain_pin_url_base64(cert_der: &CertificateDer<'_>) -> String {
-    let raw_certs = [cert_der.as_ref()];
+fn encode_live_certchain_pin_url_base64(cert_der: &[u8]) -> String {
+    let raw_certs = [cert_der];
     let chain_hash = generate_cert_chain_hash(&raw_certs);
     general_purpose::URL_SAFE.encode(chain_hash)
 }

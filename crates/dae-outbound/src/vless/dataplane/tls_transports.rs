@@ -1,8 +1,4 @@
 use std::io::{Read, Write};
-use std::sync::Arc;
-
-use rustls::ClientConnection;
-use rustls::pki_types::ServerName;
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
@@ -35,7 +31,7 @@ pub struct VlessWssTlsExchangeReport {
     pub alpn_validated: bool,
     pub websocket_handshake_validated: bool,
     pub websocket_binary_frame_validated: bool,
-    pub rustls_tls_lifecycle: bool,
+    pub boringssl_tls_lifecycle: bool,
     pub full_utls_deferred: bool,
     pub reality_deferred: bool,
     pub tls_fragment_deferred: bool,
@@ -62,7 +58,7 @@ pub struct VlessHttpsHttpUpgradeTlsExchangeReport {
     pub server_name_validated: bool,
     pub alpn_validated: bool,
     pub httpupgrade_handshake_validated: bool,
-    pub rustls_tls_lifecycle: bool,
+    pub boringssl_tls_lifecycle: bool,
     pub full_utls_deferred: bool,
     pub reality_deferred: bool,
     pub tls_fragment_deferred: bool,
@@ -110,7 +106,7 @@ where
             "VLESS WSS payload response mismatch".to_owned(),
         ));
     }
-    let selected_alpn = selected_alpn(tls.conn.alpn_protocol());
+    let selected_alpn = crate::shared_transport::test_support::selected_tls_alpn(tls.ssl());
     let alpn_validated = selected_alpn == tls_options.alpn_protocol;
 
     Ok(VlessWssTlsExchangeReport {
@@ -133,7 +129,7 @@ where
         alpn_validated,
         websocket_handshake_validated: true,
         websocket_binary_frame_validated: true,
-        rustls_tls_lifecycle: true,
+        boringssl_tls_lifecycle: true,
         full_utls_deferred: true,
         reality_deferred: true,
         tls_fragment_deferred: true,
@@ -177,7 +173,7 @@ where
             "VLESS HTTPS HTTPUpgrade payload response mismatch".to_owned(),
         ));
     }
-    let selected_alpn = selected_alpn(tls.conn.alpn_protocol());
+    let selected_alpn = crate::shared_transport::test_support::selected_tls_alpn(tls.ssl());
     let alpn_validated = selected_alpn == tls_options.alpn_protocol;
 
     Ok(VlessHttpsHttpUpgradeTlsExchangeReport {
@@ -199,7 +195,7 @@ where
         server_name_validated: true,
         alpn_validated,
         httpupgrade_handshake_validated: true,
-        rustls_tls_lifecycle: true,
+        boringssl_tls_lifecycle: true,
         full_utls_deferred: true,
         reality_deferred: true,
         tls_fragment_deferred: true,
@@ -212,19 +208,11 @@ fn tls_client_stream<S>(
     material: &TlsLoopbackMaterial,
     tls_options: &TlsUnderlayOptions,
     label: &str,
-) -> Result<rustls::StreamOwned<ClientConnection, S>, OutboundError>
+) -> Result<boring::ssl::SslStream<S>, OutboundError>
 where
     S: Read + Write,
 {
-    let server_name = ServerName::try_from(tls_options.server_name.clone())
-        .map_err(|err| OutboundError::BadVless(format!("invalid {label} server_name: {err}")))?;
-    let conn = ClientConnection::new(Arc::clone(&material.client_config), server_name)
-        .map_err(|err| OutboundError::BadVless(format!("{label} tls connect: {err}")))?;
-    Ok(rustls::StreamOwned::new(conn, stream))
-}
-
-fn selected_alpn(protocol: Option<&[u8]>) -> String {
-    protocol
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default()
+    material
+        .connect(stream, &tls_options.server_name)
+        .map_err(|err| OutboundError::BadVless(format!("{label} tls connect: {err}")))
 }

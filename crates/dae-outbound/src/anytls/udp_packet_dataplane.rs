@@ -1,8 +1,4 @@
 use std::io::{Read, Write};
-use std::sync::Arc;
-
-use rustls::ClientConnection;
-use rustls::pki_types::ServerName;
 
 use crate::error::OutboundError;
 use crate::shared_transport::{TlsLoopbackMaterial, TlsUnderlayOptions};
@@ -74,11 +70,9 @@ pub fn udp_packet_stream_exchange_over_tls_stream<S>(
 where
     S: Read + Write,
 {
-    let server_name = ServerName::try_from(tls_options.server_name.clone())
-        .map_err(|err| OutboundError::BadAnyTLS(format!("invalid anytls server_name: {err}")))?;
-    let conn = ClientConnection::new(Arc::clone(&material.client_config), server_name)
+    let mut tls = material
+        .connect(stream, &tls_options.server_name)
         .map_err(|err| OutboundError::BadAnyTLS(format!("anytls tls connect: {err}")))?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
 
     let auth_handshake = link::handshake_auth_bytes(auth);
     tls.write_all(&auth_handshake)
@@ -149,11 +143,7 @@ where
         ));
     }
 
-    let selected_alpn = tls
-        .conn
-        .alpn_protocol()
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default();
+    let selected_alpn = crate::shared_transport::test_support::selected_tls_alpn(tls.ssl());
     let alpn_validated = selected_alpn == tls_options.alpn_protocol;
     let original_udp_target = Socks5Address::parse(original_udp_target)?.authority();
     let udp_magic_domain_validated =

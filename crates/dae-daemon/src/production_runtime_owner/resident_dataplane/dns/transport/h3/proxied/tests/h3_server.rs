@@ -3,37 +3,35 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use quinn::crypto::rustls::QuicServerConfig;
-use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use dae_outbound::shared_transport::test_support::{
+    boring_quic_server_config, self_signed_tls_identity,
+};
 use tokio::task::JoinHandle;
 
 const SERVER_NAME: &str = "proxied-doh3.fixture.invalid";
 
 pub(super) struct H3TestServer {
     address: std::net::SocketAddr,
-    certificate: CertificateDer<'static>,
+    certificate: Vec<u8>,
     connections: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
 
 impl H3TestServer {
     pub(super) async fn start() -> Self {
-        let certified = generate_simple_self_signed(vec![SERVER_NAME.to_owned()]).unwrap();
-        let certificate = certified.cert.der().clone();
-        let private_key =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-        let mut crypto =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![certificate.clone()], private_key)
-                .unwrap();
-        crypto.alpn_protocols = vec![super::super::DNS_DOH3_ALPN.as_bytes().to_vec()];
-        let server_config =
-            quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()));
-        let endpoint =
-            quinn::Endpoint::server(server_config, (std::net::Ipv4Addr::LOCALHOST, 0).into())
-                .unwrap();
+        let identity = self_signed_tls_identity(&[SERVER_NAME]).unwrap();
+        let certificate = identity.certificate_der().unwrap();
+        let server_config = boring_quic_server_config(
+            &identity,
+            &[super::super::DNS_DOH3_ALPN.as_bytes().to_vec()],
+            Arc::new(quinn::TransportConfig::default()),
+        )
+        .unwrap();
+        let endpoint = dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            server_config,
+            (std::net::Ipv4Addr::LOCALHOST, 0).into(),
+        )
+        .unwrap();
         let address = endpoint.local_addr().unwrap();
         let connections = Arc::new(AtomicUsize::new(0));
         let task_connections = Arc::clone(&connections);
@@ -65,7 +63,7 @@ impl H3TestServer {
         SERVER_NAME
     }
 
-    pub(super) fn certificate(&self) -> CertificateDer<'static> {
+    pub(super) fn certificate(&self) -> Vec<u8> {
         self.certificate.clone()
     }
 

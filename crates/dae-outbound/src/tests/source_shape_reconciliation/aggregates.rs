@@ -130,7 +130,7 @@ fn projected_aggregate_classifiers_exclude_non_target_security_atoms() {
     assert_excluded_atoms("shared-reality-security-underlay", |shape| {
         !matches!(
             shape.security,
-            MaterializedSecurity::RealityRustls | MaterializedSecurity::RealityFingerprint
+            MaterializedSecurity::RealityBoring | MaterializedSecurity::RealityFingerprint
         )
     });
 }
@@ -163,7 +163,7 @@ fn security_aggregates_cover_every_matching_production_atom() {
             }
             if matches!(
                 shape.security,
-                MaterializedSecurity::RealityRustls | MaterializedSecurity::RealityFingerprint
+                MaterializedSecurity::RealityBoring | MaterializedSecurity::RealityFingerprint
             ) {
                 reality_atoms += 1;
                 assert!(

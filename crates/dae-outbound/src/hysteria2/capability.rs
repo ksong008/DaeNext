@@ -23,7 +23,7 @@ pub struct Hysteria2CapabilityLedgerEntry {
 const CAPABILITY_LEDGER: &[Hysteria2CapabilityLedgerEntry] = &[
     admitted(
         "tls-webpki-insecure-pin",
-        "typed rustls verification policy",
+        "typed BoringSSL verification policy",
     ),
     admitted("obfs-salamander", "typed UDP underlay with PMTU accounting"),
     admitted(
@@ -51,7 +51,7 @@ const CAPABILITY_LEDGER: &[Hysteria2CapabilityLedgerEntry] = &[
     rejected("gecko-packet-sizing", "Gecko underlay is not admitted"),
     rejected(
         "tls-ech",
-        "current rustls QUIC provider has no admitted ECH executor",
+        "current BoringSSL QUIC provider has no admitted ECH executor",
     ),
     rejected(
         "tls-custom-ca",

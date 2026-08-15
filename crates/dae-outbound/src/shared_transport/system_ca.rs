@@ -11,10 +11,6 @@ use boring::ssl::{SslContext, SslContextBuilder};
 use boring::x509::X509;
 use boring::x509::store::{X509Store, X509StoreBuilder};
 use foreign_types::ForeignType;
-#[cfg(test)]
-use rustls::RootCertStore;
-#[cfg(test)]
-use rustls::pki_types::CertificateDer;
 use sha2::{Digest, Sha256};
 
 pub const SYSTEM_CA_BUNDLE_PATHS: &[&str] = &[
@@ -38,19 +34,12 @@ pub struct SystemCaIdentity {
 
 pub struct SystemCaSnapshot {
     identity: SystemCaIdentity,
-    #[cfg(test)]
-    rustls_roots: RootCertStore,
     boring_store: X509Store,
 }
 
 impl SystemCaSnapshot {
     pub fn identity(&self) -> &SystemCaIdentity {
         &self.identity
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rustls_roots(&self) -> RootCertStore {
-        self.rustls_roots.clone()
     }
 
     pub fn boring_store(&self) -> X509Store {
@@ -101,8 +90,6 @@ impl SystemCaSnapshot {
             return Err(SystemCaError::NoUsableCertificates { path });
         }
 
-        #[cfg(test)]
-        let mut rustls_roots = RootCertStore::empty();
         let mut boring_builder =
             X509StoreBuilder::new().map_err(|error| SystemCaError::BoringStore {
                 message: error.to_string(),
@@ -117,13 +104,6 @@ impl SystemCaSnapshot {
             if !unique_der.insert(der.clone()) {
                 continue;
             }
-            #[cfg(test)]
-            rustls_roots
-                .add(CertificateDer::from(der))
-                .map_err(|error| SystemCaError::Parse {
-                    path: path.clone(),
-                    message: error.to_string(),
-                })?;
             boring_builder
                 .add_cert(&certificate)
                 .map_err(|error| SystemCaError::BoringStore {
@@ -143,8 +123,6 @@ impl SystemCaSnapshot {
                 sha256,
                 certificate_count,
             },
-            #[cfg(test)]
-            rustls_roots,
             boring_store: boring_builder.build(),
         })
     }
@@ -272,16 +250,12 @@ fn encode_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared_transport::test_support::{
+        TestCertificateValidity, signed_tls_certificate_chain,
+    };
     use boring::stack::Stack;
     use boring::x509::X509StoreContext;
     use foreign_types::ForeignTypeRef;
-    use rcgen::{
-        BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose,
-        IsCa, KeyPair, KeyUsagePurpose, date_time_ymd,
-    };
-    use rustls::client::WebPkiServerVerifier;
-    use rustls::client::danger::ServerCertVerifier;
-    use rustls::pki_types::{ServerName, UnixTime};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -312,7 +286,7 @@ mod tests {
 
     struct CertificateChain {
         root_pem: String,
-        leaf_der: CertificateDer<'static>,
+        leaf_der: Vec<u8>,
     }
 
     impl CertificateChain {
@@ -325,76 +299,61 @@ mod tests {
         }
 
         fn signed_with_validity(server_name: &str, current: bool) -> Self {
-            let root_key = KeyPair::generate().unwrap();
-            let mut root_params = CertificateParams::new(Vec::<String>::new()).unwrap();
-            root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-            let mut root_name = DistinguishedName::new();
-            root_name.push(
-                DnType::CommonName,
-                if current {
-                    "DaeNext current system CA test root"
-                } else {
-                    "DaeNext expired system CA test root"
-                },
-            );
-            root_params.distinguished_name = root_name;
-            root_params.key_usages = vec![
-                KeyUsagePurpose::DigitalSignature,
-                KeyUsagePurpose::KeyCertSign,
-                KeyUsagePurpose::CrlSign,
-            ];
-            let root = root_params.self_signed(&root_key).unwrap();
-
-            let leaf_key = KeyPair::generate().unwrap();
-            let mut leaf_params = CertificateParams::new(vec![server_name.to_owned()]).unwrap();
-            let mut leaf_name = DistinguishedName::new();
-            leaf_name.push(DnType::CommonName, server_name);
-            leaf_params.distinguished_name = leaf_name;
-            leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-            if !current {
-                leaf_params.not_before = date_time_ymd(2010, 1, 1);
-                leaf_params.not_after = date_time_ymd(2011, 1, 1);
-            }
-            let leaf = leaf_params.signed_by(&leaf_key, &root, &root_key).unwrap();
+            let validity = if current {
+                TestCertificateValidity::Current
+            } else {
+                TestCertificateValidity::Expired
+            };
+            let material = signed_tls_certificate_chain(server_name, validity).unwrap();
             Self {
-                root_pem: root.pem(),
-                leaf_der: leaf.der().clone(),
+                root_pem: String::from_utf8(material.root_pem().unwrap()).unwrap(),
+                leaf_der: material.leaf_identity.certificate_der().unwrap(),
             }
         }
     }
 
     fn ca_pem() -> String {
-        let mut params = CertificateParams::new(Vec::new()).unwrap();
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let key = KeyPair::generate().unwrap();
-        params.self_signed(&key).unwrap().pem()
+        let material = signed_tls_certificate_chain(
+            "root-only.system-ca.test",
+            TestCertificateValidity::Current,
+        )
+        .unwrap();
+        String::from_utf8(material.root_pem().unwrap()).unwrap()
     }
 
-    fn rustls_verifies(snapshot: &SystemCaSnapshot, chain: &CertificateChain, host: &str) -> bool {
-        let verifier = WebPkiServerVerifier::builder(Arc::new(snapshot.rustls_roots()))
-            .build()
-            .unwrap();
-        let server_name = ServerName::try_from(host.to_owned()).unwrap();
-        verifier
-            .verify_server_cert(&chain.leaf_der, &[], &server_name, &[], UnixTime::now())
-            .is_ok()
-    }
-
-    fn boring_verifies(snapshot: &SystemCaSnapshot, chain: &CertificateChain, host: &str) -> bool {
-        let certificate = X509::from_der(chain.leaf_der.as_ref()).unwrap();
+    fn boring_verification(
+        snapshot: &SystemCaSnapshot,
+        chain: &CertificateChain,
+        host: &str,
+    ) -> Result<(), String> {
+        let certificate = X509::from_der(&chain.leaf_der).unwrap();
         let intermediates = Stack::new().unwrap();
         let mut context = X509StoreContext::new().unwrap();
-        context
+        let mut verification_error = None;
+        let verified = context
             .init(
                 &snapshot.boring_store,
                 &certificate,
                 &intermediates,
                 |context| {
                     context.verify_param_mut().set_host(host)?;
-                    context.verify_cert()
+                    let verified = context.verify_cert()?;
+                    if !verified {
+                        verification_error = Some(format!(
+                            "{:?} at certificate depth {}",
+                            context.verify_result(),
+                            context.error_depth()
+                        ));
+                    }
+                    Ok(verified)
                 },
             )
-            .unwrap_or(false)
+            .map_err(|error| error.to_string())?;
+        if verified {
+            Ok(())
+        } else {
+            Err(verification_error.unwrap_or_else(|| "certificate verification failed".to_owned()))
+        }
     }
 
     #[test]
@@ -437,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_bundle_builds_matching_stores_and_identity() {
+    fn valid_bundle_builds_boringssl_store_and_identity() {
         let directory = TestDirectory::new("valid");
         let path = directory.path("roots.pem");
         let pem = ca_pem();
@@ -446,7 +405,6 @@ mod tests {
         let snapshot = SystemCaSnapshot::load_from_path(path.clone()).unwrap();
         assert_eq!(snapshot.identity().path, path);
         assert_eq!(snapshot.identity().certificate_count, 1);
-        assert_eq!(snapshot.rustls_roots().len(), 1);
         assert_eq!(
             snapshot.identity().sha256,
             encode_hex(Sha256::digest(pem.as_bytes()).as_ref())
@@ -462,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn both_providers_share_trust_and_hostname_contract() {
+    fn boringssl_enforces_trust_validity_and_hostname_contract() {
         const SERVER_NAME: &str = "trusted.system-ca.test";
 
         let directory = TestDirectory::new("provider-contract");
@@ -473,22 +431,13 @@ mod tests {
         fs::write(&path, format!("{}{}", trusted.root_pem, expired.root_pem)).unwrap();
         let snapshot = SystemCaSnapshot::load_from_path(path).unwrap();
 
-        assert!(rustls_verifies(&snapshot, &trusted, SERVER_NAME));
-        assert!(boring_verifies(&snapshot, &trusted, SERVER_NAME));
-        assert!(!rustls_verifies(&snapshot, &unknown, SERVER_NAME));
-        assert!(!boring_verifies(&snapshot, &unknown, SERVER_NAME));
-        assert!(!rustls_verifies(&snapshot, &expired, SERVER_NAME));
-        assert!(!boring_verifies(&snapshot, &expired, SERVER_NAME));
-        assert!(!rustls_verifies(
-            &snapshot,
-            &trusted,
-            "wrong.system-ca.test"
-        ));
-        assert!(!boring_verifies(
-            &snapshot,
-            &trusted,
-            "wrong.system-ca.test"
-        ));
+        assert_eq!(
+            boring_verification(&snapshot, &trusted, SERVER_NAME),
+            Ok(())
+        );
+        assert!(boring_verification(&snapshot, &unknown, SERVER_NAME).is_err());
+        assert!(boring_verification(&snapshot, &expired, SERVER_NAME).is_err());
+        assert!(boring_verification(&snapshot, &trusted, "wrong.system-ca.test").is_err());
     }
 
     #[test]
@@ -500,7 +449,6 @@ mod tests {
 
         let snapshot = SystemCaSnapshot::load_from_path(path).unwrap();
         assert_eq!(snapshot.identity().certificate_count, 1);
-        assert_eq!(snapshot.rustls_roots().len(), 1);
     }
 
     #[test]

@@ -34,21 +34,16 @@ fn https_proxy_rejects_negotiated_h2_before_connect_bytes() {
     let material = shared_transport::tls_loopback_material(&tls_options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
-        let conn = rustls::ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         let mut application_byte = [0_u8; 1];
         let application_bytes = tls.read(&mut application_byte).unwrap_or_default();
-        let selected = tls
-            .conn
-            .alpn_protocol()
-            .map(|value| String::from_utf8_lossy(value).to_string())
-            .unwrap_or_default();
+        let selected = shared_transport::test_support::selected_tls_alpn(tls.ssl());
         (selected, application_bytes)
     });
 

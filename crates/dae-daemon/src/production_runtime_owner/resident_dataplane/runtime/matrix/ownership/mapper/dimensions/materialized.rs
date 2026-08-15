@@ -54,7 +54,7 @@ fn materialized_security(security: SecurityDimension) -> MaterializedSecurity {
         SecurityDimension::InsecureTls => MaterializedSecurity::InsecureTls,
         SecurityDimension::FragmentedTls => MaterializedSecurity::FragmentedTls,
         SecurityDimension::FingerprintAwareTls => MaterializedSecurity::FingerprintAwareTls,
-        SecurityDimension::RealityRustls => MaterializedSecurity::RealityRustls,
+        SecurityDimension::RealityBoring => MaterializedSecurity::RealityBoring,
         SecurityDimension::RealityFingerprint => MaterializedSecurity::RealityFingerprint,
         SecurityDimension::QuicTls => MaterializedSecurity::QuicTls,
         SecurityDimension::Unsupported => MaterializedSecurity::Unsupported,

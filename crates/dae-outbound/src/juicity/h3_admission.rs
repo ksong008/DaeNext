@@ -2,7 +2,8 @@ pub const QUINN_VERSION: &str = "0.11.9";
 pub const H3_VERSION: &str = "0.0.8";
 pub const H3_QUINN_VERSION: &str = "0.0.10";
 pub const TOKIO_VERSION: &str = "1.52.3";
-pub const QUINN_FEATURES: &[&str] = &["runtime-tokio", "rustls-aws-lc-rs"];
+pub const QUINN_FEATURES: &[&str] = &["runtime-tokio"];
+pub const QUINN_CRYPTO_PROVIDER: &str = "quinn-boring";
 pub const TOKIO_FEATURES: &[&str] = &["rt", "net", "time", "io-util", "sync"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,7 +17,7 @@ pub struct JuicityH3DependencyAdmission {
     pub h3_client_builder_type: &'static str,
     pub tokio_runtime_builder_type: &'static str,
     pub quinn_runtime_tokio_feature_admitted: bool,
-    pub quinn_rustls_aws_lc_rs_feature_admitted: bool,
+    pub quinn_boringssl_provider_admitted: bool,
     pub h3_quinn_bridge_admitted: bool,
     pub tokio_runtime_admitted: bool,
     pub dependency_only: bool,
@@ -33,7 +34,7 @@ pub fn dependency_admission() -> JuicityH3DependencyAdmission {
         h3_client_builder_type: std::any::type_name::<h3::client::Builder>(),
         tokio_runtime_builder_type: std::any::type_name::<tokio::runtime::Builder>(),
         quinn_runtime_tokio_feature_admitted: QUINN_FEATURES.contains(&"runtime-tokio"),
-        quinn_rustls_aws_lc_rs_feature_admitted: QUINN_FEATURES.contains(&"rustls-aws-lc-rs"),
+        quinn_boringssl_provider_admitted: QUINN_CRYPTO_PROVIDER == "quinn-boring",
         h3_quinn_bridge_admitted: true,
         tokio_runtime_admitted: true,
         dependency_only: true,

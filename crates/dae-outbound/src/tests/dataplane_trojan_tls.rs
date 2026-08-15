@@ -10,15 +10,14 @@ fn case_trojan_tls_tcp_dataplane_echoes_payload() {
     let material = shared_transport::tls_loopback_material(&tls_options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let password = "fixture-password";
     let target = "fixture-trojan.fixture.invalid:443";
     let payload = b"fixture-trojan-tls-ping".to_vec();
     let server_payload = payload.clone();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let conn = rustls::ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         let request = trojan::read_tcp_request_from_stream(&mut tls, server_payload.len()).unwrap();
         assert_eq!(
             request.password_sha224_hex,
@@ -28,10 +27,7 @@ fn case_trojan_tls_tcp_dataplane_echoes_payload() {
         assert_eq!(request.target, target);
         assert_eq!(request.payload, server_payload);
         tls.write_all(&request.payload).unwrap();
-        tls.conn
-            .alpn_protocol()
-            .map(|value| String::from_utf8_lossy(value).to_string())
-            .unwrap_or_default()
+        shared_transport::test_support::selected_tls_alpn(tls.ssl())
     });
 
     let report = trojan::tcp_exchange_over_tls_stream(

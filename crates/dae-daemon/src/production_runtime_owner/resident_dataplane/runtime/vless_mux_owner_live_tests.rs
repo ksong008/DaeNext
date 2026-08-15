@@ -2,17 +2,15 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use boring::ssl::SslAcceptor;
 use dae_outbound::shared_transport::mux::{
     MuxFrameDecoder, MuxFrameOptions, SESSION_STATUS_END, SESSION_STATUS_KEEP, SESSION_STATUS_NEW,
     mux_data_frame, mux_new_frame,
 };
-use rcgen::generate_simple_self_signed;
+use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time;
-use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls;
-use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use super::vless_mux_owner::VlessMuxLogicalStream;
 use super::*;
@@ -79,7 +77,7 @@ impl VlessMuxTestServer {
                         let connection_injection = Arc::clone(&task_injection);
                         let connection_close = Arc::clone(&task_close_connections);
                         connections.spawn(async move {
-                            let Ok(stream) = connection_acceptor.accept(stream).await else {
+                            let Ok(stream) = tokio_boring::accept(&connection_acceptor, stream).await else {
                                 return;
                             };
                             serve_vless_mux_test_connection(
@@ -124,7 +122,7 @@ impl VlessMuxTestServer {
 }
 
 async fn serve_vless_mux_test_connection(
-    mut stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+    mut stream: tokio_boring::SslStream<tokio::net::TcpStream>,
     new_sids: Arc<Mutex<Vec<u16>>>,
     payloads: VlessMuxTestPayloads,
     unknown_ends: Arc<AtomicUsize>,
@@ -207,16 +205,9 @@ async fn serve_vless_mux_test_connection(
     }
 }
 
-fn vless_mux_test_tls_acceptor() -> TlsAcceptor {
-    let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let certificate = certified.cert.der().clone();
-    let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let config = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_no_client_auth()
-        .with_single_cert(vec![certificate], private_key)
-        .unwrap();
-    TlsAcceptor::from(Arc::new(config))
+fn vless_mux_test_tls_acceptor() -> SslAcceptor {
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    tls13_acceptor(&identity, &[b"http/1.1".to_vec()]).unwrap()
 }
 
 fn vless_mux_test_proxy(

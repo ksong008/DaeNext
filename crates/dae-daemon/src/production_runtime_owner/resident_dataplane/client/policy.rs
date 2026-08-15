@@ -1,9 +1,8 @@
 use super::*;
 
 /// Provider-independent certificate/authentication policy consumed by the
-/// resident TLS factory.  Keeping this separate from rustls and BoringSSL
-/// configuration objects makes provider A/B exact: both candidates must
-/// consume the same typed intent and a candidate may not silently weaken it.
+/// resident TLS factory. Keeping this separate from BoringSSL configuration
+/// objects keeps every transport on the same typed intent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentPeerVerificationPolicy {
     SystemRoots,
@@ -86,8 +85,8 @@ impl ResidentTlsSessionPolicy {
     }
 }
 
-/// Protocol-generic TLS policy.  This is deliberately free of provider types
-/// so rustls/BoringSSL candidates cannot diverge in SNI, ALPN, verification,
+/// Protocol-generic TLS policy. This is deliberately free of provider types
+/// so BoringSSL transport shapes cannot diverge in SNI, ALPN, verification,
 /// Reality authentication, resumption, or 0-RTT intent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentTlsPolicy {

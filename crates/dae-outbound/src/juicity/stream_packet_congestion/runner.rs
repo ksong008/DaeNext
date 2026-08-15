@@ -47,7 +47,7 @@ pub(super) async fn run_stream_packet_congestion_smoke_async(
 
     let mut server_config = build_live_server_config(&options.server_name)?;
     server_config.transport_config(Arc::new(bbr_transport_config()?));
-    let server_endpoint = quinn::Endpoint::server(
+    let server_endpoint = crate::shared_transport::test_support::boring_quic_server_endpoint(
         server_config,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
     )
@@ -63,10 +63,10 @@ pub(super) async fn run_stream_packet_congestion_smoke_async(
         options.iterations,
     ));
 
-    let mut client_endpoint =
-        quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).map_err(
-            |err| bad_stream_packet_congestion(format!("create client endpoint: {err}")),
-        )?;
+    let mut client_endpoint = crate::shared_transport::test_support::boring_quic_client_endpoint(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .map_err(|err| bad_stream_packet_congestion(format!("create client endpoint: {err}")))?;
     let mut client_config = build_live_client_config()?;
     client_config.transport_config(Arc::new(bbr_transport_config()?));
     client_endpoint.set_default_client_config(client_config);

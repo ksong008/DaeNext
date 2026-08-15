@@ -123,7 +123,7 @@ fn production_selector_security_features_match_registry_policy() {
         let reality = variants.clone().any(|variant| {
             matches!(
                 variant.security,
-                MaterializedSecurity::RealityRustls | MaterializedSecurity::RealityFingerprint
+                MaterializedSecurity::RealityBoring | MaterializedSecurity::RealityFingerprint
             )
         });
 

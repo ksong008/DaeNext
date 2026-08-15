@@ -557,7 +557,7 @@ pub(crate) async fn handle_vless_meek_tcp_connection_async(
     let tls_underlay = if selection.proxy.utls_fingerprint.is_some() {
         "boringssl"
     } else {
-        "rustls"
+        "boringssl"
     };
     let key = selection.proxy.vless_key()?;
     let options = meek_options_from_proxy(&selection, peer, original_dst);

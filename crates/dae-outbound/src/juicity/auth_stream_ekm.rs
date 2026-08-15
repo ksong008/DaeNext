@@ -110,7 +110,7 @@ async fn run_live_ekm_auth_smoke_async(
     let uuid = seed_header.uuid;
     let dialauth = build_dialauth_record_for_port_zero(&options.target)?;
 
-    let server_endpoint = quinn::Endpoint::server(
+    let server_endpoint = crate::shared_transport::test_support::boring_quic_server_endpoint(
         build_live_server_config(&options.server_name)?,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
     )
@@ -132,9 +132,10 @@ async fn run_live_ekm_auth_smoke_async(
         .await
     });
 
-    let mut client_endpoint =
-        quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-            .map_err(|err| bad_live_ekm_auth(format!("create client endpoint: {err}")))?;
+    let mut client_endpoint = crate::shared_transport::test_support::boring_quic_client_endpoint(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .map_err(|err| bad_live_ekm_auth(format!("create client endpoint: {err}")))?;
     client_endpoint.set_default_client_config(build_live_client_config()?);
     let client_connection = client_endpoint
         .connect(loopback_addr, &options.server_name)

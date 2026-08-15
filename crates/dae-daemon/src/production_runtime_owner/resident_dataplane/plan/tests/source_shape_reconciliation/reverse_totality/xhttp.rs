@@ -181,7 +181,7 @@ fn materialized_mode(mode: &str) -> MaterializedXhttpMode {
 fn reality_variant(fingerprint: &str) -> MaterializedTlsVariant {
     if fingerprint.is_empty() {
         MaterializedTlsVariant::new(
-            MaterializedSecurity::RealityRustls,
+            MaterializedSecurity::RealityBoring,
             MaterializedTlsFeatures::NONE,
         )
     } else {

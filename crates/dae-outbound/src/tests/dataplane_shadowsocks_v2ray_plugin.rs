@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use rustls::ServerConnection;
-
 use super::*;
 
 #[test]
@@ -26,12 +24,11 @@ fn case_sip003_v2ray_plugin_wraps_tls_ws_mux_shadowsocks_aead_tcp() {
     let payload_for_server = payload.clone();
     let server_salt_for_thread = server_salt.clone();
     let options_for_thread = options.clone();
-    let server_config = Arc::clone(&material.server_config);
+    let server_acceptor = Arc::clone(&material.server_acceptor);
 
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let conn = ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         let request_head = shared_transport::read_http_head(&mut tls).unwrap();
         let request_text = String::from_utf8(request_head).unwrap();
         assert!(request_text.starts_with("GET / HTTP/1.1\r\n"));

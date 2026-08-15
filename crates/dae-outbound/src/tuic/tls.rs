@@ -1,13 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(any(test, feature = "test-support"))]
-use quinn::crypto::rustls::QuicServerConfig;
-#[cfg(any(test, feature = "test-support"))]
-use rcgen::generate_simple_self_signed;
-#[cfg(any(test, feature = "test-support"))]
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-
 use crate::error::OutboundError;
 use crate::shared_transport::QuicCongestionController;
 
@@ -28,23 +21,14 @@ pub(super) fn build_tuic_server_config(
     server_name: &str,
     alpn: &[String],
 ) -> Result<quinn::ServerConfig, OutboundError> {
-    let certified = generate_simple_self_signed(vec![server_name.to_owned()])
-        .map_err(|err| bad_tls(format!("generate TUIC cert: {err}")))?;
-    let cert_der = certified.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der], key_der)
-            .map_err(|err| bad_tls(format!("TUIC server cert config: {err}")))?;
-    crypto.alpn_protocols = alpn_protocols(alpn);
-    let mut config = quinn::ServerConfig::with_crypto(Arc::new(
-        QuicServerConfig::try_from(crypto)
-            .map_err(|err| bad_tls(format!("TUIC server QUIC TLS: {err}")))?,
-    ));
-    config.transport_config(Arc::new(tuic_transport_config(None)?));
-    Ok(config)
+    let identity = crate::shared_transport::test_support::self_signed_tls_identity(&[server_name])
+        .map_err(|err| bad_tls(format!("generate TUIC BoringSSL cert: {err}")))?;
+    crate::shared_transport::test_support::boring_quic_server_config(
+        &identity,
+        &alpn_protocols(alpn),
+        Arc::new(tuic_transport_config(None)?),
+    )
+    .map_err(|err| bad_tls(format!("TUIC BoringSSL server QUIC TLS: {err}")))
 }
 
 pub(super) fn build_tuic_client_config(

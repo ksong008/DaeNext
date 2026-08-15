@@ -108,7 +108,3 @@ url.workspace = true
 
 [dev-dependencies]
 dae-outbound = { workspace = true, features = ["test-support"] }
-quinn = { workspace = true, features = ["rustls-aws-lc-rs"] }
-rcgen.workspace = true
-rustls.workspace = true
-tokio-rustls.workspace = true

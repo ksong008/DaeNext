@@ -2,12 +2,12 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
+use dae_outbound::shared_transport::test_support::{
+    boring_quic_server_config, self_signed_tls_identity,
+};
 use foreign_types::ForeignType;
 use h3::server;
 use http::{Request, Response, StatusCode};
-use quinn::crypto::rustls::QuicServerConfig;
-use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::os::raw::c_int;
 
 use super::*;
@@ -35,17 +35,13 @@ pub(in super::super) fn endpoint_plan() -> ResidentXhttpEndpointPlan {
 }
 
 fn server_config() -> quinn::ServerConfig {
-    let certified = generate_simple_self_signed(vec![SERVER_NAME.to_owned()]).unwrap();
-    let certificate = certified.cert.der().clone();
-    let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![certificate], private_key)
-            .unwrap();
-    crypto.alpn_protocols = vec![b"h3".to_vec()];
-    quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()))
+    let identity = self_signed_tls_identity(&[SERVER_NAME]).unwrap();
+    boring_quic_server_config(
+        &identity,
+        &[b"h3".to_vec()],
+        Arc::new(quinn::TransportConfig::default()),
+    )
+    .unwrap()
 }
 
 unsafe extern "C" fn capture_client_hello(
@@ -77,7 +73,11 @@ unsafe extern "C" fn capture_client_hello(
 async fn chrome_boring_provider_completes_h3_and_emits_quic_client_hello() {
     CLIENT_HELLO_RECORD.lock().unwrap().clear();
     let server_endpoint =
-        quinn::Endpoint::server(server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            server_config(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .unwrap();
     let server_address = server_endpoint.local_addr().unwrap();
     let accepting_endpoint = server_endpoint.clone();
     let (server_release, wait_for_client) = tokio::sync::oneshot::channel();
@@ -105,7 +105,11 @@ async fn chrome_boring_provider_completes_h3_and_emits_quic_client_hello() {
     }
     let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
     client_config.transport_config(Arc::new(xhttp_h3_transport_config().unwrap()));
-    let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+    let mut client_endpoint =
+        dae_outbound::shared_transport::test_support::boring_quic_client_endpoint(
+            "0.0.0.0:0".parse().unwrap(),
+        )
+        .unwrap();
     client_endpoint.set_default_client_config(client_config);
     let connection = client_endpoint
         .connect(server_address, SERVER_NAME)
@@ -168,7 +172,11 @@ async fn chrome_boring_provider_completes_h3_and_emits_quic_client_hello() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chrome_boring_provider_rejects_untrusted_certificate_without_fallback() {
     let server_endpoint =
-        quinn::Endpoint::server(server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            server_config(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .unwrap();
     let server_address = server_endpoint.local_addr().unwrap();
     let accepting_endpoint = server_endpoint.clone();
     let server_task = tokio::spawn(async move {
@@ -180,7 +188,11 @@ async fn chrome_boring_provider_rejects_untrusted_certificate_without_fallback()
     let mut plan = endpoint_plan();
     plan.allow_insecure = false;
     let client_config = build_chrome_boring_xhttp_h3_client_config(&plan, None).unwrap();
-    let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+    let mut client_endpoint =
+        dae_outbound::shared_transport::test_support::boring_quic_client_endpoint(
+            "0.0.0.0:0".parse().unwrap(),
+        )
+        .unwrap();
     client_endpoint.set_default_client_config(client_config);
     let error = tokio::time::timeout(
         Duration::from_secs(2),

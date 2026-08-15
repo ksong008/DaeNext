@@ -26,7 +26,7 @@ fn protocol_specific_h2_and_meek_rows_reject_their_neighbours() {
         MaterializedUdp::PolicyClosed(MaterializedPolicyClosedReason::VlessMeek),
     );
     let reality_meek = MaterializedSourceShape {
-        security: MaterializedSecurity::RealityRustls,
+        security: MaterializedSecurity::RealityBoring,
         ..tls_meek
     };
     assert!(matches("vless-meek-tls-stream-wrapper", tls_meek));

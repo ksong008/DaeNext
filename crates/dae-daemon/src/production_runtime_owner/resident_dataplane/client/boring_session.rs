@@ -359,29 +359,18 @@ fn resident_boring_tls_session_key_index()
 mod tests {
     use std::time::Duration;
 
-    use boring::pkey::{PKey, Private};
     use boring::ssl::{SslAcceptor, SslOptions};
-    use boring::x509::X509;
-    use rcgen::generate_simple_self_signed;
+    use dae_outbound::shared_transport::test_support::{TestTlsIdentity, self_signed_tls_identity};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::task::JoinHandle;
 
     use super::*;
 
-    struct TestIdentity {
-        certificate: X509,
-        private_key: PKey<Private>,
+    fn test_identity() -> TestTlsIdentity {
+        self_signed_tls_identity(&["localhost"]).unwrap()
     }
 
-    fn test_identity() -> TestIdentity {
-        let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-        TestIdentity {
-            certificate: X509::from_der(certified.cert.der().as_ref()).unwrap(),
-            private_key: PKey::private_key_from_der(&certified.key_pair.serialize_der()).unwrap(),
-        }
-    }
-
-    fn tls13_acceptor(identity: &TestIdentity) -> SslAcceptor {
+    fn tls13_acceptor(identity: &TestTlsIdentity) -> SslAcceptor {
         let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))
@@ -400,7 +389,7 @@ mod tests {
         builder.build()
     }
 
-    fn tls13_context_entry(identity: &TestIdentity) -> ResidentBoringTlsContextEntry {
+    fn tls13_context_entry(identity: &TestTlsIdentity) -> ResidentBoringTlsContextEntry {
         let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
         builder
             .set_min_proto_version(Some(SslVersion::TLS1_3))

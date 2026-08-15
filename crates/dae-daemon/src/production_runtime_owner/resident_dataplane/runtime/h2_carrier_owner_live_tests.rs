@@ -1,15 +1,13 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use boring::ssl::SslAcceptor;
 use bytes::Bytes;
-use rcgen::generate_simple_self_signed;
+use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time;
-use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls;
-use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use super::*;
 
@@ -87,7 +85,7 @@ impl H2TestServer {
                                 };
                                 permit.forget();
                             }
-                            let Ok(stream) = connection_acceptor.accept(stream).await else {
+                            let Ok(stream) = tokio_boring::accept(&connection_acceptor, stream).await else {
                                 return;
                             };
                             connection_handshakes.fetch_add(1, Ordering::Relaxed);
@@ -194,18 +192,9 @@ async fn serve_h2_connection<T>(
     while responses.join_next().await.is_some() {}
 }
 
-fn h2_test_tls_acceptor(alpn: &[u8]) -> TlsAcceptor {
-    let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let certificate = certified.cert.der().clone();
-    let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut config =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![certificate], private_key)
-            .unwrap();
-    config.alpn_protocols = vec![alpn.to_vec()];
-    TlsAcceptor::from(Arc::new(config))
+fn h2_test_tls_acceptor(alpn: &[u8]) -> SslAcceptor {
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    tls13_acceptor(&identity, &[alpn.to_vec()]).unwrap()
 }
 
 fn h2_test_proxy(

@@ -1,13 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(any(test, feature = "test-support"))]
-use quinn::crypto::rustls::QuicServerConfig;
-#[cfg(any(test, feature = "test-support"))]
-use rcgen::generate_simple_self_signed;
-#[cfg(any(test, feature = "test-support"))]
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-
 use crate::error::OutboundError;
 
 use super::Hysteria2CongestionRuntime;
@@ -23,23 +16,18 @@ const HYSTERIA2_MINIMUM_QUIC_UDP_PAYLOAD: u16 = 1200;
 #[cfg(any(test, feature = "test-support"))]
 pub(super) fn build_hysteria2_server_config(
     server_name: &str,
-) -> Result<(quinn::ServerConfig, CertificateDer<'static>), OutboundError> {
-    let certified = generate_simple_self_signed(vec![server_name.to_owned()])
-        .map_err(|err| bad_tls(format!("generate Hysteria2 cert: {err}")))?;
-    let cert_der = certified.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der.clone()], key_der)
-            .map_err(|err| bad_tls(format!("Hysteria2 server cert config: {err}")))?;
-    crypto.alpn_protocols = vec![DEFAULT_HYSTERIA2_ALPN.as_bytes().to_vec()];
-    let mut config = quinn::ServerConfig::with_crypto(Arc::new(
-        QuicServerConfig::try_from(crypto)
-            .map_err(|err| bad_tls(format!("Hysteria2 server QUIC TLS: {err}")))?,
-    ));
-    config.transport_config(Arc::new(hysteria2_transport_config(0, None)?));
+) -> Result<(quinn::ServerConfig, Vec<u8>), OutboundError> {
+    let identity = crate::shared_transport::test_support::self_signed_tls_identity(&[server_name])
+        .map_err(|err| bad_tls(format!("generate Hysteria2 BoringSSL cert: {err}")))?;
+    let cert_der = identity
+        .certificate_der()
+        .map_err(|err| bad_tls(format!("encode Hysteria2 BoringSSL cert: {err}")))?;
+    let config = crate::shared_transport::test_support::boring_quic_server_config(
+        &identity,
+        &[DEFAULT_HYSTERIA2_ALPN.as_bytes().to_vec()],
+        Arc::new(hysteria2_transport_config(0, None)?),
+    )
+    .map_err(|err| bad_tls(format!("Hysteria2 BoringSSL server QUIC TLS: {err}")))?;
     Ok((config, cert_der))
 }
 

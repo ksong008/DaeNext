@@ -1,5 +1,5 @@
 use super::*;
-pub(super) const DEPENDENCY_BOUNDARY_CONTRACT: [OutboundDependencyContract; 21] = [
+pub(super) const DEPENDENCY_BOUNDARY_CONTRACT: [OutboundDependencyContract; 23] = [
     dep("aes", OutboundDependencyBoundary::CoreRuntime, true, None),
     dep(
         "aes-gcm",
@@ -42,7 +42,13 @@ pub(super) const DEPENDENCY_BOUNDARY_CONTRACT: [OutboundDependencyContract; 21] 
     dep("md-5", OutboundDependencyBoundary::CoreRuntime, true, None),
     dep("regex", OutboundDependencyBoundary::CoreRuntime, true, None),
     dep(
-        "rustls",
+        "boring",
+        OutboundDependencyBoundary::FormalTransport,
+        true,
+        None,
+    ),
+    dep(
+        "boring-sys",
         OutboundDependencyBoundary::FormalTransport,
         true,
         None,
@@ -70,6 +76,12 @@ pub(super) const DEPENDENCY_BOUNDARY_CONTRACT: [OutboundDependencyContract; 21] 
         Some("quic-h3"),
     ),
     dep(
+        "quinn-boring",
+        OutboundDependencyBoundary::FormalTransport,
+        true,
+        Some("quic-h3"),
+    ),
+    dep(
         "h3",
         OutboundDependencyBoundary::FormalTransport,
         true,
@@ -83,17 +95,9 @@ pub(super) const DEPENDENCY_BOUNDARY_CONTRACT: [OutboundDependencyContract; 21] 
     ),
 ];
 
-pub const TEST_SUPPORT_DEPENDENCIES: [OutboundDependencyContract; 2] = [
-    dep(
-        "rcgen",
-        OutboundDependencyBoundary::TestSupport,
-        false,
-        Some("test-support"),
-    ),
-    dep(
-        "dae-golden",
-        OutboundDependencyBoundary::BenchmarkOnly,
-        false,
-        Some("test-support"),
-    ),
-];
+pub const TEST_SUPPORT_DEPENDENCIES: [OutboundDependencyContract; 1] = [dep(
+    "dae-golden",
+    OutboundDependencyBoundary::BenchmarkOnly,
+    false,
+    Some("test-support"),
+)];

@@ -3,14 +3,14 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use dae_outbound::shared_transport::test_support::{
+    boring_quic_server_config, self_signed_tls_identity,
+};
 use dae_outbound::tuic::{
     TUIC_MAX_UDP_STREAM_FRAME_LEN, TuicUdpPacket, TuicUdpRelayMode, decode_tuic_udp_packet,
     decode_tuic_udp_stream_packet, encode_tuic_udp_packet, encode_tuic_udp_stream_packet,
     write_tuic_connect_request,
 };
-use quinn::crypto::rustls::QuicServerConfig;
-use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 use tokio::time;
@@ -45,7 +45,7 @@ struct TuicTestServer {
 
 impl TuicTestServer {
     async fn start() -> Self {
-        let endpoint = quinn::Endpoint::server(
+        let endpoint = dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
             tuic_server_config(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         )
@@ -216,23 +216,11 @@ async fn handle_tuic_tcp_stream(
 }
 
 fn tuic_server_config() -> quinn::ServerConfig {
-    let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let cert_der = certified.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der], key_der)
-            .unwrap();
-    crypto.alpn_protocols = vec![b"h3".to_vec()];
-    let mut config =
-        quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()));
     let mut transport = quinn::TransportConfig::default();
     transport.datagram_receive_buffer_size(Some(64 * 1024));
     transport.datagram_send_buffer_size(64 * 1024);
-    config.transport_config(Arc::new(transport));
-    config
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    boring_quic_server_config(&identity, &[b"h3".to_vec()], Arc::new(transport)).unwrap()
 }
 
 fn tuic_proxy(addr: SocketAddr, generation: u64) -> plan::ResidentProxyBinding {

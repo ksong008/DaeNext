@@ -10,7 +10,7 @@ pub(in crate::production_runtime_owner::resident_dataplane) enum ResidentSecurit
     InsecureTls,
     FragmentedTls,
     FingerprintAwareTls,
-    RealityRustls,
+    RealityBoring,
     RealityFingerprint,
     QuicTls,
     Unsupported,
@@ -36,7 +36,7 @@ impl ResidentSecurityUnderlayPlan {
             {
                 Self::RealityFingerprint
             } else {
-                Self::RealityRustls
+                Self::RealityBoring
             };
         }
         if proxy.utls_fingerprint.is_some() {
@@ -76,7 +76,7 @@ impl ResidentSecurityUnderlayPlan {
             Self::InsecureTls => "insecure-tls",
             Self::FragmentedTls => "tls-fragment",
             Self::FingerprintAwareTls => "fingerprint-aware-tls",
-            Self::RealityRustls | Self::RealityFingerprint => "reality",
+            Self::RealityBoring | Self::RealityFingerprint => "reality",
             Self::QuicTls => "quic-tls",
             Self::Unsupported => "unsupported",
         }
@@ -89,7 +89,7 @@ impl ResidentSecurityUnderlayPlan {
                 | Self::InsecureTls
                 | Self::FragmentedTls
                 | Self::FingerprintAwareTls
-                | Self::RealityRustls
+                | Self::RealityBoring
                 | Self::RealityFingerprint
         )
     }

@@ -31,7 +31,15 @@ fn public_api_contract_excludes_fixture_support_and_smoke_surfaces() {
 
 #[test]
 fn dependency_contract_keeps_runtime_transports_separate_from_test_support() {
-    for name in ["quinn", "h3", "h3-quinn", "tokio", "rustls"] {
+    for name in [
+        "boring",
+        "boring-sys",
+        "quinn",
+        "quinn-boring",
+        "h3",
+        "h3-quinn",
+        "tokio",
+    ] {
         let item = dependency_boundary_contract()
             .iter()
             .find(|item| item.crate_name == name)
@@ -40,13 +48,9 @@ fn dependency_contract_keeps_runtime_transports_separate_from_test_support() {
         assert!(item.product_runtime_required);
     }
 
-    let rcgen = TEST_SUPPORT_DEPENDENCIES
-        .iter()
-        .find(|item| item.crate_name == "rcgen")
-        .unwrap();
-    assert_eq!(rcgen.boundary, OutboundDependencyBoundary::TestSupport);
-    assert!(!rcgen.product_runtime_required);
-    assert_eq!(rcgen.feature_candidate, Some("test-support"));
+    assert!(TEST_SUPPORT_DEPENDENCIES.iter().all(|item| {
+        item.boundary == OutboundDependencyBoundary::BenchmarkOnly && !item.product_runtime_required
+    }));
 }
 
 #[test]

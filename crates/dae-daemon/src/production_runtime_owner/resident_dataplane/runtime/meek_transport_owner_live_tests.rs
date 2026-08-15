@@ -2,15 +2,13 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use boring::ssl::SslAcceptor;
 use dae_outbound::shared_transport::MeekRoundTripOptions;
-use rcgen::generate_simple_self_signed;
+use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time;
-use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls;
-use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use super::*;
 
@@ -71,7 +69,7 @@ impl MeekTestServer {
                         let connection_bodies = Arc::clone(&task_bodies);
                         let connection_replies = Arc::clone(&task_replies);
                         connections.spawn(async move {
-                            let Ok(stream) = connection_acceptor.accept(stream).await else {
+                            let Ok(stream) = tokio_boring::accept(&connection_acceptor, stream).await else {
                                 return;
                             };
                             connection_handshakes.fetch_add(1, Ordering::Relaxed);
@@ -122,7 +120,7 @@ impl MeekTestServer {
 }
 
 async fn serve_meek_test_connection(
-    mut stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+    mut stream: tokio_boring::SslStream<tokio::net::TcpStream>,
     requests: Arc<AtomicUsize>,
     session_ids: Arc<Mutex<Vec<String>>>,
     bodies: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -180,7 +178,7 @@ async fn serve_meek_test_connection(
 }
 
 async fn read_meek_test_request(
-    stream: &mut tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+    stream: &mut tokio_boring::SslStream<tokio::net::TcpStream>,
     buffered: &mut Vec<u8>,
 ) -> Option<(String, Vec<u8>)> {
     let head_end = loop {
@@ -219,7 +217,7 @@ fn test_header_value<'a>(head: &'a str, wanted: &str) -> Option<&'a str> {
 }
 
 async fn write_meek_test_response(
-    stream: &mut tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+    stream: &mut tokio_boring::SslStream<tokio::net::TcpStream>,
     body: &[u8],
     close: bool,
 ) -> std::io::Result<()> {
@@ -233,18 +231,9 @@ async fn write_meek_test_response(
     stream.flush().await
 }
 
-fn meek_test_tls_acceptor() -> TlsAcceptor {
-    let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let certificate = certified.cert.der().clone();
-    let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut config =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![certificate], private_key)
-            .unwrap();
-    config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    TlsAcceptor::from(Arc::new(config))
+fn meek_test_tls_acceptor() -> SslAcceptor {
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    tls13_acceptor(&identity, &[b"http/1.1".to_vec()]).unwrap()
 }
 
 fn meek_test_proxy(

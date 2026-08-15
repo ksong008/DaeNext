@@ -52,7 +52,7 @@ fn security_underlay_capability_closes_non_xhttp_boundaries() {
 }
 
 #[test]
-fn security_underlay_capability_keeps_fingerprint_away_from_rustls_downgrade() {
+fn security_underlay_capability_keeps_fingerprint_on_boringssl() {
     let rows = security_underlay_capability_rows();
     let fingerprint = rows
         .iter()

@@ -38,7 +38,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
         )
         .is_err();
     let standard_tls_underlay_contract_ready =
-        dae_outbound::shared_transport::contract::RUSTLS_SHARED_UNDERLAY_TRUE_DATAPLANE
+        dae_outbound::shared_transport::contract::BORINGSSL_SHARED_UNDERLAY_TRUE_DATAPLANE
             && dae_outbound::shared_transport::contract::TLS_SCHEMES.contains(&"tls")
             && dae_outbound::shared_transport::contract::TLS_MIN_VERSION == "TLS1.3";
     let boring_fingerprint_underlay_ready =
@@ -48,17 +48,17 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
         && global_fingerprint_plan_ready
         && unknown_fingerprint_fail_closed_ready
         && boring_fingerprint_underlay_ready;
-    let no_silent_fingerprint_rustls_downgrade_ready =
+    let no_silent_fingerprint_provider_downgrade_ready =
         fingerprint_aware_tls_underlay_contract_ready && standard_tls_underlay_contract_ready;
     let live_evidence_contract_ready = true;
     let wire_evidence_comparison_recorded = true;
     let full_parity_not_declared = true;
     let reality_fingerprint_boring_underlay_ready =
         boring_fingerprint_underlay_ready && standard_tls_underlay_contract_ready;
-    let reality_fingerprint_rustls_fail_closed_ready = true;
+    let reality_fingerprint_nonboring_fail_closed_ready = true;
     let contract_ready = standard_tls_underlay_contract_ready
         && fingerprint_aware_tls_underlay_contract_ready
-        && no_silent_fingerprint_rustls_downgrade_ready
+        && no_silent_fingerprint_provider_downgrade_ready
         && live_evidence_contract_ready
         && wire_evidence_comparison_recorded
         && full_parity_not_declared
@@ -90,7 +90,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
             json!(unknown_fingerprint_fail_closed_ready),
         );
         report.insert(
-            "rustls_standard_tls_no_fingerprint_ready".to_owned(),
+            "boringssl_standard_tls_no_fingerprint_ready".to_owned(),
             json!(standard_tls_underlay_contract_ready),
         );
         report.insert(
@@ -98,8 +98,8 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
             json!(boring_fingerprint_underlay_ready),
         );
         report.insert(
-            "no_silent_fingerprint_rustls_downgrade_ready".to_owned(),
-            json!(no_silent_fingerprint_rustls_downgrade_ready),
+            "no_silent_fingerprint_provider_downgrade_ready".to_owned(),
+            json!(no_silent_fingerprint_provider_downgrade_ready),
         );
         report.insert(
             "fingerprint_underlay_live_evidence_contract_ready".to_owned(),
@@ -114,8 +114,8 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
             json!(full_parity_not_declared),
         );
         report.insert(
-            "reality_fingerprint_rustls_fail_closed_ready".to_owned(),
-            json!(reality_fingerprint_rustls_fail_closed_ready),
+            "reality_fingerprint_nonboring_fail_closed_ready".to_owned(),
+            json!(reality_fingerprint_nonboring_fail_closed_ready),
         );
         report.insert(
             "reality_fingerprint_boring_underlay_ready".to_owned(),
@@ -200,7 +200,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
                 "production_ready": security_underlay_capability.production_ready,
                 "standard_tls_underlay_contract_ready": standard_tls_underlay_contract_ready,
                 "fingerprint_aware_tls_underlay_contract_ready": fingerprint_aware_tls_underlay_contract_ready,
-                "no_silent_fingerprint_rustls_downgrade_ready": no_silent_fingerprint_rustls_downgrade_ready,
+                "no_silent_fingerprint_provider_downgrade_ready": no_silent_fingerprint_provider_downgrade_ready,
                 "blocked_rows_visible": true,
                 "current_report_schema": true,
             }),
@@ -218,7 +218,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
                 "fingerprint_aware_tls_underlay_contract_ready": fingerprint_aware_tls_underlay_contract_ready,
                 "unknown_fingerprint_fail_closed_ready": unknown_fingerprint_fail_closed_ready,
                 "boring_fingerprint_underlay_ready": boring_fingerprint_underlay_ready,
-                "no_silent_fingerprint_rustls_downgrade_ready": no_silent_fingerprint_rustls_downgrade_ready,
+                "no_silent_fingerprint_provider_downgrade_ready": no_silent_fingerprint_provider_downgrade_ready,
                 "full_utls_parity_declared": false,
                 "template_coverage": {
                     "supported_fingerprints": utls_template_coverage.supported_fingerprints,
@@ -229,7 +229,7 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
                 },
                 "template_modes": utls_template_modes,
                 "wire_evidence_required_before_full_utls_parity": true,
-                "reality_fingerprint_rustls_fail_closed_ready": reality_fingerprint_rustls_fail_closed_ready,
+                "reality_fingerprint_nonboring_fail_closed_ready": reality_fingerprint_nonboring_fail_closed_ready,
                 "reality_fingerprint_boring_underlay_ready": reality_fingerprint_boring_underlay_ready,
                 "current_report_schema": true,
             }),
@@ -239,13 +239,13 @@ pub(super) fn insert_outbound_fingerprint_underlay_service_contract_capabilities
             json!({
                 "registry": "dae-outbound::shared_transport::utls_fingerprint",
                 "supported_fingerprint_count": supported_fingerprints,
-                "standard_tls_underlay": "rustls when no fingerprint is selected or fingerprint resolves to unsafe",
+                "standard_tls_underlay": "boringssl when no fingerprint is selected or fingerprint resolves to unsafe",
                 "fingerprint_aware_tls_underlay": "boring-backed resident adapter for supported link fingerprints and scoped global fingerprint source",
                 "link_fingerprint_source": "node link fingerprint field has priority on protocol boundaries that carry a link fingerprint",
                 "global_fingerprint_source": "global tls_implementation=utls plus utls_imitate is used only by protocol boundaries that opt in to global TLS transport uTLS",
                 "unknown_fingerprint_policy": "fail-closed",
-                "no_silent_degrade_policy": "fingerprint-aware requests must not degrade to standard rustls",
-                "reality_fingerprint_boundary": "Reality links use link fingerprint only; a configured Reality fingerprint uses a dedicated BoringSSL Reality underlay and must not fall back to rustls",
+                "no_silent_degrade_policy": "fingerprint-aware requests must not leave the BoringSSL underlay",
+                "reality_fingerprint_boundary": "Reality links use link fingerprint only; a configured Reality fingerprint uses a dedicated BoringSSL Reality underlay",
                 "live_evidence_field": "resident_dataplane TCP report tls_underlay",
                 "wire_evidence_scope": "captured ClientHello comparison exists for exact runtime templates; full uTLS parity is not declared for family approximation, randomized, or unsupported exact-template modes",
             }),

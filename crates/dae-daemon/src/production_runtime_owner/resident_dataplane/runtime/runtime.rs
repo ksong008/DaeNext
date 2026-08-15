@@ -176,7 +176,6 @@ impl ResidentDataplaneRuntime {
             "name": "clear-resident-tls-config-caches",
             "status": "pass",
             "ownership": "process-wide-cache-cleared-after-runtime-quiesce",
-            "rustlsEntries": tls_caches.rustls,
             "boringEntries": tls_caches.boring,
             "boringSessions": tls_caches.boring_sessions,
             "boringSessionAttempts": tls_caches.boring_session_attempts,
