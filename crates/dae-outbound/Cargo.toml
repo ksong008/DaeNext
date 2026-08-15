@@ -6,8 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = []
-test-support = ["dep:rcgen"]
+default = ["test-boringssl-quic"]
+test-support = ["dep:rcgen", "dep:rustls", "quinn/rustls-aws-lc-rs"]
 test-boringssl-quic = []
 
 [dependencies]
@@ -19,13 +19,13 @@ boring.workspace = true
 boring-sys.workspace = true
 boring-v4-compat.workspace = true
 brotli.workspace = true
-aws-lc-rs.workspace = true
 bytes.workspace = true
 chacha20poly1305.workspace = true
 dae-core-types.workspace = true
 fastrand.workspace = true
 foreign-types.workspace = true
 getrandom.workspace = true
+ghash.workspace = true
 h3.workspace = true
 h3-quinn.workspace = true
 http.workspace = true
@@ -37,7 +37,7 @@ quinn-boring.workspace = true
 quinn-proto.workspace = true
 rcgen = { workspace = true, optional = true }
 regex.workspace = true
-rustls.workspace = true
+rustls = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
@@ -50,4 +50,6 @@ x25519-dalek.workspace = true
 [dev-dependencies]
 aws-lc-rs.workspace = true
 dae-golden.workspace = true
+quinn = { workspace = true, features = ["rustls-aws-lc-rs"] }
 rcgen.workspace = true
+rustls.workspace = true

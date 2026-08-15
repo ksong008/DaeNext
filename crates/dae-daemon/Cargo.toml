@@ -14,6 +14,8 @@ default = [
     "service-contract",
     "native-ebpf",
     "allocator-jemalloc",
+    "test-boringssl-tcp-tls",
+    "test-boringssl-quic",
 ]
 product-api = [
     "resident-runtime",
@@ -39,7 +41,10 @@ test-scalar-udp-send = []
 # product schema or runtime fallback: a binary has exactly one admitted
 # provider for each TLS shape.
 test-boringssl-tcp-tls = []
+test-boringssl-tls-profile = ["test-boringssl-tcp-tls"]
+test-boringssl-unbuffered-bio = ["test-boringssl-tcp-tls"]
 test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
+test-anytls-legacy-frame-reader = []
 
 [[bin]]
 name = "daed"
@@ -87,7 +92,6 @@ quinn.workspace = true
 quinn-boring.workspace = true
 udp.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
-rustls.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -97,11 +101,14 @@ socket2.workspace = true
 tls-parser.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tokio-boring.workspace = true
-tokio-rustls.workspace = true
 tikv-jemallocator = { workspace = true, optional = true }
 tikv-jemalloc-ctl = { workspace = true, optional = true }
 tikv-jemalloc-sys = { workspace = true, optional = true }
 url.workspace = true
 
 [dev-dependencies]
+dae-outbound = { workspace = true, features = ["test-support"] }
+quinn = { workspace = true, features = ["rustls-aws-lc-rs"] }
 rcgen.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true

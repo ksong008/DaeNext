@@ -14,6 +14,7 @@ pub mod quic_h3;
 pub mod reality;
 pub mod reality_aead;
 pub mod system_ca;
+#[cfg(any(test, feature = "test-support"))]
 pub mod tls;
 pub mod tls_fragment;
 pub mod utls_fingerprint;
@@ -95,10 +96,10 @@ pub use system_ca::{
     invalidate_system_ca_snapshot, system_ca_snapshot,
 };
 #[cfg(any(test, feature = "test-support"))]
-pub use tls::tls_loopback_material;
 pub use tls::{
     DEFAULT_TLS_ALPN, DEFAULT_TLS_SERVER_NAME, TlsLoopbackMaterial, TlsServerObservation,
-    TlsUnderlayOptions, TlsUnderlayReport, tls_client_echo_exchange, tls_server_echo,
+    TlsUnderlayOptions, TlsUnderlayReport, tls_client_echo_exchange, tls_loopback_material,
+    tls_server_echo,
 };
 pub use tls_fragment::{
     SharedTlsFragmentStats, TLS_FRAGMENT_MAX_BUFFERED_RECORD_LEN, TLS_HANDSHAKE_CONTENT_TYPE,

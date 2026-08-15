@@ -18,13 +18,6 @@ use dae_outbound::shared_transport::{
     UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE, UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ,
     UTLS_FAMILY_RANDOM, system_ca_snapshot,
 };
-use rustls::client::RealityConfig;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{
-    CertificateError, ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme,
-    SupportedCipherSuite,
-};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::time;
@@ -48,6 +41,12 @@ mod policy;
 pub(super) use self::policy::*;
 mod boring_session;
 use self::boring_session::*;
+mod boring_tls_profile;
+pub(crate) use self::boring_tls_profile::take_boring_tls_io_profile_snapshot;
+use self::boring_tls_profile::{
+    configure_boring_tls_profile, record_bio_read, record_bio_write, record_ssl_read,
+    record_ssl_write,
+};
 mod async_client;
 mod open_client;
 pub(super) use self::open_client::*;

@@ -3,10 +3,12 @@ pub mod contract;
 mod dataplane;
 pub mod link;
 pub mod request;
+#[cfg(any(test, feature = "test-support"))]
 mod tls_dataplane;
 
 pub use application_protocol::{EffectiveHttpProxyApplicationProtocol, HTTP_1_1_ALPN};
 pub use dataplane::{HttpConnectExchangeReport, connect_exchange, connect_exchange_over_stream};
 pub use link::{HttpProxyLink, HttpScheme};
 pub use request::{HttpConnectOptions, HttpForwardRequest, HttpTransportMode};
+#[cfg(any(test, feature = "test-support"))]
 pub use tls_dataplane::{HttpsProxyTlsExchangeReport, connect_exchange_over_tls_stream};

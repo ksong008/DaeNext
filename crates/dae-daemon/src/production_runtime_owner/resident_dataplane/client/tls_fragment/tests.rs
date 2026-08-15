@@ -4,6 +4,28 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[cfg(not(feature = "test-boringssl-unbuffered-bio"))]
+#[tokio::test]
+async fn boring_tcp_stream_uses_bounded_bio_read_buffer() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let connect = TokioTcpStream::connect(address);
+    let accept = listener.accept();
+    let (client, accepted) = tokio::join!(connect, accept);
+    let client = client.unwrap();
+    let (mut server, _) = accepted.unwrap();
+    server.write_all(&[7_u8; 128]).await.unwrap();
+
+    let mut stream = AsyncResidentTcpStream::new_boring(client, None);
+    let mut prefix = [0_u8; 5];
+    stream.read_exact(&mut prefix).await.unwrap();
+    let AsyncResidentTcpStream::BufferedPlain(reader) = &stream else {
+        panic!("default BoringSSL TCP stream must install the BIO read buffer");
+    };
+    assert_eq!(prefix, [7; 5]);
+    assert_eq!(reader.buffer().len(), 123);
+}
+
 #[derive(Default)]
 struct ReadyWriter {
     bytes: Vec<u8>,

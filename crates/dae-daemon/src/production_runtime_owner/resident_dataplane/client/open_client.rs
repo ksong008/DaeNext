@@ -43,34 +43,21 @@ async fn open_async_resident_tls_client_over_stream(
         ResidentTlsProvider::FingerprintAwareBoring => {
             open_async_boring_resident_tls_client(proxy, policy, tcp).await
         }
-        ResidentTlsProvider::RealityRustls => {
-            open_async_reality_rustls_resident_tls_client(proxy, policy, tcp).await
-        }
         ResidentTlsProvider::RealityFingerprintBoring => {
             open_async_reality_boring_resident_tls_client(proxy, policy, tcp).await
-        }
-        ResidentTlsProvider::StandardRustls => {
-            open_async_rustls_resident_tls_client(proxy, policy, tcp).await
         }
     }
 }
 
-pub(super) fn async_resident_tcp_stream_for_proxy(
+pub(super) fn async_boring_resident_tcp_stream_for_proxy(
     proxy: &ResidentProxyPlan,
     tcp: TokioTcpStream,
 ) -> AsyncResidentTcpStream {
-    // The record-bounded transport gate is needed by the legacy Vision path:
-    // after Xray's DIRECT command, that path hands the connection itself to
-    // raw TCP.  VLESS Encryption + Vision is different.  Its DIRECT command
-    // only hands off the *inner VLESS record wrapper*; the outer TLS session
-    // must continue to consume subsequent TLS records.  Putting a bounded
-    // reader underneath rustls would leave it parked at the first record
-    // boundary and make the post-DIRECT response look like a stalled socket.
     let vision_encryption = proxy.vless_encryption().ok().flatten().is_some();
     if proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision && !vision_encryption {
         AsyncResidentTcpStream::new_vision(tcp, proxy.tls_fragment.clone())
     } else {
-        AsyncResidentTcpStream::new(tcp, proxy.tls_fragment.clone())
+        AsyncResidentTcpStream::new_boring(tcp, proxy.tls_fragment.clone())
     }
 }
 
@@ -118,45 +105,7 @@ async fn open_async_xhttp_endpoint_tls_client_over_stream(
             )
             .await
         }
-        ResidentTlsProvider::StandardRustls | ResidentTlsProvider::RealityRustls => {
-            open_async_rustls_xhttp_endpoint_tls_client_over_stream(
-                endpoint,
-                &selection.policy,
-                tcp,
-            )
-            .await
-        }
     }
-}
-
-async fn open_async_rustls_xhttp_endpoint_tls_client_over_stream(
-    endpoint: &ResidentXhttpEndpointPlan,
-    policy: &ResidentTlsPolicy,
-    tcp: TokioTcpStream,
-) -> Result<AsyncResidentTlsClient, String> {
-    let config = rustls_xhttp_endpoint_client_config(endpoint, policy)?;
-    let server_name = ServerName::try_from(policy.server_name.clone()).map_err(|err| {
-        format!(
-            "invalid xHTTP TLS server name {}: {err}",
-            policy.server_name
-        )
-    })?;
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let tcp = AsyncResidentTcpStream::new(tcp, endpoint.tls_fragment.clone());
-    let tls = time::timeout(
-        RESIDENT_CONNECT_TIMEOUT,
-        connector.connect(server_name, tcp),
-    )
-    .await
-    .map_err(|_| "xHTTP tokio-rustls handshake timeout".to_owned())?
-    .map_err(|err| format!("connect xHTTP tokio-rustls client: {err}"))?;
-    Ok(AsyncVlessTlsClient {
-        engine: if endpoint.reality.is_some() {
-            AsyncVlessTlsEngine::RealityRustls { tls }
-        } else {
-            AsyncVlessTlsEngine::Rustls { tls }
-        },
-    })
 }
 
 async fn open_async_boring_xhttp_endpoint_tls_client_over_stream(
@@ -181,7 +130,7 @@ async fn open_async_boring_xhttp_endpoint_tls_client_over_stream(
         });
         configure_reality_boring_ssl(&mut config, &policy.verification)?;
     }
-    let tcp = AsyncResidentTcpStream::new(tcp, endpoint.tls_fragment.clone());
+    let tcp = AsyncResidentTcpStream::new_boring(tcp, endpoint.tls_fragment.clone());
     let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
@@ -360,58 +309,6 @@ fn adopt_direct_tcp_connection(
     TokioTcpStream::from_std(connected.stream).map_err(|err| format!("{adopt_context}: {err}"))
 }
 
-pub(crate) async fn open_async_rustls_resident_tls_client(
-    proxy: &ResidentProxyPlan,
-    policy: &ResidentTlsPolicy,
-    tcp: TokioTcpStream,
-) -> Result<AsyncVlessTlsClient, String> {
-    let config = rustls_vless_client_config(proxy, policy)?;
-    let server_name = ServerName::try_from(policy.server_name.clone()).map_err(|err| {
-        format!(
-            "invalid VLESS TLS server name {}: {err}",
-            policy.server_name
-        )
-    })?;
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
-    let tls = time::timeout(
-        RESIDENT_CONNECT_TIMEOUT,
-        connector.connect(server_name, tcp),
-    )
-    .await
-    .map_err(|_| "VLESS tokio-rustls handshake timeout".to_owned())?
-    .map_err(|err| format!("connect VLESS tokio-rustls client: {err}"))?;
-    Ok(AsyncVlessTlsClient {
-        engine: AsyncVlessTlsEngine::Rustls { tls },
-    })
-}
-
-pub(crate) async fn open_async_reality_rustls_resident_tls_client(
-    proxy: &ResidentProxyPlan,
-    policy: &ResidentTlsPolicy,
-    tcp: TokioTcpStream,
-) -> Result<AsyncVlessTlsClient, String> {
-    let config = rustls_vless_client_config(proxy, policy)?;
-    let server_name = ServerName::try_from(policy.server_name.clone()).map_err(|err| {
-        format!(
-            "invalid VLESS Reality server name {}: {err}",
-            policy.server_name
-        )
-    })?;
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
-    let tls = time::timeout(
-        RESIDENT_CONNECT_TIMEOUT,
-        connector.connect(server_name, tcp),
-    )
-    .await
-    .map_err(|_| "VLESS Reality tokio-rustls handshake timeout".to_owned())?
-    .map_err(|err| format!("connect VLESS Reality tokio-rustls client: {err}"))?;
-    Ok(AsyncVlessTlsClient {
-        engine: AsyncVlessTlsEngine::RealityRustls { tls },
-    })
-}
-
 pub(crate) async fn open_async_boring_resident_tls_client(
     proxy: &ResidentProxyPlan,
     policy: &ResidentTlsPolicy,
@@ -422,7 +319,7 @@ pub(crate) async fn open_async_boring_resident_tls_client(
         .configure()
         .map_err(|err| format!("configure VLESS BoringSSL client: {err}"))?;
     configure_utls_template_boring_ssl(&mut config, proxy)?;
-    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
+    let tcp = async_boring_resident_tcp_stream_for_proxy(proxy, tcp);
     let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,
@@ -524,7 +421,7 @@ async fn open_async_boring_ech_resident_tls_attempt(
     config.set_ech_config_list(ech_config_list).map_err(|err| {
         ResidentEchHandshakeError::Failed(format!("set VLESS BoringSSL ECHConfigList: {err}"))
     })?;
-    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
+    let tcp = async_boring_resident_tcp_stream_for_proxy(proxy, tcp);
     let session_key =
         ResidentBoringTlsSessionKey::with_ech_config_list(&proxy.server_name, ech_config_list);
     let result = time::timeout(
@@ -638,7 +535,7 @@ async fn open_async_boring_ech_xhttp_attempt(
     config.set_ech_config_list(ech_config_list).map_err(|err| {
         ResidentEchHandshakeError::Failed(format!("set xHTTP BoringSSL ECHConfigList: {err}"))
     })?;
-    let tcp = AsyncResidentTcpStream::new(tcp, endpoint.tls_fragment.clone());
+    let tcp = AsyncResidentTcpStream::new_boring(tcp, endpoint.tls_fragment.clone());
     let session_key =
         ResidentBoringTlsSessionKey::with_ech_config_list(&endpoint.server_name, ech_config_list);
     let result = time::timeout(

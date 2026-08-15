@@ -173,11 +173,7 @@ mod tests {
 
         assert_eq!(
             selection.provider,
-            if cfg!(feature = "test-boringssl-tcp-tls") {
-                ResidentTlsProvider::FingerprintAwareBoring
-            } else {
-                ResidentTlsProvider::StandardRustls
-            }
+            ResidentTlsProvider::FingerprintAwareBoring
         );
         assert_eq!(selection.policy.server_name, proxy.server_name);
         assert_eq!(selection.policy.alpn, proxy.alpn);
@@ -210,11 +206,7 @@ mod tests {
         let selection = ResidentTlsFactorySelection::from_proxy(&proxy).unwrap();
         assert_eq!(
             selection.provider,
-            if cfg!(feature = "test-boringssl-tcp-tls") {
-                ResidentTlsProvider::RealityFingerprintBoring
-            } else {
-                ResidentTlsProvider::RealityRustls
-            }
+            ResidentTlsProvider::RealityFingerprintBoring
         );
         assert_eq!(
             selection.policy.verification,
@@ -247,11 +239,7 @@ mod tests {
         );
         assert_eq!(
             selection.provider,
-            if cfg!(feature = "test-boringssl-tcp-tls") {
-                ResidentTlsProvider::FingerprintAwareBoring
-            } else {
-                ResidentTlsProvider::StandardRustls
-            }
+            ResidentTlsProvider::FingerprintAwareBoring
         );
     }
 
