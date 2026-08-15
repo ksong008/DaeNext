@@ -232,26 +232,35 @@ pub(super) fn parse_tcp_response_stream(input: &[u8]) -> Result<TcpResponseFrame
 pub fn encode_hysteria2_udp_message(
     message: &Hysteria2UdpMessage,
 ) -> Result<Vec<u8>, OutboundError> {
-    validate_udp_message_fields(
+    encode_hysteria2_udp_payload(
+        message.session_id,
         message.packet_id,
         message.fragment_id,
         message.fragment_count,
         &message.target,
         &message.payload,
-    )?;
-    validate_outbound_udp_message_identity(
-        message.packet_id,
-        message.fragment_id,
-        message.fragment_count,
-    )?;
-    let mut out = Vec::with_capacity(message.encoded_len());
-    out.extend_from_slice(&message.session_id.to_be_bytes());
-    out.extend_from_slice(&message.packet_id.to_be_bytes());
-    out.push(message.fragment_id);
-    out.push(message.fragment_count);
-    append_quic_varint(&mut out, message.target.len() as u64)?;
-    out.extend_from_slice(message.target.as_bytes());
-    out.extend_from_slice(&message.payload);
+    )
+}
+
+pub fn encode_hysteria2_udp_payload(
+    session_id: u32,
+    packet_id: u16,
+    fragment_id: u8,
+    fragment_count: u8,
+    target: &str,
+    payload: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
+    validate_udp_message_fields(packet_id, fragment_id, fragment_count, target, payload)?;
+    validate_outbound_udp_message_identity(packet_id, fragment_id, fragment_count)?;
+    let encoded_len = 8 + quic_varint_len(target.len() as u64) + target.len() + payload.len();
+    let mut out = Vec::with_capacity(encoded_len);
+    out.extend_from_slice(&session_id.to_be_bytes());
+    out.extend_from_slice(&packet_id.to_be_bytes());
+    out.push(fragment_id);
+    out.push(fragment_count);
+    append_quic_varint(&mut out, target.len() as u64)?;
+    out.extend_from_slice(target.as_bytes());
+    out.extend_from_slice(payload);
     Ok(out)
 }
 
@@ -447,6 +456,15 @@ fn bad_wire(message: impl Into<String>) -> OutboundError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_udp_encoder_matches_owned_message_wire() {
+        let message = Hysteria2UdpMessage::new(7, "192.0.2.1:53", b"payload").unwrap();
+        assert_eq!(
+            encode_hysteria2_udp_payload(7, 0, 0, 1, "192.0.2.1:53", b"payload").unwrap(),
+            encode_hysteria2_udp_message(&message).unwrap()
+        );
+    }
 
     #[test]
     fn tcp_request_padding_is_encoded_and_excluded_from_the_payload() {

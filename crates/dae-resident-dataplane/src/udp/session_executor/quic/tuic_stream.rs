@@ -1,12 +1,23 @@
 use super::*;
 
-pub(super) async fn send_tuic_udp_stream_packet(
+pub(super) async fn send_tuic_udp_stream_payload(
     connection: &quinn::Connection,
-    packet: &TuicUdpPacket,
+    association_id: u16,
+    packet_id: u16,
+    target: &str,
+    payload: &[u8],
     deadline: dae_runtime_control::AbsoluteDeadline,
 ) -> Result<(), String> {
-    let encoded = encode_tuic_udp_stream_packet(packet)
+    let encoded = encode_tuic_udp_stream_payload(association_id, packet_id, target, payload)
         .map_err(|err| format!("encode TUIC UDP stream packet: {err}"))?;
+    send_encoded_tuic_udp_stream_packet(connection, &encoded, deadline).await
+}
+
+async fn send_encoded_tuic_udp_stream_packet(
+    connection: &quinn::Connection,
+    encoded: &[u8],
+    deadline: dae_runtime_control::AbsoluteDeadline,
+) -> Result<(), String> {
     let remaining = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "TUIC UDP stream packet deadline elapsed".to_owned())?;
@@ -16,7 +27,7 @@ pub(super) async fn send_tuic_udp_stream_packet(
             .await
             .map_err(|err| format!("open TUIC UDP packet stream: {err}"))?;
         stream
-            .write_all(&encoded)
+            .write_all(encoded)
             .await
             .map_err(|err| format!("write TUIC UDP packet stream: {err}"))?;
         stream

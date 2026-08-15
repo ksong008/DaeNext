@@ -64,65 +64,58 @@ pub(super) fn separate_header(session_id: [u8; 8], packet_id: u64) -> [u8; 16] {
 }
 
 pub(super) fn encrypt_aes_block(key: &[u8], plaintext: &[u8]) -> Result<[u8; 16], OutboundError> {
-    if plaintext.len() != AES_BLOCK_LEN {
-        return Err(OutboundError::BadShadowsocks(
-            "SS2022 AES block plaintext must be 16 bytes".to_owned(),
-        ));
-    }
-    let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(plaintext);
-    match key.len() {
-        16 => {
-            let cipher = Aes128::new_from_slice(key).map_err(|_| {
+    Ss2022AesBlockCipher::new(key)?.encrypt_block(plaintext)
+}
+
+impl Ss2022AesBlockCipher {
+    pub(super) fn new(key: &[u8]) -> Result<Self, OutboundError> {
+        match key.len() {
+            16 => Aes128::new_from_slice(key).map(Self::Aes128).map_err(|_| {
                 OutboundError::BadShadowsocks("bad SS2022 aes-128 block key".to_owned())
-            })?;
-            cipher.encrypt_block(&mut block);
-        }
-        32 => {
-            let cipher = Aes256::new_from_slice(key).map_err(|_| {
+            }),
+            32 => Aes256::new_from_slice(key).map(Self::Aes256).map_err(|_| {
                 OutboundError::BadShadowsocks("bad SS2022 aes-256 block key".to_owned())
-            })?;
-            cipher.encrypt_block(&mut block);
-        }
-        _ => {
-            return Err(OutboundError::BadShadowsocks(format!(
+            }),
+            _ => Err(OutboundError::BadShadowsocks(format!(
                 "unsupported SS2022 AES block key length: {}",
                 key.len()
-            )));
+            ))),
         }
     }
-    let mut out = [0_u8; 16];
-    out.copy_from_slice(&block);
-    Ok(out)
+
+    pub(super) fn encrypt_block(&self, plaintext: &[u8]) -> Result<[u8; 16], OutboundError> {
+        if plaintext.len() != AES_BLOCK_LEN {
+            return Err(OutboundError::BadShadowsocks(
+                "SS2022 AES block plaintext must be 16 bytes".to_owned(),
+            ));
+        }
+        let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(plaintext);
+        match self {
+            Self::Aes128(cipher) => cipher.encrypt_block(&mut block),
+            Self::Aes256(cipher) => cipher.encrypt_block(&mut block),
+        }
+        let mut out = [0_u8; 16];
+        out.copy_from_slice(&block);
+        Ok(out)
+    }
+
+    pub(super) fn decrypt_block(&self, ciphertext: &[u8]) -> Result<[u8; 16], OutboundError> {
+        if ciphertext.len() != AES_BLOCK_LEN {
+            return Err(OutboundError::BadShadowsocks(
+                "SS2022 AES block ciphertext must be 16 bytes".to_owned(),
+            ));
+        }
+        let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(ciphertext);
+        match self {
+            Self::Aes128(cipher) => cipher.decrypt_block(&mut block),
+            Self::Aes256(cipher) => cipher.decrypt_block(&mut block),
+        }
+        let mut out = [0_u8; 16];
+        out.copy_from_slice(&block);
+        Ok(out)
+    }
 }
 
 pub(super) fn decrypt_aes_block(key: &[u8], ciphertext: &[u8]) -> Result<[u8; 16], OutboundError> {
-    if ciphertext.len() != AES_BLOCK_LEN {
-        return Err(OutboundError::BadShadowsocks(
-            "SS2022 AES block ciphertext must be 16 bytes".to_owned(),
-        ));
-    }
-    let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(ciphertext);
-    match key.len() {
-        16 => {
-            let cipher = Aes128::new_from_slice(key).map_err(|_| {
-                OutboundError::BadShadowsocks("bad SS2022 aes-128 block key".to_owned())
-            })?;
-            cipher.decrypt_block(&mut block);
-        }
-        32 => {
-            let cipher = Aes256::new_from_slice(key).map_err(|_| {
-                OutboundError::BadShadowsocks("bad SS2022 aes-256 block key".to_owned())
-            })?;
-            cipher.decrypt_block(&mut block);
-        }
-        _ => {
-            return Err(OutboundError::BadShadowsocks(format!(
-                "unsupported SS2022 AES block key length: {}",
-                key.len()
-            )));
-        }
-    }
-    let mut out = [0_u8; 16];
-    out.copy_from_slice(&block);
-    Ok(out)
+    Ss2022AesBlockCipher::new(key)?.decrypt_block(ciphertext)
 }

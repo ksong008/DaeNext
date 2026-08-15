@@ -15,6 +15,8 @@ fn case_ss2022_udp_aes_separate_header_replay_roundtrips_payload() {
     let server_session = *b"srv90aes";
     let mut codec =
         shadowsocks::Ss2022UdpCodec::new(AES_CIPHER, AES_PASSWORD, client_session).expect("codec");
+    assert!(codec.client_payload_cipher_cached());
+    assert_eq!(codec.cached_server_payload_session(), None);
     let packet = codec
         .encode_client_packet(TARGET, &payload, TIMESTAMP, None)
         .expect("client packet");
@@ -64,11 +66,13 @@ fn case_ss2022_udp_aes_separate_header_replay_roundtrips_payload() {
     assert_eq!(response_decoded.client_session_id, Some(client_session));
     assert_eq!(response_decoded.target, RESPONSE_TARGET);
     assert_eq!(response_decoded.payload, payload);
+    assert_eq!(codec.cached_server_payload_session(), Some(server_session));
 
     let duplicate = codec
         .decode_server_packet(&response.wire, TIMESTAMP)
         .unwrap_err();
     assert!(duplicate.to_string().contains("replay"));
+    assert_eq!(codec.cached_server_payload_session(), Some(server_session));
 
     let stale_session = *b"stale90a";
     let high = shadowsocks::encode_ss2022_udp_server_packet(
@@ -86,6 +90,7 @@ fn case_ss2022_udp_aes_separate_header_replay_roundtrips_payload() {
     codec
         .decode_server_packet(&high.wire, TIMESTAMP)
         .expect("high packet decode");
+    assert_eq!(codec.cached_server_payload_session(), Some(stale_session));
     let old = shadowsocks::encode_ss2022_udp_server_packet(
         AES_CIPHER,
         AES_PASSWORD,

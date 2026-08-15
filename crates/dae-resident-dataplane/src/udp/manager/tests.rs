@@ -328,6 +328,22 @@ fn udp_session_key_uses_dns_semantics_for_local_dns_destination() {
 }
 
 #[test]
+fn udp_session_key_accepts_precomputed_graph_identity_without_semantic_drift() {
+    let proxy = test_udp_proxy(ResidentProxyProtocolPlan::Socks5Tcp {
+        username: String::new(),
+        password: String::new(),
+    });
+    let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
+    let original_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443);
+    let identity = graph_identity_hash(&proxy);
+
+    assert_eq!(
+        UdpSessionKey::new(&proxy, peer, original_dst),
+        UdpSessionKey::new_with_graph_identity_hash(&proxy, &identity, peer, original_dst,)
+    );
+}
+
+#[test]
 fn forced_dns_session_lanes_are_distinct_and_observable() {
     let proxy = test_udp_proxy(ResidentProxyProtocolPlan::VlessVisionTcpTls {
         key: [1; 16],

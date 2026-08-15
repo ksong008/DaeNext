@@ -34,16 +34,29 @@ pub(super) struct TuicUdpSendReport {
     pub(super) final_max_wire_size: Option<usize>,
 }
 
-pub(super) fn send_tuic_udp_packet(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn send_tuic_udp_payload(
     connection: &quinn::Connection,
-    packet: &TuicUdpPacket,
+    association_id: u16,
+    packet_id: u16,
+    target: &str,
+    payload: &[u8],
     packet_ids: &mut QuicUdpPacketIdAllocator,
     resources: QuicUdpDatagramResourceProfile,
 ) -> Result<TuicUdpSendReport, String> {
     let mut connection = connection.clone();
-    send_tuic_udp_packet_with(&mut connection, packet, packet_ids, resources)
+    send_tuic_udp_payload_with(
+        &mut connection,
+        association_id,
+        packet_id,
+        target,
+        payload,
+        packet_ids,
+        resources,
+    )
 }
 
+#[cfg(test)]
 fn send_tuic_udp_packet_with<S>(
     sender: &mut S,
     packet: &TuicUdpPacket,
@@ -53,7 +66,34 @@ fn send_tuic_udp_packet_with<S>(
 where
     S: TuicUdpDatagramSender,
 {
-    let whole = encode_tuic_udp_packet(packet)
+    let target = packet
+        .target()
+        .ok_or_else(|| "complete TUIC UDP packet is missing its target".to_owned())?;
+    send_tuic_udp_payload_with(
+        sender,
+        packet.association_id(),
+        packet.packet_id(),
+        target,
+        packet.payload(),
+        packet_ids,
+        resources,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_tuic_udp_payload_with<S>(
+    sender: &mut S,
+    association_id: u16,
+    packet_id: u16,
+    target: &str,
+    payload: &[u8],
+    packet_ids: &mut QuicUdpPacketIdAllocator,
+    resources: QuicUdpDatagramResourceProfile,
+) -> Result<TuicUdpSendReport, String>
+where
+    S: TuicUdpDatagramSender,
+{
+    let whole = encode_tuic_udp_payload(association_id, packet_id, 1, 0, Some(target), payload)
         .map_err(|err| format!("encode complete TUIC UDP datagram: {err}"))?;
     match sender.send_datagram(Bytes::from(whole)) {
         Ok(()) => {
@@ -70,6 +110,9 @@ where
         }
     }
 
+    let packet = TuicUdpPacket::new(association_id, packet_id, target, payload)
+        .map_err(|err| format!("build oversized TUIC UDP packet: {err}"))?;
+
     let mut max_wire_size = sender.max_datagram_size().ok_or_else(|| {
         "TUIC peer disabled QUIC datagrams after reporting an oversized datagram".to_owned()
     })?;
@@ -77,7 +120,7 @@ where
     for fragment_layout in 1..=resources.pmtu_retries() {
         let packet_id = packet_ids.allocate()?;
         let fragments =
-            fragment_tuic_udp_packet(packet, packet_id, max_wire_size).map_err(|err| {
+            fragment_tuic_udp_packet(&packet, packet_id, max_wire_size).map_err(|err| {
                 format!("fragment TUIC UDP datagram for {max_wire_size}-byte QUIC limit: {err}")
             })?;
         let mut restart_max_wire_size = None;

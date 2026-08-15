@@ -5,7 +5,7 @@ use super::{
 };
 use aes::Aes256;
 use aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
-use aes_gcm::aead::Aead;
+use aes_gcm::aead::{Aead, AeadInPlace};
 use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaChaNonce};
 use getrandom::fill as random_fill;
@@ -200,6 +200,75 @@ impl AeadState {
                     )
                 }),
         }
+    }
+
+    fn seal_next_in_place(
+        &mut self,
+        buffer: &mut Vec<u8>,
+        payload_offset: usize,
+        aad: &[u8],
+    ) -> Result<()> {
+        let tag = match self {
+            Self::Aes(cipher, nonce) => cipher
+                .encrypt_in_place_detached(
+                    AesNonce::from_slice(&Self::nonce_next(nonce)),
+                    aad,
+                    &mut buffer[payload_offset..],
+                )
+                .map_err(|_| {
+                    Error::new(ErrorKind::InvalidData, "VLESS Encryption AES seal failed")
+                })?,
+            Self::ChaCha(cipher, nonce) => cipher
+                .encrypt_in_place_detached(
+                    ChaChaNonce::from_slice(&Self::nonce_next(nonce)),
+                    aad,
+                    &mut buffer[payload_offset..],
+                )
+                .map_err(|_| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        "VLESS Encryption ChaCha seal failed",
+                    )
+                })?,
+        };
+        buffer.extend_from_slice(&tag);
+        Ok(())
+    }
+
+    fn open_next_in_place(&mut self, ciphertext: &mut Vec<u8>, aad: &[u8]) -> Result<()> {
+        let payload_len = ciphertext
+            .len()
+            .checked_sub(AEAD_TAG_LEN)
+            .ok_or_else(|| io_other("VLESS Encryption record is shorter than its AEAD tag"))?;
+        let tag = aes_gcm::Tag::clone_from_slice(&ciphertext[payload_len..]);
+        let plaintext = &mut ciphertext[..payload_len];
+        match self {
+            Self::Aes(cipher, nonce) => cipher
+                .decrypt_in_place_detached(
+                    AesNonce::from_slice(&Self::nonce_next(nonce)),
+                    aad,
+                    plaintext,
+                    &tag,
+                )
+                .map_err(|_| {
+                    Error::new(ErrorKind::InvalidData, "VLESS Encryption AES open failed")
+                })?,
+            Self::ChaCha(cipher, nonce) => cipher
+                .decrypt_in_place_detached(
+                    ChaChaNonce::from_slice(&Self::nonce_next(nonce)),
+                    aad,
+                    plaintext,
+                    &tag,
+                )
+                .map_err(|_| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        "VLESS Encryption ChaCha open failed",
+                    )
+                })?,
+        }
+        ciphertext.truncate(payload_len);
+        Ok(())
     }
 
     fn open_with_nonce(&self, nonce: &[u8; 12], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
@@ -599,7 +668,7 @@ where
         }
     }
 
-    fn build_record(&mut self, payload: &[u8]) -> Result<Vec<u8>> {
+    fn build_record(&mut self, payload: &[u8]) -> Result<()> {
         let length = payload.len().saturating_add(AEAD_TAG_LEN);
         if length > u16::MAX as usize || length + RECORD_HEADER_LEN > MAX_RECORD_LEN {
             return Err(Error::new(
@@ -610,19 +679,27 @@ where
         let mut header = [0_u8; RECORD_HEADER_LEN];
         header[..3].copy_from_slice(&[23, 3, 3]);
         header[3..].copy_from_slice(&(length as u16).to_be_bytes());
-        let ciphertext = self.write_aead.seal_next(payload, &header)?;
-        let mut record = Vec::with_capacity(RECORD_HEADER_LEN + ciphertext.len());
-        record.extend_from_slice(&header);
-        record.extend_from_slice(&ciphertext);
-        if let Some(ctr) = &mut self.write_ctr {
-            ctr.apply(&mut record[..RECORD_HEADER_LEN]);
-        }
+        self.pending_write.clear();
+        self.pending_offset = 0;
         if !self.prewrite.is_empty() {
-            let mut first = std::mem::take(&mut self.prewrite);
-            first.extend_from_slice(&record);
-            return Ok(first);
+            if self.pending_write.capacity() < self.prewrite.len() {
+                self.pending_write = std::mem::take(&mut self.prewrite);
+            } else {
+                self.pending_write.append(&mut self.prewrite);
+            }
         }
-        Ok(record)
+        let record_start = self.pending_write.len();
+        self.pending_write
+            .reserve(RECORD_HEADER_LEN + payload.len() + AEAD_TAG_LEN);
+        self.pending_write.extend_from_slice(&header);
+        let payload_offset = self.pending_write.len();
+        self.pending_write.extend_from_slice(payload);
+        self.write_aead
+            .seal_next_in_place(&mut self.pending_write, payload_offset, &header)?;
+        if let Some(ctr) = &mut self.write_ctr {
+            ctr.apply(&mut self.pending_write[record_start..payload_offset]);
+        }
+        Ok(())
     }
 
     fn evict_ticket(&self) {
@@ -790,9 +867,12 @@ where
                                     "VLESS Encryption record header invalid; ticket evicted",
                                 )));
                             }
+                            let mut body = std::mem::take(&mut self.read_plain);
+                            body.clear();
+                            body.resize(length, 0);
                             self.read_state = ReadState::Body {
                                 header: buffer,
-                                buffer: vec![0_u8; length],
+                                buffer: body,
                                 filled: 0,
                             };
                             continue;
@@ -837,10 +917,10 @@ where
                                 .read_aead
                                 .as_mut()
                                 .ok_or_else(|| io_other("VLESS Encryption peer AEAD missing"))
-                                .and_then(|aead| aead.open_next(&buffer, &header));
+                                .and_then(|aead| aead.open_next_in_place(&mut buffer, &header));
                             match plaintext {
-                                Ok(plaintext) => {
-                                    self.read_plain = plaintext;
+                                Ok(()) => {
+                                    self.read_plain = buffer;
                                     self.read_plain_offset = 0;
                                     self.read_state = ReadState::Header {
                                         buffer: [0; RECORD_HEADER_LEN],
@@ -914,11 +994,7 @@ where
         }
         let take = input.len().min(MAX_RECORD_PAYLOAD);
         match self.build_record(&input[..take]) {
-            Ok(record) => {
-                self.pending_write = record;
-                self.pending_offset = 0;
-                Poll::Ready(Ok(take))
-            }
+            Ok(()) => Poll::Ready(Ok(take)),
             Err(error) => Poll::Ready(Err(error)),
         }
     }
@@ -1128,6 +1204,37 @@ mod tests {
         .expect("write_all must succeed");
         stream.flush().await.expect("flush must drain the record");
         assert!(!stream.into_inner().writes.is_empty());
+    }
+
+    #[test]
+    fn record_aead_in_place_matches_allocating_wire_and_open() {
+        let payload = b"in-place-record-payload";
+        let aad = [23, 3, 3, 0, (payload.len() + AEAD_TAG_LEN) as u8];
+        let mut allocating = AeadState::new(b"fixture", &[0x11; 32]);
+        let expected = allocating.seal_next(payload, &aad).unwrap();
+
+        let mut in_place = AeadState::new(b"fixture", &[0x11; 32]);
+        let mut encoded = vec![0xaa, 0xbb];
+        encoded.extend_from_slice(payload);
+        in_place.seal_next_in_place(&mut encoded, 2, &aad).unwrap();
+        assert_eq!(&encoded[2..], expected);
+
+        let mut opener = AeadState::new(b"fixture", &[0x11; 32]);
+        let mut ciphertext = expected;
+        opener.open_next_in_place(&mut ciphertext, &aad).unwrap();
+        assert_eq!(ciphertext, payload);
+    }
+
+    #[test]
+    fn record_writer_reuses_pending_allocation() {
+        let mut stream = test_stream(ChunkedIo::new(Vec::new(), usize::MAX), ReadState::Eof);
+        stream.build_record(&[0x31; 256]).unwrap();
+        let allocation = stream.pending_write.as_ptr();
+        let capacity = stream.pending_write.capacity();
+
+        stream.build_record(&[0x72; 256]).unwrap();
+        assert_eq!(stream.pending_write.as_ptr(), allocation);
+        assert_eq!(stream.pending_write.capacity(), capacity);
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -8,10 +8,10 @@ mod packet_id;
 mod tuic_datagram;
 mod tuic_stream;
 use self::fragment_buffer::{QuicUdpFragmentBuffer, QuicUdpFragmentOutcome};
-use self::hysteria2_datagram::send_hysteria2_udp_message;
+use self::hysteria2_datagram::send_hysteria2_udp_payload;
 use self::packet_id::QuicUdpPacketIdAllocator;
-use self::tuic_datagram::send_tuic_udp_packet;
-use self::tuic_stream::send_tuic_udp_stream_packet;
+use self::tuic_datagram::send_tuic_udp_payload;
+use self::tuic_stream::send_tuic_udp_stream_payload;
 
 const TUIC_ASSOCIATION_IDENTITY_DOMAIN: &[u8] = b"tuic-v5-association";
 const HYSTERIA2_SESSION_IDENTITY_DOMAIN: &[u8] = b"hysteria2-udp-session";
@@ -34,6 +34,7 @@ pub(in crate::udp) struct Hysteria2QuicDatagramSession {
     packet_ids: QuicUdpPacketIdAllocator,
     resources: QuicUdpDatagramResourceProfile,
     fixed_target: UdpSessionFixedTarget,
+    wire_target: String,
 }
 
 impl Hysteria2QuicDatagramSession {
@@ -52,6 +53,7 @@ impl Hysteria2QuicDatagramSession {
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
+            wire_target: String::new(),
         }
     }
 
@@ -68,6 +70,7 @@ impl Hysteria2QuicDatagramSession {
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
+            wire_target: String::new(),
         }
     }
 
@@ -85,6 +88,9 @@ impl Hysteria2QuicDatagramSession {
     ) -> Result<UdpExchangeResult, String> {
         self.fixed_target
             .bind(original_dst, "Hysteria2 UDP session")?;
+        if self.wire_target.is_empty() {
+            self.wire_target = original_dst.to_string();
+        }
         self.ensure_open().await?;
         let connection = self
             .udp_session
@@ -92,9 +98,14 @@ impl Hysteria2QuicDatagramSession {
             .ok_or_else(|| "Hysteria2 UDP session lease is not initialized".to_owned())?
             .connection()
             .clone();
-        let request = Hysteria2UdpMessage::new(self.session_id, original_dst.to_string(), payload)
-            .map_err(|err| format!("build Hysteria2 UDP datagram: {err}"))?;
-        send_hysteria2_udp_message(&connection, &request, &mut self.packet_ids, self.resources)?;
+        send_hysteria2_udp_payload(
+            &connection,
+            self.session_id,
+            &self.wire_target,
+            payload,
+            &mut self.packet_ids,
+            self.resources,
+        )?;
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
         }
@@ -234,6 +245,7 @@ impl Hysteria2QuicDatagramSession {
         self.fragments.clear();
         self.packet_ids.clear();
         self.fixed_target.clear();
+        self.wire_target.clear();
     }
 }
 
@@ -249,6 +261,7 @@ pub(in crate::udp) struct TuicQuicPacketSession {
     resources: QuicUdpDatagramResourceProfile,
     fixed_target: UdpSessionFixedTarget,
     udp_relay_mode: TuicUdpRelayMode,
+    wire_target: String,
 }
 
 impl TuicQuicPacketSession {
@@ -270,6 +283,7 @@ impl TuicQuicPacketSession {
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
             udp_relay_mode,
+            wire_target: String::new(),
         }
     }
 
@@ -288,6 +302,7 @@ impl TuicQuicPacketSession {
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
             udp_relay_mode: TuicUdpRelayMode::Native,
+            wire_target: String::new(),
         }
     }
 
@@ -305,6 +320,9 @@ impl TuicQuicPacketSession {
     ) -> Result<UdpExchangeResult, String> {
         self.fixed_target
             .bind(original_dst, "TUIC UDP association")?;
+        if self.wire_target.is_empty() {
+            self.wire_target = original_dst.to_string();
+        }
         let deadline = self.owner_deadline.take().unwrap_or_else(|| {
             dae_runtime_control::AbsoluteDeadline::from_now(
                 Instant::now(),
@@ -318,15 +336,28 @@ impl TuicQuicPacketSession {
             .ok_or_else(|| "TUIC UDP association is not initialized".to_owned())?
             .connection();
         let packet_id = self.packet_ids.allocate()?;
-        let request =
-            TuicUdpPacket::new(self.assoc_id, packet_id, original_dst.to_string(), payload)
-                .map_err(|err| format!("build TUIC UDP packet: {err}"))?;
         match self.udp_relay_mode {
             TuicUdpRelayMode::Native => {
-                send_tuic_udp_packet(connection, &request, &mut self.packet_ids, self.resources)?;
+                send_tuic_udp_payload(
+                    connection,
+                    self.assoc_id,
+                    packet_id,
+                    &self.wire_target,
+                    payload,
+                    &mut self.packet_ids,
+                    self.resources,
+                )?;
             }
             TuicUdpRelayMode::Quic => {
-                send_tuic_udp_stream_packet(connection, &request, deadline).await?;
+                send_tuic_udp_stream_payload(
+                    connection,
+                    self.assoc_id,
+                    packet_id,
+                    &self.wire_target,
+                    payload,
+                    deadline,
+                )
+                .await?;
             }
         }
         if let Some(response) = self.poll_response().await? {
@@ -526,6 +557,7 @@ impl TuicQuicPacketSession {
         self.fragment_sources.clear();
         self.packet_ids.clear();
         self.fixed_target.clear();
+        self.wire_target.clear();
     }
 }
 
@@ -539,6 +571,7 @@ pub(in crate::udp) struct JuicityQuicStreamPacketSession {
     response_buffer: Vec<u8>,
     first_packet: bool,
     fixed_target: UdpSessionFixedTarget,
+    wire_target: String,
 }
 
 impl JuicityQuicStreamPacketSession {
@@ -556,6 +589,7 @@ impl JuicityQuicStreamPacketSession {
             response_buffer: Vec::new(),
             first_packet: true,
             fixed_target: UdpSessionFixedTarget::default(),
+            wire_target: String::new(),
         }
     }
 
@@ -576,6 +610,9 @@ impl JuicityQuicStreamPacketSession {
         }
         self.fixed_target
             .bind(original_dst, "Juicity UDP stream session")?;
+        if self.wire_target.is_empty() {
+            self.wire_target = original_dst.to_string();
+        }
         let deadline = self.owner_deadline.take().unwrap_or_else(|| {
             dae_runtime_control::AbsoluteDeadline::from_now(
                 Instant::now(),
@@ -583,10 +620,10 @@ impl JuicityQuicStreamPacketSession {
             )
         });
         self.ensure_open(deadline).await?;
-        let request_frame = seal_stream_packet_frame(&original_dst.to_string(), payload)
+        let request_frame = seal_stream_packet_frame(&self.wire_target, payload)
             .map_err(|err| format!("build Juicity UDP stream packet: {err}"))?;
         let request = if self.first_packet {
-            build_juicity_stream_packet_request(&original_dst.to_string(), &request_frame.encoded)?
+            build_juicity_stream_packet_request(&self.wire_target, &request_frame.encoded)?
         } else {
             request_frame.encoded
         };
@@ -695,6 +732,7 @@ impl JuicityQuicStreamPacketSession {
         self.response_buffer.clear();
         self.first_packet = true;
         self.fixed_target.clear();
+        self.wire_target.clear();
     }
 }
 

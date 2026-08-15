@@ -58,6 +58,34 @@ pub(super) fn bench_shadowsocks_ss2022_psk_split(
     ))
 }
 
+pub(super) fn bench_shadowsocks_ss2022_udp_encode(
+    iters: u64,
+    warmup: u64,
+) -> Result<Measurement, String> {
+    let mut codec = dae_outbound::shadowsocks::Ss2022UdpCodec::new(
+        "2022-blake3-aes-128-gcm",
+        SS2022_PSK_128,
+        [0x31; 8],
+    )
+    .map_err(|err| format!("SS2022 UDP codec setup failed: {err}"))?;
+    let payload = [0x72_u8; 1_200];
+    Ok(measure(
+        || {
+            let packet = codec
+                .encode_client_packet(
+                    black_box("192.0.2.1:443"),
+                    black_box(&payload),
+                    black_box(1_700_000_000),
+                    None,
+                )
+                .expect("SS2022 UDP encode");
+            black_box(packet.wire.len() as u64 ^ packet.packet_id)
+        },
+        iters,
+        warmup,
+    ))
+}
+
 pub(super) fn bench_trojan_parse_link(iters: u64, warmup: u64) -> Result<Measurement, String> {
     let link = "trojan-go://password@example.com:443?type=ws&host=front.example&path=/ws&encryption=ss%3Baes-128-gcm%3Bsecret#ss";
     Ok(measure(
