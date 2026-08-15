@@ -813,6 +813,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dae-ebpf-abi"
+version = "3.1.0"
+dependencies = [
+ "aya",
+]
+
+[[package]]
 name = "dae-ebpf-loader"
 version = "3.1.0"
 dependencies = [
@@ -829,6 +836,7 @@ name = "dae-ebpf-program"
 version = "3.1.0"
 dependencies = [
  "aya-ebpf",
+ "dae-ebpf-abi",
 ]
 
 [[package]]
@@ -836,6 +844,7 @@ name = "dae-ebpf-support"
 version = "3.1.0"
 dependencies = [
  "aya",
+ "dae-ebpf-abi",
  "dae-golden",
  "libc",
  "serde_json",

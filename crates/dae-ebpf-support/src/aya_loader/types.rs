@@ -9,12 +9,6 @@ pub(super) const UNUSED_LPM_TYPE_NAME: &str = "unused_lpm_type";
 pub const DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES: &[&str] = &[LPM_ARRAY_MAP_NAME];
 pub const TRACE_CORE_SIDELOAD_ENABLED: bool = false;
 
-// SAFETY: BpfDaeParam is #[repr(C)], Copy, contains only integer/byte-array fields,
-// and its explicit padding byte is initialized by build_dae_param before Aya global use.
-unsafe impl aya::Pod for BpfDaeParam {}
-// SAFETY: BpfUdpStateMetrics is #[repr(C)], Copy, and contains only u64 counters.
-unsafe impl aya::Pod for BpfUdpStateMetrics {}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AyaUserspaceLoaderOptions<'a> {
     pub object: &'a Path,

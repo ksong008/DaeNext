@@ -36,7 +36,7 @@ pub(crate) fn write_param_image(
                 "dae_netns_id": param.dae_netns_id,
                 "dae0peer_mac": mac_string(param.dae0peer_mac),
                 "has_bpf_get_current_task": param.has_bpf_get_current_task,
-                "tproxy_port_protect": param.padding != 0,
+                "tproxy_port_protect": param.tproxy_port_protect != 0,
                 "task_struct_mm_offset": param.task_struct_mm_offset,
                 "mm_struct_arg_start_offset": param.mm_struct_arg_start_offset,
                 "abi_version": param.abi_version,
