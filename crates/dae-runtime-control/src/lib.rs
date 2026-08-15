@@ -1,5 +1,6 @@
 pub mod connectivity_owned;
 pub mod domain_routing;
+pub mod overview;
 pub mod physical_owner;
 pub mod reload;
 pub mod routing_native;
@@ -60,6 +61,9 @@ pub use domain_routing::{
     DomainRoutingOwnerSnapshot, DomainRoutingOwnerUpdate, DomainRoutingReloadClearPlan,
     DomainRoutingStateEntry, DomainRoutingSyncPlan, DomainRoutingTracker, DomainRoutingView,
     IpRoutingView, format_ip_key, ip_to_key, parse_ip_key,
+};
+pub use overview::{
+    DnsObservabilityStats, RuntimeOverview, RuntimeStatsSnapshot, RuntimeTrafficSample,
 };
 pub use physical_owner::*;
 pub use reload::{CoreFlip, ReloadCoreState, ReloadDnsCachePlan};

@@ -220,7 +220,7 @@ routing {
         .iter()
         .find(|set| {
             set.iter()
-                .any(|prefix| prefix.addr.to_string() == "203.0.113.1")
+                .any(|prefix| prefix.addr().to_string() == "203.0.113.1")
         })
         .expect("explicit ip rule must compile after geodata expansion");
     assert_eq!(

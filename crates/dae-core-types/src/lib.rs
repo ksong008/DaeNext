@@ -11,7 +11,9 @@ pub use dial::{
     DEFAULT_DIAL_TIMEOUT, DEFAULT_DIAL_TIMEOUT_SECS, DEFAULT_DIAL_TIMEOUT_STR, DialMode,
     DialModeParseError, DialerSelectionPolicy, UDP_CHECK_LOOKUP_HOST,
 };
-pub use dns::{DnsRequestOutboundIndex, DnsResponseOutboundIndex};
+pub use dns::{
+    DnsRequestOutboundIndex, DnsResponseOutboundIndex, DnsUserDefinedOutboundIndexError,
+};
 pub use network::{
     IP_VERSION_4, IP_VERSION_6, IpVersionStr, L4_PROTO_TCP, L4_PROTO_UDP, L4ProtoStr,
 };

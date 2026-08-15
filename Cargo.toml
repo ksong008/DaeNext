@@ -10,18 +10,20 @@ members = [
     "crates/dae-bench",
     "crates/dae-build-support",
     "crates/dae-ebpf-loader",
+    "crates/dae-ebpf-abi",
     "crates/dae-datapath",
     "crates/dae-dns",
     "crates/dae-ebpf-program",
     "crates/dae-ebpf-support",
-    "crates/dae-engine",
     "crates/dae-geodata",
     "crates/dae-golden",
     "crates/dae-netutil",
     "crates/dae-outbound",
+    "crates/dae-resident-dataplane",
     "crates/dae-routing",
     "crates/dae-sysdump",
     "crates/dae-sniffing",
+    "crates/dae-tls",
     "crates/dae-trace",
 ]
 resolver = "3"
@@ -75,20 +77,22 @@ dae-config-util = { path = "crates/dae-config-util" }
 dae-config = { path = "crates/dae-config" }
 dae-daemon = { path = "crates/dae-daemon", default-features = false }
 dae-ebpf-loader = { path = "crates/dae-ebpf-loader" }
+dae-ebpf-abi = { path = "crates/dae-ebpf-abi" }
 dae-runtime-control = { path = "crates/dae-runtime-control" }
 dae-core-types = { path = "crates/dae-core-types" }
 dae-datapath = { path = "crates/dae-datapath" }
 dae-dns = { path = "crates/dae-dns" }
 dae-ebpf-support = { path = "crates/dae-ebpf-support" }
-dae-engine = { path = "crates/dae-engine" }
 dae-geodata = { path = "crates/dae-geodata" }
 dae-golden = { path = "crates/dae-golden" }
 dae-netutil = { path = "crates/dae-netutil" }
 dae-outbound = { path = "crates/dae-outbound" }
+dae-resident-dataplane = { path = "crates/dae-resident-dataplane", default-features = false }
 dae-product-identity = { path = "crates/dae-product-identity" }
 dae-routing = { path = "crates/dae-routing" }
 dae-sniffing = { path = "crates/dae-sniffing" }
 dae-sysdump = { path = "crates/dae-sysdump" }
+dae-tls = { path = "crates/dae-tls" }
 dae-trace = { path = "crates/dae-trace" }
 h3 = { version = "0.0.8", features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
 h3-quinn = "0.0.10"

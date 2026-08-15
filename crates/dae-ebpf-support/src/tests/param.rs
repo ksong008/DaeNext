@@ -42,8 +42,8 @@ pub(super) fn tproxy_protection_flag_uses_abi_stable_padding_byte() {
     };
     let protected = build_dae_param_with_protection(input, true);
     let unprotected = build_dae_param_with_protection(input, false);
-    assert_eq!(protected.padding, 1);
-    assert_eq!(unprotected.padding, 0);
+    assert_eq!(protected.tproxy_port_protect, 1);
+    assert_eq!(unprotected.tproxy_port_protect, 0);
     assert_eq!(
         std::mem::size_of_val(&protected),
         std::mem::size_of::<BpfDaeParam>()

@@ -2,17 +2,14 @@ use std::{
     collections::BTreeMap,
     hash::{Hash, Hasher},
     os::fd::AsRawFd,
-    path::PathBuf,
 };
 
-use dae_config::{Config, Function, RoutingRule};
+use dae_config::Config;
 use dae_ebpf_support::{
     RuntimeMapInfo, RuntimeMapSnapshot, map_info, open_map_fd, update_map_elem_bytes,
 };
-use dae_routing::RoutingMatcher;
 use serde_json::{Value, json};
 
-mod geodata;
 mod maps;
 mod plan;
 mod types;
@@ -20,15 +17,17 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub(super) use geodata::GeodataResolver as ResidentGeodataStore;
-use geodata::geodata_report_json;
+pub(super) use dae_resident_dataplane::facade::ResidentGeodataStore;
+use dae_resident_dataplane::facade::geodata_report_json;
+#[cfg(test)]
+pub(super) use dae_resident_dataplane::facade::{
+    build_resident_userspace_routing_matcher, build_resident_userspace_routing_matcher_with_geodata,
+};
 use maps::{
     ensure_map_contract, map_json, open_all_maps, open_latest_map_in_ids, open_optional_unique_map,
     open_unique_map, update_lpm_array_map, update_outbound_connectivity_map,
 };
-use plan::{
-    build_routing_plan_with_geodata_resolver, domain_set_json, userspace_matcher_typed_sets,
-};
+use plan::{build_routing_plan_with_geodata_resolver, domain_set_json};
 use types::MatchSetBytes;
 
 const ROUTING_MAP_NAME: &str = "routing_map";
@@ -48,22 +47,6 @@ const BPF_MAP_CREATE: libc::c_uint = 0;
 const BPF_MAP_TYPE_LPM_TRIE: u32 = 11;
 const BPF_F_NO_PREALLOC: u32 = 1;
 
-const MATCH_TYPE_DOMAIN_SET: u8 = 0;
-const MATCH_TYPE_IP_SET: u8 = 1;
-const MATCH_TYPE_SOURCE_IP_SET: u8 = 2;
-const MATCH_TYPE_PORT: u8 = 3;
-const MATCH_TYPE_SOURCE_PORT: u8 = 4;
-const MATCH_TYPE_L4_PROTO: u8 = 5;
-const MATCH_TYPE_IP_VERSION: u8 = 6;
-const MATCH_TYPE_MAC: u8 = 7;
-const MATCH_TYPE_PROCESS_NAME: u8 = 8;
-const MATCH_TYPE_DSCP: u8 = 9;
-const MATCH_TYPE_FALLBACK: u8 = 10;
-
-const L4_TCP: u8 = 1;
-const L4_UDP: u8 = 2;
-const IP_VERSION_4: u8 = 1;
-const IP_VERSION_6: u8 = 2;
 const CONNECTIVITY_L4_TCP: u8 = 6;
 const CONNECTIVITY_L4_UDP: u8 = 17;
 const CONNECTIVITY_L4_UDP_LEGACY: u8 = 22;
@@ -89,123 +72,6 @@ impl ResidentRoutingApplyCache {
     fn record(&mut self, key: ResidentRoutingApplyKey, checksum: u64) {
         self.applied.insert(key, checksum);
     }
-}
-
-#[allow(dead_code)]
-pub(super) fn expand_resident_dns_request_qname_rules(
-    rules: &[RoutingRule],
-) -> Result<Vec<RoutingRule>, String> {
-    let resolver = geodata::GeodataResolver::new(Vec::<PathBuf>::new());
-    expand_resident_dns_request_qname_rules_with_resolver(rules, &resolver)
-}
-
-pub(super) fn expand_resident_dns_request_qname_rules_with_resolver(
-    rules: &[RoutingRule],
-    resolver: &ResidentGeodataStore,
-) -> Result<Vec<RoutingRule>, String> {
-    expand_resident_dns_qname_rules_with_resolver(rules, resolver, "dns.routing.request qname")
-}
-
-pub(super) fn expand_resident_dns_response_qname_rules_with_resolver(
-    rules: &[RoutingRule],
-    resolver: &ResidentGeodataStore,
-) -> Result<Vec<RoutingRule>, String> {
-    expand_resident_dns_qname_rules_with_resolver(rules, resolver, "dns.routing.response qname")
-}
-
-fn expand_resident_dns_qname_rules_with_resolver(
-    rules: &[RoutingRule],
-    resolver: &ResidentGeodataStore,
-    context: &str,
-) -> Result<Vec<RoutingRule>, String> {
-    let mut geodata_report = geodata::GeodataResolutionReport::default();
-    let mut rules = rules.to_vec();
-    for rule in &mut rules {
-        for function in &mut rule.and_functions {
-            if function.name != "qname" {
-                continue;
-            }
-            expand_resident_dns_qname_function(function, resolver, &mut geodata_report, context)?;
-        }
-    }
-    Ok(rules)
-}
-
-fn expand_resident_dns_qname_function(
-    function: &mut Function,
-    resolver: &geodata::GeodataResolver,
-    geodata_report: &mut geodata::GeodataResolutionReport,
-    context: &str,
-) -> Result<(), String> {
-    let mut expanded = Vec::new();
-    for param in &function.params {
-        match param.key.as_str() {
-            "geosite" => {
-                expanded.extend(geodata::load_geosite_params(
-                    resolver,
-                    "geosite",
-                    &param.val,
-                    geodata_report,
-                )?);
-            }
-            "ext" => {
-                let (filename, code) = param.val.split_once(':').ok_or_else(|| {
-                    format!(
-                        "{context} ext parameter must be file:code, got {}",
-                        param.val
-                    )
-                })?;
-                expanded.extend(geodata::load_geosite_params(
-                    resolver,
-                    filename,
-                    code,
-                    geodata_report,
-                )?);
-            }
-            "geoip" => {
-                return Err(format!(
-                    "{context} cannot use geoip parameters; use geosite or ext geosite data"
-                ));
-            }
-            _ => expanded.push(param.clone()),
-        }
-    }
-    function.params = expanded;
-    Ok(())
-}
-
-pub(super) fn expand_resident_dns_response_ip_params_with_resolver(
-    params: &[dae_config::Param],
-    resolver: &ResidentGeodataStore,
-) -> Result<Vec<dae_config::Param>, String> {
-    let mut geodata_report = geodata::GeodataResolutionReport::default();
-    let mut expanded = Vec::new();
-    for param in params {
-        match param.key.as_str() {
-            "geoip" => expanded.extend(geodata::load_geoip_params(
-                resolver,
-                "geoip",
-                &param.val,
-                &mut geodata_report,
-            )?),
-            "ext" => {
-                let (filename, code) = param.val.split_once(':').ok_or_else(|| {
-                    format!(
-                        "dns.routing.response ip ext parameter must be file:code, got {}",
-                        param.val
-                    )
-                })?;
-                expanded.extend(geodata::load_geoip_params(
-                    resolver,
-                    filename,
-                    code,
-                    &mut geodata_report,
-                )?);
-            }
-            _ => expanded.push(param.clone()),
-        }
-    }
-    Ok(expanded)
 }
 
 pub(super) fn update_new_resident_routing_map(
@@ -312,24 +178,6 @@ pub(super) fn seed_resident_outbound_connectivity_maps(
     }))
 }
 
-#[allow(dead_code)]
-pub(super) fn build_resident_userspace_routing_matcher(
-    config: &Config,
-) -> Result<RoutingMatcher, String> {
-    let geodata = ResidentGeodataStore::new(Vec::<PathBuf>::new());
-    build_resident_userspace_routing_matcher_with_geodata(config, &geodata)
-}
-
-pub(super) fn build_resident_userspace_routing_matcher_with_geodata(
-    config: &Config,
-    geodata: &ResidentGeodataStore,
-) -> Result<RoutingMatcher, String> {
-    let plan = build_routing_plan_with_geodata_resolver(config, geodata)?;
-    let (domain_sets, lpm_sets, matches) = userspace_matcher_typed_sets(&plan)?;
-    RoutingMatcher::from_shared_typed_sets(domain_sets, lpm_sets, matches)
-        .map_err(|err| format!("build resident userspace routing matcher: {err}"))
-}
-
 // Routing map updates keep map fds, metadata, config, geodata, and report source explicit.
 #[allow(clippy::too_many_arguments)]
 fn update_resident_routing_map_fd(
@@ -424,8 +272,8 @@ fn resident_routing_apply_checksum(plan: &types::ResidentRoutingPlan) -> u64 {
     for prefixes in &plan.lpm_sets {
         prefixes.len().hash(&mut hasher);
         for prefix in prefixes.iter() {
-            prefix.addr.hash(&mut hasher);
-            prefix.bits.hash(&mut hasher);
+            prefix.addr().hash(&mut hasher);
+            prefix.bits().hash(&mut hasher);
         }
     }
     hasher.finish()

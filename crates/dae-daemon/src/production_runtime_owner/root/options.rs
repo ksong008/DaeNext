@@ -10,14 +10,14 @@ pub(super) const PRODUCTION_HOST_IFACE: &str = "dae0";
 pub(super) const PRODUCTION_PEER_IFACE: &str = "dae0peer";
 
 pub(crate) fn set_resident_event_log_sink(sink: Option<ResidentEventLogSink>) {
-    resident_dataplane::set_event_log_sink(sink);
+    dae_resident_dataplane::facade::set_event_log_sink(sink);
 }
 
 pub(crate) fn set_resident_event_log_policies(
     policy: Option<ResidentEventLogPolicy>,
     prefilter: Option<ResidentEventLogPrefilter>,
 ) {
-    resident_dataplane::set_event_log_policies(policy, prefilter);
+    dae_resident_dataplane::facade::set_event_log_policies(policy, prefilter);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
