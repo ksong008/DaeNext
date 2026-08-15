@@ -270,6 +270,7 @@ pub(in super::super) async fn shutdown_cached_proxy_dns_quic(
         });
     };
     state.closing = true;
+    let _ = state.session_cache.clear();
     let connection = state.connection.take();
     let endpoint = state.endpoint.take();
     let bridge = state.bridge.take();
@@ -331,13 +332,15 @@ fn proxy_dns_quic_client_config(
     if let Some(config) = _forwarder.client_config_override.as_ref() {
         return Ok(config.clone());
     }
-    resident_dns_quic_client_config(DNS_DOQ_ALPN).map_err(|error| {
-        ProxyDnsRequestError::new(
-            ProxyDnsRequestStage::Authenticate,
-            ProxyDnsRequestFailure::Protocol,
-            error,
-        )
-    })
+    resident_dns_quic_client_config(DNS_DOQ_ALPN, _forwarder.session_cache.clone()).map_err(
+        |error| {
+            ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Authenticate,
+                ProxyDnsRequestFailure::Protocol,
+                error,
+            )
+        },
+    )
 }
 
 async fn connect_proxy_dns_quic_connection(

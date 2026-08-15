@@ -686,6 +686,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<ObservedQuicEndpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) session_cache:
+        dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: Arc<AsyncMutex<()>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) closing: bool,
@@ -708,6 +710,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<ObservedQuicEndpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) session_cache:
+        dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Arc<Semaphore>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) open_lock: Arc<AsyncMutex<()>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) closing: bool,
@@ -735,6 +739,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<ObservedQuicEndpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) session_cache:
+        dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) client:
         Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) driver_task:
@@ -816,7 +822,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
     pub(in crate::production_runtime_owner::resident_dataplane::dns) target: SocketAddr,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) mark: u32,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) idle:
-        AsyncMutex<Vec<ResidentDnsTlsStream>>,
+        AsyncMutex<Vec<ResidentDnsTlsConnection>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) permits: Semaphore,
 }
 
@@ -857,6 +863,8 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
         Option<ObservedQuicEndpoint>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) connection:
         Option<quinn::Connection>,
+    pub(in crate::production_runtime_owner::resident_dataplane::dns) session_cache:
+        dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) client:
         Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
     pub(in crate::production_runtime_owner::resident_dataplane::dns) driver_task:
@@ -868,6 +876,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) struct Resident
 
 impl Drop for ResidentDnsQuicForwarder {
     fn drop(&mut self) {
+        let _ = self.session_cache.clear();
         if let Some(connection) = self.connection.take() {
             connection.close(0_u32.into(), b"dns forwarder dropped");
         }
@@ -876,6 +885,7 @@ impl Drop for ResidentDnsQuicForwarder {
 
 impl Drop for ResidentDnsProxyQuicForwarder {
     fn drop(&mut self) {
+        let _ = self.session_cache.clear();
         if let Some(connection) = self.connection.take() {
             connection.close(0_u32.into(), b"proxied DNS forwarder dropped");
         }
@@ -887,6 +897,7 @@ impl Drop for ResidentDnsProxyQuicForwarder {
 
 impl Drop for ResidentDnsProxyH3Forwarder {
     fn drop(&mut self) {
+        let _ = self.session_cache.clear();
         self.client = None;
         if let Some(connection) = self.connection.take() {
             connection.close(0_u32.into(), b"proxied DNS H3 forwarder dropped");
@@ -902,6 +913,7 @@ impl Drop for ResidentDnsProxyH3Forwarder {
 
 impl Drop for ResidentDnsH3Forwarder {
     fn drop(&mut self) {
+        let _ = self.session_cache.clear();
         if let Some(connection) = self.connection.take() {
             connection.close(0_u32.into(), b"dns forwarder dropped");
         }

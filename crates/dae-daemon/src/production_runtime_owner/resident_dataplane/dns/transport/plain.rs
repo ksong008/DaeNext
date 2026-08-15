@@ -1148,22 +1148,14 @@ mod tests {
         let target = upstream_listener.local_addr().unwrap();
         let upstream_server = tokio::spawn(async move {
             let (mut stream, _) = upstream_listener.accept().await.unwrap();
-            let warm = read_dns_tcp_payload_async(&mut stream)
-                .await
-                .unwrap()
-                .unwrap();
+            let mut frame_reader = DnsTcpFrameReader::default();
+            let warm = frame_reader.read_frame(&mut stream).await.unwrap().unwrap();
             let warm_response = dns_a_response_for_query(&warm, [192, 0, 2, 70]);
             write_dns_tcp_payload_async(&mut stream, &warm_response)
                 .await
                 .unwrap();
-            let first = read_dns_tcp_payload_async(&mut stream)
-                .await
-                .unwrap()
-                .unwrap();
-            let second = read_dns_tcp_payload_async(&mut stream)
-                .await
-                .unwrap()
-                .unwrap();
+            let first = frame_reader.read_frame(&mut stream).await.unwrap().unwrap();
+            let second = frame_reader.read_frame(&mut stream).await.unwrap().unwrap();
             let second_response = dns_a_response_for_query(&second, [192, 0, 2, 72]);
             let first_response = dns_a_response_for_query(&first, [192, 0, 2, 71]);
             write_dns_tcp_payload_async(&mut stream, &second_response)
@@ -1238,10 +1230,8 @@ mod tests {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let response_barrier = Arc::clone(&server_barrier);
                 connections.spawn(async move {
-                    let query = read_dns_tcp_payload_async(&mut stream)
-                        .await
-                        .unwrap()
-                        .unwrap();
+                    let mut frame_reader = DnsTcpFrameReader::default();
+                    let query = frame_reader.read_frame(&mut stream).await.unwrap().unwrap();
                     response_barrier.wait().await;
                     let response = dns_a_response_for_query(&query, [192, 0, 2, 100 + index]);
                     write_dns_tcp_payload_async(&mut stream, &response)
@@ -1361,10 +1351,8 @@ mod tests {
                 accepted_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 let response_barrier = Arc::clone(&server_barrier);
                 connections.spawn(async move {
-                    let query = read_dns_tcp_payload_async(&mut stream)
-                        .await
-                        .unwrap()
-                        .unwrap();
+                    let mut frame_reader = DnsTcpFrameReader::default();
+                    let query = frame_reader.read_frame(&mut stream).await.unwrap().unwrap();
                     response_barrier.wait().await;
                     let response = dns_a_response_for_query(&query, [192, 0, 2, 90]);
                     write_dns_tcp_payload_async(&mut stream, &response)

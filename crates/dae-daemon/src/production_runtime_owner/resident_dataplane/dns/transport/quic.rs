@@ -140,13 +140,14 @@ async fn open_cached_dns_quic_connection(
             return Ok((connection.clone(), forwarder.upstream.clone()));
         }
     }
-    let (upstream, generation, mark, fixed_remote) = {
+    let (upstream, generation, mark, fixed_remote, session_cache) = {
         let forwarder = lock_dns_quic_forwarder(forwarder, context, "read endpoint plan").await?;
         (
             forwarder.upstream.clone(),
             forwarder.generation,
             forwarder.mark,
             forwarder.fixed_remote,
+            forwarder.session_cache.clone(),
         )
     };
     let mut failures = Vec::new();
@@ -179,7 +180,13 @@ async fn open_cached_dns_quic_connection(
             .run(
                 ProxyDnsRequestStage::Connect,
                 ProxyDnsRequestFailure::Network,
-                connect_dns_quic_endpoint_async(&upstream, remote, mark, connect_contract),
+                connect_dns_quic_endpoint_async(
+                    &upstream,
+                    remote,
+                    mark,
+                    connect_contract,
+                    session_cache.clone(),
+                ),
             )
             .await;
         match connected {
@@ -269,6 +276,7 @@ pub(super) async fn shutdown_cached_dns_quic(
         });
     };
     state.closing = true;
+    let _ = state.session_cache.clear();
     state.permits.close();
     let connection = state.connection.take();
     let endpoint = state.endpoint.take();
@@ -427,13 +435,14 @@ pub(super) async fn connect_dns_quic_endpoint_async(
     remote: SocketAddr,
     mark: u32,
     contract: DnsQuicEndpointConnectContract,
+    session_cache: dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache,
 ) -> Result<(ObservedQuicEndpoint, quinn::Connection), String> {
     let deadline = dae_runtime_control::AbsoluteDeadline::from_now(
         Instant::now(),
         RESIDENT_UDP_RESPONSE_TIMEOUT,
     );
     let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
-    let client_config = resident_dns_quic_client_config(contract.alpn)?;
+    let client_config = resident_dns_quic_client_config(contract.alpn, session_cache)?;
     let mut endpoint = open_marked_quic_endpoint_for_remote(
         mark,
         remote,

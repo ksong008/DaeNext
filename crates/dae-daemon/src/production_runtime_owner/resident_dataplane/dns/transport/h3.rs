@@ -230,13 +230,14 @@ async fn open_cached_dns_h3_client(
             return Ok((client.clone(), connection.stable_id()));
         }
     }
-    let (upstream, generation, target, mark) = {
+    let (upstream, generation, target, mark, session_cache) = {
         let forwarder = lock_dns_h3_forwarder(forwarder, context, "read endpoint plan").await?;
         (
             forwarder.upstream.clone(),
             forwarder.generation,
             forwarder.target,
             forwarder.mark,
+            forwarder.session_cache.clone(),
         )
     };
     let open_context = configured_dns_quic_endpoint_context(
@@ -255,7 +256,13 @@ async fn open_cached_dns_h3_client(
         .run(
             ProxyDnsRequestStage::Connect,
             ProxyDnsRequestFailure::Network,
-            connect_dns_quic_endpoint_async(&upstream, target, mark, connect_contract),
+            connect_dns_quic_endpoint_async(
+                &upstream,
+                target,
+                mark,
+                connect_contract,
+                session_cache,
+            ),
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -381,6 +388,7 @@ pub(super) async fn shutdown_cached_dns_h3(
         });
     };
     state.closing = true;
+    let _ = state.session_cache.clear();
     state.permits.close();
     state.client = None;
     let connection = state.connection.take();

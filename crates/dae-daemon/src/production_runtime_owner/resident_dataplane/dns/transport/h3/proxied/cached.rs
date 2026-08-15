@@ -335,13 +335,15 @@ fn proxy_dns_h3_client_config(
     if let Some(config) = _forwarder.client_config_override.as_ref() {
         return Ok(config.clone());
     }
-    resident_dns_quic_client_config(DNS_DOH3_ALPN).map_err(|error| {
-        ProxyDnsRequestError::new(
-            ProxyDnsRequestStage::Authenticate,
-            ProxyDnsRequestFailure::Protocol,
-            error,
-        )
-    })
+    resident_dns_quic_client_config(DNS_DOH3_ALPN, _forwarder.session_cache.clone()).map_err(
+        |error| {
+            ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Authenticate,
+                ProxyDnsRequestFailure::Protocol,
+                error,
+            )
+        },
+    )
 }
 
 async fn reset_cached_proxy_dns_h3(
@@ -410,6 +412,7 @@ pub(in super::super::super) async fn shutdown_cached_proxy_dns_h3(
         });
     };
     state.closing = true;
+    let _ = state.session_cache.clear();
     let mut resources = take_resources(&mut state);
     let metrics = Arc::clone(&state.metrics);
     drop(state);

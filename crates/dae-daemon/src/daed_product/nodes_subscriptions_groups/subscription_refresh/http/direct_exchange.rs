@@ -2,6 +2,10 @@ use super::response::subscription_http_response_limit;
 use super::*;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use crate::boring_tls::{
+    BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async,
+};
+
 const SUBSCRIPTION_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SUBSCRIPTION_DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const SUBSCRIPTION_HTTP_IO_TIMEOUT: Duration = Duration::from_secs(20);
@@ -50,20 +54,13 @@ async fn exchange_direct_subscription_request_async(
     let addrs = resolve_subscription_endpoint(host, port, &cancellation).await?;
     let stream = connect_subscription_endpoint(&addrs, &cancellation).await?;
     if use_tls {
-        let server_name = ServerName::try_from(host.to_owned()).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid tls server name: {error}"),
-            )
-        })?;
-        let connector = tokio_rustls::TlsConnector::from(subscription_tls_client_config()?);
+        let context = build_boring_tls_context(BoringTlsVerification::SystemRoots)?;
         let mut stream = wait_for_subscription_io(
             &cancellation,
-            connector.connect(server_name, stream),
+            connect_boring_tls_async(&context, host, stream),
             "tls connect",
         )
-        .await?
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        .await??;
         write_subscription_request(&mut stream, request, &cancellation).await?;
         read_subscription_response(&mut stream, &cancellation).await
     } else {
@@ -216,17 +213,6 @@ where
     }
 }
 
-fn subscription_tls_client_config() -> io::Result<Arc<ClientConfig>> {
-    let roots = dae_outbound::shared_transport::system_ca_snapshot()
-        .map_err(|err| io::Error::other(format!("load subscription system CA bundle: {err}")))?
-        .rustls_roots();
-    Ok(Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    ))
-}
-
 fn direct_subscription_control_error(error: ProductControlExecutionError) -> io::Error {
     match error {
         ProductControlExecutionError::Busy => {
@@ -251,8 +237,5 @@ fn subscription_cancelled() -> io::Error {
 
 #[cfg(test)]
 pub(crate) fn subscription_tls_alpn_protocols() -> Vec<Vec<u8>> {
-    subscription_tls_client_config()
-        .expect("test host must provide a system CA bundle")
-        .alpn_protocols
-        .clone()
+    Vec::new()
 }

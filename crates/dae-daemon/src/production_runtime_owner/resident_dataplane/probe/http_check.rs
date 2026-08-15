@@ -1,8 +1,8 @@
-use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use boring::ssl::{SslConnector, SslMethod};
-use rustls::{ClientConfig, pki_types::ServerName};
+use crate::boring_tls::{
+    BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
 
@@ -47,45 +47,15 @@ pub(crate) async fn read_resident_tcp_probe_https_response_over_stream_async<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    if cfg!(feature = "test-boringssl-tcp-tls") {
-        let connector = resident_tcp_probe_boring_connector()?;
-        let config = connector.configure().map_err(|err| {
-            ResidentTcpProbeHttpError::new(
-                ResidentTcpProbeHttpStage::Security,
-                format!("resident TCP probe configure BoringSSL client: {err}"),
-            )
-        })?;
-        let mut tls = time::timeout(
-            resident_http_probe_remaining(deadline, ResidentTcpProbeHttpStage::Security)?,
-            tokio_boring::connect(config, host, stream),
-        )
-        .await
-        .map_err(|_| {
-            ResidentTcpProbeHttpError::new(
-                ResidentTcpProbeHttpStage::Security,
-                "resident TCP probe HTTPS handshake timeout",
-            )
-        })?
-        .map_err(|err| {
-            ResidentTcpProbeHttpError::new(
-                ResidentTcpProbeHttpStage::Security,
-                format!("resident TCP probe create BoringSSL HTTPS client: {err}"),
-            )
-        })?;
-        return exchange_resident_tcp_probe_https(&mut tls, host, path, method, deadline).await;
-    }
-    let config = resident_tcp_probe_tls_config()
-        .map_err(|err| ResidentTcpProbeHttpError::new(ResidentTcpProbeHttpStage::Security, err))?;
-    let server_name = ServerName::try_from(host.to_owned()).map_err(|err| {
+    let context = build_boring_tls_context(BoringTlsVerification::SystemRoots).map_err(|err| {
         ResidentTcpProbeHttpError::new(
             ResidentTcpProbeHttpStage::Security,
-            format!("resident TCP probe invalid HTTPS server name {host}: {err}"),
+            format!("resident TCP probe create BoringSSL context: {err}"),
         )
     })?;
-    let connector = tokio_rustls::TlsConnector::from(config);
     let mut tls = time::timeout(
         resident_http_probe_remaining(deadline, ResidentTcpProbeHttpStage::Security)?,
-        connector.connect(server_name, stream),
+        connect_boring_tls_async(&context, host, stream),
     )
     .await
     .map_err(|_| {
@@ -97,7 +67,7 @@ where
     .map_err(|err| {
         ResidentTcpProbeHttpError::new(
             ResidentTcpProbeHttpStage::Security,
-            format!("resident TCP probe create HTTPS client: {err}"),
+            format!("resident TCP probe create BoringSSL HTTPS client: {err}"),
         )
     })?;
     exchange_resident_tcp_probe_https(&mut tls, host, path, method, deadline).await
@@ -149,35 +119,6 @@ where
         )
     })?;
     read_resident_tcp_probe_response_async(tls, path, deadline).await
-}
-
-fn resident_tcp_probe_boring_connector() -> Result<&'static SslConnector, ResidentTcpProbeHttpError>
-{
-    static CONFIG: OnceLock<Result<SslConnector, String>> = OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
-            let system_ca = dae_outbound::shared_transport::system_ca_snapshot()
-                .map_err(|err| format!("load HTTP probe system CA bundle: {err}"))?;
-            let mut builder = SslConnector::builder(SslMethod::tls())
-                .map_err(|err| format!("create resident TCP probe BoringSSL connector: {err}"))?;
-            system_ca.install_boring_builder(&mut builder);
-            Ok(builder.build())
-        })
-        .as_ref()
-        .map_err(|detail| {
-            ResidentTcpProbeHttpError::new(ResidentTcpProbeHttpStage::Security, detail.clone())
-        })
-}
-
-pub(crate) fn resident_tcp_probe_tls_config() -> Result<Arc<ClientConfig>, String> {
-    let roots = dae_outbound::shared_transport::system_ca_snapshot()
-        .map_err(|err| format!("load HTTP probe system CA bundle: {err}"))?
-        .rustls_roots();
-    Ok(Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    ))
 }
 
 pub(crate) async fn read_resident_tcp_probe_response_async<S>(
