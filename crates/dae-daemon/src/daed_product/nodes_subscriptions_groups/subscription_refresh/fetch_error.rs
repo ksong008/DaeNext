@@ -102,7 +102,7 @@ impl SubscriptionFetchFailure {
     pub(super) fn from_io_error(error: &io::Error) -> Self {
         let message = error.to_string().to_ascii_lowercase();
         let tls_kind = tls_client_error(error).map(|error| error.kind());
-        let kind = if tls_kind == Some(crate::boring_tls::TlsClientErrorKind::UnknownIssuer)
+        let kind = if tls_kind == Some(dae_tls::TlsClientErrorKind::UnknownIssuer)
             || message.contains("unknownissuer")
             || message.contains("unknown ca")
             || message.contains("unable to get local issuer")
@@ -111,10 +111,10 @@ impl SubscriptionFetchFailure {
         } else if matches!(
             tls_kind,
             Some(
-                crate::boring_tls::TlsClientErrorKind::HostnameMismatch
-                    | crate::boring_tls::TlsClientErrorKind::Expired
-                    | crate::boring_tls::TlsClientErrorKind::NotYetValid
-                    | crate::boring_tls::TlsClientErrorKind::Certificate
+                dae_tls::TlsClientErrorKind::HostnameMismatch
+                    | dae_tls::TlsClientErrorKind::Expired
+                    | dae_tls::TlsClientErrorKind::NotYetValid
+                    | dae_tls::TlsClientErrorKind::Certificate
             )
         ) || message.contains("invalid peer certificate")
             || message.contains("certificate validation")
@@ -189,11 +189,11 @@ impl SubscriptionFetchFailure {
     }
 }
 
-fn tls_client_error(error: &io::Error) -> Option<&crate::boring_tls::TlsClientError> {
+fn tls_client_error(error: &io::Error) -> Option<&dae_tls::TlsClientError> {
     let inner = error.get_ref()?;
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(inner);
     while let Some(candidate) = current {
-        if let Some(error) = candidate.downcast_ref::<crate::boring_tls::TlsClientError>() {
+        if let Some(error) = candidate.downcast_ref::<dae_tls::TlsClientError>() {
             return Some(error);
         }
         current = candidate.source();

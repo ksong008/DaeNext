@@ -38,6 +38,24 @@ const L4_PROTO_UDP_MATCH: u32 = 2;
 const IP_VERSION_4_MATCH: u32 = 1;
 const IP_VERSION_6_MATCH: u32 = 2;
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BpfPortRange {
+    port_start: u16,
+    port_end: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union BpfMatchValue {
+    bytes: [u8; 16],
+    index: u32,
+    port_range: BpfPortRange,
+    l4proto_type: u32,
+    ip_version: u32,
+    dscp: u8,
+}
+
 const ROUTE_BAD_RULE: u8 = 0b0001;
 const ROUTE_GOOD_SUBRULE: u8 = 0b0010;
 const ROUTE_MUST: u8 = 0b0100;
@@ -297,7 +315,12 @@ unsafe fn names_equal(a: *const u8, b: *const u8) -> bool {
 
 #[inline(always)]
 unsafe fn match_value_ptr(match_set: *const BpfMatchSet) -> *const u8 {
-    unsafe { ptr::addr_of!((*match_set).value.bytes).cast::<u8>() }
+    unsafe { ptr::addr_of!((*match_set).value).cast::<u8>() }
+}
+
+#[inline(always)]
+unsafe fn match_value(match_set: *const BpfMatchSet) -> *const BpfMatchValue {
+    unsafe { ptr::addr_of!((*match_set).value).cast::<BpfMatchValue>() }
 }
 
 #[inline(never)]
@@ -326,7 +349,7 @@ extern "C" fn route_loop_cb(index: u32, data: *mut c_void) -> i64 {
                 || kind == MATCH_TYPE_IP_SET
                 || kind == MATCH_TYPE_SOURCE_IP_SET
             {
-                let lpm_index = (*match_set).value.index;
+                let lpm_index = (*match_value(match_set)).index;
                 let lpm = lookup_lpm_map(ptr::addr_of!(lpm_index));
                 if lpm.is_null() {
                     (*ctx).result = -EFAULT;
@@ -343,21 +366,21 @@ extern "C" fn route_loop_cb(index: u32, data: *mut c_void) -> i64 {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_PORT {
-                let range = (*match_set).value.port_range;
+                let range = (*match_value(match_set)).port_range;
                 if range.port_start <= (*ctx).h_dport && (*ctx).h_dport <= range.port_end {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_SOURCE_PORT {
-                let range = (*match_set).value.port_range;
+                let range = (*match_value(match_set)).port_range;
                 if range.port_start <= (*ctx).h_sport && (*ctx).h_sport <= range.port_end {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_L4_PROTO {
-                if ((*params).l4proto_type & (*match_set).value.l4proto_type) != 0 {
+                if ((*params).l4proto_type & (*match_value(match_set)).l4proto_type) != 0 {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_IP_VERSION {
-                if ((*params).ipversion_type & (*match_set).value.ip_version) != 0 {
+                if ((*params).ipversion_type & (*match_value(match_set)).ip_version) != 0 {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_DOMAIN_SET {
@@ -372,7 +395,7 @@ extern "C" fn route_loop_cb(index: u32, data: *mut c_void) -> i64 {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_DSCP {
-                if (*params).dscp == (*match_set).value.dscp as u32 {
+                if (*params).dscp == (*match_value(match_set)).dscp as u32 {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_FALLBACK {

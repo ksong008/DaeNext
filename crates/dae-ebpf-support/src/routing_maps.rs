@@ -3,8 +3,8 @@ use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use crate::{
-    BpfDomainRouting, BpfMatchSet, RuntimeMapUpdateDiffReport, apply_runtime_map_update_diff,
-    delete_map_elem_bytes, open_map_fd, update_map_elem_bytes,
+    BpfDomainRouting, BpfLpmKey, BpfMatchSet, RuntimeMapUpdateDiffReport,
+    apply_runtime_map_update_diff, delete_map_elem_bytes, open_map_fd, update_map_elem_bytes,
 };
 
 const BPF_MAP_CREATE: libc::c_uint = 0;
@@ -20,13 +20,6 @@ pub struct RoutingMapEntry {
 pub struct LpmArrayMapEntry {
     pub index: u32,
     pub map_id: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BpfLpmKey {
-    pub prefix_len: u32,
-    pub data: [u32; 4],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

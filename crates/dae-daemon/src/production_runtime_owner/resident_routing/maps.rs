@@ -13,15 +13,17 @@ use dae_ebpf_support::{
     map_keys_by_fd, open_map_fd, runtime_map_name_matches as support_runtime_map_name_matches,
     update_map_elem_bytes,
 };
+use dae_routing::IpPrefix;
 use serde_json::{Value, json};
 
-use super::types::{IpPrefix, OutboundConnectivityEntry, SharedResidentIpPrefixSet};
+use super::types::OutboundConnectivityEntry;
 use super::{
     BPF_F_NO_PREALLOC, BPF_MAP_CREATE, BPF_MAP_TYPE_LPM_TRIE, CONNECTIVITY_IP_VERSION_4,
     CONNECTIVITY_IP_VERSION_6, CONNECTIVITY_L4_TCP, CONNECTIVITY_L4_UDP,
     CONNECTIVITY_L4_UDP_LEGACY, LPM_KEY_SIZE, LPM_MAX_ENTRIES, LPM_VALUE_SIZE,
     UNUSED_LPM_TYPE_NAME,
 };
+use dae_resident_dataplane::facade::SharedResidentIpPrefixSet;
 
 pub(super) fn update_lpm_array_map(
     lpm_array_fd: i32,
@@ -167,9 +169,9 @@ fn create_lpm_map(prefixes: &[IpPrefix]) -> Result<OwnedFd, String> {
 
 fn prefix_to_lpm_key(prefix: &IpPrefix) -> [u8; 20] {
     let mut key = [0_u8; 20];
-    let (bytes, bits) = match prefix.addr {
-        IpAddr::V4(addr) => (addr.to_ipv6_mapped().octets(), prefix.bits as u32 + 96),
-        IpAddr::V6(addr) => (addr.octets(), prefix.bits as u32),
+    let (bytes, bits) = match prefix.addr() {
+        IpAddr::V4(addr) => (addr.to_ipv6_mapped().octets(), prefix.bits() as u32 + 96),
+        IpAddr::V6(addr) => (addr.octets(), prefix.bits() as u32),
     };
     key[..4].copy_from_slice(&bits.to_ne_bytes());
     for (index, chunk) in bytes.chunks_exact(4).enumerate() {

@@ -1,0 +1,13 @@
+[package]
+name = "dae-ebpf-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+aya-pod = ["dep:aya"]
+
+[dependencies]
+aya = { workspace = true, optional = true }

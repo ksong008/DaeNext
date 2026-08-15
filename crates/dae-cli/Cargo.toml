@@ -13,7 +13,6 @@ dae-core-types.workspace = true
 dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-ebpf-support.workspace = true
-dae-engine.workspace = true
 dae-netutil.workspace = true
 dae-outbound.workspace = true
 dae-routing.workspace = true

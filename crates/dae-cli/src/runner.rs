@@ -1,4 +1,4 @@
-use dae_engine::parse_config_sections;
+use dae_config::parse_config_sections;
 
 use crate::active_datapath_runner::run_active_datapath;
 use crate::outbound_runner::run_outbound;

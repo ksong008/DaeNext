@@ -662,14 +662,15 @@ dependencies = [
  "bytes",
  "dae-cli",
  "dae-config",
+ "dae-config-util",
  "dae-core-types",
  "dae-daemon",
  "dae-datapath",
  "dae-dns",
  "dae-ebpf-support",
- "dae-engine",
  "dae-geodata",
  "dae-golden",
+ "dae-netutil",
  "dae-outbound",
  "dae-routing",
  "dae-runtime-control",
@@ -696,7 +697,6 @@ dependencies = [
  "dae-datapath",
  "dae-dns",
  "dae-ebpf-support",
- "dae-engine",
  "dae-golden",
  "dae-netutil",
  "dae-outbound",
@@ -752,14 +752,15 @@ dependencies = [
  "dae-dns",
  "dae-ebpf-loader",
  "dae-ebpf-support",
- "dae-engine",
  "dae-geodata",
  "dae-netutil",
  "dae-outbound",
  "dae-product-identity",
+ "dae-resident-dataplane",
  "dae-routing",
  "dae-runtime-control",
  "dae-sniffing",
+ "dae-tls",
  "fastrand",
  "flate2",
  "foreign-types",
@@ -805,11 +806,19 @@ name = "dae-dns"
 version = "3.1.0"
 dependencies = [
  "base64",
+ "dae-core-types",
  "dae-golden",
  "dae-routing",
  "hashbrown 0.15.5",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "dae-ebpf-abi"
+version = "3.1.0"
+dependencies = [
+ "aya",
 ]
 
 [[package]]
@@ -829,6 +838,7 @@ name = "dae-ebpf-program"
 version = "3.1.0"
 dependencies = [
  "aya-ebpf",
+ "dae-ebpf-abi",
 ]
 
 [[package]]
@@ -836,17 +846,9 @@ name = "dae-ebpf-support"
 version = "3.1.0"
 dependencies = [
  "aya",
+ "dae-ebpf-abi",
  "dae-golden",
  "libc",
- "serde_json",
-]
-
-[[package]]
-name = "dae-engine"
-version = "3.1.0"
-dependencies = [
- "dae-config",
- "dae-golden",
  "serde_json",
 ]
 
@@ -889,6 +891,7 @@ dependencies = [
  "chacha20poly1305",
  "dae-core-types",
  "dae-golden",
+ "dae-tls",
  "fastrand",
  "foreign-types",
  "getrandom 0.3.4",
@@ -918,6 +921,52 @@ name = "dae-product-identity"
 version = "3.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "dae-resident-dataplane"
+version = "3.1.0"
+dependencies = [
+ "base64",
+ "blake2",
+ "boring 5.1.0",
+ "boring-sys 5.1.0",
+ "brotli",
+ "bytes",
+ "dae-config",
+ "dae-core-types",
+ "dae-datapath",
+ "dae-dns",
+ "dae-ebpf-support",
+ "dae-geodata",
+ "dae-netutil",
+ "dae-outbound",
+ "dae-routing",
+ "dae-runtime-control",
+ "dae-sniffing",
+ "dae-tls",
+ "fastrand",
+ "flate2",
+ "foreign-types",
+ "futures-util",
+ "getrandom 0.3.4",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http",
+ "libc",
+ "quinn",
+ "quinn-boring",
+ "quinn-udp",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2",
+ "tls-parser",
+ "tokio",
+ "tokio-boring",
+ "url",
 ]
 
 [[package]]
@@ -965,6 +1014,18 @@ version = "3.1.0"
 dependencies = [
  "dae-golden",
  "serde_json",
+]
+
+[[package]]
+name = "dae-tls"
+version = "3.1.0"
+dependencies = [
+ "boring 5.1.0",
+ "boring-sys 5.1.0",
+ "foreign-types",
+ "sha2",
+ "tokio",
+ "tokio-boring",
 ]
 
 [[package]]

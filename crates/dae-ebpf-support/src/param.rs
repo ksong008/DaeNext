@@ -38,8 +38,7 @@ pub fn build_dae_param_with_protection(
         dae_netns_id: input.dae_netns_id,
         dae0peer_mac: input.dae0peer_mac,
         has_bpf_get_current_task: u8::from(input.has_bpf_get_current_task),
-        // Reuse the ABI-stable historical padding byte for the new flag.
-        padding: u8::from(tproxy_port_protect),
+        tproxy_port_protect: u8::from(tproxy_port_protect),
         task_struct_mm_offset: input.task_struct_mm_offset,
         mm_struct_arg_start_offset: input.mm_struct_arg_start_offset,
         abi_version: BPF_DAE_PARAM_ABI_VERSION,

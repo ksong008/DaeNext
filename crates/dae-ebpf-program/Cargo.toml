@@ -16,3 +16,4 @@ trace-program = []
 
 [dependencies]
 aya-ebpf.workspace = true
+dae-ebpf-abi.workspace = true
