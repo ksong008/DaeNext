@@ -130,7 +130,10 @@ fn resident_dns_plan_admits_fallback_upstream_udp() {
     match plan.request_default_action {
         ResidentDnsRequestAction::Upstream(upstream) => {
             assert_eq!(upstream.tag, "primary");
-            assert_eq!(upstream.target.authority, local_dns_upstream_authority());
+            assert_eq!(
+                upstream.target.authority.as_ref(),
+                local_dns_upstream_authority()
+            );
             assert_eq!(upstream.target.literal_addr, None);
         }
         _ => panic!("expected upstream default action"),
@@ -610,7 +613,7 @@ async fn tcp_udp_preserves_the_complete_udp_target_set_during_the_udp_lead() {
         index: 1,
         tag: "multi-address".to_owned(),
         target: ResidentDnsUpstreamTarget {
-            authority: format!("resolver.fixture.invalid:{}", live_target.port()),
+            authority: Arc::from(format!("resolver.fixture.invalid:{}", live_target.port())),
             host: "resolver.fixture.invalid".to_owned(),
             port: live_target.port(),
             literal_addr: None,
@@ -619,7 +622,7 @@ async fn tcp_udp_preserves_the_complete_udp_target_set_during_the_udp_lead() {
             resolved_addrs: Arc::default(),
         },
         scheme: ResidentDnsUpstreamScheme::TcpUdp,
-        path: String::new(),
+        path: Arc::from(""),
     };
     upstream
         .target
@@ -2740,10 +2743,10 @@ fn resident_dns_plan_admits_official_upstream_schemes() {
             assert_eq!(upstream.tag, "h3up");
             assert_eq!(upstream.scheme, ResidentDnsUpstreamScheme::Http3);
             assert_eq!(
-                upstream.target.authority,
+                upstream.target.authority.as_ref(),
                 format!("{TEST_DNS_UPSTREAM_HOST}:443")
             );
-            assert_eq!(upstream.path, "/custom");
+            assert_eq!(upstream.path.as_ref(), "/custom");
         }
         other => panic!("expected h3 upstream fallback, got {other:?}"),
     }
@@ -2837,10 +2840,10 @@ fn resident_dns_upstream_parser_applies_default_ports_and_paths() {
     for (tag, link, scheme, authority, host, port, path) in cases {
         let upstream = parse_dns_upstream(0, tag, &link, test_fallback_resolver(), 0).unwrap();
         assert_eq!(upstream.scheme, scheme, "{tag}");
-        assert_eq!(upstream.target.authority, authority, "{tag}");
+        assert_eq!(upstream.target.authority.as_ref(), authority, "{tag}");
         assert_eq!(upstream.target.host, host, "{tag}");
         assert_eq!(upstream.target.port, port, "{tag}");
-        assert_eq!(upstream.path, path, "{tag}");
+        assert_eq!(upstream.path.as_ref(), path, "{tag}");
     }
 }
 

@@ -6,7 +6,6 @@ use crate::udp::{UdpFixedTargetPayload, UdpFixedTargetValidation, UdpResponseDro
 
 pub(in crate::udp::proxy_dns_forwarder::actor) fn handle_proxy_dns_udp_response(
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
-    deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
     id_allocator: &mut DnsRequestIdAllocator,
     expected_source: SocketAddr,
     mut response: UdpExchangeResult,
@@ -54,7 +53,6 @@ pub(in crate::udp::proxy_dns_forwarder::actor) fn handle_proxy_dns_udp_response(
             let Some(request) = pending.remove(&response_id) else {
                 return Ok(());
             };
-            remove_proxy_dns_udp_deadline(deadlines, response_id, request.generation);
             id_allocator.release(response_id);
             let error = ProxyDnsRequestError::new(
                 ProxyDnsRequestStage::Read,
@@ -71,7 +69,6 @@ pub(in crate::udp::proxy_dns_forwarder::actor) fn handle_proxy_dns_udp_response(
     let Some(request) = pending.remove(&response_id) else {
         return Ok(());
     };
-    remove_proxy_dns_udp_deadline(deadlines, response_id, request.generation);
     id_allocator.release(response_id);
     let response_permit = match payload_admission.try_acquire(payload.len()) {
         Ok(permit) => permit,

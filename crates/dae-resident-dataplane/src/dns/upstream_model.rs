@@ -41,7 +41,7 @@ pub(in crate::dns) struct ResidentDnsUpstream {
     pub(in crate::dns) tag: String,
     pub(in crate::dns) target: ResidentDnsUpstreamTarget,
     pub(in crate::dns) scheme: ResidentDnsUpstreamScheme,
-    pub(in crate::dns) path: String,
+    pub(in crate::dns) path: Arc<str>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,7 +54,7 @@ pub(in crate::dns) struct ResidentDnsUpstreams {
 
 #[derive(Clone, Debug)]
 pub(in crate::dns) struct ResidentDnsUpstreamTarget {
-    pub(in crate::dns) authority: String,
+    pub(in crate::dns) authority: Arc<str>,
     pub(in crate::dns) host: String,
     pub(in crate::dns) port: u16,
     pub(in crate::dns) literal_addr: Option<SocketAddr>,
@@ -74,7 +74,7 @@ impl ResidentDnsUpstreamTarget {
         refresh_interval: Duration,
     ) -> Self {
         Self {
-            authority,
+            authority: authority.into(),
             host,
             port,
             literal_addr,
@@ -532,8 +532,8 @@ impl ResidentDnsForwarderEntryKind {
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(in crate::dns) struct ResidentDnsForwarderKey {
     pub(in crate::dns) scheme: ResidentDnsUpstreamScheme,
-    pub(in crate::dns) authority: String,
-    pub(in crate::dns) path: String,
+    pub(in crate::dns) authority: Arc<str>,
+    pub(in crate::dns) path: Arc<str>,
     pub(in crate::dns) mark: u32,
     pub(in crate::dns) target: Option<SocketAddr>,
     pub(in crate::dns) selection: ResidentDnsForwarderSelectionKey,
@@ -546,6 +546,7 @@ pub(in crate::dns) enum ResidentDnsForwarderTransport {
     ProxyQuic,
     ProxyHttp3,
     Udp,
+    AsisUdp,
     ProxyUdp,
     ProxyUdpHealth,
     Tcp,

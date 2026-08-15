@@ -1,5 +1,3 @@
-use futures_util::{StreamExt, stream::FuturesUnordered};
-
 use super::*;
 use crate::dns::{ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage};
 use crate::udp::proxy_dns_forwarder::actor::transaction::ProxyDnsRequestRelease;
@@ -8,34 +6,47 @@ use crate::udp::proxy_dns_forwarder::actor::transaction::ProxyDnsRequestRelease;
 mod tests;
 
 pub(super) fn insert_proxy_dns_udp_deadline(
-    deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
+    deadlines: &mut BinaryHeap<Reverse<PendingProxyDnsDeadline>>,
     deadline: PendingProxyDnsDeadline,
 ) {
-    let index = deadlines
-        .iter()
-        .position(|queued| deadline.deadline < queued.deadline)
-        .unwrap_or(deadlines.len());
-    deadlines.insert(index, deadline);
-}
-
-pub(super) fn remove_proxy_dns_udp_deadline(
-    deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
-    id: u16,
-    generation: u64,
-) -> bool {
-    let Some(index) = deadlines
-        .iter()
-        .position(|deadline| deadline.id == id && deadline.generation == generation)
-    else {
-        return false;
-    };
-    deadlines.remove(index);
-    true
+    deadlines.push(Reverse(deadline));
 }
 
 pub(super) fn expire_proxy_dns_udp_requests(
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
-    deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
+    deadlines: &mut BinaryHeap<Reverse<PendingProxyDnsDeadline>>,
+    id_allocator: &mut DnsRequestIdAllocator,
+) {
+    let now = time::Instant::now();
+    while let Some(Reverse(deadline)) = deadlines.peek().copied() {
+        let Some(request) = pending.get(&deadline.id) else {
+            deadlines.pop();
+            continue;
+        };
+        if request.generation != deadline.generation
+            || request.context.deadline() != deadline.deadline
+        {
+            deadlines.pop();
+            continue;
+        }
+        if deadline.deadline > now {
+            break;
+        }
+        deadlines.pop();
+        if let Some(request) = pending.remove(&deadline.id) {
+            id_allocator.release(deadline.id);
+            request.deliver(
+                Err(ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Read)),
+                ProxyDnsRequestRelease::Expired,
+            );
+        }
+    }
+    compact_proxy_dns_udp_deadlines(deadlines, pending);
+}
+
+pub(super) fn cancel_abandoned_proxy_dns_udp_requests(
+    pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
+    deadlines: &mut BinaryHeap<Reverse<PendingProxyDnsDeadline>>,
     id_allocator: &mut DnsRequestIdAllocator,
 ) {
     let abandoned = pending
@@ -46,7 +57,6 @@ pub(super) fn expire_proxy_dns_udp_requests(
         let Some(mut request) = pending.remove(&id) else {
             continue;
         };
-        remove_proxy_dns_udp_deadline(deadlines, id, request.generation);
         id_allocator.release(id);
         if request
             .context
@@ -58,43 +68,18 @@ pub(super) fn expire_proxy_dns_udp_requests(
             request.bytes.mark_abandoned();
         }
     }
-
-    let now = time::Instant::now();
-    while let Some(deadline) = deadlines.front().copied() {
-        let Some(request) = pending.get(&deadline.id) else {
-            deadlines.pop_front();
-            continue;
-        };
-        if request.generation != deadline.generation
-            || request.context.deadline() != deadline.deadline
-        {
-            deadlines.pop_front();
-            continue;
-        }
-        if deadline.deadline > now {
-            break;
-        }
-        deadlines.pop_front();
-        if let Some(request) = pending.remove(&deadline.id) {
-            id_allocator.release(deadline.id);
-            request.deliver(
-                Err(ProxyDnsRequestError::deadline(ProxyDnsRequestStage::Read)),
-                ProxyDnsRequestRelease::Expired,
-            );
-        }
-    }
+    compact_proxy_dns_udp_deadlines(deadlines, pending);
 }
 
 pub(super) fn fail_proxy_dns_udp_requests(
     pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
-    deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
+    deadlines: &mut BinaryHeap<Reverse<PendingProxyDnsDeadline>>,
     id_allocator: &mut DnsRequestIdAllocator,
     error: ProxyDnsRequestError,
 ) -> usize {
     let pending = std::mem::take(pending);
     let failed = pending.len();
     for (id, request) in pending {
-        remove_proxy_dns_udp_deadline(deadlines, id, request.generation);
         id_allocator.release(id);
         let release = if request.response.is_closed() {
             if request
@@ -135,37 +120,44 @@ pub(super) fn fail_queued_proxy_dns_udp_requests(
 }
 
 pub(super) fn next_proxy_dns_udp_deadline(
-    deadlines: &mut VecDeque<PendingProxyDnsDeadline>,
+    deadlines: &mut BinaryHeap<Reverse<PendingProxyDnsDeadline>>,
     pending: &HashMap<u16, PendingProxyDnsUdpRequest>,
 ) -> Option<time::Instant> {
+    compact_proxy_dns_udp_deadlines(deadlines, pending);
     loop {
-        let deadline = *deadlines.front()?;
+        let Reverse(deadline) = *deadlines.peek()?;
         let Some(request) = pending.get(&deadline.id) else {
-            deadlines.pop_front();
+            deadlines.pop();
             continue;
         };
         if request.generation != deadline.generation
             || request.context.deadline() != deadline.deadline
         {
-            deadlines.pop_front();
+            deadlines.pop();
             continue;
         }
         return Some(deadline.deadline);
     }
 }
 
-pub(super) async fn wait_proxy_dns_udp_cancellation(
-    pending: &mut HashMap<u16, PendingProxyDnsUdpRequest>,
+fn compact_proxy_dns_udp_deadlines(
+    deadlines: &mut BinaryHeap<Reverse<PendingProxyDnsDeadline>>,
+    pending: &HashMap<u16, PendingProxyDnsUdpRequest>,
 ) {
-    let cancellations = pending
-        .values_mut()
-        .map(|request| request.response.closed())
-        .collect::<FuturesUnordered<_>>();
-    if cancellations.is_empty() {
-        std::future::pending::<()>().await;
-    } else {
-        let _ = cancellations.into_future().await;
+    let compact_threshold = pending.len().saturating_mul(2).saturating_add(64);
+    if deadlines.len() <= compact_threshold {
+        return;
     }
+    *deadlines = pending
+        .values()
+        .map(|request| {
+            Reverse(PendingProxyDnsDeadline {
+                deadline: request.context.deadline(),
+                generation: request.generation,
+                id: request.upstream_id,
+            })
+        })
+        .collect();
 }
 
 pub(super) async fn wait_proxy_dns_udp_deadline(deadline: Option<time::Instant>) {

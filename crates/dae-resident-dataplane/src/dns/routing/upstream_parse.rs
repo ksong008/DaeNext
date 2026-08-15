@@ -73,7 +73,7 @@ pub(super) fn parse_dns_upstream_with_refresh_interval(
         tag: tag.to_owned(),
         target,
         scheme,
-        path,
+        path: path.into(),
     })
 }
 

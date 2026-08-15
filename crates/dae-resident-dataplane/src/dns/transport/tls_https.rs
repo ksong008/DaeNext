@@ -796,7 +796,7 @@ mod tests {
             index: 0,
             tag: "h2-fixture".to_owned(),
             target: ResidentDnsUpstreamTarget {
-                authority: H2_DOH_TEST_AUTHORITY.to_owned(),
+                authority: Arc::from(H2_DOH_TEST_AUTHORITY),
                 host: H2_DOH_TEST_AUTHORITY.to_owned(),
                 port: DNS_HTTPS_DEFAULT_PORT,
                 literal_addr: None,
@@ -808,7 +808,7 @@ mod tests {
                 resolved_addrs: Arc::default(),
             },
             scheme: ResidentDnsUpstreamScheme::Https,
-            path: H2_DOH_TEST_PATH.to_owned(),
+            path: Arc::from(H2_DOH_TEST_PATH),
         }
     }
 

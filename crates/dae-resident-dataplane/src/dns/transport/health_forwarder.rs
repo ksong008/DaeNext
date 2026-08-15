@@ -9,8 +9,8 @@ impl ResidentDnsForwarderCache {
     ) -> Result<ResidentDnsHealthForwarderLease, String> {
         let key = ResidentDnsForwarderKey {
             scheme: ResidentDnsUpstreamScheme::Udp,
-            authority: String::new(),
-            path: String::new(),
+            authority: Arc::from(""),
+            path: Arc::from(""),
             mark: binding.effective_socket_mark(),
             target: Some(target),
             selection: ResidentDnsForwarderSelectionKey::Proxy {

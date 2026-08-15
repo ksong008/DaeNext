@@ -428,7 +428,7 @@ mod tests {
             index: 0,
             tag: "candidate-race".to_owned(),
             target: ResidentDnsUpstreamTarget {
-                authority: "candidate-race.invalid:53".to_owned(),
+                authority: Arc::from("candidate-race.invalid:53"),
                 host: "candidate-race.invalid".to_owned(),
                 port: DNS_DEFAULT_PORT,
                 literal_addr: None,
@@ -437,7 +437,7 @@ mod tests {
                 resolved_addrs: Arc::default(),
             },
             scheme: ResidentDnsUpstreamScheme::Udp,
-            path: String::new(),
+            path: Arc::from(""),
         }
     }
 
