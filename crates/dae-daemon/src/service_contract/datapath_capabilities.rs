@@ -191,7 +191,7 @@ pub(super) fn insert_datapath_core_service_contract_capabilities(report: &mut Va
                     "control_plane_routing": dae_datapath::OUTBOUND_CONTROL_PLANE_ROUTING,
                     "must_direct_route_rule_field": "dae-datapath::RouteRule::must",
                 },
-                "resident_adapter": "dae-daemon::production_runtime_owner::resident_dataplane",
+                "resident_adapter": "dae-resident-dataplane::facade",
                 "runtime_owner_report": "dae-daemon::production_runtime_owner::report",
             }),
         );

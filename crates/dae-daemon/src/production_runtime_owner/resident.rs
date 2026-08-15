@@ -24,14 +24,6 @@ use super::native_ebpf::{
 };
 use super::netns_link::resolve_netns_link_mode_from_env;
 use super::report::{live_handoff_json, socket_options_verified};
-use super::resident_dataplane::facade::{
-    ResidentDataplaneGeneration, ResidentDataplaneReadHandle, ResidentDataplaneRuntime,
-    ResidentDataplaneStartContext, ResidentDnsReloadSnapshot, ResidentManualProbeHandle,
-    ResidentPreparedDataplane, ResidentTrafficCounters, build_resident_dataplane_plan_with_geodata,
-    build_resident_userspace_routing_matcher_with_geodata, next_resident_runtime_generation,
-    resident_datapath_postflight_interval_seconds_default,
-    resident_dataplane_generation_lifetime_counts, start_resident_dataplane_workers,
-};
 use super::resident_interfaces::{
     attach_resident_lan_egress_program, attach_resident_wan_programs,
     configure_resident_kernel_parameters, configured_wan_ifaces, iface_exists_in_sysfs_root,
@@ -55,6 +47,14 @@ use super::topology::{
 use super::{
     DEFAULT_DAE_NETNS_ID, DEFAULT_HOST_SECTION, DEFAULT_PEER_SECTION, PRODUCTION_NETNS,
     ProductionRuntimeOwnerOptions,
+};
+use dae_resident_dataplane::facade::{
+    ResidentDataplaneGeneration, ResidentDataplaneReadHandle, ResidentDataplaneRuntime,
+    ResidentDataplaneStartContext, ResidentDnsReloadSnapshot, ResidentManualProbeHandle,
+    ResidentPreparedDataplane, ResidentTrafficCounters,
+    build_resident_prepared_dataplane_with_geodata, next_resident_runtime_generation,
+    resident_datapath_postflight_interval_seconds_default,
+    resident_dataplane_generation_lifetime_counts, start_resident_dataplane_workers,
 };
 
 mod constants;

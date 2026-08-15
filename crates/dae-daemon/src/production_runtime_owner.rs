@@ -20,7 +20,6 @@ mod report;
 mod resident;
 mod resident_allocator;
 pub(crate) use resident_lan::configured_lan_ifaces;
-mod resident_dataplane;
 mod resident_interfaces;
 pub(crate) use resident_interfaces::{configured_wan_ifaces, validate_resident_runtime_interfaces};
 mod resident_lan;
@@ -32,6 +31,22 @@ mod udp_io;
 use command::{
     bpf_dae_snapshot, ensure_safe_run_root, path_string, runtime_resource_leftovers,
     wait_for_loaded_map_cleanup,
+};
+pub(crate) use dae_resident_dataplane::facade::{
+    RESIDENT_MANUAL_PROBE_TASK_NAME, ResidentDnsReloadSnapshot, ResidentEventLogDecision,
+    ResidentEventLogPolicy, ResidentEventLogPrefilter, ResidentEventLogSink, ResidentEventMetadata,
+    ResidentManualProbeHandle, ResidentNodeSourceAdmission, ResidentTrafficCounters,
+    effective_process_memory_capacity, fetch_http_url_via_default_proxy_async,
+    resident_live_adapter_config_assessment, resident_live_adapter_entry_missing,
+    resident_live_adapter_entry_remote_live_matrix_ready, resident_live_adapter_matrix_contract,
+    resident_live_adapter_udp_probe, resident_live_matrix_evidence_from_env,
+    resident_manual_latency_probe_concurrency_from_config, resident_node_source_admissions,
+    resident_runtime_defaults_contract, resident_tcp_latency_probe_timeout_from_config,
+    run_resident_manual_latency_probe_helper, run_resident_manual_latency_probe_helper_streaming,
+};
+pub use dae_resident_dataplane::facade::{
+    ResidentProxyOwnershipBenchmarkFixture, ResidentTcpSelectionBenchmarkFixture,
+    resident_proxy_ownership_benchmark_fixture, resident_tcp_selection_benchmark_fixture,
 };
 use live_dns_probe::{
     ActiveDnsEvidence, DEFAULT_ACTIVE_DNS_QNAME, DEFAULT_ACTIVE_DNS_TARGET_PORT,
@@ -65,22 +80,6 @@ pub(crate) use resident::{
     start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot,
 };
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime_with_asset_dirs};
-pub(crate) use resident_dataplane::facade::{
-    RESIDENT_MANUAL_PROBE_TASK_NAME, ResidentDnsReloadSnapshot, ResidentEventLogDecision,
-    ResidentEventLogPolicy, ResidentEventLogPrefilter, ResidentEventLogSink, ResidentEventMetadata,
-    ResidentManualProbeHandle, ResidentNodeSourceAdmission, ResidentTrafficCounters,
-    effective_process_memory_capacity, fetch_http_url_via_default_proxy_async,
-    resident_live_adapter_config_assessment, resident_live_adapter_entry_missing,
-    resident_live_adapter_entry_remote_live_matrix_ready, resident_live_adapter_matrix_contract,
-    resident_live_adapter_udp_probe, resident_live_matrix_evidence_from_env,
-    resident_manual_latency_probe_concurrency_from_config, resident_node_source_admissions,
-    resident_runtime_defaults_contract, resident_tcp_latency_probe_timeout_from_config,
-    run_resident_manual_latency_probe_helper, run_resident_manual_latency_probe_helper_streaming,
-};
-pub use resident_dataplane::facade::{
-    ResidentProxyOwnershipBenchmarkFixture, ResidentTcpSelectionBenchmarkFixture,
-    resident_proxy_ownership_benchmark_fixture, resident_tcp_selection_benchmark_fixture,
-};
 use topology::{
     attach_host_program, attach_peer_program, cleanup_production_topology, preflight_checks,
     read_topology_values, setup_production_topology, show_host_program, show_peer_program,

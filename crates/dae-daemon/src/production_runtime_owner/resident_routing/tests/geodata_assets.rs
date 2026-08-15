@@ -1,9 +1,9 @@
-use super::super::super::resident_dataplane::facade::geodata_report_json;
 use super::super::plan::{
     build_routing_plan_with_asset_dirs, build_routing_plan_with_geodata_resolver,
 };
 use super::super::{ResidentGeodataStore, build_resident_userspace_routing_matcher_with_geodata};
 use super::*;
+use dae_resident_dataplane::facade::geodata_report_json;
 use dae_routing::DomainKey;
 #[test]
 pub(super) fn resident_routing_plan_compiles_geoip_from_asset() {
@@ -396,16 +396,16 @@ pub(super) fn resident_routing_regex_sets_scope_thread_caches_to_one_generation(
         .collect::<Vec<_>>();
     let first_generation = ResidentGeodataStore::new(Vec::<std::path::PathBuf>::new());
     let first = first_generation
-        .shared_domain_set("regex", patterns.clone())
+        .shared_domain_set_for_test("regex", patterns.clone())
         .unwrap();
     let first_again = first_generation
-        .shared_domain_set("regex", patterns.clone())
+        .shared_domain_set_for_test("regex", patterns.clone())
         .unwrap();
     assert!(first.ptr_eq(&first_again));
 
     let next_generation = ResidentGeodataStore::new(Vec::<std::path::PathBuf>::new());
     let next = next_generation
-        .shared_domain_set("regex", patterns)
+        .shared_domain_set_for_test("regex", patterns)
         .unwrap();
     assert!(!first.ptr_eq(&next));
 }

@@ -16,7 +16,6 @@ use dae_ebpf_support::{
 use dae_routing::IpPrefix;
 use serde_json::{Value, json};
 
-use super::super::resident_dataplane::facade::SharedResidentIpPrefixSet;
 use super::types::OutboundConnectivityEntry;
 use super::{
     BPF_F_NO_PREALLOC, BPF_MAP_CREATE, BPF_MAP_TYPE_LPM_TRIE, CONNECTIVITY_IP_VERSION_4,
@@ -24,6 +23,7 @@ use super::{
     CONNECTIVITY_L4_UDP_LEGACY, LPM_KEY_SIZE, LPM_MAX_ENTRIES, LPM_VALUE_SIZE,
     UNUSED_LPM_TYPE_NAME,
 };
+use dae_resident_dataplane::facade::SharedResidentIpPrefixSet;
 
 pub(super) fn update_lpm_array_map(
     lpm_array_fd: i32,

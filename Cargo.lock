@@ -756,6 +756,7 @@ dependencies = [
  "dae-netutil",
  "dae-outbound",
  "dae-product-identity",
+ "dae-resident-dataplane",
  "dae-routing",
  "dae-runtime-control",
  "dae-sniffing",
@@ -920,6 +921,52 @@ name = "dae-product-identity"
 version = "3.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "dae-resident-dataplane"
+version = "3.1.0"
+dependencies = [
+ "base64",
+ "blake2",
+ "boring 5.1.0",
+ "boring-sys 5.1.0",
+ "brotli",
+ "bytes",
+ "dae-config",
+ "dae-core-types",
+ "dae-datapath",
+ "dae-dns",
+ "dae-ebpf-support",
+ "dae-geodata",
+ "dae-netutil",
+ "dae-outbound",
+ "dae-routing",
+ "dae-runtime-control",
+ "dae-sniffing",
+ "dae-tls",
+ "fastrand",
+ "flate2",
+ "foreign-types",
+ "futures-util",
+ "getrandom 0.3.4",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http",
+ "libc",
+ "quinn",
+ "quinn-boring",
+ "quinn-udp",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2",
+ "tls-parser",
+ "tokio",
+ "tokio-boring",
+ "url",
 ]
 
 [[package]]
