@@ -662,14 +662,15 @@ dependencies = [
  "bytes",
  "dae-cli",
  "dae-config",
+ "dae-config-util",
  "dae-core-types",
  "dae-daemon",
  "dae-datapath",
  "dae-dns",
  "dae-ebpf-support",
- "dae-engine",
  "dae-geodata",
  "dae-golden",
+ "dae-netutil",
  "dae-outbound",
  "dae-routing",
  "dae-runtime-control",
@@ -696,7 +697,6 @@ dependencies = [
  "dae-datapath",
  "dae-dns",
  "dae-ebpf-support",
- "dae-engine",
  "dae-golden",
  "dae-netutil",
  "dae-outbound",
@@ -752,7 +752,6 @@ dependencies = [
  "dae-dns",
  "dae-ebpf-loader",
  "dae-ebpf-support",
- "dae-engine",
  "dae-geodata",
  "dae-netutil",
  "dae-outbound",
@@ -848,15 +847,6 @@ dependencies = [
  "dae-ebpf-abi",
  "dae-golden",
  "libc",
- "serde_json",
-]
-
-[[package]]
-name = "dae-engine"
-version = "3.1.0"
-dependencies = [
- "dae-config",
- "dae-golden",
  "serde_json",
 ]
 
