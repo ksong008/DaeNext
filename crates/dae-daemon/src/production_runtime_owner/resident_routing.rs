@@ -17,15 +17,16 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub(super) use super::resident_dataplane::geodata::GeodataResolver as ResidentGeodataStore;
-use super::resident_dataplane::geodata::geodata_report_json;
+pub(super) use super::resident_dataplane::facade::ResidentGeodataStore;
+use super::resident_dataplane::facade::geodata_report_json;
+#[cfg(test)]
+pub(super) use super::resident_dataplane::facade::{
+    build_resident_userspace_routing_matcher, build_resident_userspace_routing_matcher_with_geodata,
+};
 use maps::{
     ensure_map_contract, map_json, open_all_maps, open_latest_map_in_ids, open_optional_unique_map,
     open_unique_map, update_lpm_array_map, update_outbound_connectivity_map,
 };
-#[cfg(test)]
-pub(super) use plan::build_resident_userspace_routing_matcher;
-pub(super) use plan::build_resident_userspace_routing_matcher_with_geodata;
 use plan::{build_routing_plan_with_geodata_resolver, domain_set_json};
 use types::MatchSetBytes;
 

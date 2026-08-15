@@ -74,7 +74,7 @@ impl ResidentRuntimeOwnerReadHandle {
 }
 
 #[derive(Clone)]
-pub(in crate::production_runtime_owner) struct ResidentDataplaneReadHandle {
+pub(crate) struct ResidentDataplaneReadHandle {
     owner: ResidentRuntimeOwnerReadHandle,
     generation_drain: ResidentGenerationDrain,
 }

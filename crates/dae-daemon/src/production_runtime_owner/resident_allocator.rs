@@ -3,7 +3,7 @@ use std::sync::Arc;
 #[cfg(test)]
 use serde_json::Value;
 
-use super::resident_dataplane::{
+use super::resident_dataplane::facade::{
     ResidentAllocatorBusyKind, ResidentAllocatorHooks, ResidentAllocatorReclaimReason,
     ResidentAllocatorRuntimeHooks, ResidentAllocatorWorkerKind, set_resident_allocator_hooks,
 };

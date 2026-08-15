@@ -1,4 +1,4 @@
-use super::super::super::resident_dataplane::geodata::geodata_report_json;
+use super::super::super::resident_dataplane::facade::geodata_report_json;
 use super::super::plan::{
     build_routing_plan_with_asset_dirs, build_routing_plan_with_geodata_resolver,
 };

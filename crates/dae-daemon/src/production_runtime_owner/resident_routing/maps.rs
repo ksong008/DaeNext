@@ -16,7 +16,7 @@ use dae_ebpf_support::{
 use dae_routing::IpPrefix;
 use serde_json::{Value, json};
 
-use super::super::resident_dataplane::geodata::SharedResidentIpPrefixSet;
+use super::super::resident_dataplane::facade::SharedResidentIpPrefixSet;
 use super::types::OutboundConnectivityEntry;
 use super::{
     BPF_F_NO_PREALLOC, BPF_MAP_CREATE, BPF_MAP_TYPE_LPM_TRIE, CONNECTIVITY_IP_VERSION_4,

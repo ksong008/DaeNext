@@ -65,7 +65,7 @@ pub(crate) use resident::{
     start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot,
 };
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime_with_asset_dirs};
-pub(crate) use resident_dataplane::{
+pub(crate) use resident_dataplane::facade::{
     RESIDENT_MANUAL_PROBE_TASK_NAME, ResidentDnsReloadSnapshot, ResidentEventLogDecision,
     ResidentEventLogPolicy, ResidentEventLogPrefilter, ResidentEventLogSink, ResidentEventMetadata,
     ResidentManualProbeHandle, ResidentNodeSourceAdmission, ResidentTrafficCounters,
@@ -77,7 +77,7 @@ pub(crate) use resident_dataplane::{
     resident_runtime_defaults_contract, resident_tcp_latency_probe_timeout_from_config,
     run_resident_manual_latency_probe_helper, run_resident_manual_latency_probe_helper_streaming,
 };
-pub use resident_dataplane::{
+pub use resident_dataplane::facade::{
     ResidentProxyOwnershipBenchmarkFixture, ResidentTcpSelectionBenchmarkFixture,
     resident_proxy_ownership_benchmark_fixture, resident_tcp_selection_benchmark_fixture,
 };

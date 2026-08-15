@@ -1936,8 +1936,7 @@ pub(crate) fn resident_runtime_profile_contract() -> Value {
     })
 }
 
-pub(in crate::production_runtime_owner) fn resident_datapath_postflight_interval_seconds_default()
--> u64 {
+pub(crate) fn resident_datapath_postflight_interval_seconds_default() -> u64 {
     ResidentRuntimeProfileSelection::selected()
         .profile
         .datapath_postflight_interval_seconds_default()
