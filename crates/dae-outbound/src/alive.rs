@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::annotation::Annotation;
 use crate::dialer::Dialer;
 use crate::policy::SelectionPolicy;
@@ -14,6 +16,7 @@ pub struct AliveDialerSet {
     alive_positions: Vec<Option<usize>>,
     latencies_ms: Vec<Option<i64>>,
     latency_offsets_ms: Vec<i64>,
+    latency_order: BTreeSet<(i64, usize)>,
     min_index: Option<usize>,
     min_latency_ms: i64,
     tolerance_ms: i64,
@@ -60,6 +63,7 @@ impl AliveDialerSet {
             alive_positions,
             latencies_ms: vec![None; dialers.len()],
             latency_offsets_ms,
+            latency_order: BTreeSet::new(),
             min_index,
             min_latency_ms: i64::MAX / 4,
             tolerance_ms,
@@ -70,6 +74,7 @@ impl AliveDialerSet {
         if index >= self.alive.len() {
             return;
         }
+        self.remove_latency_entry(index);
         self.update_alive_index(index, alive);
 
         let raw_latency = match self.policy {
@@ -87,6 +92,7 @@ impl AliveDialerSet {
         };
 
         let Some(raw_latency) = raw_latency else {
+            self.insert_latency_entry(index);
             if alive && self.policy.needs_latency_state() && self.min_index.is_none() {
                 self.min_index = Some(index);
             }
@@ -98,6 +104,7 @@ impl AliveDialerSet {
         };
         self.latencies_ms[index] = Some(raw_latency);
         let sorting_latency = raw_latency + self.latency_offset(index);
+        self.insert_latency_entry(index);
         match self.min_index {
             None if alive => {
                 self.min_index = Some(index);
@@ -132,7 +139,9 @@ impl AliveDialerSet {
 
     pub fn set_alive(&mut self, index: usize, alive: bool) {
         if index < self.alive.len() {
+            self.remove_latency_entry(index);
             self.update_alive_index(index, alive);
+            self.insert_latency_entry(index);
             if !alive && self.min_index == Some(index) {
                 self.min_index = None;
                 self.recalc_min();
@@ -181,21 +190,29 @@ impl AliveDialerSet {
         }
     }
 
+    fn remove_latency_entry(&mut self, index: usize) {
+        if let Some(latency) = self.latencies_ms[index] {
+            self.latency_order
+                .remove(&(latency + self.latency_offset(index), index));
+        }
+    }
+
+    fn insert_latency_entry(&mut self, index: usize) {
+        if self.alive[index]
+            && let Some(latency) = self.latencies_ms[index]
+        {
+            self.latency_order
+                .insert((latency + self.latency_offset(index), index));
+        }
+    }
+
     fn recalc_min(&mut self) {
-        self.min_index = None;
-        self.min_latency_ms = i64::MAX / 4;
-        for (index, maybe_latency) in self.latencies_ms.iter().enumerate() {
-            if !self.alive[index] {
-                continue;
-            }
-            let Some(latency) = maybe_latency else {
-                continue;
-            };
-            let sorting_latency = *latency + self.latency_offset(index);
-            if sorting_latency < self.min_latency_ms {
-                self.min_index = Some(index);
-                self.min_latency_ms = sorting_latency;
-            }
+        if let Some(&(latency, index)) = self.latency_order.first() {
+            self.min_index = Some(index);
+            self.min_latency_ms = latency;
+        } else {
+            self.min_index = None;
+            self.min_latency_ms = i64::MAX / 4;
         }
     }
 }

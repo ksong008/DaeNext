@@ -46,7 +46,7 @@ pub(super) async fn run_stream_packet_congestion_server(
         if parsed.network_byte == TrojanNetwork::Udp.byte()
             && parsed.initial_target == expected_target
             && parsed.frame.target == expected_target
-            && parsed.frame.payload == expected_payload
+            && parsed.frame.payload() == expected_payload
         {
             request_match_count += 1;
         }

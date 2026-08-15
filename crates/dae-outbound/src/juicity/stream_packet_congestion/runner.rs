@@ -131,7 +131,7 @@ pub(super) async fn run_stream_packet_congestion_smoke_async(
             client_response_read_count += 1;
             let decoded = decode_stream_packet_frame(&response)?;
             if decoded.target == options.response_target
-                && decoded.payload == options.response_payload
+                && decoded.payload() == options.response_payload
                 && decoded.encoded == response_frame.encoded
             {
                 client_response_match_count += 1;

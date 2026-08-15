@@ -62,9 +62,13 @@ where
                     if read.is_empty() {
                         return Poll::Ready(Ok(()));
                     }
-                    let frames = state.decoder.push(read).map_err(std::io::Error::other)?;
-                    for frame in frames {
-                        state.pending.extend_from_slice(&frame);
+                    state.decoder.extend(read).map_err(std::io::Error::other)?;
+                    while let Some(frame) = state
+                        .decoder
+                        .next_message()
+                        .map_err(std::io::Error::other)?
+                    {
+                        state.pending.extend_from_slice(frame);
                     }
                     state.control.queue_from(&mut state.decoder);
                 }
@@ -139,9 +143,13 @@ where
                     if read.is_empty() {
                         return Poll::Ready(Ok(()));
                     }
-                    let frames = state.decoder.push(read).map_err(std::io::Error::other)?;
-                    for frame in frames {
-                        state.pending.extend_from_slice(&frame);
+                    state.decoder.extend(read).map_err(std::io::Error::other)?;
+                    while let Some(frame) = state
+                        .decoder
+                        .next_message()
+                        .map_err(std::io::Error::other)?
+                    {
+                        state.pending.extend_from_slice(frame);
                     }
                     state.control.queue_from(&mut state.decoder);
                 }

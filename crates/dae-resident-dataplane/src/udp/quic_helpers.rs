@@ -19,20 +19,23 @@ pub(crate) fn build_juicity_stream_packet_request(
 pub(super) async fn read_juicity_stream_packet_response(
     recv: &mut quinn::RecvStream,
     response: &mut Vec<u8>,
+    response_cursor: &mut usize,
     mode: UdpStreamReadMode,
-) -> Result<Option<JuicityStreamPacketFrame>, String> {
+) -> Result<Option<JuicityStreamPacketPayload>, String> {
     const READ_CHUNK_BYTES: usize = 4 * 1024;
     const RESPONSE_BUFFER_LIMIT: usize = JUICITY_STREAM_PACKET_MAX_FRAME_LEN + READ_CHUNK_BYTES;
     let mut buf = [0_u8; READ_CHUNK_BYTES];
     loop {
-        match decode_stream_packet_frame_prefix(response) {
+        match decode_stream_packet_payload_prefix(&response[*response_cursor..]) {
             Ok(Some((frame, consumed))) => {
-                response.drain(..consumed);
+                *response_cursor += consumed;
+                compact_juicity_response_buffer(response, response_cursor);
                 return Ok(Some(frame));
             }
             Ok(None) => {}
             Err(err) => return Err(format!("decode Juicity UDP stream packet: {err}")),
         }
+        compact_juicity_response_buffer(response, response_cursor);
         if response.len() >= RESPONSE_BUFFER_LIMIT {
             return Err(format!(
                 "Juicity UDP stream response exceeds the bounded frame buffer ({RESPONSE_BUFFER_LIMIT} bytes)"
@@ -50,5 +53,20 @@ pub(super) async fn read_juicity_stream_packet_response(
             Some(read) => response.extend_from_slice(&buf[..read]),
             None => return Ok(None),
         }
+    }
+}
+
+fn compact_juicity_response_buffer(response: &mut Vec<u8>, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    if *cursor >= response.len() {
+        response.clear();
+        *cursor = 0;
+        return;
+    }
+    if *cursor >= 8192 && cursor.saturating_mul(2) >= response.len() {
+        response.drain(..*cursor);
+        *cursor = 0;
     }
 }

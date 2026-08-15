@@ -393,7 +393,7 @@ pub(in crate::udp) mod tests {
         let decoded =
             decode_stream_packet_frame(&juicity_request[1 + initial_metadata_len..]).unwrap();
         assert_eq!(decoded.target, target);
-        assert_eq!(decoded.payload, payload);
+        assert_eq!(decoded.payload(), payload);
     }
 
     #[test]

@@ -15,7 +15,7 @@ impl Socks5UdpAssociateSession {
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         self.ensure_open(binding).await?;
-        let request = udp_packet::wrap_target(&original_dst.to_string(), payload)
+        let request = udp_packet::wrap_socket_addr(original_dst, payload)
             .map_err(|err| format!("wrap SOCKS5 UDP packet: {err}"))?;
         self.relay
             .send_packet(&request, binding.effective_socket_mark(), "SOCKS5")
@@ -27,16 +27,14 @@ impl Socks5UdpAssociateSession {
     }
 
     pub(super) fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        let response = match self.relay.poll_response("SOCKS5")? {
-            Some(response) => response,
-            None => return Ok(None),
-        };
-        self.decode_response(&response).map(Some)
+        self.relay
+            .poll_response_with("SOCKS5", decode_socks5_response)
     }
 
     pub(super) async fn wait_response(&mut self) -> Result<UdpExchangeResult, String> {
-        let response = self.relay.wait_response("SOCKS5").await?;
-        self.decode_response(&response)
+        self.relay
+            .wait_response_with("SOCKS5", decode_socks5_response)
+            .await
     }
 
     pub(super) fn has_response_buffer(&self) -> bool {
@@ -47,19 +45,9 @@ impl Socks5UdpAssociateSession {
         self.relay.reclaim_response_buffer()
     }
 
+    #[cfg(test)]
     fn decode_response(&self, response: &[u8]) -> Result<UdpExchangeResult, String> {
-        let decoded = udp_packet::unwrap(response)
-            .map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;
-        let wire_source = decoded.target.authority().parse::<SocketAddr>();
-        let result = UdpExchangeResult::new(decoded.payload, "socks5-udp-associate")
-            .with_session_executor("tokio-socks5-udp-associate")
-            .with_underlay_reuse("tcp-control-and-udp-relay-reused");
-        Ok(match wire_source {
-            Ok(source) => result.with_decoded_response_identity(Some(source), None),
-            Err(_) => {
-                result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity)
-            }
-        })
+        decode_socks5_response(response)
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {
@@ -92,6 +80,19 @@ impl Socks5UdpAssociateSession {
         self.relay = relay;
         Ok(())
     }
+}
+
+fn decode_socks5_response(response: &[u8]) -> Result<UdpExchangeResult, String> {
+    let decoded =
+        udp_packet::unwrap(response).map_err(|err| format!("unwrap SOCKS5 UDP packet: {err}"))?;
+    let wire_source = decoded.target.socket_addr();
+    let result = UdpExchangeResult::new(decoded.payload, "socks5-udp-associate")
+        .with_session_executor("tokio-socks5-udp-associate")
+        .with_underlay_reuse("tcp-control-and-udp-relay-reused");
+    Ok(match wire_source {
+        Some(source) => result.with_decoded_response_identity(Some(source), None),
+        None => result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity),
+    })
 }
 
 async fn socks5_udp_associate_control_async(

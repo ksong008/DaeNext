@@ -569,6 +569,7 @@ pub(in crate::udp) struct JuicityQuicStreamPacketSession {
     send: Option<quinn::SendStream>,
     recv: Option<quinn::RecvStream>,
     response_buffer: Vec<u8>,
+    response_buffer_cursor: usize,
     first_packet: bool,
     fixed_target: UdpSessionFixedTarget,
     wire_target: String,
@@ -587,6 +588,7 @@ impl JuicityQuicStreamPacketSession {
             send: None,
             recv: None,
             response_buffer: Vec::new(),
+            response_buffer_cursor: 0,
             first_packet: true,
             fixed_target: UdpSessionFixedTarget::default(),
             wire_target: String::new(),
@@ -620,12 +622,12 @@ impl JuicityQuicStreamPacketSession {
             )
         });
         self.ensure_open(deadline).await?;
-        let request_frame = seal_stream_packet_frame(&self.wire_target, payload)
+        let request_frame = encode_stream_packet_frame(&self.wire_target, payload)
             .map_err(|err| format!("build Juicity UDP stream packet: {err}"))?;
         let request = if self.first_packet {
-            build_juicity_stream_packet_request(&self.wire_target, &request_frame.encoded)?
+            build_juicity_stream_packet_request(&self.wire_target, &request_frame)?
         } else {
-            request_frame.encoded
+            request_frame
         };
         let remaining = deadline
             .remaining_at(Instant::now())
@@ -668,7 +670,13 @@ impl JuicityQuicStreamPacketSession {
             let Some(recv) = self.recv.as_mut() else {
                 return Ok(None);
             };
-            read_juicity_stream_packet_response(recv, &mut self.response_buffer, mode).await
+            read_juicity_stream_packet_response(
+                recv,
+                &mut self.response_buffer,
+                &mut self.response_buffer_cursor,
+                mode,
+            )
+            .await
         };
         match response {
             Ok(Some(response)) => Ok(Some(juicity_udp_response_result(
@@ -720,6 +728,7 @@ impl JuicityQuicStreamPacketSession {
         self.recv.take();
         self.transport.take();
         self.response_buffer.clear();
+        self.response_buffer_cursor = 0;
         self.first_packet = true;
     }
 
@@ -730,6 +739,7 @@ impl JuicityQuicStreamPacketSession {
         self.recv.take();
         self.transport.take();
         self.response_buffer.clear();
+        self.response_buffer_cursor = 0;
         self.first_packet = true;
         self.fixed_target.clear();
         self.wire_target.clear();
@@ -1075,7 +1085,8 @@ mod tests {
         let other: SocketAddr = "192.0.2.2:53".parse().unwrap();
         let frame = seal_stream_packet_frame(&other.to_string(), b"response").unwrap();
         let parsed = decode_stream_packet_frame(&frame.encoded).unwrap();
-        let mut response = juicity_udp_response_result(parsed.target, parsed.payload);
+        let payload = parsed.payload().to_vec();
+        let mut response = juicity_udp_response_result(parsed.target, payload);
         let expectation = response.fixed_target_expectation(expected);
         assert_eq!(
             response.take_fixed_target_payload(expectation).validation(),

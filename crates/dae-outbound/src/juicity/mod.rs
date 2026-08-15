@@ -76,10 +76,11 @@ pub use outbound_dataplane::{
 pub use packet::{
     JUICITY_STREAM_PACKET_MAX_FRAME_LEN, JUICITY_STREAM_PACKET_MAX_METADATA_LEN,
     JUICITY_UNDERLAY_AUTH_IV_LEN, JUICITY_UNDERLAY_AUTH_PSK_LEN, JuicityDialAuthRecord,
-    JuicityPacketStateSmokeReport, JuicityStreamPacketFrame, JuicityUdpPacketConnDecision,
-    JuicityUdpPacketConnKind, build_dialauth_record_for_port_zero, decode_stream_packet_frame,
-    decode_stream_packet_frame_prefix, packet_state_smoke, seal_stream_packet_frame,
-    select_udp_packet_conn, stream_packet_frame_len,
+    JuicityPacketStateSmokeReport, JuicityStreamPacketFrame, JuicityStreamPacketPayload,
+    JuicityUdpPacketConnDecision, JuicityUdpPacketConnKind, build_dialauth_record_for_port_zero,
+    decode_stream_packet_frame, decode_stream_packet_frame_prefix,
+    decode_stream_packet_payload_prefix, encode_stream_packet_frame, packet_state_smoke,
+    seal_stream_packet_frame, select_udp_packet_conn, stream_packet_frame_len,
 };
 pub use runtime::{
     JuicityAuthReport, JuicityAuthStream, authenticate_juicity_connection,

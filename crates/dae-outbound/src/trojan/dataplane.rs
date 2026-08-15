@@ -59,6 +59,12 @@ pub struct TrojanUdpPacket {
     pub packet_len: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrojanUdpPacketPayload {
+    pub target: Socks5Address,
+    pub payload: Vec<u8>,
+}
+
 pub fn tcp_exchange_over_stream<S>(
     stream: &mut S,
     proxy: &str,
@@ -222,6 +228,39 @@ pub fn decode_udp_packet(input: &[u8]) -> Result<TrojanUdpPacket, OutboundError>
 pub fn decode_udp_packet_prefix(
     input: &[u8],
 ) -> Result<Option<(TrojanUdpPacket, usize)>, OutboundError> {
+    let Some((address, payload_start, packet_len)) = decode_udp_packet_layout(input)? else {
+        return Ok(None);
+    };
+    let payload_len = packet_len - payload_start;
+    Ok(Some((
+        TrojanUdpPacket {
+            target: address.authority(),
+            payload: input[payload_start..packet_len].to_vec(),
+            payload_len,
+            packet_len,
+        },
+        packet_len,
+    )))
+}
+
+pub fn decode_udp_packet_payload_prefix(
+    input: &[u8],
+) -> Result<Option<(TrojanUdpPacketPayload, usize)>, OutboundError> {
+    let Some((address, payload_start, packet_len)) = decode_udp_packet_layout(input)? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        TrojanUdpPacketPayload {
+            target: address,
+            payload: input[payload_start..packet_len].to_vec(),
+        },
+        packet_len,
+    )))
+}
+
+fn decode_udp_packet_layout(
+    input: &[u8],
+) -> Result<Option<(Socks5Address, usize, usize)>, OutboundError> {
     let Some(address_len) = socks5_address_prefix_len(input)? else {
         return Ok(None);
     };
@@ -245,15 +284,7 @@ pub fn decode_udp_packet_prefix(
     if input.len() < packet_len {
         return Ok(None);
     }
-    Ok(Some((
-        TrojanUdpPacket {
-            target: address.authority(),
-            payload: input[payload_start..packet_len].to_vec(),
-            payload_len,
-            packet_len,
-        },
-        packet_len,
-    )))
+    Ok(Some((address, payload_start, packet_len)))
 }
 
 fn socks5_address_prefix_len(input: &[u8]) -> Result<Option<usize>, OutboundError> {

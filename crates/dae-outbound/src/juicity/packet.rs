@@ -59,6 +59,20 @@ pub struct JuicityStreamPacketFrame {
     pub metadata_len: usize,
     pub payload_len: usize,
     pub encoded: Vec<u8>,
+}
+
+impl JuicityStreamPacketFrame {
+    pub fn payload(&self) -> &[u8] {
+        let start = self.metadata_len + 2;
+        self.encoded
+            .get(start..start + self.payload_len)
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JuicityStreamPacketPayload {
+    pub target: String,
     pub payload: Vec<u8>,
 }
 
@@ -175,8 +189,29 @@ pub fn seal_stream_packet_frame(
         metadata_len: metadata_bytes.len(),
         payload_len: payload.len(),
         encoded,
-        payload: payload.to_vec(),
     })
+}
+
+pub fn encode_stream_packet_frame(target: &str, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    if payload.len() > u16::MAX as usize {
+        return Err(OutboundError::BadJuicity(format!(
+            "juicity stream packet payload too large: {} bytes",
+            payload.len()
+        )));
+    }
+    let decision = select_udp_packet_conn(target)?;
+    if decision.kind != JuicityUdpPacketConnKind::StreamPacketConn {
+        return Err(OutboundError::BadJuicity(
+            "juicity stream packet frame requires nonzero UDP target port".to_owned(),
+        ));
+    }
+    let metadata = TrojanMetadata::parse("udp", target)?;
+    let metadata_bytes = metadata.encode()?;
+    let mut encoded = Vec::with_capacity(metadata_bytes.len() + 2 + payload.len());
+    encoded.extend_from_slice(&metadata_bytes);
+    encoded.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    encoded.extend_from_slice(payload);
+    Ok(encoded)
 }
 
 pub fn decode_stream_packet_frame(input: &[u8]) -> Result<JuicityStreamPacketFrame, OutboundError> {
@@ -201,7 +236,6 @@ pub fn decode_stream_packet_frame(input: &[u8]) -> Result<JuicityStreamPacketFra
         metadata_len,
         payload_len,
         encoded: input.to_vec(),
-        payload: input[payload_start..packet_len].to_vec(),
     })
 }
 
@@ -243,6 +277,27 @@ pub fn decode_stream_packet_frame_prefix(
     decode_stream_packet_frame(&input[..frame_len]).map(|frame| Some((frame, frame_len)))
 }
 
+pub fn decode_stream_packet_payload_prefix(
+    input: &[u8],
+) -> Result<Option<(JuicityStreamPacketPayload, usize)>, OutboundError> {
+    let Some(frame_len) = stream_packet_frame_len(input)? else {
+        return Ok(None);
+    };
+    if input.len() < frame_len {
+        return Ok(None);
+    }
+    let frame = &input[..frame_len];
+    let (address, metadata_len) = Socks5Address::decode(frame)?;
+    let payload_start = metadata_len + 2;
+    Ok(Some((
+        JuicityStreamPacketPayload {
+            target: address.authority(),
+            payload: frame[payload_start..].to_vec(),
+        },
+        frame_len,
+    )))
+}
+
 pub fn packet_state_smoke(
     port_zero_target: &str,
     stream_target: &str,
@@ -260,7 +315,7 @@ pub fn packet_state_smoke(
         .unwrap_or(false);
     let stream_packet_roundtrip_validated = decoded.target == frame.target
         && decoded.metadata_len == frame.metadata_len
-        && decoded.payload == payload
+        && decoded.payload() == payload
         && decoded.payload_len == payload.len();
     let dialauth_record_admitted = port_zero_decision.kind
         == JuicityUdpPacketConnKind::TransportPacketConn
@@ -321,14 +376,14 @@ mod tests {
         let (decoded_first, first_len) =
             decode_stream_packet_frame_prefix(&joined).unwrap().unwrap();
         assert_eq!(decoded_first.target, "192.0.2.10:53");
-        assert_eq!(decoded_first.payload, b"first");
+        assert_eq!(decoded_first.payload(), b"first");
         assert_eq!(first_len, first.encoded.len());
 
         let (decoded_second, second_len) = decode_stream_packet_frame_prefix(&joined[first_len..])
             .unwrap()
             .unwrap();
         assert_eq!(decoded_second.target, "[2001:db8::10]:5353");
-        assert_eq!(decoded_second.payload, b"second");
+        assert_eq!(decoded_second.payload(), b"second");
         assert_eq!(second_len, second.encoded.len());
     }
 
@@ -347,7 +402,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(decoded.target, target);
-            assert_eq!(decoded.payload, b"payload");
+            assert_eq!(decoded.payload(), b"payload");
             assert_eq!(consumed, frame.encoded.len());
         }
     }
@@ -359,5 +414,25 @@ mod tests {
             JUICITY_STREAM_PACKET_MAX_FRAME_LEN,
             JUICITY_STREAM_PACKET_MAX_METADATA_LEN + 2 + u16::MAX as usize
         );
+    }
+
+    #[test]
+    fn production_codec_avoids_the_report_frame_payload_copy() {
+        let target = "192.0.2.30:53";
+        let payload = b"payload";
+        let report_frame = seal_stream_packet_frame(target, payload).unwrap();
+        assert_eq!(
+            encode_stream_packet_frame(target, payload).unwrap(),
+            report_frame.encoded
+        );
+
+        let mut joined = report_frame.encoded.clone();
+        joined.extend_from_slice(b"trailing");
+        let (decoded, consumed) = decode_stream_packet_payload_prefix(&joined)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded.target, target);
+        assert_eq!(decoded.payload, payload);
+        assert_eq!(consumed, report_frame.encoded.len());
     }
 }

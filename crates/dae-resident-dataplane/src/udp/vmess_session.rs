@@ -30,6 +30,7 @@ pub(super) struct VmessAeadUdpOverTcpSession {
     request: Option<vmess::VMessAeadTcpRequest>,
     response: Option<vmess::VMessAeadTcpResponseReader>,
     response_plaintext: Vec<u8>,
+    response_plaintext_cursor: usize,
     fixed_target: UdpSessionFixedTarget,
 }
 
@@ -93,6 +94,7 @@ impl VmessAeadUdpOverTcpSession {
             request: None,
             response: None,
             response_plaintext: Vec::new(),
+            response_plaintext_cursor: 0,
             fixed_target: UdpSessionFixedTarget::default(),
         }
     }
@@ -135,6 +137,7 @@ impl VmessAeadUdpOverTcpSession {
         } else {
             self.response = None;
             self.response_plaintext.clear();
+            self.response_plaintext_cursor = 0;
         }
         self.upload_buffer = start.upload.new_owned_chunk_buffer(0);
         self.upload_payload_offset = self.upload_buffer.len();
@@ -199,6 +202,10 @@ impl VmessAeadUdpOverTcpSession {
         let Some(read) = read_vmess_underlay_plaintext(underlay, &mut buf, mode).await? else {
             return Ok(None);
         };
+        compact_vmess_response_buffer(
+            &mut self.response_plaintext,
+            &mut self.response_plaintext_cursor,
+        );
         self.response_plaintext.extend_from_slice(&buf[..read]);
         self.try_pop_response_payload()
             .map(|payload| payload.map(|payload| self.response_result(payload)))
@@ -219,9 +226,18 @@ impl VmessAeadUdpOverTcpSession {
         let response = self.response.as_mut().ok_or_else(|| {
             "VMess AEAD UDP-over-TCP response reader is not initialized".to_owned()
         })?;
-        response
-            .try_read_chunk_from_buffer(&mut self.response_plaintext)
-            .map_err(|err| format!("read VMess wrapped UDP session packet: {err}"))
+        let payload = response
+            .try_read_chunk_in_place_from_buffer(
+                &mut self.response_plaintext,
+                &mut self.response_plaintext_cursor,
+            )
+            .map(|payload| payload.map(<[u8]>::to_vec))
+            .map_err(|err| format!("read VMess wrapped UDP session packet: {err}"))?;
+        compact_vmess_response_buffer(
+            &mut self.response_plaintext,
+            &mut self.response_plaintext_cursor,
+        );
+        Ok(payload)
     }
 
     fn response_result(&self, payload: Vec<u8>) -> UdpExchangeResult {
@@ -419,6 +435,7 @@ impl VmessAeadUdpOverTcpSession {
         self.request = None;
         self.response = None;
         self.response_plaintext.clear();
+        self.response_plaintext_cursor = 0;
         if let Some(mut underlay) = self.underlay.take() {
             underlay.shutdown().await;
         }
@@ -819,6 +836,7 @@ async fn run_vmess_grpc_response_reader(
     let grpc_mode = response.grpc_mode();
     let mut hunk_buffer = GrpcHunkReadBuffer::with_mode(grpc_mode);
     let mut encrypted = Vec::new();
+    let mut encrypted_cursor = 0_usize;
     let mut decoder = None;
     let result: Result<(), String> = async {
         loop {
@@ -827,8 +845,9 @@ async fn run_vmess_grpc_response_reader(
                 .await?
                 .ok_or_else(|| "VMess gRPC response stream closed".to_owned())?;
             hunk_buffer.extend_from_slice(&bytes);
-            while let Some(payload) = hunk_buffer.pop_payload()? {
-                encrypted.extend_from_slice(&payload);
+            while let Some(payload) = hunk_buffer.next_payload()? {
+                compact_vmess_response_buffer(&mut encrypted, &mut encrypted_cursor);
+                encrypted.extend_from_slice(payload);
                 if decoder.is_none() {
                     decoder = vmess::aead_tcp_response_reader_from_buffer(&mut encrypted, &request)
                         .map_err(|err| format!("read VMess gRPC UDP response header: {err}"))?;
@@ -837,19 +856,35 @@ async fn run_vmess_grpc_response_reader(
                     continue;
                 };
                 while let Some(payload) = reader
-                    .try_read_chunk_from_buffer(&mut encrypted)
+                    .try_read_chunk_in_place_from_buffer(&mut encrypted, &mut encrypted_cursor)
                     .map_err(|err| format!("read VMess gRPC UDP response packet: {err}"))?
                 {
-                    tx.send(Ok(payload))
+                    tx.send(Ok(payload.to_vec()))
                         .await
                         .map_err(|_| "VMess gRPC response consumer stopped".to_owned())?;
                 }
+                compact_vmess_response_buffer(&mut encrypted, &mut encrypted_cursor);
             }
         }
     }
     .await;
     if let Err(err) = result {
         let _ = tx.send(Err(err)).await;
+    }
+}
+
+fn compact_vmess_response_buffer(buffer: &mut Vec<u8>, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    if *cursor >= buffer.len() {
+        buffer.clear();
+        *cursor = 0;
+        return;
+    }
+    if *cursor >= 8192 && cursor.saturating_mul(2) >= buffer.len() {
+        buffer.drain(..*cursor);
+        *cursor = 0;
     }
 }
 

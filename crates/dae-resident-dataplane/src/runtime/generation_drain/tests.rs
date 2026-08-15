@@ -118,6 +118,17 @@ fn retired_generation_survives_the_old_cleanup_grace() {
 }
 
 #[test]
+fn idle_drain_only_polls_while_retirements_exist() {
+    let drain = test_drain(Duration::from_secs(60), 2);
+    assert!(!drain.has_pending_retirements());
+    let (generation, _) = TestGeneration::new(1);
+    drain.retire_shared_at(generation, Instant::now());
+    assert!(drain.has_pending_retirements());
+    drain.stop_all();
+    assert!(!drain.has_pending_retirements());
+}
+
+#[test]
 fn final_owner_release_reaps_generation_naturally() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();

@@ -168,9 +168,16 @@ where
                         state.closed = true;
                         return Poll::Ready(Ok(()));
                     }
-                    let frames = state.ws_decoder.push(read).map_err(std::io::Error::other)?;
-                    for frame in frames {
-                        state.mux_bytes.extend_from_slice(&frame);
+                    state
+                        .ws_decoder
+                        .extend(read)
+                        .map_err(std::io::Error::other)?;
+                    while let Some(frame) = state
+                        .ws_decoder
+                        .next_message()
+                        .map_err(std::io::Error::other)?
+                    {
+                        state.mux_bytes.extend_from_slice(frame);
                     }
                     state.control.queue_from(&mut state.ws_decoder);
                     if state.ws_decoder.is_closed() {

@@ -116,16 +116,22 @@ async fn awaited_response_blocks_until_the_socket_is_readable() {
     };
 
     assert!(
-        time::timeout(TEST_NO_DATAGRAM_TIMEOUT, relay.wait_response("test"))
-            .await
-            .is_err()
+        time::timeout(
+            TEST_NO_DATAGRAM_TIMEOUT,
+            relay.wait_response_with("test", |response| Ok(response.to_vec())),
+        )
+        .await
+        .is_err()
     );
 
     upstream.send_to(b"response", relay_addr).await.unwrap();
-    let response = time::timeout(TEST_RECEIVE_TIMEOUT, relay.wait_response("test"))
-        .await
-        .unwrap()
-        .unwrap();
+    let response = time::timeout(
+        TEST_RECEIVE_TIMEOUT,
+        relay.wait_response_with("test", |response| Ok(response.to_vec())),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(response, b"response");
 }
 
@@ -145,10 +151,13 @@ async fn response_buffer_does_not_truncate_legal_udp_datagrams() {
     for payload_len in [1_400, 4_096, 65_507] {
         let payload = vec![payload_len as u8; payload_len];
         upstream.send_to(&payload, relay_addr).await.unwrap();
-        let response = time::timeout(TEST_RECEIVE_TIMEOUT, relay.wait_response("test"))
-            .await
-            .unwrap()
-            .unwrap();
+        let response = time::timeout(
+            TEST_RECEIVE_TIMEOUT,
+            relay.wait_response_with("test", |response| Ok(response.to_vec())),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(response, payload);
     }
     assert_eq!(relay.response_buf.len(), UDP_DATAGRAM_RESPONSE_CAPACITY);
@@ -169,10 +178,13 @@ async fn zero_length_response_remains_a_valid_datagram() {
     };
 
     upstream.send_to(&[], relay_addr).await.unwrap();
-    let response = time::timeout(TEST_RECEIVE_TIMEOUT, relay.wait_response("test"))
-        .await
-        .unwrap()
-        .unwrap();
+    let response = time::timeout(
+        TEST_RECEIVE_TIMEOUT,
+        relay.wait_response_with("test", |response| Ok(response.to_vec())),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(response.is_empty());
     assert_eq!(relay.response_buf.len(), UDP_DATAGRAM_RESPONSE_CAPACITY);
     assert!(!relay.response_buffer_reclaimed);
@@ -215,7 +227,12 @@ async fn would_block_receive_clears_stale_tokio_readiness() {
     };
     assert_eq!(read, b"stale-readiness".len() as isize);
 
-    assert!(relay.poll_response("test").unwrap().is_none());
+    assert!(
+        relay
+            .poll_response_with("test", |response| Ok(response.to_vec()))
+            .unwrap()
+            .is_none()
+    );
     let socket = relay.socket.as_ref().unwrap();
     assert!(
         time::timeout(TEST_NO_DATAGRAM_TIMEOUT, socket.readable())
@@ -242,9 +259,12 @@ async fn reclaimed_response_buffer_stays_released_until_socket_is_readable() {
     assert_eq!(relay.response_buf.capacity(), 0);
     assert!(relay.response_buffer_reclaimed);
     assert!(
-        time::timeout(TEST_NO_DATAGRAM_TIMEOUT, relay.wait_response("test"))
-            .await
-            .is_err()
+        time::timeout(
+            TEST_NO_DATAGRAM_TIMEOUT,
+            relay.wait_response_with("test", |response| Ok(response.to_vec())),
+        )
+        .await
+        .is_err()
     );
     assert_eq!(relay.response_buf.capacity(), 0);
 
@@ -252,10 +272,13 @@ async fn reclaimed_response_buffer_stays_released_until_socket_is_readable() {
         .send_to(b"cold-response", relay_addr)
         .await
         .unwrap();
-    let response = time::timeout(TEST_RECEIVE_TIMEOUT, relay.wait_response("test"))
-        .await
-        .unwrap()
-        .unwrap();
+    let response = time::timeout(
+        TEST_RECEIVE_TIMEOUT,
+        relay.wait_response_with("test", |response| Ok(response.to_vec())),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(response, b"cold-response");
     assert_eq!(relay.response_buf.len(), UDP_DATAGRAM_RESPONSE_CAPACITY);
     assert!(!relay.response_buffer_reclaimed);

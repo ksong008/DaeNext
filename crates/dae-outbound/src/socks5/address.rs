@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use crate::error::OutboundError;
 
@@ -130,6 +130,24 @@ impl Socks5Address {
             }
         }
         Ok(())
+    }
+
+    pub fn encoded_len(&self) -> usize {
+        match self {
+            Self::Ipv4 { .. } => 1 + 4 + 2,
+            Self::Domain { hostname, .. } => 1 + 1 + hostname.len() + 2,
+            Self::Ipv6 { .. } => 1 + 16 + 2,
+        }
+    }
+
+    pub fn socket_addr(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Ipv4 { addr, port } => Some(SocketAddr::V4(SocketAddrV4::new(*addr, *port))),
+            Self::Ipv6 { addr, port } => {
+                Some(SocketAddr::V6(SocketAddrV6::new(*addr, *port, 0, 0)))
+            }
+            Self::Domain { .. } => None,
+        }
     }
 
     pub fn kind(&self) -> AddressKind {
