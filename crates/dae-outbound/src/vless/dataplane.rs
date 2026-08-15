@@ -19,6 +19,7 @@ pub const VLESS_VERSION: u8 = 0;
 
 mod grpc_http2;
 mod helpers;
+#[cfg(any(test, feature = "test-support"))]
 mod tls_transports;
 mod types;
 #[cfg(any(test, feature = "test-support"))]
@@ -27,6 +28,7 @@ mod xhttp_http2;
 
 pub use grpc_http2::*;
 use helpers::*;
+#[cfg(any(test, feature = "test-support"))]
 pub use tls_transports::*;
 pub use types::*;
 #[cfg(any(test, feature = "test-support"))]

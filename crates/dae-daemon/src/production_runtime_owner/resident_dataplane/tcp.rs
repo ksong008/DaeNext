@@ -44,15 +44,15 @@ use dae_outbound::{
     },
     juicity::write_juicity_tcp_request,
     shadowsocks::{
-        AeadStreamCodec, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
-        SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE, SS2022_TCP_RELAY_PAYLOAD_SIZE,
-        SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE, ShadowsocksMetadata, ShadowsocksRStreamDecoder,
-        ShadowsocksRStreamEncoder, Sip003SimpleObfsHttpOptions, Sip003SimpleObfsTlsOptions,
-        Ss2022TcpClientStreamEncoder, Ss2022TcpServerStreamDecoder, cipher_spec,
-        read_encrypted_chunk_in_place_from_async_stream, shadowsocksr_http_simple_origin_request,
-        simple_obfs_http_request_with_body, simple_obfs_tls_client_hello_with_body,
-        ss2022_tcp_client_stream_encoder, ss2022_tcp_server_stream_decoder_async,
-        ss2022_tcp_unix_timestamp_now,
+        AeadStreamCodec, AeadStreamFrameReader, SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE,
+        SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE, SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE,
+        SS2022_TCP_RELAY_PAYLOAD_SIZE, SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE, ShadowsocksMetadata,
+        ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder, Sip003SimpleObfsHttpOptions,
+        Sip003SimpleObfsTlsOptions, Ss2022TcpClientStreamEncoder, Ss2022TcpServerStreamDecoder,
+        cipher_spec, read_encrypted_chunk_in_place_from_async_stream,
+        shadowsocksr_http_simple_origin_request, simple_obfs_http_request_with_body,
+        simple_obfs_tls_client_hello_with_body, ss2022_tcp_client_stream_encoder,
+        ss2022_tcp_server_stream_decoder_async, ss2022_tcp_unix_timestamp_now,
     },
     shared_transport::mux::MuxFrameOptions,
     shared_transport::{
@@ -78,7 +78,6 @@ use dae_outbound::{
 };
 use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::{SniffingError, sniff_tcp};
-use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
 
 #[cfg(test)]
@@ -111,7 +110,6 @@ use super::plan::{
     ResidentXhttpPaddingPlacement, ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement,
     ResidentXhttpXmuxPlan, SharedResidentProxyGroupMap,
 };
-use super::probe::resident_tcp_probe_tls_config;
 #[cfg(test)]
 use super::probe::{resident_tcp_probe_http_request, resident_tcp_probe_status_ok};
 #[cfg(test)]

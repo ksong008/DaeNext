@@ -176,15 +176,18 @@ pub(crate) async fn relay_tcp_over_anytls_async(
     .await
 }
 
+#[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
 const ANYTLS_FRAME_READ_CHUNK_SIZE: usize = 32 * 1024;
 
 pub(crate) struct AnyTlsFrameReader {
+    #[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
     buffered: BytesMut,
 }
 
 impl Default for AnyTlsFrameReader {
     fn default() -> Self {
         Self {
+            #[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
             buffered: BytesMut::with_capacity(ANYTLS_FRAME_READ_CHUNK_SIZE),
         }
     }
@@ -212,6 +215,12 @@ impl AnyTlsFrameReader {
         client: &mut (impl AsyncRead + Unpin),
         data: &mut BytesMut,
     ) -> Result<(u8, u32), String> {
+        #[cfg(feature = "test-anytls-legacy-frame-reader")]
+        {
+            return read_anytls_frame_into_legacy(client, data).await;
+        }
+
+        #[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
         loop {
             if self.buffered.len() >= anytls_contract::HEADER_OVERHEAD_SIZE {
                 let len = u16::from_be_bytes([self.buffered[5], self.buffered[6]]) as usize;
@@ -250,8 +259,57 @@ impl AnyTlsFrameReader {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "test-anytls-legacy-frame-reader")))]
     pub(crate) fn buffered_len(&self) -> usize {
         self.buffered.len()
     }
+}
+
+#[cfg(feature = "test-anytls-legacy-frame-reader")]
+async fn read_anytls_frame_into_legacy(
+    client: &mut (impl AsyncRead + Unpin),
+    data: &mut BytesMut,
+) -> Result<(u8, u32), String> {
+    let mut header = [0_u8; anytls_contract::HEADER_OVERHEAD_SIZE];
+    read_anytls_exact_legacy(client, &mut header, "read AnyTLS frame header").await?;
+    let len = u16::from_be_bytes([header[5], header[6]]) as usize;
+    data.clear();
+    data.reserve(len);
+    let mut limited = client.take(len as u64);
+    while data.len() < len {
+        let read = time::timeout(RESIDENT_TCP_IDLE_TIMEOUT, limited.read_buf(data))
+            .await
+            .map_err(|_| "read AnyTLS frame data: timeout".to_owned())?
+            .map_err(|err| format!("read AnyTLS frame data: {err}"))?;
+        if read == 0 {
+            return Err("read AnyTLS frame data: early eof".to_owned());
+        }
+    }
+    Ok((
+        header[0],
+        u32::from_be_bytes([header[1], header[2], header[3], header[4]]),
+    ))
+}
+
+#[cfg(feature = "test-anytls-legacy-frame-reader")]
+async fn read_anytls_exact_legacy(
+    client: &mut (impl AsyncRead + Unpin),
+    buffer: &mut [u8],
+    label: &str,
+) -> Result<(), String> {
+    let mut offset = 0;
+    while offset < buffer.len() {
+        let read = time::timeout(
+            RESIDENT_TCP_IDLE_TIMEOUT,
+            client.read(&mut buffer[offset..]),
+        )
+        .await
+        .map_err(|_| format!("{label}: timeout"))?
+        .map_err(|err| format!("{label}: {err}"))?;
+        if read == 0 {
+            return Err(format!("{label}: early eof"));
+        }
+        offset += read;
+    }
+    Ok(())
 }

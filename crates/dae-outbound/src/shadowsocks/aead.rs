@@ -1,5 +1,8 @@
+use std::future::poll_fn;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::pin::Pin;
+use std::task::Poll;
 use std::time::Duration;
 
 use aes_gcm::aead::{Aead, AeadInPlace, KeyInit};
@@ -9,7 +12,7 @@ use chacha20poly1305::ChaCha20Poly1305;
 use hkdf::Hkdf;
 use md5::{Digest, Md5};
 use sha1::Sha1;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
 use crate::error::OutboundError;
 use crate::socks5::Socks5Address;
@@ -23,6 +26,13 @@ pub const NONCE_LEN: usize = 12;
 pub const MAX_CHUNK_LEN: usize = 0x3fff;
 pub const SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE: usize = 2 + TAG_LEN + MAX_CHUNK_LEN + TAG_LEN;
 pub const SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE: usize = MAX_CHUNK_LEN + TAG_LEN;
+const SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES: usize = 4;
+const SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET: usize =
+    SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * (2 + TAG_LEN * 2);
+pub const SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE: usize =
+    SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE;
+pub const SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE: usize =
+    SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AeadCipherSpec {
@@ -280,6 +290,203 @@ where
     Ok(plain_len)
 }
 
+pub struct AeadStreamFrameReader {
+    wire: Box<[u8]>,
+    start: usize,
+    end: usize,
+    pending_payload_len: Option<usize>,
+    plaintext_start: usize,
+    plaintext_len: usize,
+    plaintext_frames: usize,
+}
+
+impl Default for AeadStreamFrameReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AeadStreamFrameReader {
+    pub fn new() -> Self {
+        Self {
+            wire: vec![0_u8; SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE].into_boxed_slice(),
+            start: 0,
+            end: 0,
+            pending_payload_len: None,
+            plaintext_start: 0,
+            plaintext_len: 0,
+            plaintext_frames: 0,
+        }
+    }
+
+    pub async fn read_batch<S>(
+        &mut self,
+        stream: &mut S,
+        decoder: &mut AeadStreamCodec,
+    ) -> Result<usize, OutboundError>
+    where
+        S: AsyncRead + Unpin,
+    {
+        if self.plaintext_frames != 0 {
+            return Err(OutboundError::BadShadowsocks(
+                "previous Shadowsocks AEAD plaintext was not consumed".to_owned(),
+            ));
+        }
+        self.plaintext_start = self.start;
+        self.plaintext_len = 0;
+        let mut attempted_ready_fill = false;
+        loop {
+            if self.pending_payload_len.is_none() && self.available() < 2 + TAG_LEN {
+                if self.plaintext_frames != 0 {
+                    if !attempted_ready_fill {
+                        attempted_ready_fill = true;
+                        if self.try_fill_ready(stream).await? {
+                            continue;
+                        }
+                    }
+                    return Ok(self.plaintext_len);
+                }
+                self.fill(stream).await?;
+                continue;
+            }
+
+            if self.pending_payload_len.is_none() {
+                let length_end = self.start + 2 + TAG_LEN;
+                let length_plain_len =
+                    decoder.decrypt_next_in_place(&mut self.wire[self.start..length_end])?;
+                if length_plain_len != 2 {
+                    return Err(OutboundError::BadShadowsocks(
+                        "bad decrypted chunk length".to_owned(),
+                    ));
+                }
+                let payload_len =
+                    u16::from_be_bytes([self.wire[self.start], self.wire[self.start + 1]]) as usize;
+                self.start += 2 + TAG_LEN;
+                if payload_len > MAX_CHUNK_LEN {
+                    return Err(OutboundError::BadShadowsocks(format!(
+                        "chunk too large: {payload_len}"
+                    )));
+                }
+                self.pending_payload_len = Some(payload_len);
+            }
+
+            if let Some(payload_len) = self.pending_payload_len {
+                let payload_wire_len = payload_len + TAG_LEN;
+                if self.available() < payload_wire_len {
+                    if self.plaintext_frames != 0 {
+                        if !attempted_ready_fill {
+                            attempted_ready_fill = true;
+                            if self.try_fill_ready(stream).await? {
+                                continue;
+                            }
+                        }
+                        return Ok(self.plaintext_len);
+                    }
+                    self.fill(stream).await?;
+                    continue;
+                }
+
+                let payload_start = self.start;
+                let payload_end = payload_start + payload_wire_len;
+                let plain_len =
+                    decoder.decrypt_next_in_place(&mut self.wire[payload_start..payload_end])?;
+                if plain_len != payload_len {
+                    return Err(OutboundError::BadShadowsocks(
+                        "bad decrypted chunk payload length".to_owned(),
+                    ));
+                }
+                let plaintext_end = self.plaintext_start + self.plaintext_len;
+                self.wire
+                    .copy_within(payload_start..payload_start + plain_len, plaintext_end);
+                self.plaintext_len += plain_len;
+                self.plaintext_frames += 1;
+                self.start += payload_wire_len;
+                self.pending_payload_len = None;
+                if self.plaintext_frames == SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES {
+                    return Ok(self.plaintext_len);
+                }
+            }
+        }
+    }
+
+    pub fn plaintext(&self) -> &[u8] {
+        assert_ne!(
+            self.plaintext_frames, 0,
+            "Shadowsocks AEAD plaintext is not ready"
+        );
+        &self.wire[self.plaintext_start..self.plaintext_start + self.plaintext_len]
+    }
+
+    pub fn consume_plaintext(&mut self) {
+        assert_ne!(
+            self.plaintext_frames, 0,
+            "Shadowsocks AEAD plaintext is not ready"
+        );
+        self.plaintext_len = 0;
+        self.plaintext_frames = 0;
+        if self.start == self.end {
+            self.start = 0;
+            self.end = 0;
+        }
+    }
+
+    fn available(&self) -> usize {
+        self.end - self.start
+    }
+
+    async fn fill<S>(&mut self, stream: &mut S) -> Result<(), OutboundError>
+    where
+        S: AsyncRead + Unpin,
+    {
+        if self.end == self.wire.len() && self.start != 0 {
+            self.wire.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.start = 0;
+            self.plaintext_start = 0;
+        }
+        if self.end == self.wire.len() {
+            return Err(OutboundError::BadShadowsocks(
+                "Shadowsocks AEAD wire read buffer exhausted".to_owned(),
+            ));
+        }
+        let read = stream
+            .read(&mut self.wire[self.end..])
+            .await
+            .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+        if read == 0 {
+            return Err(OutboundError::BadShadowsocks(
+                "failed to fill whole buffer while reading Shadowsocks AEAD frame".to_owned(),
+            ));
+        }
+        self.end += read;
+        Ok(())
+    }
+
+    async fn try_fill_ready<S>(&mut self, stream: &mut S) -> Result<bool, OutboundError>
+    where
+        S: AsyncRead + Unpin,
+    {
+        if self.end == self.wire.len() {
+            return Ok(false);
+        }
+        let mut buffer = ReadBuf::new(&mut self.wire[self.end..]);
+        let result =
+            poll_fn(|cx| Poll::Ready(Pin::new(&mut *stream).poll_read(cx, &mut buffer))).await;
+        match result {
+            Poll::Pending => return Ok(false),
+            Poll::Ready(result) => {
+                result.map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
+            }
+        }
+        let read = buffer.filled().len();
+        if read == 0 {
+            return Ok(false);
+        }
+        self.end += read;
+        Ok(true)
+    }
+}
+
 pub fn encode_server_payload(
     cipher: &str,
     password: &str,
@@ -297,7 +504,7 @@ pub fn encode_server_payload(
 
 pub struct AeadStreamCodec {
     cipher: AeadCipher,
-    nonce_counter: u64,
+    nonce: [u8; NONCE_LEN],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -373,7 +580,7 @@ impl AeadStreamCodec {
         let subkey = hkdf_sha1_subkey(&master_key, salt, spec.key_len)?;
         Ok(Self {
             cipher: AeadCipher::new(spec.cipher, &subkey)?,
-            nonce_counter: 0,
+            nonce: [0_u8; NONCE_LEN],
         })
     }
 
@@ -400,6 +607,58 @@ impl AeadStreamCodec {
             .saturating_sub(payload_offset + TAG_LEN)
             .min(MAX_CHUNK_LEN);
         &mut buffer[payload_offset..payload_offset + payload_capacity]
+    }
+
+    pub fn batch_payload_buffer<'a>(&self, buffer: &'a mut [u8]) -> &'a mut [u8] {
+        let payload_capacity = buffer
+            .len()
+            .saturating_sub(SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET)
+            .min(SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * MAX_CHUNK_LEN);
+        &mut buffer[SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET
+            ..SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET + payload_capacity]
+    }
+
+    pub fn encrypt_batch_in_place(
+        &mut self,
+        buffer: &mut [u8],
+        payload_len: usize,
+    ) -> Result<usize, OutboundError> {
+        let max_payload_len = SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * MAX_CHUNK_LEN;
+        if payload_len > max_payload_len {
+            return Err(OutboundError::BadShadowsocks(format!(
+                "batch payload too large: {payload_len}"
+            )));
+        }
+        if SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET + payload_len > buffer.len() {
+            return Err(OutboundError::BadShadowsocks(format!(
+                "batch payload length {payload_len} exceeds in-place buffer capacity"
+            )));
+        }
+
+        let mut plain_offset = 0;
+        let mut wire_offset = 0;
+        while plain_offset < payload_len {
+            let chunk_len = (payload_len - plain_offset).min(MAX_CHUNK_LEN);
+            let source_start = SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET + plain_offset;
+            let payload_start = wire_offset + 2 + TAG_LEN;
+            buffer.copy_within(source_start..source_start + chunk_len, payload_start);
+            plain_offset += chunk_len;
+            wire_offset += 2 + TAG_LEN + chunk_len + TAG_LEN;
+        }
+
+        plain_offset = 0;
+        wire_offset = 0;
+        while plain_offset < payload_len {
+            let chunk_len = (payload_len - plain_offset).min(MAX_CHUNK_LEN);
+            let chunk_wire_len = 2 + TAG_LEN + chunk_len + TAG_LEN;
+            self.encrypt_chunk_in_place(
+                &mut buffer[wire_offset..wire_offset + chunk_wire_len],
+                chunk_len,
+            )?;
+            plain_offset += chunk_len;
+            wire_offset += chunk_wire_len;
+        }
+        Ok(wire_offset)
     }
 
     pub fn encrypt_chunk_in_place(
@@ -452,30 +711,30 @@ impl AeadStreamCodec {
     }
 
     fn encrypt_next(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
-        let nonce = nonce_from_counter(self.nonce_counter);
-        self.nonce_counter += 1;
-        self.cipher.encrypt(&nonce, plaintext)
+        let encrypted = self.cipher.encrypt(&self.nonce, plaintext)?;
+        increment_nonce_le_12(&mut self.nonce);
+        Ok(encrypted)
     }
 
     fn decrypt_next(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, OutboundError> {
-        let nonce = nonce_from_counter(self.nonce_counter);
-        self.nonce_counter += 1;
-        self.cipher.decrypt(&nonce, ciphertext)
+        let plaintext = self.cipher.decrypt(&self.nonce, ciphertext)?;
+        increment_nonce_le_12(&mut self.nonce);
+        Ok(plaintext)
     }
 
     fn encrypt_next_in_place(
         &mut self,
         plaintext: &mut [u8],
     ) -> Result<[u8; TAG_LEN], OutboundError> {
-        let nonce = nonce_from_counter(self.nonce_counter);
-        self.nonce_counter += 1;
-        self.cipher.encrypt_in_place(&nonce, plaintext)
+        let tag = self.cipher.encrypt_in_place(&self.nonce, plaintext)?;
+        increment_nonce_le_12(&mut self.nonce);
+        Ok(tag)
     }
 
     fn decrypt_next_in_place(&mut self, ciphertext: &mut [u8]) -> Result<usize, OutboundError> {
-        let nonce = nonce_from_counter(self.nonce_counter);
-        self.nonce_counter += 1;
-        self.cipher.decrypt_in_place(&nonce, ciphertext)
+        let plain_len = self.cipher.decrypt_in_place(&self.nonce, ciphertext)?;
+        increment_nonce_le_12(&mut self.nonce);
+        Ok(plain_len)
     }
 }
 
@@ -542,6 +801,17 @@ fn nonce_from_counter(counter: u64) -> [u8; NONCE_LEN] {
     let mut nonce = [0_u8; NONCE_LEN];
     nonce[..8].copy_from_slice(&counter.to_le_bytes());
     nonce
+}
+
+#[inline(always)]
+fn increment_nonce_le_12(nonce: &mut [u8; NONCE_LEN]) {
+    for byte in nonce {
+        let (next, overflow) = byte.overflowing_add(1);
+        *byte = next;
+        if !overflow {
+            return;
+        }
+    }
 }
 
 enum AeadCipher {
@@ -671,6 +941,102 @@ impl AeadCipher {
 #[cfg(test)]
 mod in_place_tests {
     use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use tokio::io::ReadBuf;
+
+    struct CountingReader {
+        bytes: Vec<u8>,
+        offset: usize,
+        max_read: usize,
+        reads: usize,
+    }
+
+    impl CountingReader {
+        fn new(bytes: Vec<u8>, max_read: usize) -> Self {
+            Self {
+                bytes,
+                offset: 0,
+                max_read,
+                reads: 0,
+            }
+        }
+    }
+
+    struct PendingAfterFirstRead {
+        bytes: Vec<u8>,
+        offset: usize,
+        first_read_len: usize,
+        returned_pending: bool,
+        polls: usize,
+    }
+
+    impl AsyncRead for PendingAfterFirstRead {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buffer: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            self.polls += 1;
+            if self.offset == self.first_read_len && !self.returned_pending {
+                self.returned_pending = true;
+                return Poll::Pending;
+            }
+            let max_read = if self.offset == 0 {
+                self.first_read_len
+            } else {
+                usize::MAX
+            };
+            let read = self
+                .bytes
+                .len()
+                .saturating_sub(self.offset)
+                .min(max_read)
+                .min(buffer.remaining());
+            if read != 0 {
+                let start = self.offset;
+                let end = start + read;
+                buffer.put_slice(&self.bytes[start..end]);
+                self.offset = end;
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncRead for CountingReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buffer: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            self.reads += 1;
+            let read = self
+                .bytes
+                .len()
+                .saturating_sub(self.offset)
+                .min(self.max_read)
+                .min(buffer.remaining());
+            if read != 0 {
+                let start = self.offset;
+                let end = start + read;
+                buffer.put_slice(&self.bytes[start..end]);
+                self.offset = end;
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn encrypted_chunks(payloads: &[Vec<u8>]) -> (Vec<u8>, AeadStreamCodec) {
+        let salt = [0x35_u8; 16];
+        let mut encoder = AeadStreamCodec::new("aes-128-gcm", "password", &salt).unwrap();
+        let decoder = AeadStreamCodec::new("aes-128-gcm", "password", &salt).unwrap();
+        let mut wire = Vec::new();
+        for payload in payloads {
+            wire.extend_from_slice(&encoder.encrypt_chunk(payload).unwrap());
+        }
+        (wire, decoder)
+    }
 
     #[test]
     fn in_place_stream_chunks_match_allocating_wire_for_every_cipher() {
@@ -691,5 +1057,147 @@ mod in_place_tests {
                 assert_eq!(&buffer[..wire_len], expected);
             }
         }
+    }
+
+    #[test]
+    fn in_place_stream_batches_match_sequential_wire_for_every_cipher() {
+        for cipher in ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"] {
+            let spec = cipher_spec(cipher).unwrap();
+            let salt = vec![0x46; spec.salt_len];
+            for payload_len in [
+                1,
+                MAX_CHUNK_LEN,
+                MAX_CHUNK_LEN + 1,
+                MAX_CHUNK_LEN * 2,
+                MAX_CHUNK_LEN * 3 + 417,
+                MAX_CHUNK_LEN * SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES,
+            ] {
+                let payload = vec![payload_len as u8; payload_len];
+                let mut sequential = AeadStreamCodec::new(cipher, "password", &salt).unwrap();
+                let mut expected = Vec::new();
+                for chunk in payload.chunks(MAX_CHUNK_LEN) {
+                    expected.extend_from_slice(&sequential.encrypt_chunk(chunk).unwrap());
+                }
+
+                let mut batched = AeadStreamCodec::new(cipher, "password", &salt).unwrap();
+                let mut buffer = [0_u8; SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE];
+                batched.batch_payload_buffer(&mut buffer)[..payload_len].copy_from_slice(&payload);
+                let wire_len = batched
+                    .encrypt_batch_in_place(&mut buffer, payload_len)
+                    .unwrap();
+                assert_eq!(
+                    &buffer[..wire_len],
+                    expected,
+                    "{cipher} payload_len={payload_len}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn frame_reader_retains_multiple_records_from_one_read() {
+        let payloads = vec![vec![0x11; 1024], vec![0x22; 4097], vec![0x33; 8192]];
+        let expected = payloads.concat();
+        let (wire, mut decoder) = encrypted_chunks(&payloads);
+        let mut source = CountingReader::new(wire, usize::MAX);
+        let mut reader = AeadStreamFrameReader::new();
+
+        let read = reader.read_batch(&mut source, &mut decoder).await.unwrap();
+        assert_eq!(read, expected.len());
+        assert_eq!(reader.plaintext(), expected);
+        reader.consume_plaintext();
+        assert_eq!(source.reads, 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn frame_reader_coalesces_one_additional_ready_read() {
+        let payloads = vec![vec![0x21; 1024], vec![0x22; 512]];
+        let expected = payloads.concat();
+        let (wire, mut decoder) = encrypted_chunks(&payloads);
+        let first_wire_len = 2 + TAG_LEN + payloads[0].len() + TAG_LEN;
+        let mut source = CountingReader::new(wire, first_wire_len);
+        let mut reader = AeadStreamFrameReader::new();
+
+        let read = reader.read_batch(&mut source, &mut decoder).await.unwrap();
+        assert_eq!(read, expected.len());
+        assert_eq!(reader.plaintext(), expected);
+        reader.consume_plaintext();
+        assert_eq!(source.reads, 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn frame_reader_does_not_wait_after_completed_frame() {
+        let payloads = vec![vec![0x31; 1024], vec![0x32; 2048]];
+        let (wire, mut decoder) = encrypted_chunks(&payloads);
+        let first_wire_len = 2 + TAG_LEN + payloads[0].len() + TAG_LEN;
+        let mut source = PendingAfterFirstRead {
+            bytes: wire,
+            offset: 0,
+            first_read_len: first_wire_len,
+            returned_pending: false,
+            polls: 0,
+        };
+        let mut reader = AeadStreamFrameReader::new();
+
+        let first_read = reader.read_batch(&mut source, &mut decoder).await.unwrap();
+        assert_eq!(reader.plaintext(), payloads[0]);
+        assert_eq!(first_read, payloads[0].len());
+        assert_eq!(source.polls, 2);
+        reader.consume_plaintext();
+
+        let second_read = reader.read_batch(&mut source, &mut decoder).await.unwrap();
+        assert_eq!(reader.plaintext(), payloads[1]);
+        assert_eq!(second_read, payloads[1].len());
+        reader.consume_plaintext();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn frame_reader_handles_fragmented_records() {
+        let payloads = vec![vec![0x41; 31], vec![0x42; 1024]];
+        let expected = payloads.concat();
+
+        for max_read in 1..=64 {
+            let (wire, mut decoder) = encrypted_chunks(&payloads);
+            let mut source = CountingReader::new(wire, max_read);
+            let mut reader = AeadStreamFrameReader::new();
+            let mut observed = Vec::new();
+            while observed.len() < expected.len() {
+                let read = reader.read_batch(&mut source, &mut decoder).await.unwrap();
+                observed.extend_from_slice(&reader.plaintext()[..read]);
+                reader.consume_plaintext();
+            }
+            assert_eq!(observed, expected, "max_read={max_read}");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn frame_reader_reports_truncated_payload_as_eof() {
+        let payloads = vec![vec![0x51; 1024]];
+        let (mut wire, mut decoder) = encrypted_chunks(&payloads);
+        wire.truncate(wire.len() - 3);
+        let mut source = CountingReader::new(wire, usize::MAX);
+        let mut reader = AeadStreamFrameReader::new();
+
+        let error = reader
+            .read_batch(&mut source, &mut decoder)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("failed to fill whole buffer"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn frame_reader_batches_four_maximum_records() {
+        let payloads = vec![vec![0x61; MAX_CHUNK_LEN]; SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES];
+        let expected = payloads.concat();
+        let (wire, mut decoder) = encrypted_chunks(&payloads);
+        assert_eq!(wire.len(), SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE);
+        let mut source = CountingReader::new(wire, usize::MAX);
+        let mut reader = AeadStreamFrameReader::new();
+
+        let read = reader.read_batch(&mut source, &mut decoder).await.unwrap();
+        assert_eq!(read, expected.len());
+        assert_eq!(reader.plaintext(), expected);
+        reader.consume_plaintext();
+        assert_eq!(source.reads, 1);
     }
 }

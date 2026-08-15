@@ -69,6 +69,7 @@ mod grpc_http2;
 mod read_request;
 mod response_http;
 mod response_read;
+#[cfg(any(test, feature = "test-support"))]
 mod tls_transports;
 mod types;
 #[cfg(any(test, feature = "test-support"))]
@@ -80,6 +81,7 @@ pub use exchange::*;
 pub use grpc_http2::*;
 pub use read_request::*;
 pub use response_http::*;
+#[cfg(any(test, feature = "test-support"))]
 pub use tls_transports::*;
 pub use types::*;
 #[cfg(any(test, feature = "test-support"))]

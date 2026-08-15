@@ -40,7 +40,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
     }
     drop((first_plain, initial, initial_payload, client_salt));
 
-    let inbound_buf = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
+    let inbound_buf = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE]);
     let (progress, activity) = resident_duplex_progress();
     if stats.client_to_direct != 0 {
         progress.record_upload(stats.client_to_direct);
@@ -55,7 +55,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
         let mut inbound_buf = inbound_buf;
         loop {
             let read = match inbound_read
-                .read(encoder.chunk_payload_buffer(inbound_buf.as_mut()))
+                .read(encoder.batch_payload_buffer(inbound_buf.as_mut()))
                 .await
             {
                 Ok(0) => {
@@ -72,8 +72,8 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
                 }
             };
             let wire_len = encoder
-                .encrypt_chunk_in_place(inbound_buf.as_mut(), read)
-                .map_err(|err| format!("encrypt Shadowsocks upload chunk: {err}"))?;
+                .encrypt_batch_in_place(inbound_buf.as_mut(), read)
+                .map_err(|err| format!("encrypt Shadowsocks upload batch: {err}"))?;
             if let Err(err) = proxy_write.write_all(&inbound_buf[..wire_len]).await {
                 if upload_stop.load(Ordering::Acquire) || is_graceful_stream_close_error(&err) {
                     return Ok(());
@@ -95,19 +95,13 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
             .map_err(|err| format!("read Shadowsocks server salt: {err}"))?;
         let mut decoder = AeadStreamCodec::new(cipher, password, &server_salt)
             .map_err(|err| format!("create Shadowsocks response decoder: {err}"))?;
-        let mut buffer = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE]);
+        let mut frame_reader = AeadStreamFrameReader::new();
         loop {
-            match read_encrypted_chunk_in_place_from_async_stream(
-                &mut proxy_read,
-                &mut decoder,
-                buffer.as_mut(),
-            )
-            .await
-            {
+            match frame_reader.read_batch(&mut proxy_read, &mut decoder).await {
                 Ok(plain_len) => {
                     if plain_len != 0 {
                         inbound_write
-                            .write_all(&buffer[..plain_len])
+                            .write_all(frame_reader.plaintext())
                             .await
                             .map_err(|err| {
                                 format!("write Shadowsocks response to inbound: {err}")
@@ -115,6 +109,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_aead_async(
                         metrics.add_download(plain_len);
                     }
                     download_progress.record_download(plain_len);
+                    frame_reader.consume_plaintext();
                 }
                 Err(err) => {
                     let message = err.to_string();
