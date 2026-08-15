@@ -11,7 +11,9 @@ use boring::ssl::{SslContext, SslContextBuilder};
 use boring::x509::X509;
 use boring::x509::store::{X509Store, X509StoreBuilder};
 use foreign_types::ForeignType;
+#[cfg(test)]
 use rustls::RootCertStore;
+#[cfg(test)]
 use rustls::pki_types::CertificateDer;
 use sha2::{Digest, Sha256};
 
@@ -36,6 +38,7 @@ pub struct SystemCaIdentity {
 
 pub struct SystemCaSnapshot {
     identity: SystemCaIdentity,
+    #[cfg(test)]
     rustls_roots: RootCertStore,
     boring_store: X509Store,
 }
@@ -45,7 +48,8 @@ impl SystemCaSnapshot {
         &self.identity
     }
 
-    pub fn rustls_roots(&self) -> RootCertStore {
+    #[cfg(test)]
+    pub(crate) fn rustls_roots(&self) -> RootCertStore {
         self.rustls_roots.clone()
     }
 
@@ -80,7 +84,7 @@ impl SystemCaSnapshot {
         Self::load_from_path(path)
     }
 
-    fn load_from_path(path: PathBuf) -> Result<Self, SystemCaError> {
+    pub(crate) fn load_from_path(path: PathBuf) -> Result<Self, SystemCaError> {
         let bytes = fs::read(&path).map_err(|error| SystemCaError::Read {
             path: path.clone(),
             message: error.to_string(),
@@ -97,6 +101,7 @@ impl SystemCaSnapshot {
             return Err(SystemCaError::NoUsableCertificates { path });
         }
 
+        #[cfg(test)]
         let mut rustls_roots = RootCertStore::empty();
         let mut boring_builder =
             X509StoreBuilder::new().map_err(|error| SystemCaError::BoringStore {
@@ -112,10 +117,13 @@ impl SystemCaSnapshot {
             if !unique_der.insert(der.clone()) {
                 continue;
             }
-            let rustls_certificate = CertificateDer::from(der);
-            if rustls_roots.add(rustls_certificate).is_err() {
-                continue;
-            }
+            #[cfg(test)]
+            rustls_roots
+                .add(CertificateDer::from(der))
+                .map_err(|error| SystemCaError::Parse {
+                    path: path.clone(),
+                    message: error.to_string(),
+                })?;
             boring_builder
                 .add_cert(&certificate)
                 .map_err(|error| SystemCaError::BoringStore {
@@ -123,7 +131,7 @@ impl SystemCaSnapshot {
                 })?;
         }
 
-        let certificate_count = rustls_roots.len();
+        let certificate_count = unique_der.len();
         if certificate_count == 0 {
             return Err(SystemCaError::NoUsableCertificates { path });
         }
@@ -135,6 +143,7 @@ impl SystemCaSnapshot {
                 sha256,
                 certificate_count,
             },
+            #[cfg(test)]
             rustls_roots,
             boring_store: boring_builder.build(),
         })

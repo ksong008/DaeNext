@@ -6,12 +6,6 @@ pub(crate) struct AsyncVlessTlsClient {
 pub(crate) type AsyncResidentTlsClient = AsyncVlessTlsClient;
 
 pub(crate) enum AsyncVlessTlsEngine {
-    Rustls {
-        tls: tokio_rustls::client::TlsStream<AsyncResidentTcpStream>,
-    },
-    RealityRustls {
-        tls: tokio_rustls::client::TlsStream<AsyncResidentTcpStream>,
-    },
     RealityBoring {
         tls: tokio_boring::SslStream<AsyncResidentTcpStream>,
     },
@@ -22,8 +16,6 @@ pub(crate) enum AsyncVlessTlsEngine {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentTlsProvider {
-    StandardRustls,
-    RealityRustls,
     RealityFingerprintBoring,
     FingerprintAwareBoring,
 }
@@ -31,8 +23,6 @@ pub(crate) enum ResidentTlsProvider {
 impl ResidentTlsProvider {
     pub(crate) const fn evidence_label(self) -> &'static str {
         match self {
-            Self::StandardRustls => "rustls",
-            Self::RealityRustls => "rustls-reality",
             Self::RealityFingerprintBoring => "reality-boringssl",
             Self::FingerprintAwareBoring => "boringssl",
         }
@@ -60,22 +50,10 @@ impl ResidentTlsProvider {
         match proxy.execution_plan().security {
             ResidentSecurityUnderlayPlan::StandardTls
             | ResidentSecurityUnderlayPlan::InsecureTls
-            | ResidentSecurityUnderlayPlan::FragmentedTls => {
-                if cfg!(feature = "test-boringssl-tcp-tls") {
-                    Ok(Self::FingerprintAwareBoring)
-                } else {
-                    Ok(Self::StandardRustls)
-                }
-            }
+            | ResidentSecurityUnderlayPlan::FragmentedTls => Ok(Self::FingerprintAwareBoring),
             ResidentSecurityUnderlayPlan::FingerprintAwareTls => Ok(Self::FingerprintAwareBoring),
             ResidentSecurityUnderlayPlan::RealityFingerprint => Ok(Self::RealityFingerprintBoring),
-            ResidentSecurityUnderlayPlan::RealityRustls => {
-                if cfg!(feature = "test-boringssl-tcp-tls") {
-                    Ok(Self::RealityFingerprintBoring)
-                } else {
-                    Ok(Self::RealityRustls)
-                }
-            }
+            ResidentSecurityUnderlayPlan::RealityRustls => Ok(Self::RealityFingerprintBoring),
             other => Err(format!(
                 "resident TLS factory cannot open security underlay {} for protocol {}",
                 other.graph_label(),
@@ -96,21 +74,9 @@ impl ResidentTlsProvider {
             return Ok(Self::FingerprintAwareBoring);
         }
         if endpoint.reality.is_some() {
-            if cfg!(feature = "test-boringssl-tcp-tls")
-                || endpoint.utls_fingerprint.is_some()
-                || endpoint
-                    .reality
-                    .as_ref()
-                    .is_some_and(|reality| reality.mldsa65_verify.is_some())
-            {
-                return Ok(Self::RealityFingerprintBoring);
-            }
-            return Ok(Self::RealityRustls);
+            return Ok(Self::RealityFingerprintBoring);
         }
-        if cfg!(feature = "test-boringssl-tcp-tls") || endpoint.utls_fingerprint.is_some() {
-            return Ok(Self::FingerprintAwareBoring);
-        }
-        Ok(Self::StandardRustls)
+        Ok(Self::FingerprintAwareBoring)
     }
 }
 
@@ -147,9 +113,6 @@ pub(crate) struct ResidentRealityConfigKey {
     pub(super) mldsa65_verify: Option<[u8; 32]>,
 }
 
-pub(super) static RUSTLS_CLIENT_CONFIG_CACHE: OnceLock<
-    Mutex<ResidentTlsConfigCache<ClientConfig>>,
-> = OnceLock::new();
 pub(super) static BORING_CONNECTOR_CACHE: OnceLock<
     Mutex<ResidentTlsConfigCache<ResidentBoringTlsContextEntry>>,
 > = OnceLock::new();
@@ -262,17 +225,13 @@ impl ResidentTlsConfigCache<ResidentBoringTlsContextEntry> {
 }
 
 pub(crate) fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearReport {
-    let rustls = RUSTLS_CLIENT_CONFIG_CACHE
-        .get()
-        .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear()))
-        .unwrap_or(0);
     let (boring, boring_sessions) = BORING_CONNECTOR_CACHE
         .get()
         .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear_boring()))
         .unwrap_or_default();
     let _ = dae_outbound::shared_transport::invalidate_system_ca_snapshot();
     ResidentTlsConfigCacheClearReport {
-        rustls,
+        rustls: 0,
         boring,
         boring_sessions: boring_sessions.entries,
         boring_session_attempts: boring_sessions.attempted,

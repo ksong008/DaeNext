@@ -3,6 +3,7 @@
 
 mod allocator;
 mod allocator_bootstrap;
+mod boring_tls;
 mod bpf_loader;
 mod config_validate;
 mod control_plane;

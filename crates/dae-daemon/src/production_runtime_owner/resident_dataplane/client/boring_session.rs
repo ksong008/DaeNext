@@ -68,6 +68,7 @@ impl ResidentBoringTlsContextEntry {
         mut builder: SslConnectorBuilder,
         context: &'static str,
     ) -> Result<Self, String> {
+        configure_boring_tls_profile(&mut builder);
         let session_key_index = resident_boring_tls_session_key_index()
             .map_err(|err| format!("allocate {context} BoringSSL session key index: {err}"))?;
         let sessions = Arc::new(Mutex::new(ResidentBoringTlsSessionCache::default()));

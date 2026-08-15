@@ -20,7 +20,7 @@ pub(crate) async fn open_async_reality_boring_resident_tls_client(
     });
     configure_reality_boring_ssl(&mut config, &policy.verification)?;
 
-    let tcp = async_resident_tcp_stream_for_proxy(proxy, tcp);
+    let tcp = async_boring_resident_tcp_stream_for_proxy(proxy, tcp);
     let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
     let tls = time::timeout(
         RESIDENT_CONNECT_TIMEOUT,

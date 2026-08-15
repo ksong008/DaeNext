@@ -1,9 +1,7 @@
 use std::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use rustls::client::EchConfig;
-use rustls::crypto::aws_lc_rs::hpke::ALL_SUPPORTED_SUITES;
-use rustls::pki_types::EchConfigListBytes;
+use boring::ssl::{Ssl, SslContextBuilder, SslMethod};
 use sha2::{Digest, Sha256};
 
 pub const ECH_CONFIG_LIST_MAX_BYTES: usize = u16::MAX as usize + 2;
@@ -44,11 +42,7 @@ impl EchConfigList {
                 maximum: ECH_CONFIG_LIST_MAX_BYTES,
             });
         }
-        EchConfig::new(
-            EchConfigListBytes::from(bytes.clone()),
-            ALL_SUPPORTED_SUITES,
-        )
-        .map_err(|err| EchConfigListError::InvalidConfigList(err.to_string()))?;
+        validate_boringssl_ech_config_list(&bytes)?;
         let sha256 = Sha256::digest(&bytes).into();
         let canonical_base64 = STANDARD.encode(&bytes);
         Ok(Self {
@@ -79,6 +73,16 @@ impl EchConfigList {
         }
         out
     }
+}
+
+fn validate_boringssl_ech_config_list(bytes: &[u8]) -> Result<(), EchConfigListError> {
+    let context = SslContextBuilder::new(SslMethod::tls())
+        .map_err(|err| EchConfigListError::InvalidConfigList(err.to_string()))?
+        .build();
+    let mut ssl =
+        Ssl::new(&context).map_err(|err| EchConfigListError::InvalidConfigList(err.to_string()))?;
+    ssl.set_ech_config_list(bytes)
+        .map_err(|err| EchConfigListError::InvalidConfigList(err.to_string()))
 }
 
 impl fmt::Debug for EchConfigList {

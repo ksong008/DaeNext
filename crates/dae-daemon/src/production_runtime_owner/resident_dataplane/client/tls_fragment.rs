@@ -2,10 +2,15 @@ use super::*;
 use dae_outbound::shared_transport::{TlsFragmentPlan, TlsFragmentPlanner};
 use std::future::Future;
 use std::time::Duration;
+use tokio::io::BufReader;
+
+const BORING_TLS_BIO_READ_BUFFER_BYTES: usize = 64 * 1024;
 
 pub(in crate::production_runtime_owner::resident_dataplane) enum AsyncResidentTcpStream {
     Plain(TokioTcpStream),
     Fragmenting(AsyncTlsFragmentingTcpStream),
+    BufferedPlain(BufReader<TokioTcpStream>),
+    BufferedFragmenting(BufReader<AsyncTlsFragmentingTcpStream>),
     VisionPlain(TlsRecordBoundedReader<TokioTcpStream>),
     VisionFragmenting(TlsRecordBoundedReader<AsyncTlsFragmentingTcpStream>),
 }
@@ -15,6 +20,22 @@ impl AsyncResidentTcpStream {
         match options {
             Some(options) => Self::Fragmenting(AsyncTlsFragmentingTcpStream::new(tcp, options)),
             None => Self::Plain(tcp),
+        }
+    }
+
+    pub(super) fn new_boring(tcp: TokioTcpStream, options: Option<TlsFragmentOptions>) -> Self {
+        if cfg!(feature = "test-boringssl-unbuffered-bio") {
+            return Self::new(tcp, options);
+        }
+        match options {
+            Some(options) => Self::BufferedFragmenting(BufReader::with_capacity(
+                BORING_TLS_BIO_READ_BUFFER_BYTES,
+                AsyncTlsFragmentingTcpStream::new(tcp, options),
+            )),
+            None => Self::BufferedPlain(BufReader::with_capacity(
+                BORING_TLS_BIO_READ_BUFFER_BYTES,
+                tcp,
+            )),
         }
     }
 
@@ -31,6 +52,8 @@ impl AsyncResidentTcpStream {
         match self {
             Self::Plain(tcp) => tcp,
             Self::Fragmenting(stream) => stream.raw_mut(),
+            Self::BufferedPlain(stream) => stream.get_mut(),
+            Self::BufferedFragmenting(stream) => stream.get_mut().raw_mut(),
             Self::VisionPlain(stream) => stream.inner_mut(),
             Self::VisionFragmenting(stream) => stream.inner_mut().raw_mut(),
         }
@@ -40,7 +63,10 @@ impl AsyncResidentTcpStream {
         match self {
             Self::VisionPlain(stream) => stream.enable_record_handoff(),
             Self::VisionFragmenting(stream) => stream.enable_record_handoff(),
-            Self::Plain(_) | Self::Fragmenting(_) => {}
+            Self::Plain(_)
+            | Self::Fragmenting(_)
+            | Self::BufferedPlain(_)
+            | Self::BufferedFragmenting(_) => {}
         }
     }
 
@@ -48,7 +74,10 @@ impl AsyncResidentTcpStream {
         match self {
             Self::VisionPlain(stream) => stream.take_record_handoff(),
             Self::VisionFragmenting(stream) => stream.take_record_handoff(),
-            Self::Plain(_) | Self::Fragmenting(_) => false,
+            Self::Plain(_)
+            | Self::Fragmenting(_)
+            | Self::BufferedPlain(_)
+            | Self::BufferedFragmenting(_) => false,
         }
     }
 }
@@ -59,12 +88,20 @@ impl AsyncRead for AsyncResidentTcpStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        match &mut *self {
+        let before = buf.filled().len();
+        let result = match &mut *self {
             Self::Plain(tcp) => Pin::new(tcp).poll_read(cx, buf),
             Self::Fragmenting(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::BufferedPlain(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::BufferedFragmenting(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::VisionPlain(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::VisionFragmenting(stream) => Pin::new(stream).poll_read(cx, buf),
-        }
+        };
+        record_bio_read(match &result {
+            Poll::Ready(Ok(())) => Some(buf.filled().len().saturating_sub(before)),
+            Poll::Ready(Err(_)) | Poll::Pending => None,
+        });
+        result
     }
 }
 
@@ -74,18 +111,27 @@ impl AsyncWrite for AsyncResidentTcpStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        match &mut *self {
+        let result = match &mut *self {
             Self::Plain(tcp) => Pin::new(tcp).poll_write(cx, buf),
             Self::Fragmenting(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::BufferedPlain(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::BufferedFragmenting(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::VisionPlain(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::VisionFragmenting(stream) => Pin::new(stream).poll_write(cx, buf),
-        }
+        };
+        record_bio_write(match &result {
+            Poll::Ready(Ok(written)) => Some(*written),
+            Poll::Ready(Err(_)) | Poll::Pending => None,
+        });
+        result
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match &mut *self {
             Self::Plain(tcp) => Pin::new(tcp).poll_flush(cx),
             Self::Fragmenting(stream) => Pin::new(stream).poll_flush(cx),
+            Self::BufferedPlain(stream) => Pin::new(stream).poll_flush(cx),
+            Self::BufferedFragmenting(stream) => Pin::new(stream).poll_flush(cx),
             Self::VisionPlain(stream) => Pin::new(stream).poll_flush(cx),
             Self::VisionFragmenting(stream) => Pin::new(stream).poll_flush(cx),
         }
@@ -95,6 +141,8 @@ impl AsyncWrite for AsyncResidentTcpStream {
         match &mut *self {
             Self::Plain(tcp) => Pin::new(tcp).poll_shutdown(cx),
             Self::Fragmenting(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::BufferedPlain(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::BufferedFragmenting(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::VisionPlain(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::VisionFragmenting(stream) => Pin::new(stream).poll_shutdown(cx),
         }

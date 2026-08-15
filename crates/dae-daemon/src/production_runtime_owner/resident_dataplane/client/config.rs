@@ -1,5 +1,4 @@
 use super::*;
-use dae_outbound::shared_transport::reality::reality_client_version;
 
 pub(super) fn boring_vless_connector(
     proxy: &ResidentProxyPlan,
@@ -230,181 +229,6 @@ impl ResidentRealityConfigKey {
     }
 }
 
-pub(super) fn rustls_vless_client_config(
-    proxy: &ResidentProxyPlan,
-    policy: &ResidentTlsPolicy,
-) -> Result<Arc<ClientConfig>, String> {
-    require_tcp_tls_session_policy(policy)?;
-    if proxy.ech.is_some() {
-        return Err("VLESS ECH must use the authenticated-retry BoringSSL factory".to_owned());
-    }
-    if proxy.reality.is_some() {
-        if proxy
-            .reality
-            .as_ref()
-            .is_some_and(|reality| reality.mldsa65_verify.is_some())
-        {
-            return Err("VLESS Reality PQV requires the BoringSSL Reality engine".to_owned());
-        }
-        return build_rustls_vless_client_config(proxy, policy);
-    }
-    let system_ca = proxy_system_ca_snapshot(proxy)?;
-    let key = ResidentTlsClientConfigKey::from_proxy(proxy, system_ca.as_deref());
-    let cache =
-        RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
-    {
-        let mut cache = cache
-            .lock()
-            .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
-        if let Some(config) = cache.get(&key) {
-            return Ok(config);
-        }
-    }
-    let config =
-        build_rustls_vless_client_config_with_system_ca(proxy, policy, system_ca.as_deref())?;
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "VLESS rustls client config cache lock poisoned".to_owned())?;
-    Ok(cache.insert_or_get(key, config))
-}
-
-fn build_rustls_vless_client_config(
-    proxy: &ResidentProxyPlan,
-    policy: &ResidentTlsPolicy,
-) -> Result<Arc<ClientConfig>, String> {
-    build_rustls_vless_client_config_with_system_ca(proxy, policy, None)
-}
-
-fn build_rustls_vless_client_config_with_system_ca(
-    proxy: &ResidentProxyPlan,
-    policy: &ResidentTlsPolicy,
-    system_ca: Option<&SystemCaSnapshot>,
-) -> Result<Arc<ClientConfig>, String> {
-    let builder = if policy.verification.reality_material().is_some() {
-        if proxy.utls_fingerprint.is_some() {
-            return Err("VLESS Reality with uTLS fingerprint requires a fingerprint-capable Reality TLS underlay; rustls cannot implement uTLS fingerprints".to_owned());
-        }
-        let provider = rustls_reality_crypto_provider();
-        ClientConfig::builder_with_provider(Arc::new(provider))
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|err| format!("create VLESS Reality rustls provider: {err}"))?
-    } else if proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision {
-        ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-    } else {
-        ClientConfig::builder()
-    };
-    let mut config = if let Some((public_key, short_id)) = policy.verification.reality_material() {
-        let reality_config = RealityConfig::new(*public_key, short_id.to_vec())
-            .map_err(|err| format!("create VLESS Reality config: {err}"))?
-            .with_client_version(reality_client_version());
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(ResidentRealityFallbackRejectVerifier::new())
-            .with_reality(reality_config)
-            .with_no_client_auth()
-    } else if policy.verification.allow_insecure() {
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
-            .with_no_client_auth()
-    } else {
-        let roots = system_ca
-            .ok_or_else(|| "VLESS secure TLS config is missing system CA snapshot".to_owned())?
-            .rustls_roots();
-        builder.with_root_certificates(roots).with_no_client_auth()
-    };
-    config.alpn_protocols = policy
-        .alpn
-        .iter()
-        .map(|value| value.as_bytes().to_vec())
-        .collect();
-    Ok(Arc::new(config))
-}
-
-pub(super) fn rustls_xhttp_endpoint_client_config(
-    endpoint: &ResidentXhttpEndpointPlan,
-    policy: &ResidentTlsPolicy,
-) -> Result<Arc<ClientConfig>, String> {
-    require_tcp_tls_session_policy(policy)?;
-    if endpoint.ech.is_some() {
-        return Err("xHTTP ECH must use the authenticated-retry BoringSSL factory".to_owned());
-    }
-    if endpoint.reality.is_some() {
-        if endpoint
-            .reality
-            .as_ref()
-            .is_some_and(|reality| reality.mldsa65_verify.is_some())
-        {
-            return Err("xHTTP Reality PQV requires the BoringSSL Reality engine".to_owned());
-        }
-        return build_rustls_xhttp_endpoint_client_config(policy);
-    }
-    let system_ca = xhttp_endpoint_system_ca_snapshot(endpoint)?;
-    let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint, system_ca.as_deref());
-    let cache =
-        RUSTLS_CLIENT_CONFIG_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
-    {
-        let mut cache = cache
-            .lock()
-            .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
-        if let Some(config) = cache.get(&key) {
-            return Ok(config);
-        }
-    }
-    let config =
-        build_rustls_xhttp_endpoint_client_config_with_system_ca(policy, system_ca.as_deref())?;
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "xHTTP rustls client config cache lock poisoned".to_owned())?;
-    Ok(cache.insert_or_get(key, config))
-}
-
-fn build_rustls_xhttp_endpoint_client_config(
-    policy: &ResidentTlsPolicy,
-) -> Result<Arc<ClientConfig>, String> {
-    build_rustls_xhttp_endpoint_client_config_with_system_ca(policy, None)
-}
-
-fn build_rustls_xhttp_endpoint_client_config_with_system_ca(
-    policy: &ResidentTlsPolicy,
-    system_ca: Option<&SystemCaSnapshot>,
-) -> Result<Arc<ClientConfig>, String> {
-    let builder = if policy.verification.reality_material().is_some() {
-        let provider = rustls_reality_crypto_provider();
-        ClientConfig::builder_with_provider(Arc::new(provider))
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|err| format!("create xHTTP Reality rustls provider: {err}"))?
-    } else {
-        ClientConfig::builder()
-    };
-    let mut config = if let Some((public_key, short_id)) = policy.verification.reality_material() {
-        let reality_config = RealityConfig::new(*public_key, short_id.to_vec())
-            .map_err(|err| format!("create xHTTP Reality config: {err}"))?
-            .with_client_version(reality_client_version());
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(ResidentRealityFallbackRejectVerifier::new())
-            .with_reality(reality_config)
-            .with_no_client_auth()
-    } else if policy.verification.allow_insecure() {
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(ResidentInsecureCertVerifier::new())
-            .with_no_client_auth()
-    } else {
-        let roots = system_ca
-            .ok_or_else(|| "xHTTP secure TLS config is missing system CA snapshot".to_owned())?
-            .rustls_roots();
-        builder.with_root_certificates(roots).with_no_client_auth()
-    };
-    config.alpn_protocols = policy
-        .alpn
-        .iter()
-        .map(|value| value.as_bytes().to_vec())
-        .collect();
-    Ok(Arc::new(config))
-}
-
 fn proxy_system_ca_snapshot(
     proxy: &ResidentProxyPlan,
 ) -> Result<Option<Arc<SystemCaSnapshot>>, String> {
@@ -425,151 +249,6 @@ fn xhttp_endpoint_system_ca_snapshot(
     system_ca_snapshot()
         .map(Some)
         .map_err(|err| format!("load xHTTP system CA bundle: {err}"))
-}
-
-pub(super) fn rustls_reality_crypto_provider() -> rustls::crypto::CryptoProvider {
-    let mut provider = rustls::crypto::aws_lc_rs::default_provider();
-    provider.cipher_suites = rustls_reality_cipher_suites();
-    provider.kx_groups = rustls_reality_kx_groups();
-    provider
-}
-
-fn rustls_reality_cipher_suites() -> Vec<SupportedCipherSuite> {
-    vec![
-        rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256,
-        rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384,
-        rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
-    ]
-}
-
-fn rustls_reality_kx_groups() -> Vec<&'static dyn rustls::crypto::SupportedKxGroup> {
-    vec![
-        rustls::crypto::aws_lc_rs::kx_group::X25519,
-        rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
-        rustls::crypto::aws_lc_rs::kx_group::SECP384R1,
-    ]
-}
-
-#[derive(Debug)]
-pub(super) struct ResidentInsecureCertVerifier {
-    provider: Arc<rustls::crypto::CryptoProvider>,
-}
-
-impl ResidentInsecureCertVerifier {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-        })
-    }
-}
-
-impl ServerCertVerifier for ResidentInsecureCertVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct ResidentRealityFallbackRejectVerifier {
-    provider: Arc<rustls::crypto::CryptoProvider>,
-}
-
-impl ResidentRealityFallbackRejectVerifier {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-        })
-    }
-}
-
-impl ServerCertVerifier for ResidentRealityFallbackRejectVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, RustlsError> {
-        Err(RustlsError::InvalidCertificate(
-            CertificateError::ApplicationVerificationFailure,
-        ))
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
 }
 
 pub(super) fn configure_boring_fingerprint(
@@ -694,85 +373,6 @@ mod tests {
     }
 
     #[test]
-    fn reality_client_version_uses_shared_protocol_version() {
-        assert_eq!(
-            reality_client_version(),
-            dae_outbound::shared_transport::reality::REALITY_VERSION
-        );
-    }
-
-    #[test]
-    fn reality_provider_keeps_generic_tls13_shape_without_fingerprint() {
-        let provider = rustls_reality_crypto_provider();
-
-        let groups = provider
-            .kx_groups
-            .iter()
-            .map(|group| group.name())
-            .collect::<Vec<_>>();
-        assert_eq!(groups[0], rustls::NamedGroup::X25519);
-        assert_eq!(groups[1], rustls::NamedGroup::secp256r1);
-        assert_eq!(groups[2], rustls::NamedGroup::secp384r1);
-        assert_eq!(
-            provider.cipher_suites[0],
-            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256
-        );
-        assert_eq!(
-            provider.cipher_suites[1],
-            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_AES_256_GCM_SHA384
-        );
-        assert_eq!(
-            provider.cipher_suites[2],
-            rustls::crypto::aws_lc_rs::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256
-        );
-    }
-
-    #[test]
-    fn reality_client_config_keeps_auth_slot_per_connection() {
-        let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
-            key: [0; 16],
-            encryption: None,
-        });
-        proxy.tls = "reality".to_owned();
-        proxy.reality = Some(ResidentRealityUnderlayPlan {
-            public_key: [7; 32],
-            short_id: vec![1, 2, 3, 4],
-            spider_x: "/".to_owned(),
-            mldsa65_verify: None,
-        });
-        proxy.materialize_execution();
-
-        let policy = ResidentTlsPolicy::from_proxy(&proxy);
-        let first = rustls_vless_client_config(&proxy, &policy).unwrap();
-        let second = rustls_vless_client_config(&proxy, &policy).unwrap();
-
-        assert!(!Arc::ptr_eq(&first, &second));
-    }
-
-    #[test]
-    fn reality_client_config_keeps_rustls_fingerprint_fail_closed_if_called_directly() {
-        let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
-            key: [0; 16],
-            encryption: None,
-        });
-        proxy.tls = "reality".to_owned();
-        proxy.reality = Some(ResidentRealityUnderlayPlan {
-            public_key: [7; 32],
-            short_id: vec![1, 2, 3, 4],
-            spider_x: "/".to_owned(),
-            mldsa65_verify: None,
-        });
-        proxy.utls_fingerprint = Some(test_fingerprint_plan(
-            dae_outbound::shared_transport::UTLS_FAMILY_IOS,
-        ));
-        proxy.materialize_execution();
-
-        let policy = ResidentTlsPolicy::from_proxy(&proxy);
-        let err = rustls_vless_client_config(&proxy, &policy).unwrap_err();
-        assert!(err.contains("rustls cannot implement uTLS fingerprints"));
-    }
-
-    #[test]
     fn reality_fingerprint_uses_boring_provider() {
         let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [0; 16],
@@ -815,12 +415,6 @@ mod tests {
             ResidentTlsProvider::from_proxy(&proxy).unwrap(),
             ResidentTlsProvider::RealityFingerprintBoring
         );
-        let policy = ResidentTlsPolicy::from_proxy(&proxy);
-        assert!(
-            rustls_vless_client_config(&proxy, &policy)
-                .unwrap_err()
-                .contains("PQV requires the BoringSSL Reality engine")
-        );
     }
 
     #[test]
@@ -830,10 +424,10 @@ mod tests {
             encryption: None,
         });
         let mut endpoint = ResidentXhttpEndpointPlan::from_proxy(&proxy);
-        let rustls_key = ResidentTlsClientConfigKey::from_xhttp_endpoint(&endpoint, None);
+        let default_key = ResidentTlsClientConfigKey::from_xhttp_endpoint(&endpoint, None);
         assert_eq!(
             ResidentTlsProvider::from_xhttp_endpoint(&endpoint).unwrap(),
-            ResidentTlsProvider::StandardRustls
+            ResidentTlsProvider::FingerprintAwareBoring
         );
 
         endpoint.utls_fingerprint = Some(test_fingerprint_plan(
@@ -844,26 +438,12 @@ mod tests {
             ResidentTlsProvider::from_xhttp_endpoint(&endpoint).unwrap(),
             ResidentTlsProvider::FingerprintAwareBoring
         );
-        assert_ne!(rustls_key, boring_key);
+        assert_ne!(default_key, boring_key);
         assert!(boring_key.utls_fingerprint.is_some());
     }
 
     #[test]
-    fn standard_rustls_client_config_still_uses_cache() {
-        let proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
-            key: [0; 16],
-            encryption: None,
-        });
-
-        let policy = ResidentTlsPolicy::from_proxy(&proxy);
-        let first = rustls_vless_client_config(&proxy, &policy).unwrap();
-        let second = rustls_vless_client_config(&proxy, &policy).unwrap();
-
-        assert!(Arc::ptr_eq(&first, &second));
-    }
-
-    #[test]
-    fn ech_selects_boring_and_keeps_rustls_fail_closed() {
+    fn ech_selects_boring() {
         let mut proxy = test_proxy_plan(ResidentProxyProtocolPlan::VlessVisionTcpTls {
             key: [0; 16],
             encryption: None,
@@ -873,12 +453,6 @@ mod tests {
         assert_eq!(
             ResidentTlsProvider::from_proxy(&proxy).unwrap(),
             ResidentTlsProvider::FingerprintAwareBoring
-        );
-        let policy = ResidentTlsPolicy::from_proxy(&proxy);
-        assert!(
-            rustls_vless_client_config(&proxy, &policy)
-                .unwrap_err()
-                .contains("authenticated-retry BoringSSL factory")
         );
     }
 
@@ -910,27 +484,6 @@ mod tests {
 
         assert_ne!(first_key.ech, second_key.ech);
         assert_ne!(first_key, second_key);
-    }
-
-    #[test]
-    fn reality_fallback_verifier_rejects_non_reality_certificates() {
-        let verifier = ResidentRealityFallbackRejectVerifier::new();
-        let cert = CertificateDer::from(vec![0_u8]);
-        let server_name = ServerName::try_from("example.com").unwrap();
-        let err = verifier
-            .verify_server_cert(
-                &cert,
-                &[],
-                &server_name,
-                &[],
-                UnixTime::since_unix_epoch(std::time::Duration::from_secs(0)),
-            )
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            RustlsError::InvalidCertificate(CertificateError::ApplicationVerificationFailure)
-        ));
     }
 
     fn test_fingerprint_plan(family: &str) -> ResidentUtlsFingerprintPlan {
