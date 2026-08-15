@@ -10,6 +10,7 @@ use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaChaNonce};
 use getrandom::fill as random_fill;
 use std::io::{self, Error, ErrorKind, Result};
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -25,6 +26,93 @@ const MAX_RECORD_LEN: usize = 16_640;
 const MAX_NONCE: [u8; 12] = [0xff; 12];
 const SERVER_PFS_RESPONSE_LEN: usize = 1088 + 32 + 16;
 
+#[cfg(test)]
+static SECRET_WIPE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn cleanse_secret(bytes: &mut [u8]) {
+    unsafe {
+        boring_sys::OPENSSL_cleanse(bytes.as_mut_ptr().cast(), bytes.len());
+    }
+    #[cfg(test)]
+    SECRET_WIPE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+struct SecretVec(Vec<u8>);
+
+impl SecretVec {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+}
+
+impl From<Vec<u8>> for SecretVec {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl Deref for SecretVec {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for SecretVec {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for SecretVec {
+    fn drop(&mut self) {
+        cleanse_secret(&mut self.0);
+    }
+}
+
+struct SecretArray<const N: usize>([u8; N]);
+
+impl<const N: usize> SecretArray<N> {
+    fn zeroed() -> Self {
+        Self([0; N])
+    }
+
+    fn copied(&self) -> [u8; N] {
+        self.0
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for SecretArray<N> {
+    fn from(bytes: [u8; N]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl<const N: usize> Deref for SecretArray<N> {
+    type Target = [u8; N];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<const N: usize> DerefMut for SecretArray<N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<const N: usize> Drop for SecretArray<N> {
+    fn drop(&mut self) {
+        cleanse_secret(&mut self.0);
+    }
+}
+
 #[derive(Clone)]
 #[allow(dead_code)]
 enum AeadState {
@@ -34,12 +122,13 @@ enum AeadState {
 
 impl AeadState {
     fn new(context: &[u8], key_material: &[u8]) -> Self {
-        let key = derive_key_bytes(context, key_material);
+        let mut key = derive_key_bytes(context, key_material);
         // Xray-core's VLESS Encryption server currently constructs its record
         // AEAD with AES enabled. Keep the client on the same wire choice; the
         // AES implementation itself uses the platform's accelerated backend
         // when available.
         let cipher = Aes256Gcm::new_from_slice(&key).expect("VLESS AES-256 key length");
+        cleanse_secret(&mut key);
         Self::Aes(cipher, [0; 12])
     }
 
@@ -158,13 +247,15 @@ impl AesCtr {
     /// public-key XOR and the `random` record-header camouflage are not
     /// derived from their wire context bytes.
     fn new(key_material: &[u8], iv: &[u8; 16]) -> Self {
-        let key = derive_key_bytes(b"VLESS", key_material);
-        Self {
+        let mut key = derive_key_bytes(b"VLESS", key_material);
+        let state = Self {
             cipher: Aes256::new_from_slice(&key).expect("VLESS CTR key length"),
             counter: *iv,
             block: [0; 16],
             offset: 16,
-        }
+        };
+        cleanse_secret(&mut key);
+        state
     }
 
     fn apply(&mut self, data: &mut [u8]) {
@@ -183,6 +274,14 @@ impl AesCtr {
             *byte ^= self.block[self.offset];
             self.offset += 1;
         }
+    }
+}
+
+impl Drop for AesCtr {
+    fn drop(&mut self) {
+        cleanse_secret(&mut self.counter);
+        cleanse_secret(&mut self.block);
+        self.offset = 0;
     }
 }
 
@@ -212,7 +311,7 @@ pub struct VlessEncryptedStream<S> {
     inner: S,
     write_aead: AeadState,
     read_aead: Option<AeadState>,
-    united_key: Vec<u8>,
+    united_key: SecretVec,
     write_ctr: Option<AesCtr>,
     read_ctr: Option<AesCtr>,
     prewrite: Vec<u8>,
@@ -246,7 +345,7 @@ where
         let mut read_aead: Option<AeadState> = None;
         let mut write_ctr: Option<AesCtr> = None;
         let mut read_ctr: Option<AesCtr> = None;
-        let mut united_key = Vec::new();
+        let mut united_key = SecretVec::new();
         if spec.rtt == VlessEncryptionRtt::ZeroRtt {
             let ticket = client
                 .ticket
@@ -295,9 +394,9 @@ where
         }
 
         let (pfs_mlkem_public, pfs_decapsulation) = DecapsulationKey::generate();
-        let mut x25519_private_bytes = [0_u8; 32];
-        random_fill(&mut x25519_private_bytes).map_err(|error| io_other(error.to_string()))?;
-        let x25519_private = StaticSecret::from(x25519_private_bytes);
+        let mut x25519_private_bytes = SecretArray::<32>::zeroed();
+        random_fill(&mut *x25519_private_bytes).map_err(|error| io_other(error.to_string()))?;
+        let x25519_private = StaticSecret::from(x25519_private_bytes.copied());
         let x25519_public = PublicKey::from(&x25519_private);
         let mut pfs_public = Vec::with_capacity(1216);
         pfs_public.extend_from_slice(&pfs_mlkem_public);
@@ -374,7 +473,8 @@ where
         let mut encrypted_peer_pfs = vec![0_u8; SERVER_PFS_RESPONSE_LEN];
         inner.read_exact(&mut encrypted_peer_pfs).await?;
         let max_nonce = MAX_NONCE;
-        let peer_pfs_plain = nfs_aead.open_with_nonce(&max_nonce, &encrypted_peer_pfs, &[])?;
+        let peer_pfs_plain =
+            SecretVec::from(nfs_aead.open_with_nonce(&max_nonce, &encrypted_peer_pfs, &[])?);
         if peer_pfs_plain.len() != 1120 {
             return Err(io_other(
                 "VLESS Encryption server PFS response length mismatch",
@@ -388,21 +488,21 @@ where
                 .map_err(|_| io_other("VLESS X25519 server public key length mismatch"))?,
         );
         let x25519_secret = x25519_private.diffie_hellman(&server_x25519_public);
-        let mut pfs_key = [0_u8; 64];
+        let mut pfs_key = SecretArray::<64>::zeroed();
         pfs_key[..32].copy_from_slice(mlkem_secret.as_bytes());
         pfs_key[32..].copy_from_slice(x25519_secret.as_bytes());
-        united_key.extend_from_slice(&pfs_key);
+        united_key.extend_from_slice(&*pfs_key);
         united_key.extend_from_slice(&nfs_key);
         let write_aead = AeadState::new(&pfs_public, &united_key);
         let mut peer_aead = AeadState::new(&peer_pfs_plain, &united_key);
 
         let mut encrypted_ticket = [0_u8; 32];
         inner.read_exact(&mut encrypted_ticket).await?;
-        let ticket = peer_aead.open_next(&encrypted_ticket, &[])?;
+        let ticket = SecretVec::from(peer_aead.open_next(&encrypted_ticket, &[])?);
         if ticket.len() != 16 {
             return Err(io_other("VLESS Encryption ticket length mismatch"));
         }
-        let mut ticket_bytes = [0_u8; 16];
+        let mut ticket_bytes = SecretArray::<16>::zeroed();
         ticket_bytes.copy_from_slice(&ticket);
         let server_seconds = u16::from_be_bytes([ticket[0], ticket[1]]) as u64;
         // The actual ticket duration is encoded in the first two bytes by
@@ -414,8 +514,8 @@ where
                 .map_err(|_| io_other("VLESS Encryption ticket mutex poisoned"))?;
             *guard = Some(VlessEncryptionTicket {
                 expires_at: Instant::now() + Duration::from_secs(server_seconds),
-                pfs_key,
-                ticket: ticket_bytes,
+                pfs_key: pfs_key.copied(),
+                ticket: ticket_bytes.copied(),
             });
         }
 
@@ -433,7 +533,7 @@ where
         };
         if spec.mode.random_records() {
             write_ctr = Some(AesCtr::new(&united_key, &iv));
-            read_ctr = Some(AesCtr::new(&united_key, &ticket_bytes));
+            read_ctr = Some(AesCtr::new(&united_key, &*ticket_bytes));
         }
         read_aead = Some(peer_aead);
         Ok(Self {
@@ -862,9 +962,9 @@ where
     }
 }
 
-fn build_relays(spec: &VlessEncryptionSpec, iv: &[u8; 16]) -> Result<(Vec<u8>, Vec<u8>)> {
+fn build_relays(spec: &VlessEncryptionSpec, iv: &[u8; 16]) -> Result<(Vec<u8>, SecretVec)> {
     let mut relays = Vec::new();
-    let mut nfs_key = Vec::new();
+    let mut nfs_key = SecretVec::new();
     let mut last_ctr: Option<AesCtr> = None;
     for (index, public_key) in spec.public_keys.iter().enumerate() {
         let relay_offset = relays.len();
@@ -873,12 +973,12 @@ fn build_relays(spec: &VlessEncryptionSpec, iv: &[u8; 16]) -> Result<(Vec<u8>, V
                 <[u8; 32]>::try_from(public_key.as_slice())
                     .map_err(|_| io_other("VLESS X25519 key length mismatch"))?,
             );
-            let mut private_bytes = [0_u8; 32];
-            random_fill(&mut private_bytes).map_err(|error| io_other(error.to_string()))?;
-            let private = StaticSecret::from(private_bytes);
+            let mut private_bytes = SecretArray::<32>::zeroed();
+            random_fill(&mut *private_bytes).map_err(|error| io_other(error.to_string()))?;
+            let private = StaticSecret::from(private_bytes.copied());
             let public = PublicKey::from(&private);
             relays.extend_from_slice(public.as_bytes());
-            nfs_key = private.diffie_hellman(&key).as_bytes().to_vec();
+            nfs_key = SecretVec::from(private.diffie_hellman(&key).as_bytes().to_vec());
             if spec.mode.xor_public_key() {
                 let mut ctr = AesCtr::new(public_key, iv);
                 ctr.apply(&mut relays[relay_offset..relay_offset + 32]);
@@ -888,7 +988,7 @@ fn build_relays(spec: &VlessEncryptionSpec, iv: &[u8; 16]) -> Result<(Vec<u8>, V
                 .map_err(|_| io_other("invalid VLESS ML-KEM-768 client public key"))?;
             let (ciphertext, secret) = key.encapsulate();
             relays.extend_from_slice(&ciphertext);
-            nfs_key = secret.as_bytes().to_vec();
+            nfs_key = SecretVec::from(secret.as_bytes().to_vec());
             if spec.mode.xor_public_key() {
                 let mut ctr = AesCtr::new(public_key, iv);
                 ctr.apply(&mut relays[relay_offset..relay_offset + 1088]);
@@ -999,7 +1099,7 @@ mod tests {
             inner,
             write_aead: AeadState::new(b"fixture-write", &[0x11; 32]),
             read_aead: Some(AeadState::new(b"fixture-read", &[0x22; 32])),
-            united_key: vec![0x33; 64],
+            united_key: SecretVec::from(vec![0x33; 64]),
             write_ctr: None,
             read_ctr: None,
             prewrite: Vec::new(),
@@ -1085,5 +1185,14 @@ mod tests {
                 .expect("ticket mutex must be available")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn secret_owners_cleanse_on_drop() {
+        let before = SECRET_WIPE_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+        drop(SecretVec::from(vec![0x5a; 64]));
+        drop(SecretArray::<32>::from([0xa5; 32]));
+        let after = SECRET_WIPE_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(after >= before + 2);
     }
 }

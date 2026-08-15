@@ -60,6 +60,43 @@ struct TestAsyncRead {
     offset: usize,
 }
 
+struct ChunkedAsyncRead {
+    bytes: Vec<u8>,
+    offset: usize,
+    chunk_size: usize,
+}
+
+impl ChunkedAsyncRead {
+    fn new(bytes: Vec<u8>, chunk_size: usize) -> Self {
+        Self {
+            bytes,
+            offset: 0,
+            chunk_size,
+        }
+    }
+}
+
+impl AsyncRead for ChunkedAsyncRead {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if self.offset == self.bytes.len() {
+            return Poll::Ready(Ok(()));
+        }
+        let amount = self
+            .bytes
+            .len()
+            .saturating_sub(self.offset)
+            .min(self.chunk_size.max(1))
+            .min(buf.remaining());
+        buf.put_slice(&self.bytes[self.offset..self.offset + amount]);
+        self.offset += amount;
+        Poll::Ready(Ok(()))
+    }
+}
+
 impl TestAsyncRead {
     fn new(bytes: Vec<u8>) -> Self {
         Self { bytes, offset: 0 }
@@ -641,10 +678,119 @@ async fn resident_anytls_frame_reader_keeps_idle_control_after_active_fin() {
     assert!(idle_heartbeat.data.is_empty());
 }
 
+#[tokio::test]
+async fn resident_anytls_frame_reader_handles_split_header_payload_and_next_frame() {
+    let first = dae_outbound::anytls::link::frame(
+        dae_outbound::anytls::contract::CMD_PSH,
+        11,
+        b"payload split across reads",
+    );
+    let second =
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_FIN, 11, &[]);
+    let mut wire = first.clone();
+    wire.extend_from_slice(&second);
+    let mut reader = ChunkedAsyncRead::new(wire, 2);
+    let mut frames = AnyTlsFrameReader::default();
+    let mut data = bytes::BytesMut::new();
+
+    let (cmd, sid) = frames.read_into(&mut reader, &mut data).await.unwrap();
+    assert_eq!((cmd, sid), (dae_outbound::anytls::contract::CMD_PSH, 11));
+    assert_eq!(&data[..], b"payload split across reads");
+    let (cmd, sid) = frames.read_into(&mut reader, &mut data).await.unwrap();
+    assert_eq!((cmd, sid), (dae_outbound::anytls::contract::CMD_FIN, 11));
+    assert!(data.is_empty());
+}
+
+#[tokio::test]
+async fn resident_anytls_frame_reader_rejects_truncated_header_and_payload() {
+    let mut header = vec![dae_outbound::anytls::contract::CMD_PSH, 0, 0, 0];
+    let mut reader = ChunkedAsyncRead::new(header.split_off(0), 1);
+    let mut frames = AnyTlsFrameReader::default();
+    assert!(
+        frames
+            .read_frame(&mut reader)
+            .await
+            .unwrap_err()
+            .contains("early eof")
+    );
+
+    let mut truncated =
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 3, b"payload");
+    truncated.pop();
+    let mut reader = ChunkedAsyncRead::new(truncated, 3);
+    let mut frames = AnyTlsFrameReader::default();
+    assert!(
+        frames
+            .read_frame(&mut reader)
+            .await
+            .unwrap_err()
+            .contains("early eof")
+    );
+}
+
 #[derive(Default)]
 struct NonVectoredCountingWriter {
     bytes: Vec<u8>,
     writes: usize,
+}
+
+#[derive(Default)]
+struct PartialVectoredWriter {
+    bytes: Vec<u8>,
+    max_write: usize,
+    vectored_calls: usize,
+    flushes: usize,
+}
+
+impl AsyncWrite for PartialVectoredWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let amount = buffer.len().min(self.max_write.max(1));
+        self.bytes.extend_from_slice(&buffer[..amount]);
+        Poll::Ready(Ok(amount))
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        buffers: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        self.vectored_calls += 1;
+        let mut remaining = self.max_write.max(1);
+        let mut written = 0;
+        for buffer in buffers {
+            let amount = buffer.len().min(remaining);
+            self.bytes.extend_from_slice(&buffer[..amount]);
+            written += amount;
+            remaining -= amount;
+            if remaining == 0 {
+                break;
+            }
+        }
+        Poll::Ready(Ok(written))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.flushes += 1;
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
 }
 
 impl AsyncWrite for NonVectoredCountingWriter {
@@ -680,6 +826,22 @@ async fn resident_non_vectored_header_payload_uses_one_contiguous_write() {
 
     assert_eq!(writer.writes, 1);
     assert_eq!(writer.bytes, b"headerpayload");
+}
+
+#[tokio::test]
+async fn resident_vectored_header_payload_preserves_partial_remainder() {
+    let mut writer = PartialVectoredWriter {
+        max_write: 3,
+        ..Default::default()
+    };
+
+    write_all_vectored_header_payload(&mut writer, b"header", b"payload")
+        .await
+        .unwrap();
+
+    assert_eq!(writer.bytes, b"headerpayload");
+    assert_eq!(writer.vectored_calls, 2);
+    assert_eq!(writer.flushes, 0);
 }
 
 #[test]

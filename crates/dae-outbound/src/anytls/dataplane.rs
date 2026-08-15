@@ -1,11 +1,16 @@
 use std::io::{Read, Write};
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "test-support"))]
 use rustls::ClientConnection;
+#[cfg(any(test, feature = "test-support"))]
 use rustls::pki_types::ServerName;
 
 use crate::error::OutboundError;
+#[cfg(any(test, feature = "test-support"))]
 use crate::shared_transport::{TlsLoopbackMaterial, TlsUnderlayOptions};
+#[cfg(any(test, feature = "test-support"))]
 use crate::socks5::Socks5Address;
 
 use super::{contract, link};
@@ -23,6 +28,7 @@ impl AnyTlsFrame {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnyTlsSessionFrameExchangeReport {
     pub proxy: String,
@@ -55,6 +61,7 @@ pub struct AnyTlsSessionFrameExchangeReport {
     pub true_dataplane: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn tcp_session_frame_exchange_over_tls_stream<S>(
     stream: S,
     material: &TlsLoopbackMaterial,
@@ -218,6 +225,7 @@ where
     Ok(frame.len())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn hex_encode(bytes: &[u8]) -> String {
     bytes
         .iter()

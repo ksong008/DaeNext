@@ -5,6 +5,7 @@ pub mod link;
 pub mod metadata;
 mod sip003_dataplane;
 mod sip003_tls_dataplane;
+#[cfg(any(test, feature = "test-support"))]
 mod sip003_v2ray_plugin_dataplane;
 pub mod ss2022;
 mod ss2022_tcp_dataplane;
@@ -14,13 +15,14 @@ pub mod ssr_link;
 mod ssr_stream;
 
 pub use aead::{
-    AeadCipherSpec, AeadStreamCodec, AeadTcpSalts, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
-    SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE, ShadowsocksAeadTcpExchangeReport,
-    ShadowsocksAeadUdpPacket, TAG_LEN, aead_cipher_specs, cipher_spec, decode_client_initial,
-    decode_udp_packet, encode_client_initial, encode_server_payload, encode_udp_packet,
-    read_client_initial_from_stream, read_encrypted_chunk_from_async_stream,
-    read_encrypted_chunk_from_stream, read_encrypted_chunk_in_place_from_async_stream,
-    tcp_exchange, tcp_exchange_over_stream,
+    AeadCipherSpec, AeadStreamCodec, AeadStreamFrameReader, AeadTcpSalts,
+    SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
+    SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE, SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE,
+    ShadowsocksAeadTcpExchangeReport, ShadowsocksAeadUdpPacket, TAG_LEN, aead_cipher_specs,
+    cipher_spec, decode_client_initial, decode_udp_packet, encode_client_initial,
+    encode_server_payload, encode_udp_packet, read_client_initial_from_stream,
+    read_encrypted_chunk_from_async_stream, read_encrypted_chunk_from_stream,
+    read_encrypted_chunk_in_place_from_async_stream, tcp_exchange, tcp_exchange_over_stream,
 };
 pub use cipher::{CipherFamily, CipherInfo, classify_cipher};
 pub use link::{ShadowsocksLink, Sip003, Sip003Opts};
@@ -37,6 +39,7 @@ pub use sip003_tls_dataplane::{
     read_simple_obfs_tls_client_hello, simple_obfs_tls_client_hello_with_body,
     simple_obfs_tls_shadowsocks_aead_exchange_over_stream,
 };
+#[cfg(any(test, feature = "test-support"))]
 pub use sip003_v2ray_plugin_dataplane::{
     Sip003V2rayPluginExchangeReport, Sip003V2rayPluginOptions, Sip003V2rayPluginRequest,
     encode_v2ray_plugin_muxed_shadowsocks_response, read_v2ray_plugin_muxed_shadowsocks_request,

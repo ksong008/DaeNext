@@ -2,13 +2,17 @@ pub mod contract;
 mod dataplane;
 mod grpc_dataplane;
 mod grpc_http2_dataplane;
+#[cfg(any(test, feature = "test-support"))]
 mod httpupgrade_tls_dataplane;
 mod inner_shadowsocks_dataplane;
 pub mod link;
 pub mod metadata;
 pub mod packet;
+#[cfg(any(test, feature = "test-support"))]
 mod tls_dataplane;
+#[cfg(any(test, feature = "test-support"))]
 mod websocket_tls_dataplane;
+#[cfg(any(test, feature = "test-support"))]
 mod wss_inner_shadowsocks_dataplane;
 
 pub use dataplane::{
@@ -27,6 +31,7 @@ pub use grpc_http2_dataplane::{
     read_tcp_request_from_grpc_http2_stream, tcp_exchange_over_grpc_http2_stream,
     write_grpc_http2_hunk_response,
 };
+#[cfg(any(test, feature = "test-support"))]
 pub use httpupgrade_tls_dataplane::{
     TrojanGoHttpUpgradeTcpExchangeReport, tcp_exchange_over_httpupgrade_tls_stream,
 };
@@ -37,11 +42,14 @@ pub use inner_shadowsocks_dataplane::{
 };
 pub use link::{TrojanLink, TrojanTransportType};
 pub use metadata::{TrojanMetadata, TrojanNetwork};
+#[cfg(any(test, feature = "test-support"))]
 pub use tls_dataplane::{TrojanTlsTcpExchangeReport, tcp_exchange_over_tls_stream};
+#[cfg(any(test, feature = "test-support"))]
 pub use websocket_tls_dataplane::{
     TrojanGoWssTcpExchangeReport, TrojanWebSocketRequest, read_tcp_request_from_websocket_stream,
     tcp_exchange_over_wss_stream,
 };
+#[cfg(any(test, feature = "test-support"))]
 pub use wss_inner_shadowsocks_dataplane::{
     TrojanGoWssInnerShadowsocksTcpExchangeReport,
     read_inner_shadowsocks_trojan_request_from_websocket_stream,
