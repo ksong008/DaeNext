@@ -1,5 +1,5 @@
 use super::*;
-use crate::production_runtime_owner::resident_dataplane::selected_resident_runtime_profile_name;
+use crate::production_runtime_owner::resident_dataplane::facade::selected_resident_runtime_profile_name;
 
 const MAP_PROFILE_ENV: &str = "RESIDENT_EBPF_MAP_PROFILE";
 const MAP_PROFILE_LEGACY_ENV: &str = "DAE_EBPF_MAP_PROFILE";

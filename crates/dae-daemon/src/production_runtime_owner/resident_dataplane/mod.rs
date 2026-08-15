@@ -32,7 +32,7 @@ pub(crate) use self::events::{
 use self::events::{append_event, path_string};
 use self::plan::build_resident_dataplane_plan;
 pub(crate) use self::plan::{ResidentNodeSourceAdmission, resident_node_source_admissions};
-pub(in crate::production_runtime_owner) use self::plan::{
+pub(crate) use self::plan::{
     ResidentPreparedDataplane, build_resident_dataplane_plan_with_geodata,
 };
 use self::probe::*;
@@ -52,6 +52,7 @@ mod dns_listener;
 mod events;
 mod execution;
 mod execution_types;
+pub(in crate::production_runtime_owner) mod facade;
 pub(crate) mod geodata;
 pub(crate) mod host_routing_plan;
 mod memory_bench;
@@ -92,10 +93,10 @@ mod defaults;
 pub(crate) use self::defaults::*;
 #[path = "runtime/runtime.rs"]
 mod runtime;
-pub(super) use self::runtime::*;
+pub(crate) use self::runtime::*;
 #[path = "runtime/generation.rs"]
 mod generation;
-pub(in crate::production_runtime_owner) use self::generation::ResidentDataplaneGeneration;
+pub(crate) use self::generation::ResidentDataplaneGeneration;
 pub(crate) use self::generation::resident_dataplane_generation_lifetime_counts;
 use self::generation::{
     ActiveGenerationSlot, ResidentDataplaneGenerationLifetime, ResidentGenerationDrainControl,
@@ -115,7 +116,7 @@ mod generation_drain_policy;
 use self::generation_drain_policy::*;
 #[path = "runtime/read_view.rs"]
 mod read_view;
-pub(in crate::production_runtime_owner) use self::read_view::ResidentDataplaneReadHandle;
+pub(crate) use self::read_view::ResidentDataplaneReadHandle;
 use self::read_view::ResidentRuntimeOwnerReadHandle;
 #[path = "runtime/executor.rs"]
 mod executor;
@@ -140,7 +141,7 @@ pub(super) use self::metrics::{
 mod workers;
 use self::display::*;
 use self::dns_listener::*;
-pub(super) use self::workers::*;
+pub(crate) use self::workers::*;
 #[path = "runtime/socket_buffers.rs"]
 mod socket_buffers;
 pub(crate) use self::socket_buffers::*;
@@ -154,7 +155,7 @@ use self::udp_resources::*;
 mod resource_profile;
 pub(crate) use self::resource_profile::effective_process_memory_capacity;
 use self::resource_profile::*;
-pub(super) use self::resource_profile::{
+pub(crate) use self::resource_profile::{
     resident_datapath_postflight_interval_seconds_default, selected_resident_runtime_profile_name,
 };
 

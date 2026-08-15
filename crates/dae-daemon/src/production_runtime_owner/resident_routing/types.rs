@@ -1,8 +1,6 @@
 #[cfg(test)]
-pub(super) use super::super::resident_dataplane::host_routing_plan::ResidentDomainSet;
-pub(super) use super::super::resident_dataplane::host_routing_plan::{
-    MatchSetBytes, ResidentRoutingPlan,
-};
+pub(super) use super::super::resident_dataplane::facade::ResidentDomainSet;
+pub(super) use super::super::resident_dataplane::facade::{MatchSetBytes, ResidentRoutingPlan};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct OutboundConnectivityEntry {
