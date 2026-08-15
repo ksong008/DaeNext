@@ -3,7 +3,7 @@ use crate::bffi_ext::QuicSslContext;
 use crate::error::{map_result, Result};
 use crate::session_state::{SessionState, QUIC_METHOD};
 use crate::version::QuicVersion;
-use crate::{Entry, KeyLog, NoKeyLog, QuicSsl, QuicSslSession, SessionCache, SimpleCache};
+use crate::{Entry, KeyLog, NoKeyLog, NoSessionCache, QuicSsl, QuicSslSession, SessionCache};
 use boring::ssl::{
     Ssl, SslContext, SslContextBuilder, SslMethod, SslSession, SslVerifyError, SslVerifyMode,
     SslVersion,
@@ -46,8 +46,6 @@ impl Config {
         builder.set_min_proto_version(Some(SslVersion::TLS1_3))?;
         builder.set_max_proto_version(Some(SslVersion::TLS1_3))?;
 
-        builder.set_default_verify_paths()?;
-
         // We build the context early, since we are not allowed to further mutate the context
         // in start_session.
         let mut ctx = builder.build();
@@ -72,7 +70,7 @@ impl Config {
 
         Ok(Self {
             ctx,
-            session_cache: Arc::new(SimpleCache::new(256)),
+            session_cache: Arc::new(NoSessionCache),
             session_cache_namespace: Bytes::new(),
             key_log: None,
             custom_verify_callback: None,

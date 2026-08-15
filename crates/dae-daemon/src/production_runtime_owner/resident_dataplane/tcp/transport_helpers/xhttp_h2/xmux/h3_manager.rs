@@ -406,6 +406,9 @@ pub(super) async fn clear_xhttp_h3_xmux_managers(
         report.clients = report.clients.saturating_add(clients);
         report.locked_managers = report.locked_managers.saturating_add(usize::from(deferred));
     }
+    if let Some(session_cache) = generation.session_cache.as_ref() {
+        let _ = session_cache.clear();
+    }
     report
 }
 

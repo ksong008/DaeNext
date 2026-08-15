@@ -1,10 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::crypto::rustls::QuicClientConfig;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::OutboundError;
@@ -12,7 +8,6 @@ use crate::shared_transport::QuicCongestionController;
 use crate::trojan::{TrojanMetadata, TrojanNetwork};
 
 use super::auth_stream::build_authenticate_header;
-use super::certchain::verify_pinned_certchain;
 use super::contract::{
     RUNTIME_ALPN, RUNTIME_HANDSHAKE_IDLE_TIMEOUT_SECONDS, RUNTIME_KEEPALIVE_SECONDS,
 };
@@ -37,88 +32,6 @@ impl JuicityAuthStream {
 
     pub async fn finish(&mut self) -> Result<(), OutboundError> {
         self.request_finish()
-    }
-}
-
-#[derive(Debug)]
-struct JuicityServerCertVerifier {
-    provider: Arc<rustls::crypto::CryptoProvider>,
-    pinned_certchain_sha256: Option<String>,
-    allow_insecure: bool,
-}
-
-impl JuicityServerCertVerifier {
-    fn new(allow_insecure: bool, pinned_certchain_sha256: &str) -> Arc<Self> {
-        Arc::new(Self {
-            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-            pinned_certchain_sha256: (!pinned_certchain_sha256.is_empty())
-                .then(|| pinned_certchain_sha256.to_owned()),
-            allow_insecure,
-        })
-    }
-}
-
-impl ServerCertVerifier for JuicityServerCertVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        if let Some(pin) = &self.pinned_certchain_sha256 {
-            let mut raw_certs: Vec<&[u8]> = Vec::with_capacity(intermediates.len() + 1);
-            raw_certs.push(end_entity.as_ref());
-            raw_certs.extend(intermediates.iter().map(|cert| cert.as_ref()));
-            verify_pinned_certchain(&raw_certs, pin).map_err(|err| {
-                rustls::Error::General(format!(
-                    "juicity pinned certchain verification failed: {err}"
-                ))
-            })?;
-            return Ok(ServerCertVerified::assertion());
-        }
-        if self.allow_insecure {
-            return Ok(ServerCertVerified::assertion());
-        }
-        Err(rustls::Error::General(
-            "juicity custom verifier requires allow_insecure or pinned_certchain_sha256; system-root verification uses the standard WebPKI verifier"
-                .to_owned(),
-        ))
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
     }
 }
 
@@ -166,41 +79,20 @@ pub fn build_juicity_runtime_client_config_with_congestion_and_session_cache(
     session_cache: Option<crate::shared_transport::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
     let transport = Arc::new(transport_config(congestion)?);
-    if cfg!(feature = "test-boringssl-quic") {
-        let mut policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([
-            RUNTIME_ALPN.as_bytes(),
-        ])?
-        .allow_insecure(allow_insecure)
-        .zero_rtt(false);
-        if !pinned_certchain_sha256.is_empty() {
-            policy = policy.pinned_certchain_sha256(pinned_certchain_sha256);
-        }
-        return crate::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
-            &policy, transport, session_cache,
-        )
-        .map_err(|err| bad_runtime(format!("client BoringSSL QUIC TLS config: {err}")));
+    let mut policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([
+        RUNTIME_ALPN.as_bytes(),
+    ])?
+    .allow_insecure(allow_insecure)
+    .zero_rtt(false);
+    if !pinned_certchain_sha256.is_empty() {
+        policy = policy.pinned_certchain_sha256(pinned_certchain_sha256);
     }
-    let mut crypto = if allow_insecure || !pinned_certchain_sha256.is_empty() {
-        let verifier = JuicityServerCertVerifier::new(allow_insecure, pinned_certchain_sha256);
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth()
-    } else {
-        let roots = crate::shared_transport::system_ca_snapshot()
-            .map_err(|err| bad_runtime(format!("load Juicity system CA bundle: {err}")))?
-            .rustls_roots();
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(roots)
-            .with_no_client_auth()
-    };
-    crypto.alpn_protocols = vec![RUNTIME_ALPN.as_bytes().to_vec()];
-    let mut config = quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)
-            .map_err(|err| bad_runtime(format!("client quic tls config: {err}")))?,
-    ));
-    config.transport_config(transport);
-    Ok(config)
+    crate::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
+        &policy,
+        transport,
+        session_cache,
+    )
+    .map_err(|err| bad_runtime(format!("client BoringSSL QUIC TLS config: {err}")))
 }
 
 pub async fn authenticate_juicity_connection(

@@ -57,7 +57,7 @@ fn h3_ech_fails_closed_for_every_quic_tls_provider() {
     ));
 
     for provider in [
-        ResidentXhttpQuicTlsProvider::Rustls,
+        ResidentXhttpQuicTlsProvider::Boring,
         ResidentXhttpQuicTlsProvider::ChromeBoring,
     ] {
         let error = match build_xhttp_h3_client_config(&endpoint, provider, None) {
@@ -151,7 +151,7 @@ async fn delayed_h3_responses_do_not_serialize_packet_up_requests() {
     let endpoint = packet_up_endpoint(server_address);
     let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
     client_endpoint.set_default_client_config(
-        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Rustls, None)
+        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Boring, None)
             .unwrap(),
     );
     let connection = client_endpoint
@@ -239,7 +239,7 @@ async fn low_request_budget_h3_rotation_keeps_the_replacement_lease() {
     let endpoint = packet_up_endpoint(server_address);
     let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
     client_endpoint.set_default_client_config(
-        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Rustls, None)
+        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Boring, None)
             .unwrap(),
     );
     let connection = client_endpoint

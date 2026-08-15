@@ -807,7 +807,7 @@ mod registry_tests {
         generation: Option<OwnerGeneration>,
         ipv6: bool,
     ) -> QuicEndpointProvenance {
-        let endpoint_config = quinn::EndpointConfig::default();
+        let endpoint_config = quinn_boring::helpers::default_endpoint_config();
         let charge =
             QuicEndpointCharge::for_socket(&endpoint_config, 1, protocol.uses_http3()).unwrap();
         let (remote, bind) = if ipv6 {

@@ -20,25 +20,13 @@ pub(super) use self::vmess_fixtures::*;
 mod source_fixture_contract;
 
 pub(super) const fn expected_resident_tls_provider() -> &'static str {
-    if cfg!(feature = "test-boringssl-tcp-tls") {
-        "boringssl"
-    } else {
-        "rustls"
-    }
+    "boringssl"
 }
 
 pub(super) const fn expected_resident_reality_provider() -> &'static str {
-    if cfg!(feature = "test-boringssl-tcp-tls") {
-        "reality-boringssl"
-    } else {
-        "rustls-reality"
-    }
+    "reality-boringssl"
 }
 
 pub(super) const fn expected_resident_quic_provider() -> &'static str {
-    if cfg!(feature = "test-boringssl-quic") {
-        "quinn-boringssl"
-    } else {
-        "quinn-rustls"
-    }
+    "quinn-boringssl"
 }

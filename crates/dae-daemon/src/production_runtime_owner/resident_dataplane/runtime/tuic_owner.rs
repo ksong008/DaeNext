@@ -1172,8 +1172,8 @@ async fn run_tuic_owner_registry(
     metrics: Arc<TuicOwnerRegistryMetrics>,
     stop: SharedResidentStopSignal,
 ) {
-    let session_cache = cfg!(feature = "test-boringssl-quic")
-        .then(dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache);
+    let session_cache =
+        Some(dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache());
     let mut ownership_reconciler =
         TuicRegistryOwnershipReconciler::new(Arc::clone(&metrics), Arc::clone(&index));
     let mut tasks = JoinSet::new();
@@ -1327,6 +1327,9 @@ async fn run_tuic_owner_registry(
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     let report = wait_quic_endpoints_idle_until(endpoints, deadline).await;
     drain_guard.finish(report);
+    if let Some(session_cache) = session_cache {
+        let _ = session_cache.clear();
+    }
     ownership_reconciler.finish_shutdown();
 }
 

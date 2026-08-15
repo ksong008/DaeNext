@@ -303,20 +303,10 @@ impl ResidentExecutableGraphDescriptor {
         let quic_provider = (self.security_underlay == "quic-tls").then(|| {
             if self.stream_wrapper == "xhttp" {
                 ResidentXhttpQuicTlsProvider::for_endpoint(self.utls_fingerprint.as_ref())
-                    .map(|provider| {
-                        if provider == ResidentXhttpQuicTlsProvider::Rustls
-                            && cfg!(feature = "test-boringssl-quic")
-                        {
-                            "quinn-boringssl"
-                        } else {
-                            provider.as_str()
-                        }
-                    })
+                    .map(ResidentXhttpQuicTlsProvider::as_str)
                     .unwrap_or("unsupported")
-            } else if cfg!(feature = "test-boringssl-quic") {
-                "quinn-boringssl"
             } else {
-                "quinn-rustls"
+                "quinn-boringssl"
             }
         });
         let reality_with_boring_features = self.security_underlay == "reality"
@@ -823,14 +813,10 @@ fn graph_session_policy(proxy: &ResidentProxyPlan) -> ResidentTlsSessionPolicy {
     if execution.security != ResidentSecurityUnderlayPlan::QuicTls {
         return ResidentTlsSessionPolicy::ProviderManagedNoEarlyData;
     }
-    let boring_generation_cache = cfg!(feature = "test-boringssl-quic")
-        && quic_lifecycle_scope(proxy) == QuicLifecycleScope::GenerationOwned;
-    let chrome_boring_generation_cache = quic_lifecycle_scope(proxy)
-        == QuicLifecycleScope::GenerationOwned
-        && ResidentXhttpQuicTlsProvider::for_endpoint(proxy.utls_fingerprint.as_ref())
-            .is_ok_and(|provider| provider == ResidentXhttpQuicTlsProvider::ChromeBoring);
+    let boring_generation_cache =
+        quic_lifecycle_scope(proxy) == QuicLifecycleScope::GenerationOwned;
     ResidentTlsSessionPolicy::QuicManaged {
-        cache_scope: if boring_generation_cache || chrome_boring_generation_cache {
+        cache_scope: if boring_generation_cache {
             ResidentTlsSessionCacheScope::ReloadGeneration
         } else {
             ResidentTlsSessionCacheScope::ProviderConfig

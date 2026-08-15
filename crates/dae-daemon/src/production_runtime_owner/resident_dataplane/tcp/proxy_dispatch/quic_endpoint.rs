@@ -146,7 +146,7 @@ pub(super) fn open_observed_quic_endpoint(
     context: QuicEndpointOpenContext,
     admission_context: QuicEndpointAdmissionContext<'_>,
 ) -> Result<ObservedQuicEndpoint, String> {
-    let endpoint_config = quinn::EndpointConfig::default();
+    let endpoint_config = quinn_boring::helpers::default_endpoint_config();
     let admission_charge = QuicEndpointCharge::before_socket(
         &endpoint_config,
         underlay,
@@ -175,7 +175,7 @@ pub(super) async fn open_observed_quic_endpoint_waiting(
     context: QuicEndpointOpenContext,
     admission_context: QuicEndpointAdmissionContext<'_>,
 ) -> Result<ObservedQuicEndpoint, QuicEndpointOpenError> {
-    let endpoint_config = quinn::EndpointConfig::default();
+    let endpoint_config = quinn_boring::helpers::default_endpoint_config();
     let admission_charge = QuicEndpointCharge::before_socket(
         &endpoint_config,
         underlay,

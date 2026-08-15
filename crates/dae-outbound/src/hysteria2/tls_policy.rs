@@ -68,11 +68,6 @@ impl Hysteria2LeafCertificateSha256 {
         }
         Ok(Some(Self(digest)))
     }
-
-    fn matches_raw_certificate(&self, certificate_der: &[u8]) -> bool {
-        let observed: [u8; 32] = Sha256::digest(certificate_der).into();
-        self.0 == observed
-    }
 }
 
 fn hex_nibble(byte: u8) -> u8 {
@@ -144,12 +139,6 @@ impl Hysteria2TlsPolicy {
             (Hysteria2CertificateVerification::ExplicitInsecure, true) => "pinned-raw-cert-sha256",
         }
     }
-
-    pub(super) fn leaf_certificate_matches(&self, certificate_der: &[u8]) -> bool {
-        self.leaf_certificate_sha256
-            .as_ref()
-            .is_none_or(|pin| pin.matches_raw_certificate(certificate_der))
-    }
 }
 
 impl fmt::Debug for Hysteria2TlsPolicy {
@@ -193,7 +182,9 @@ impl Hysteria2TlsIdentity {
                 "Hysteria2 TLS server name must not be empty".to_owned(),
             ));
         }
-        if rustls::pki_types::ServerName::try_from(server_name.clone()).is_err() {
+        if server_name.parse::<std::net::IpAddr>().is_err()
+            && url::Host::parse(&server_name).is_err()
+        {
             return Err(OutboundError::BadHysteria2(
                 "Hysteria2 TLS server name is invalid".to_owned(),
             ));
