@@ -7,6 +7,7 @@ pub mod http;
 pub mod mac;
 pub mod path_safety;
 pub mod port;
+pub mod subscription_persist;
 pub mod url_or_empty;
 
 pub use base64_decode::{Base64DecodeError, base64_std_decode, base64_url_decode};
@@ -23,4 +24,7 @@ pub use http::is_valid_http_method;
 pub use mac::{ParseMacError, parse_mac};
 pub use path_safety::{PathSafetyError, ensure_file_in_sub_dir};
 pub use port::{ParsePortRangeError, parse_port_range};
+pub use subscription_persist::{
+    SUBSCRIPTION_RESOLVE_CONCURRENCY, cleanup_subscription_persist_files,
+};
 pub use url_or_empty::UrlOrEmpty;

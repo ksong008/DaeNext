@@ -3,10 +3,11 @@ use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
 
-use dae_engine::{
+use dae_config::{necessary_outbounds, parse_config_sections};
+use dae_config_util::cleanup_subscription_persist_files;
+use dae_netutil::route_aware_dial_target;
+use dae_runtime_control::{
     DnsObservabilityStats, RuntimeOverview, RuntimeStatsSnapshot, RuntimeTrafficSample,
-    cleanup_subscription_persist_files, necessary_outbounds, parse_config_sections,
-    route_aware_dial_target,
 };
 
 use crate::{BenchCase, Measurement, measure};

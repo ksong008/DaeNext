@@ -9,7 +9,7 @@ use dae_ebpf_support::{
     LISTEN_SOCKET_KEY_UDP6, LiveLoadedTproxyListenSocketMap, map_info, open_map_fd,
     update_map_elem_bytes,
 };
-use dae_engine::{
+use dae_runtime_control::{
     DnsObservabilityStats, RuntimeOverview, RuntimeStatsSnapshot, RuntimeTrafficSample,
 };
 use serde_json::{Value, json};
