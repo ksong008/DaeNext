@@ -184,18 +184,21 @@ impl BpfTuplesKey {
     }
 }
 
+#[allow(non_camel_case_types)]
 #[repr(C, align(8))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BpfTimerOpaque {
-    pub opaque: [u64; 2],
+pub struct bpf_timer {
+    pub __opaque: [u64; 2],
 }
+
+pub type BpfTimerOpaque = bpf_timer;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BpfUdpConnState {
     pub is_wan_ingress_direction: u8,
     pub padding: [u8; 7],
-    pub timer: BpfTimerOpaque,
+    pub timer: bpf_timer,
 }
 
 impl BpfUdpConnState {
@@ -203,7 +206,7 @@ impl BpfUdpConnState {
         Self {
             is_wan_ingress_direction: is_wan_ingress_direction as u8,
             padding: [0; 7],
-            timer: BpfTimerOpaque { opaque: [0; 2] },
+            timer: bpf_timer { __opaque: [0; 2] },
         }
     }
 }
@@ -259,6 +262,13 @@ mod tests {
         assert_eq!(size_of::<BpfRedirectKey>(), 48);
         assert_eq!(size_of::<BpfRoutingResult>(), 36);
         assert_eq!(size_of::<BpfTuplesKey>(), 40);
+        assert_eq!(
+            core::any::type_name::<BpfTimerOpaque>(),
+            "dae_ebpf_abi::bpf_timer"
+        );
+        assert_eq!(size_of::<BpfTimerOpaque>(), 16);
+        assert_eq!(align_of::<BpfTimerOpaque>(), 8);
         assert_eq!(size_of::<BpfUdpConnState>(), 24);
+        assert_eq!(offset_of!(BpfUdpConnState, timer), 8);
     }
 }
