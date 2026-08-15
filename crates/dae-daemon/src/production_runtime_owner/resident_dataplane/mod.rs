@@ -16,7 +16,7 @@ use dae_outbound::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::udp_payload_admission::ResidentUdpPayloadAdmission;
+use self::udp::ResidentUdpPayloadAdmission;
 
 pub(crate) use self::adapter_matrix::{
     resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
@@ -42,6 +42,7 @@ use self::udp::{
 };
 
 mod adapter_matrix;
+mod allocator_hooks;
 mod client;
 mod control_transport_owners;
 mod direct;
@@ -51,6 +52,8 @@ mod dns_listener;
 mod events;
 mod execution;
 mod execution_types;
+pub(crate) mod geodata;
+pub(crate) mod host_routing_plan;
 mod memory_bench;
 mod ownership_bench;
 mod plan;
@@ -61,7 +64,17 @@ mod subscription_fetch;
 mod tcp;
 mod udp;
 mod vision;
+#[cfg(test)]
+pub(crate) use self::allocator_hooks::resident_allocator_stats_json;
+pub(crate) use self::allocator_hooks::{
+    ResidentAllocatorBusyKind, ResidentAllocatorHooks, ResidentAllocatorReclaimReason,
+    ResidentAllocatorRuntimeHooks, ResidentAllocatorWorkerKind, resident_allocator_enter_busy,
+    resident_allocator_request_reclaim, resident_allocator_runtime_hooks,
+    set_resident_allocator_hooks,
+};
 pub(crate) use self::dns::ResidentDnsReloadSnapshot;
+#[cfg(test)]
+pub(crate) use self::geodata::GeodataResolver as ResidentGeodataStore;
 pub use self::memory_bench::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
 };
@@ -144,6 +157,8 @@ use self::resource_profile::*;
 pub(super) use self::resource_profile::{
     resident_datapath_postflight_interval_seconds_default, selected_resident_runtime_profile_name,
 };
+
+pub const RESIDENT_MANUAL_PROBE_TASK_NAME: &str = "daed-latency";
 #[path = "runtime/hysteria2_owner.rs"]
 mod hysteria2_owner;
 pub(crate) use self::hysteria2_owner::{

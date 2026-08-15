@@ -10,6 +10,7 @@ pub(crate) fn prepare_resident_production_generation(
     config: Arc<Config>,
     geodata_asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
 ) -> Result<ResidentPreparedGeneration, String> {
+    super::super::resident_allocator::install_resident_allocator_hooks();
     let geodata_asset_dirs = geodata_asset_dirs
         .into_iter()
         .map(Into::into)

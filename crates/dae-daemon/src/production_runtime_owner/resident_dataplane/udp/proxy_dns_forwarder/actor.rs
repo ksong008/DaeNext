@@ -6,7 +6,7 @@ use crate::production_runtime_owner::resident_dataplane::dns::{
     ProxyDnsRequestFailure, ProxyDnsRequestStage, ProxyDnsResponseBytes,
     ResidentDnsUdpActorCompletion, ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
 };
-use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadAdmission;
+use crate::production_runtime_owner::resident_dataplane::udp::ResidentUdpPayloadAdmission;
 
 mod executor_state;
 mod pending;

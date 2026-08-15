@@ -43,13 +43,7 @@ pub(crate) fn userspace_matcher_typed_sets(
         .iter()
         .enumerate()
         .map(|(index, prefixes)| {
-            let prefixes = prefixes
-                .iter()
-                .map(|prefix| {
-                    RoutingIpPrefix::new(prefix.addr, prefix.bits)
-                        .map_err(|err| format!("lpm set {index}: {err}"))
-                })
-                .collect::<Result<Vec<_>, String>>()?;
+            let prefixes = prefixes.iter().cloned().collect::<Vec<_>>();
             Ok(RoutingSharedLpmSet {
                 index: index as u32,
                 prefixes: SharedIpPrefixSet::new(prefixes),

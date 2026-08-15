@@ -759,6 +759,7 @@ dependencies = [
  "dae-routing",
  "dae-runtime-control",
  "dae-sniffing",
+ "dae-tls",
  "fastrand",
  "flate2",
  "foreign-types",
@@ -889,6 +890,7 @@ dependencies = [
  "chacha20poly1305",
  "dae-core-types",
  "dae-golden",
+ "dae-tls",
  "fastrand",
  "foreign-types",
  "getrandom 0.3.4",
@@ -965,6 +967,18 @@ version = "3.1.0"
 dependencies = [
  "dae-golden",
  "serde_json",
+]
+
+[[package]]
+name = "dae-tls"
+version = "3.1.0"
+dependencies = [
+ "boring 5.1.0",
+ "boring-sys 5.1.0",
+ "foreign-types",
+ "sha2",
+ "tokio",
+ "tokio-boring",
 ]
 
 [[package]]

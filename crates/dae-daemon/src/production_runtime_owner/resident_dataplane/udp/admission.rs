@@ -4,8 +4,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
+use dae_datapath::udp_io::UdpPayload;
+
 #[derive(Clone)]
-pub(super) struct ResidentUdpPayloadAdmission {
+pub(crate) struct ResidentUdpPayloadAdmission {
     generation: u64,
     state: Arc<ResidentUdpPayloadAdmissionState>,
 }
@@ -19,20 +21,20 @@ struct ResidentUdpPayloadAdmissionState {
 }
 
 #[derive(Debug)]
-pub(super) struct ResidentUdpPayloadPermit {
+pub(crate) struct ResidentUdpPayloadPermit {
     admission: ResidentUdpPayloadAdmission,
     bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct ResidentUdpPayloadAdmissionError {
-    pub(super) requested: usize,
-    pub(super) current: usize,
-    pub(super) limit: usize,
+pub(crate) struct ResidentUdpPayloadAdmissionError {
+    pub(crate) requested: usize,
+    pub(crate) current: usize,
+    pub(crate) limit: usize,
 }
 
 impl ResidentUdpPayloadAdmission {
-    pub(super) fn new(generation: u64, limit: usize) -> Self {
+    pub(crate) fn new(generation: u64, limit: usize) -> Self {
         Self {
             generation,
             state: Arc::new(ResidentUdpPayloadAdmissionState {
@@ -45,7 +47,7 @@ impl ResidentUdpPayloadAdmission {
         }
     }
 
-    pub(super) fn try_acquire(
+    pub(crate) fn try_acquire(
         &self,
         bytes: usize,
     ) -> Result<ResidentUdpPayloadPermit, ResidentUdpPayloadAdmissionError> {
@@ -87,15 +89,15 @@ impl ResidentUdpPayloadAdmission {
         }
     }
 
-    pub(super) fn limit(&self) -> usize {
+    pub(crate) fn limit(&self) -> usize {
         self.state.limit
     }
 
-    pub(super) fn current(&self) -> usize {
+    pub(crate) fn current(&self) -> usize {
         self.state.current.load(Ordering::Acquire)
     }
 
-    pub(super) fn snapshot(&self) -> Value {
+    pub(crate) fn snapshot(&self) -> Value {
         json!({
             "generation": self.generation,
             "limitBytes": self.state.limit,
@@ -105,6 +107,15 @@ impl ResidentUdpPayloadAdmission {
             "rejectedBytes": self.state.rejected_bytes.load(Ordering::Relaxed),
         })
     }
+}
+
+pub(crate) fn admit_udp_payload(
+    payload: &mut UdpPayload,
+    admission: &ResidentUdpPayloadAdmission,
+) -> Result<(), ResidentUdpPayloadAdmissionError> {
+    let permit = admission.try_acquire(payload.len())?;
+    let _ = payload.attach_retained_owner(permit);
+    Ok(())
 }
 
 impl PartialEq for ResidentUdpPayloadAdmission {

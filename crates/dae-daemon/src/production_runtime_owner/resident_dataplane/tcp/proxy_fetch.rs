@@ -1,8 +1,6 @@
 use super::*;
 
-use crate::boring_tls::{
-    BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async,
-};
+use dae_tls::{BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async};
 
 pub(crate) const RESIDENT_TCP_FAILED_HANDLER_JOIN_GRACE: Duration = Duration::from_millis(100);
 

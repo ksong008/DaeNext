@@ -106,7 +106,7 @@ impl ManualProbeRuntime {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(worker_threads)
             .max_blocking_threads(blocking_threads)
-            .thread_name(crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME)
+            .thread_name(RESIDENT_MANUAL_PROBE_TASK_NAME)
             .thread_stack_size(worker_stack_bytes)
             .enable_all()
             .build()

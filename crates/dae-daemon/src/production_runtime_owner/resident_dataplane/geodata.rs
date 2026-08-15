@@ -9,46 +9,45 @@ use std::{
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 
-use dae_config::Param;
+use dae_config::{Function, Param, RoutingRule};
 use dae_geodata::{
     DomainType, decode_entry_range, load_geoip_bytes, load_geoip_entry_bytes, load_geosite_bytes,
     load_geosite_entry_bytes,
 };
-use dae_routing::{DomainKey, SharedDomainSet, WeakSharedDomainSet};
+use dae_routing::{DomainKey, IpPrefix, SharedDomainSet, WeakSharedDomainSet};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::PRODUCT_BINARY_NAME;
-
-use super::types::{IpPrefix, SharedResidentIpPrefixSet};
-
 const DAE_PRODUCT_DIR_NAME: &str = "dae";
+const PRODUCT_BINARY_NAME: &str = "daed";
+
+pub(crate) type SharedResidentIpPrefixSet = Arc<[IpPrefix]>;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct GeodataResolutionReport {
-    pub(super) lookups: Vec<GeodataLookup>,
+pub(crate) struct GeodataResolutionReport {
+    pub(crate) lookups: Vec<GeodataLookup>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct GeodataLookup {
-    pub(super) kind: &'static str,
-    pub(super) filename: String,
-    pub(super) code: String,
-    pub(super) attr: Option<String>,
-    pub(super) path: Option<PathBuf>,
-    pub(super) decode_ok: bool,
-    pub(super) fallback_ok: bool,
-    pub(super) output_count: usize,
-    pub(super) raw_file_bytes: usize,
-    pub(super) decoded_entry_bytes: usize,
-    pub(super) expanded_string_bytes: usize,
-    pub(super) asset_cache_hit: bool,
-    pub(super) decoded_entry_cache_hit: bool,
-    pub(super) asset_storage: &'static str,
+pub(crate) struct GeodataLookup {
+    pub(crate) kind: &'static str,
+    pub(crate) filename: String,
+    pub(crate) code: String,
+    pub(crate) attr: Option<String>,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) decode_ok: bool,
+    pub(crate) fallback_ok: bool,
+    pub(crate) output_count: usize,
+    pub(crate) raw_file_bytes: usize,
+    pub(crate) decoded_entry_bytes: usize,
+    pub(crate) expanded_string_bytes: usize,
+    pub(crate) asset_cache_hit: bool,
+    pub(crate) decoded_entry_cache_hit: bool,
+    pub(crate) asset_storage: &'static str,
 }
 
 #[derive(Debug)]
-pub(in crate::production_runtime_owner) struct GeodataResolver {
+pub(crate) struct GeodataResolver {
     asset_dirs: Vec<PathBuf>,
     asset_cache: Mutex<BTreeMap<String, CachedGeodataAsset>>,
     decoded_entry_cache: Mutex<BTreeMap<DecodedEntryCacheKey, CachedDecodedEntry>>,
@@ -261,7 +260,116 @@ fn shared_prefix_set_interner() -> &'static Mutex<BTreeMap<SharedSetCacheKey, We
     INTERNER.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-pub(super) fn load_geoip_params(
+pub(crate) fn expand_resident_dns_request_qname_rules_with_resolver(
+    rules: &[RoutingRule],
+    resolver: &GeodataResolver,
+) -> Result<Vec<RoutingRule>, String> {
+    expand_resident_dns_qname_rules_with_resolver(rules, resolver, "dns.routing.request qname")
+}
+
+pub(crate) fn expand_resident_dns_response_qname_rules_with_resolver(
+    rules: &[RoutingRule],
+    resolver: &GeodataResolver,
+) -> Result<Vec<RoutingRule>, String> {
+    expand_resident_dns_qname_rules_with_resolver(rules, resolver, "dns.routing.response qname")
+}
+
+fn expand_resident_dns_qname_rules_with_resolver(
+    rules: &[RoutingRule],
+    resolver: &GeodataResolver,
+    context: &str,
+) -> Result<Vec<RoutingRule>, String> {
+    let mut geodata_report = GeodataResolutionReport::default();
+    let mut rules = rules.to_vec();
+    for rule in &mut rules {
+        for function in &mut rule.and_functions {
+            if function.name != "qname" {
+                continue;
+            }
+            expand_resident_dns_qname_function(function, resolver, &mut geodata_report, context)?;
+        }
+    }
+    Ok(rules)
+}
+
+fn expand_resident_dns_qname_function(
+    function: &mut Function,
+    resolver: &GeodataResolver,
+    geodata_report: &mut GeodataResolutionReport,
+    context: &str,
+) -> Result<(), String> {
+    let mut expanded = Vec::new();
+    for param in &function.params {
+        match param.key.as_str() {
+            "geosite" => {
+                expanded.extend(load_geosite_params(
+                    resolver,
+                    "geosite",
+                    &param.val,
+                    geodata_report,
+                )?);
+            }
+            "ext" => {
+                let (filename, code) = param.val.split_once(':').ok_or_else(|| {
+                    format!(
+                        "{context} ext parameter must be file:code, got {}",
+                        param.val
+                    )
+                })?;
+                expanded.extend(load_geosite_params(
+                    resolver,
+                    filename,
+                    code,
+                    geodata_report,
+                )?);
+            }
+            "geoip" => {
+                return Err(format!(
+                    "{context} cannot use geoip parameters; use geosite or ext geosite data"
+                ));
+            }
+            _ => expanded.push(param.clone()),
+        }
+    }
+    function.params = expanded;
+    Ok(())
+}
+
+pub(crate) fn expand_resident_dns_response_ip_params_with_resolver(
+    params: &[Param],
+    resolver: &GeodataResolver,
+) -> Result<Vec<Param>, String> {
+    let mut geodata_report = GeodataResolutionReport::default();
+    let mut expanded = Vec::new();
+    for param in params {
+        match param.key.as_str() {
+            "geoip" => expanded.extend(load_geoip_params(
+                resolver,
+                "geoip",
+                &param.val,
+                &mut geodata_report,
+            )?),
+            "ext" => {
+                let (filename, code) = param.val.split_once(':').ok_or_else(|| {
+                    format!(
+                        "dns.routing.response ip ext parameter must be file:code, got {}",
+                        param.val
+                    )
+                })?;
+                expanded.extend(load_geoip_params(
+                    resolver,
+                    filename,
+                    code,
+                    &mut geodata_report,
+                )?);
+            }
+            _ => expanded.push(param.clone()),
+        }
+    }
+    Ok(expanded)
+}
+
+pub(crate) fn load_geoip_params(
     resolver: &GeodataResolver,
     filename: &str,
     code: &str,
@@ -313,7 +421,7 @@ pub(super) fn load_geoip_params(
         .collect())
 }
 
-pub(super) fn load_geosite_params(
+pub(crate) fn load_geosite_params(
     resolver: &GeodataResolver,
     filename: &str,
     code: &str,
@@ -448,9 +556,7 @@ fn product_xdg_geodata_dirs(product_binary_name: &str) -> Vec<PathBuf> {
 }
 
 impl GeodataResolver {
-    pub(in crate::production_runtime_owner) fn new(
-        asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
-    ) -> Self {
+    pub(crate) fn new(asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>) -> Self {
         let mut dirs = Vec::new();
         if let Ok(dir) = env::var("DAE_LOCATION_ASSET")
             && !dir.is_empty()
@@ -470,7 +576,7 @@ impl GeodataResolver {
         }
     }
 
-    pub(in crate::production_runtime_owner) fn shared_domain_set(
+    pub(crate) fn shared_domain_set(
         &self,
         key: &str,
         values: Vec<String>,
@@ -538,7 +644,7 @@ impl GeodataResolver {
         Ok(shared)
     }
 
-    pub(super) fn shared_prefix_set(
+    pub(crate) fn shared_prefix_set(
         &self,
         prefixes: Vec<IpPrefix>,
     ) -> Result<SharedResidentIpPrefixSet, String> {
@@ -585,7 +691,7 @@ impl GeodataResolver {
     }
 
     #[cfg(test)]
-    pub(in crate::production_runtime_owner) fn shared_domain_set_count(&self) -> usize {
+    pub(crate) fn shared_domain_set_count(&self) -> usize {
         self.shared_domain_sets
             .lock()
             .expect("shared domain set cache lock")
@@ -593,7 +699,7 @@ impl GeodataResolver {
     }
 
     #[cfg(test)]
-    pub(in crate::production_runtime_owner) fn shared_prefix_set_count(&self) -> usize {
+    pub(crate) fn shared_prefix_set_count(&self) -> usize {
         self.shared_prefix_sets
             .lock()
             .expect("shared prefix set cache lock")
@@ -724,9 +830,9 @@ fn shared_string_set_key(kind: &'static str, key: &str, values: &[String]) -> Sh
 fn shared_prefix_set_key(prefixes: &[IpPrefix]) -> SharedSetCacheKey {
     let mut hash = Sha256::new();
     for prefix in prefixes {
-        hash.update(prefix.addr.to_string().as_bytes());
+        hash.update(prefix.addr().to_string().as_bytes());
         hash.update([0]);
-        hash.update([prefix.bits]);
+        hash.update([prefix.bits()]);
     }
     SharedSetCacheKey {
         kind: "prefix",
@@ -736,7 +842,7 @@ fn shared_prefix_set_key(prefixes: &[IpPrefix]) -> SharedSetCacheKey {
     }
 }
 
-pub(super) fn geodata_report_json(report: &GeodataResolutionReport) -> Value {
+pub(crate) fn geodata_report_json(report: &GeodataResolutionReport) -> Value {
     let lookup_count = report.lookups.len();
     let asset_cache_hit_count = report
         .lookups

@@ -1,7 +1,7 @@
 use super::*;
 use std::os::fd::RawFd;
 
-pub(in crate::production_runtime_owner) const UDP_RECV_SYSCALL_BATCH_LIMIT_MAX: usize = 32;
+pub const UDP_RECV_SYSCALL_BATCH_LIMIT_MAX: usize = 32;
 
 struct UdpBatchRecvSlot {
     payload: Vec<u8>,
@@ -9,24 +9,24 @@ struct UdpBatchRecvSlot {
     peer: libc::sockaddr_storage,
 }
 
-pub(in crate::production_runtime_owner) struct UdpBatchReceiver {
+pub struct UdpBatchReceiver {
     enabled: bool,
     slots: Box<[UdpBatchRecvSlot]>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     forced_errno: Option<i32>,
 }
 
-pub(in crate::production_runtime_owner) struct UdpBatchRecvOutcome {
-    pub(in crate::production_runtime_owner) truncated: usize,
-    pub(in crate::production_runtime_owner) control_truncated: usize,
-    pub(in crate::production_runtime_owner) invalid: usize,
-    pub(in crate::production_runtime_owner) syscall_count: usize,
-    pub(in crate::production_runtime_owner) batch_datagrams: usize,
-    pub(in crate::production_runtime_owner) fallback_activated: Option<String>,
+pub struct UdpBatchRecvOutcome {
+    pub truncated: usize,
+    pub control_truncated: usize,
+    pub invalid: usize,
+    pub syscall_count: usize,
+    pub batch_datagrams: usize,
+    pub fallback_activated: Option<String>,
 }
 
 impl UdpBatchReceiver {
-    pub(in crate::production_runtime_owner) fn new(limit: usize) -> Self {
+    pub fn new(limit: usize) -> Self {
         let enabled = !cfg!(feature = "test-scalar-udp-recv") && limit > 1;
         let slot_count = if enabled {
             limit.clamp(2, UDP_RECV_SYSCALL_BATCH_LIMIT_MAX)
@@ -44,17 +44,20 @@ impl UdpBatchReceiver {
         Self {
             enabled,
             slots,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             forced_errno: None,
         }
     }
 
-    #[cfg(all(test, not(feature = "test-scalar-udp-recv")))]
-    pub(in crate::production_runtime_owner) fn is_enabled(&self) -> bool {
+    #[cfg(all(
+        any(test, feature = "test-support"),
+        not(feature = "test-scalar-udp-recv")
+    ))]
+    pub fn is_enabled(&self) -> bool {
         self.enabled
     }
 
-    pub(in crate::production_runtime_owner) fn try_recv(
+    pub fn try_recv(
         &mut self,
         socket: &UdpSocket,
         payload_pool: &UdpPayloadPool,
@@ -159,13 +162,13 @@ impl UdpBatchReceiver {
         }
 
         let received = loop {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let result = if let Some(errno) = self.forced_errno.take() {
                 Err(io::Error::from_raw_os_error(errno))
             } else {
                 recvmmsg_syscall(socket.as_raw_fd(), &mut messages[..count])
             };
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-support")))]
             let result = recvmmsg_syscall(socket.as_raw_fd(), &mut messages[..count]);
             match result {
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
@@ -210,8 +213,11 @@ impl UdpBatchReceiver {
         Ok(outcome)
     }
 
-    #[cfg(all(test, not(feature = "test-scalar-udp-recv")))]
-    pub(in crate::production_runtime_owner) fn force_next_errno(&mut self, errno: i32) {
+    #[cfg(all(
+        any(test, feature = "test-support"),
+        not(feature = "test-scalar-udp-recv")
+    ))]
+    pub fn force_next_errno(&mut self, errno: i32) {
         self.forced_errno = Some(errno);
     }
 }
@@ -233,15 +239,12 @@ fn recvmmsg_syscall(fd: RawFd, messages: &mut [libc::mmsghdr]) -> io::Result<usi
     }
 }
 
-pub(in crate::production_runtime_owner) struct UdpSendMessage<'a> {
-    pub(in crate::production_runtime_owner) payload: &'a [u8],
-    pub(in crate::production_runtime_owner) peer: Option<SocketAddr>,
+pub struct UdpSendMessage<'a> {
+    pub payload: &'a [u8],
+    pub peer: Option<SocketAddr>,
 }
 
-pub(in crate::production_runtime_owner) fn try_sendmmsg(
-    fd: RawFd,
-    datagrams: &[UdpSendMessage<'_>],
-) -> io::Result<usize> {
+pub fn try_sendmmsg(fd: RawFd, datagrams: &[UdpSendMessage<'_>]) -> io::Result<usize> {
     if datagrams.is_empty() {
         return Ok(0);
     }

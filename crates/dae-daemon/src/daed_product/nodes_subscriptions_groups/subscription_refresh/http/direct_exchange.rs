@@ -2,9 +2,7 @@ use super::response::subscription_http_response_limit;
 use super::*;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::boring_tls::{
-    BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async,
-};
+use dae_tls::{BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async};
 
 const SUBSCRIPTION_TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SUBSCRIPTION_DNS_TIMEOUT: Duration = Duration::from_secs(10);

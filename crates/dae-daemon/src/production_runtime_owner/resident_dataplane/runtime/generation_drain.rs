@@ -1,8 +1,5 @@
 use super::*;
 
-#[cfg(not(test))]
-use crate::allocator::{AllocatorReclaimReason, allocator_request_reclaim};
-
 trait ResidentDrainControl: std::fmt::Debug + Send + Sync {
     fn id(&self) -> u64;
     fn close_admission(&self);
@@ -449,7 +446,7 @@ impl ResidentGenerationDrain {
 
 #[cfg(not(test))]
 fn request_retired_generation_reclaim() {
-    allocator_request_reclaim(AllocatorReclaimReason::RetiredGenerationReleased);
+    resident_allocator_request_reclaim(ResidentAllocatorReclaimReason::RetiredGenerationReleased);
 }
 
 #[cfg(test)]

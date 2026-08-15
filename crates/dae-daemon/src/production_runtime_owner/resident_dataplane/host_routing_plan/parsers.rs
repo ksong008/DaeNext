@@ -69,11 +69,11 @@ pub(super) fn parse_ip_prefix(value: &str) -> Result<IpPrefix, String> {
         if bits > max_bits {
             return Err(format!("invalid prefix bits {bits} for {addr}"));
         }
-        return Ok(IpPrefix { addr, bits });
+        return IpPrefix::new(addr, bits).map_err(|error| error.to_string());
     }
     let addr = IpAddr::from_str(value).map_err(|err| format!("invalid ip {value}: {err}"))?;
     let bits = if addr.is_ipv4() { 32 } else { 128 };
-    Ok(IpPrefix { addr, bits })
+    IpPrefix::new(addr, bits).map_err(|error| error.to_string())
 }
 
 pub(super) fn parse_mac_prefix(value: &str) -> Result<IpPrefix, String> {
@@ -86,10 +86,7 @@ pub(super) fn parse_mac_prefix(value: &str) -> Result<IpPrefix, String> {
         octets[index + 10] = u8::from_str_radix(part, 16)
             .map_err(|err| format!("invalid mac address {value}: {err}"))?;
     }
-    Ok(IpPrefix {
-        addr: IpAddr::V6(Ipv6Addr::from(octets)),
-        bits: 128,
-    })
+    IpPrefix::new(IpAddr::V6(Ipv6Addr::from(octets)), 128).map_err(|error| error.to_string())
 }
 
 pub(super) fn parse_u32_auto(value: &str) -> Result<u32, std::num::ParseIntError> {

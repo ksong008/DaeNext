@@ -1145,8 +1145,8 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
 
+    use crate::production_runtime_owner::resident_dataplane::ResidentGeodataStore;
     use crate::production_runtime_owner::resident_dataplane::dns::build_resident_dns_plan;
-    use crate::production_runtime_owner::resident_routing::ResidentGeodataStore;
     use dae_dns::{
         DNS_DEFAULT_PORT, DNS_FLAG_RESPONSE, DNS_HEADER_LEN, DNS_RCODE_MASK, DNS_RCODE_SERVFAIL,
         DnsPacketView,

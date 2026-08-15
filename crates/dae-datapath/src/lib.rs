@@ -10,6 +10,7 @@ pub mod tcp_liveness;
 pub mod tcp_route_dial;
 pub mod udp_direct;
 pub mod udp_endpoint;
+pub mod udp_io;
 pub mod udp_task;
 
 #[cfg(test)]

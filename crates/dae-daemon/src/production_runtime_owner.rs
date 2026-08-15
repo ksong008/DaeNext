@@ -6,8 +6,6 @@ use dae_ebpf_support::{
 };
 use serde_json::{Value, json};
 
-pub(crate) const RESIDENT_MANUAL_PROBE_TASK_NAME: &str = "daed-latency";
-
 mod command;
 mod deep_area;
 mod host_ops;
@@ -20,6 +18,7 @@ mod netns_link;
 mod reload_runtime;
 mod report;
 mod resident;
+mod resident_allocator;
 pub(crate) use resident_lan::configured_lan_ifaces;
 mod resident_dataplane;
 mod resident_interfaces;
@@ -29,7 +28,6 @@ mod resident_routing;
 mod topology;
 mod udp_dns_datapath_contract;
 mod udp_io;
-mod udp_payload_admission;
 
 use command::{
     bpf_dae_snapshot, ensure_safe_run_root, path_string, runtime_resource_leftovers,
@@ -68,8 +66,8 @@ pub(crate) use resident::{
 };
 pub use resident::{ResidentProductionRuntime, start_resident_production_runtime_with_asset_dirs};
 pub(crate) use resident_dataplane::{
-    ResidentDnsReloadSnapshot, ResidentEventLogDecision, ResidentEventLogPolicy,
-    ResidentEventLogPrefilter, ResidentEventLogSink, ResidentEventMetadata,
+    RESIDENT_MANUAL_PROBE_TASK_NAME, ResidentDnsReloadSnapshot, ResidentEventLogDecision,
+    ResidentEventLogPolicy, ResidentEventLogPrefilter, ResidentEventLogSink, ResidentEventMetadata,
     ResidentManualProbeHandle, ResidentNodeSourceAdmission, ResidentTrafficCounters,
     effective_process_memory_capacity, fetch_http_url_via_default_proxy_async,
     resident_live_adapter_config_assessment, resident_live_adapter_entry_missing,

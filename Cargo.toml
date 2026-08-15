@@ -22,6 +22,7 @@ members = [
     "crates/dae-routing",
     "crates/dae-sysdump",
     "crates/dae-sniffing",
+    "crates/dae-tls",
     "crates/dae-trace",
 ]
 resolver = "3"
@@ -89,6 +90,7 @@ dae-product-identity = { path = "crates/dae-product-identity" }
 dae-routing = { path = "crates/dae-routing" }
 dae-sniffing = { path = "crates/dae-sniffing" }
 dae-sysdump = { path = "crates/dae-sysdump" }
+dae-tls = { path = "crates/dae-tls" }
 dae-trace = { path = "crates/dae-trace" }
 h3 = { version = "0.0.8", features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
 h3-quinn = "0.0.10"

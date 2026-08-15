@@ -30,15 +30,15 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio::time;
 
-#[cfg(test)]
-use super::super::resident_routing::build_resident_userspace_routing_matcher_with_geodata;
-use super::super::resident_routing::{
-    ResidentGeodataStore, expand_resident_dns_request_qname_rules_with_resolver,
+use super::ResolvedHostAddrs;
+use super::direct::open_direct_tcp_connection_async;
+use super::geodata::{
+    GeodataResolver as ResidentGeodataStore, expand_resident_dns_request_qname_rules_with_resolver,
     expand_resident_dns_response_ip_params_with_resolver,
     expand_resident_dns_response_qname_rules_with_resolver,
 };
-use super::ResolvedHostAddrs;
-use super::direct::open_direct_tcp_connection_async;
+#[cfg(test)]
+use super::host_routing_plan::build_resident_userspace_routing_matcher_with_geodata;
 #[cfg(test)]
 use super::plan::ResidentProxyPlan;
 #[cfg(test)]

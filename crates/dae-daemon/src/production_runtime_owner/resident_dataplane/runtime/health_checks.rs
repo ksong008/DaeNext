@@ -1,9 +1,5 @@
 use super::tcp::{QuicEndpointCallerClass, scope_quic_endpoint_observation};
 use super::*;
-use crate::allocator::{
-    AllocatorReclaimBusyKind, AllocatorReclaimReason, allocator_reclaim_busy,
-    allocator_request_reclaim,
-};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
 #[path = "health_checks/family.rs"]
@@ -38,7 +34,7 @@ pub(super) async fn run_resident_group_health_check_round_async(
     dns: Arc<dns::ResidentDnsPlan>,
     owners: ResidentTransportOwnerRegistries,
 ) -> HealthCheckRoundStatus {
-    let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::GroupHealth);
+    let _reclaim_busy = resident_allocator_enter_busy(ResidentAllocatorBusyKind::GroupHealth);
     if stop.load(Ordering::Relaxed) {
         return HealthCheckRoundStatus::Cancelled;
     }
@@ -57,7 +53,7 @@ pub(super) async fn run_resident_group_health_check_round_async(
     )
     .await;
     drop(candidates);
-    allocator_request_reclaim(AllocatorReclaimReason::GroupHealthProbe);
+    resident_allocator_request_reclaim(ResidentAllocatorReclaimReason::GroupHealthProbe);
     status
 }
 

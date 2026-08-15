@@ -10,9 +10,9 @@ use super::wire::{
     http1_doh_keep_alive_request_bytes, http1_doh_request_bytes, parse_doh_http_response,
     read_http1_response_message_capped_async, read_to_end_capped_async, restore_dns_response_id,
 };
-use crate::boring_tls::{build_boring_tls_context_with_system_ca, connect_boring_tls_async};
 use boring::ssl::SslContext;
 use dae_outbound::shared_transport::{SystemCaIdentity, system_ca_snapshot};
+use dae_tls::{build_boring_tls_context_with_system_ca, connect_boring_tls_async};
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 

@@ -18,9 +18,6 @@ use tokio::task::JoinSet;
 
 use crate::production_runtime_owner::resident_dataplane::UdpIngressMetricObservation;
 
-#[cfg(not(test))]
-use crate::allocator::{AllocatorReclaimReason, allocator_request_reclaim};
-
 use super::super::plan::resident_data_udp_network_type;
 use super::super::{
     ActiveGenerationSlot, ResidentDataplaneGeneration, ResidentGenerationDrainControl,
@@ -525,10 +522,11 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 let session_idle_timeout = runtime_config.session_idle_timeout;
                                 let proxy_session_idle_timeout =
                                     runtime_config.proxy_session_idle_timeout;
-                                if packet
-                                    .payload
-                                    .admit(&runtime_config.payload_admission)
-                                    .is_err()
+                                if admit_udp_payload(
+                                    &mut packet.payload,
+                                    &runtime_config.payload_admission,
+                                )
+                                .is_err()
                                 {
                                     continue;
                                 }
@@ -581,10 +579,11 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             let session_idle_timeout = runtime_config.session_idle_timeout;
                             let proxy_session_idle_timeout =
                                 runtime_config.proxy_session_idle_timeout;
-                            if packet
-                                .payload
-                                .admit(&runtime_config.payload_admission)
-                                .is_err()
+                            if admit_udp_payload(
+                                &mut packet.payload,
+                                &runtime_config.payload_admission,
+                            )
+                            .is_err()
                             {
                                 continue;
                             }
@@ -881,7 +880,7 @@ fn udp_session_manager_start_failure(stage: &'static str, error: String) -> Valu
 
 #[cfg(not(test))]
 fn request_udp_generation_reclaim() {
-    allocator_request_reclaim(AllocatorReclaimReason::RetiredGenerationReleased);
+    resident_allocator_request_reclaim(ResidentAllocatorReclaimReason::RetiredGenerationReleased);
 }
 
 #[cfg(test)]

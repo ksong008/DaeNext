@@ -8,10 +8,11 @@ use boring::ssl::{
 };
 use boring::x509::X509VerifyError;
 use boring::x509::verify::X509CheckFlags;
-use dae_outbound::shared_transport::system_ca::SystemCaSnapshot;
+
+use crate::SystemCaSnapshot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TlsClientErrorKind {
+pub enum TlsClientErrorKind {
     UnknownIssuer,
     HostnameMismatch,
     Expired,
@@ -22,13 +23,13 @@ pub(crate) enum TlsClientErrorKind {
 }
 
 #[derive(Debug)]
-pub(crate) struct TlsClientError {
+pub struct TlsClientError {
     kind: TlsClientErrorKind,
     detail: String,
 }
 
 impl TlsClientError {
-    pub(crate) const fn kind(&self) -> TlsClientErrorKind {
+    pub const fn kind(&self) -> TlsClientErrorKind {
         self.kind
     }
 }
@@ -42,25 +43,24 @@ impl std::fmt::Display for TlsClientError {
 impl std::error::Error for TlsClientError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BoringTlsVerification {
+pub enum BoringTlsVerification {
     SystemRoots,
-    #[allow(dead_code)]
     ExplicitInsecure,
 }
 
-pub(crate) fn build_boring_tls_context(
+pub fn build_boring_tls_context(
     verification: BoringTlsVerification,
 ) -> io::Result<Arc<SslContext>> {
     build_boring_tls_context_with_alpn(verification, &[])
 }
 
-pub(crate) fn build_boring_tls_context_with_alpn(
+pub fn build_boring_tls_context_with_alpn(
     verification: BoringTlsVerification,
     alpn: &[&[u8]],
 ) -> io::Result<Arc<SslContext>> {
     let snapshot = match verification {
         BoringTlsVerification::SystemRoots => Some(
-            dae_outbound::shared_transport::system_ca_snapshot()
+            crate::system_ca_snapshot()
                 .map_err(|error| io::Error::other(format!("load system CA bundle: {error}")))?,
         ),
         BoringTlsVerification::ExplicitInsecure => None,
@@ -68,7 +68,7 @@ pub(crate) fn build_boring_tls_context_with_alpn(
     build_boring_tls_context_with_alpn_and_snapshot(verification, alpn, snapshot.as_deref())
 }
 
-pub(crate) fn build_boring_tls_context_with_system_ca(
+pub fn build_boring_tls_context_with_system_ca(
     snapshot: &SystemCaSnapshot,
     alpn: &[&[u8]],
 ) -> io::Result<Arc<SslContext>> {
@@ -138,10 +138,7 @@ fn build_boring_tls_context_with_alpn_and_snapshot(
     Ok(Arc::new(builder.build()))
 }
 
-pub(crate) fn configure_boring_tls_client(
-    context: &SslContext,
-    server_name: &str,
-) -> io::Result<Ssl> {
+pub fn configure_boring_tls_client(context: &SslContext, server_name: &str) -> io::Result<Ssl> {
     let mut ssl = Ssl::new(context)
         .map_err(|error| tls_configuration_error("create BoringSSL connection", error))?;
     if server_name.parse::<IpAddr>().is_err() {
@@ -162,7 +159,7 @@ pub(crate) fn configure_boring_tls_client(
     Ok(ssl)
 }
 
-pub(crate) async fn connect_boring_tls_async<S>(
+pub async fn connect_boring_tls_async<S>(
     context: &SslContext,
     server_name: &str,
     stream: S,
@@ -177,7 +174,7 @@ where
         .map_err(async_handshake_error)
 }
 
-pub(crate) fn connect_boring_tls_sync<S>(
+pub fn connect_boring_tls_sync<S>(
     context: &SslContext,
     server_name: &str,
     stream: S,
