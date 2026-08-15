@@ -30,6 +30,7 @@ dae-routing.workspace = true
 dae-sniffing.workspace = true
 dae-tls.workspace = true
 base64.workspace = true
+arc-swap.workspace = true
 blake2.workspace = true
 boring.workspace = true
 boring-sys.workspace = true

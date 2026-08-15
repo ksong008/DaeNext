@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwapOption;
 use serde_json::{Value, json};
 
 use super::writer_metrics::ResidentEventWriterMetrics;
@@ -19,7 +20,7 @@ use self::control::{deadline_after, send_command_until};
 
 const RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
-static ACTIVE_EVENT_WRITER: OnceLock<Mutex<Option<ResidentEventWriterHandle>>> = OnceLock::new();
+static ACTIVE_EVENT_WRITER: OnceLock<ArcSwapOption<ResidentEventWriterInner>> = OnceLock::new();
 
 #[derive(Debug)]
 pub(crate) struct ResidentEventWriterRuntime {
@@ -87,7 +88,7 @@ impl ResidentEventWriterRuntime {
             thread: Some(thread),
             completion: Some(completion_rx),
         };
-        set_active_resident_event_writer(Some(handle));
+        set_active_resident_event_writer(Some(&handle));
         runtime
     }
 
@@ -182,49 +183,9 @@ impl ResidentEventWriterRuntime {
 }
 
 impl ResidentEventWriterHandle {
+    #[cfg(test)]
     pub(super) fn submit(&self, event: ResidentEvent) {
-        let class = event.class();
-        let block_on_full_queue = event.block_on_full_queue();
-        self.inner.metrics.command_enqueued();
-        match self
-            .inner
-            .sender
-            .try_send(ResidentEventWriterCommand::Event(event))
-        {
-            Ok(()) => {}
-            Err(TrySendError::Full(ResidentEventWriterCommand::Event(event)))
-                if block_on_full_queue =>
-            {
-                if let Err(err) = send_command_until(
-                    &self.inner.sender,
-                    ResidentEventWriterCommand::Event(event),
-                    deadline_after(RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT),
-                ) {
-                    self.inner.metrics.command_rejected();
-                    self.inner
-                        .metrics
-                        .record_error(format!("send resident event: {err}"));
-                }
-            }
-            Err(TrySendError::Full(ResidentEventWriterCommand::Event(_))) => {
-                self.inner.metrics.command_rejected();
-                self.inner.metrics.dropped(class);
-            }
-            Err(TrySendError::Disconnected(ResidentEventWriterCommand::Event(_))) => {
-                self.inner.metrics.command_rejected();
-                self.inner.metrics.dropped(class);
-                self.inner
-                    .metrics
-                    .record_error("resident event writer channel disconnected");
-            }
-            Err(TrySendError::Full(command) | TrySendError::Disconnected(command)) => {
-                self.inner.metrics.command_rejected();
-                self.inner.metrics.record_error(format!(
-                    "unexpected resident event writer command rejection: {}",
-                    command.name()
-                ));
-            }
-        }
+        submit_event(&self.inner, event);
     }
 
     pub(crate) fn metrics_snapshot(&self) -> Value {
@@ -240,6 +201,50 @@ impl ResidentEventWriterHandle {
     }
 }
 
+fn submit_event(inner: &ResidentEventWriterInner, event: ResidentEvent) {
+    let class = event.class();
+    let block_on_full_queue = event.block_on_full_queue();
+    inner.metrics.command_enqueued();
+    match inner
+        .sender
+        .try_send(ResidentEventWriterCommand::Event(event))
+    {
+        Ok(()) => {}
+        Err(TrySendError::Full(ResidentEventWriterCommand::Event(event)))
+            if block_on_full_queue =>
+        {
+            if let Err(err) = send_command_until(
+                &inner.sender,
+                ResidentEventWriterCommand::Event(event),
+                deadline_after(RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT),
+            ) {
+                inner.metrics.command_rejected();
+                inner
+                    .metrics
+                    .record_error(format!("send resident event: {err}"));
+            }
+        }
+        Err(TrySendError::Full(ResidentEventWriterCommand::Event(_))) => {
+            inner.metrics.command_rejected();
+            inner.metrics.dropped(class);
+        }
+        Err(TrySendError::Disconnected(ResidentEventWriterCommand::Event(_))) => {
+            inner.metrics.command_rejected();
+            inner.metrics.dropped(class);
+            inner
+                .metrics
+                .record_error("resident event writer channel disconnected");
+        }
+        Err(TrySendError::Full(command) | TrySendError::Disconnected(command)) => {
+            inner.metrics.command_rejected();
+            inner.metrics.record_error(format!(
+                "unexpected resident event writer command rejection: {}",
+                command.name()
+            ));
+        }
+    }
+}
+
 impl ResidentEventWriterCommand {
     fn name(&self) -> &'static str {
         match self {
@@ -251,38 +256,34 @@ impl ResidentEventWriterCommand {
     }
 }
 
-pub(super) fn active_resident_event_writer_for_path(
+pub(super) fn submit_to_active_resident_event_writer(
     path: &Path,
-) -> Option<ResidentEventWriterHandle> {
-    ACTIVE_EVENT_WRITER.get().and_then(|slot| {
-        slot.lock().ok().and_then(|guard| {
-            guard
-                .as_ref()
-                .filter(|writer| writer.inner.path == path)
-                .cloned()
-        })
-    })
+    event: ResidentEvent,
+) -> Result<(), ResidentEvent> {
+    let Some(slot) = ACTIVE_EVENT_WRITER.get() else {
+        return Err(event);
+    };
+    let active = slot.load();
+    let Some(writer) = active.as_ref().filter(|writer| writer.path == path) else {
+        return Err(event);
+    };
+    submit_event(writer, event);
+    Ok(())
 }
 
-fn set_active_resident_event_writer(writer: Option<ResidentEventWriterHandle>) {
-    let slot = ACTIVE_EVENT_WRITER.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = slot.lock() {
-        *guard = writer;
-    }
+fn set_active_resident_event_writer(writer: Option<&ResidentEventWriterHandle>) {
+    ACTIVE_EVENT_WRITER
+        .get_or_init(ArcSwapOption::empty)
+        .store(writer.map(|writer| Arc::clone(&writer.inner)));
 }
 
 fn clear_active_resident_event_writer(path: &Path) {
     let Some(slot) = ACTIVE_EVENT_WRITER.get() else {
         return;
     };
-    let Ok(mut guard) = slot.lock() else {
-        return;
-    };
-    if guard
-        .as_ref()
-        .is_some_and(|writer| writer.inner.path == path)
-    {
-        *guard = None;
+    let active = slot.load();
+    if active.as_ref().is_some_and(|writer| writer.path == path) {
+        slot.store(None);
     }
 }
 

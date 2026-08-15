@@ -27,6 +27,22 @@ pub(crate) fn append_log_fields_for_config(
     append_log_fields_for_config_with_policy(config_dir, state, level, message, fields, true)
 }
 
+pub(crate) fn append_log_fields_for_config_detached(
+    config_dir: &Path,
+    state: &Path,
+    level: &str,
+    message: &str,
+    fields: BTreeMap<String, String>,
+) -> io::Result<()> {
+    let Some(level) = normalize_log_level_name(level) else {
+        return Ok(());
+    };
+    if let Some(runtime) = product_log_runtime_for(config_dir) {
+        return runtime.append_detached(level, message, fields, true);
+    }
+    append_log_fields_for_config_with_policy(config_dir, state, &level, message, fields, true)
+}
+
 pub(crate) fn append_lifecycle_log_fields_for_config(
     config_dir: &Path,
     state: &Path,
