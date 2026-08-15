@@ -6,9 +6,11 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use dae_outbound::shared_transport::boring_quic::{
+    BoringQuicClientPolicy, build_boring_quic_client_config,
+};
 use dae_runtime_control::OwnerGeneration;
-use quinn::crypto::rustls::QuicClientConfig;
-use rustls::{ClientConfig, RootCertStore};
+use sha2::{Digest, Sha256};
 
 use super::h3_server::H3TestServer;
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
@@ -102,13 +104,11 @@ impl ProxiedDoh3ExchangeTarget for ProductionResourceTarget {
 }
 
 fn trusted_h3_client_config(server: &H3TestServer) -> quinn::ClientConfig {
-    let mut roots = RootCertStore::empty();
-    roots.add(server.certificate()).unwrap();
-    let mut crypto = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    crypto.alpn_protocols = vec![DNS_DOH3_ALPN.as_bytes().to_vec()];
-    quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).unwrap()))
+    let digest: [u8; 32] = Sha256::digest(server.certificate()).into();
+    let policy = BoringQuicClientPolicy::new([DNS_DOH3_ALPN.as_bytes()])
+        .unwrap()
+        .pinned_leaf_sha256(digest, false);
+    build_boring_quic_client_config(&policy, Arc::new(quinn::TransportConfig::default())).unwrap()
 }
 
 fn bridge_test_proxy() -> Arc<ResidentProxyPlan> {

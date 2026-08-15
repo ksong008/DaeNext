@@ -4,11 +4,11 @@ use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 use bytes::Bytes;
+use dae_outbound::shared_transport::test_support::{
+    boring_quic_server_config, self_signed_tls_identity,
+};
 use h3::server;
 use http::{Response, StatusCode};
-use quinn::crypto::rustls::QuicServerConfig;
-use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{Barrier, Notify, oneshot};
 
 use crate::production_runtime_owner::resident_dataplane::plan::build_resident_proxy_plan_for_node;
@@ -58,19 +58,18 @@ impl Hysteria2OwnerTestServer {
         auth_behavior: Hysteria2OwnerAuthBehavior,
         ip: std::net::IpAddr,
     ) -> Self {
-        let certified = generate_simple_self_signed(vec![SERVER_NAME.to_owned()]).unwrap();
-        let certificate = certified.cert.der().clone();
-        let private_key =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-        let mut crypto =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![certificate], private_key)
-                .unwrap();
-        crypto.alpn_protocols = vec![b"h3".to_vec()];
-        let server_config =
-            quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()));
-        let endpoint = quinn::Endpoint::server(server_config, SocketAddr::new(ip, 0)).unwrap();
+        let identity = self_signed_tls_identity(&[SERVER_NAME]).unwrap();
+        let server_config = boring_quic_server_config(
+            &identity,
+            &[b"h3".to_vec()],
+            Arc::new(quinn::TransportConfig::default()),
+        )
+        .unwrap();
+        let endpoint = dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            server_config,
+            SocketAddr::new(ip, 0),
+        )
+        .unwrap();
         let address = endpoint.local_addr().unwrap();
         let auth_count = Arc::new(AtomicUsize::new(0));
         let connection_count = Arc::new(AtomicUsize::new(0));

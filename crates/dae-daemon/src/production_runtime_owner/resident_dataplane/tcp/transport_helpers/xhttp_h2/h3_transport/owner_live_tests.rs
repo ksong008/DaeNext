@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
+use dae_outbound::shared_transport::test_support::{
+    boring_quic_server_config, self_signed_tls_identity,
+};
 use h3::server;
 use http::{Response, StatusCode};
-use quinn::crypto::rustls::QuicServerConfig;
-use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::plan::ResidentProxyProtocolPlan;
@@ -16,17 +16,13 @@ use crate::production_runtime_owner::resident_dataplane::tcp::shutdown_xhttp_xmu
 const XHTTP_H3_OWNER_TEST_STACK_BYTES: usize = 1024 * 1024;
 
 fn h3_server_config() -> quinn::ServerConfig {
-    let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let certificate = certified.cert.der().clone();
-    let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![certificate], private_key)
-            .unwrap();
-    crypto.alpn_protocols = vec![b"h3".to_vec()];
-    quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()))
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    boring_quic_server_config(
+        &identity,
+        &[b"h3".to_vec()],
+        Arc::new(quinn::TransportConfig::default()),
+    )
+    .unwrap()
 }
 
 fn xhttp_h3_owner_plan(
@@ -112,7 +108,11 @@ async fn serve_h3_request(incoming: &mut server::Connection<h3_quinn::Connection
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn h3_goaway_retires_the_old_physical_before_rebuild() {
     let server_endpoint =
-        quinn::Endpoint::server(h3_server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            h3_server_config(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .unwrap();
     let server_address = server_endpoint.local_addr().unwrap();
     let accepting_endpoint = server_endpoint.clone();
     let accepted_connections = Arc::new(AtomicUsize::new(0));

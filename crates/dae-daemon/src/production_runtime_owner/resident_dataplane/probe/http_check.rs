@@ -214,43 +214,28 @@ pub(crate) fn resident_tcp_probe_status_ok(path: &str, status: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
-    use std::sync::Arc;
     use std::task::Poll;
 
-    use rcgen::generate_simple_self_signed;
+    use dae_outbound::shared_transport::test_support::{
+        self_signed_tls_identity, tls13_acceptor, tls13_connector,
+    };
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
     use tokio::sync::oneshot;
-    use tokio_rustls::TlsAcceptor;
-    use tokio_rustls::rustls;
-    use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 
     /// Reproduces the handoff shape used by the native HTTPS probe: the inner
     /// TLS application read is polled before the peer has written its first
     /// application record, then the peer writes and the same read must wake.
     #[tokio::test(flavor = "current_thread")]
-    async fn rustls_application_read_wakes_after_duplex_peer_write() {
-        let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-        let certificate = certified.cert.der().clone();
-        let private_key =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-        let server_config =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![certificate.clone()], private_key)
-                .unwrap();
-        let acceptor = TlsAcceptor::from(Arc::new(server_config));
-
-        let mut roots = rustls::RootCertStore::empty();
-        roots.add(certificate).unwrap();
-        let client_config = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(client_config));
+    async fn boringssl_application_read_wakes_after_duplex_peer_write() {
+        let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+        let alpn = [b"http/1.1".to_vec()];
+        let acceptor = tls13_acceptor(&identity, &alpn).unwrap();
+        let connector = tls13_connector(&identity, &alpn).unwrap();
         let (client_io, server_io) = tokio::io::duplex(64 * 1024);
         let (first_poll_tx, first_poll_rx) = oneshot::channel();
 
         let server = tokio::spawn(async move {
-            let mut tls = acceptor.accept(server_io).await.unwrap();
+            let mut tls = tokio_boring::accept(&acceptor, server_io).await.unwrap();
             let mut request = [0_u8; 1];
             tls.read_exact(&mut request).await.unwrap();
             first_poll_rx.await.unwrap();
@@ -258,8 +243,10 @@ mod tests {
             tls.flush().await.unwrap();
         });
 
-        let server_name = ServerName::try_from("localhost".to_owned()).unwrap();
-        let mut tls = connector.connect(server_name, client_io).await.unwrap();
+        let config = connector.configure().unwrap();
+        let mut tls = tokio_boring::connect(config, "localhost", client_io)
+            .await
+            .unwrap();
         tls.write_all(b"x").await.unwrap();
         tls.flush().await.unwrap();
 

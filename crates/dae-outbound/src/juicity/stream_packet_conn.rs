@@ -131,7 +131,7 @@ async fn run_stream_packet_conn_smoke_async(
         seal_stream_packet_frame(&options.response_target, &options.response_payload)?;
     let request_stream = build_stream_conn_request(&options.target, &request_frame)?;
 
-    let server_endpoint = quinn::Endpoint::server(
+    let server_endpoint = crate::shared_transport::test_support::boring_quic_server_endpoint(
         build_live_server_config(&options.server_name)?,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
     )
@@ -154,9 +154,10 @@ async fn run_stream_packet_conn_smoke_async(
         .await
     });
 
-    let mut client_endpoint =
-        quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-            .map_err(|err| bad_stream_packet_conn(format!("create client endpoint: {err}")))?;
+    let mut client_endpoint = crate::shared_transport::test_support::boring_quic_client_endpoint(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .map_err(|err| bad_stream_packet_conn(format!("create client endpoint: {err}")))?;
     client_endpoint.set_default_client_config(build_live_client_config()?);
     let client_connection = client_endpoint
         .connect(loopback_addr, &options.server_name)

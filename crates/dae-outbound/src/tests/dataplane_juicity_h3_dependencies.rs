@@ -17,7 +17,7 @@ fn case_juicity_h3_dependencies_are_compile_admitted() {
     assert!(admission.tokio_runtime_builder_type.contains("tokio"));
     assert!(admission.tokio_runtime_builder_type.contains("Builder"));
     assert!(admission.quinn_runtime_tokio_feature_admitted);
-    assert!(admission.quinn_rustls_aws_lc_rs_feature_admitted);
+    assert!(admission.quinn_boringssl_provider_admitted);
     assert!(admission.h3_quinn_bridge_admitted);
     assert!(admission.tokio_runtime_admitted);
     assert!(admission.dependency_only);

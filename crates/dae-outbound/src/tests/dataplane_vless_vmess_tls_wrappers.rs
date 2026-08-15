@@ -11,12 +11,11 @@ fn case_vless_wss_tls_lifecycle_roundtrips_tcp_payload() {
     let material = shared_transport::tls_loopback_material(&tls_options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let server_payload = payload.clone();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let conn = rustls::ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         validate_case_ws_upgrade(&mut tls, ws_host, ws_path);
         let request =
             vless::read_tcp_request_from_websocket_stream(&mut tls, server_payload.len()).unwrap();
@@ -27,7 +26,7 @@ fn case_vless_wss_tls_lifecycle_roundtrips_tcp_payload() {
         let response = vless::response_payload_bytes(&request.request.payload);
         let response = shared_transport::websocket_server_binary_frame(&response).unwrap();
         tls.write_all(&response).unwrap();
-        selected_alpn(tls.conn.alpn_protocol())
+        shared_transport::test_support::selected_tls_alpn(tls.ssl())
     });
 
     let report = vless::tcp_exchange_over_wss_tls_stream(
@@ -45,7 +44,7 @@ fn case_vless_wss_tls_lifecycle_roundtrips_tcp_payload() {
     let server_alpn = handle.join().unwrap();
 
     assert!(report.true_dataplane);
-    assert!(report.rustls_tls_lifecycle);
+    assert!(report.boringssl_tls_lifecycle);
     assert!(report.full_utls_deferred);
     assert!(report.reality_deferred);
     assert!(report.tls_fragment_deferred);
@@ -75,12 +74,11 @@ fn case_vless_https_httpupgrade_tls_lifecycle_roundtrips_tcp_payload() {
     let material = shared_transport::tls_loopback_material(&tls_options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let server_payload = payload.clone();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let conn = rustls::ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         validate_case_httpupgrade(&mut tls, host, path);
         let request = vless::read_tcp_request_from_stream(&mut tls, server_payload.len()).unwrap();
         assert_eq!(request.key, key);
@@ -89,7 +87,7 @@ fn case_vless_https_httpupgrade_tls_lifecycle_roundtrips_tcp_payload() {
         assert_eq!(request.payload, server_payload);
         let response = vless::response_payload_bytes(&request.payload);
         tls.write_all(&response).unwrap();
-        selected_alpn(tls.conn.alpn_protocol())
+        shared_transport::test_support::selected_tls_alpn(tls.ssl())
     });
 
     let report = vless::tcp_exchange_over_https_httpupgrade_tls_stream(
@@ -107,7 +105,7 @@ fn case_vless_https_httpupgrade_tls_lifecycle_roundtrips_tcp_payload() {
     let server_alpn = handle.join().unwrap();
 
     assert!(report.true_dataplane);
-    assert!(report.rustls_tls_lifecycle);
+    assert!(report.boringssl_tls_lifecycle);
     assert_eq!(report.command, vmess::VMessNetwork::Tcp.byte());
     assert_eq!(report.target, target);
     assert_eq!(report.httpupgrade_host, host);
@@ -130,13 +128,12 @@ fn case_vmess_wss_tls_lifecycle_roundtrips_aead_tcp_payload() {
     let material = shared_transport::tls_loopback_material(&tls_options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let server_payload = payload.clone();
     let server_uuid = uuid.to_owned();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let conn = rustls::ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         validate_case_ws_upgrade(&mut tls, ws_host, ws_path);
         let request =
             vmess::read_aead_tcp_request_from_websocket_stream(&mut tls, &server_uuid).unwrap();
@@ -147,7 +144,7 @@ fn case_vmess_wss_tls_lifecycle_roundtrips_aead_tcp_payload() {
             vmess::aead_tcp_response_packet(&request.request, &request.request.payload).unwrap();
         let response = shared_transport::websocket_server_binary_frame(&response).unwrap();
         tls.write_all(&response).unwrap();
-        selected_alpn(tls.conn.alpn_protocol())
+        shared_transport::test_support::selected_tls_alpn(tls.ssl())
     });
 
     let report = vmess::aead_tcp_exchange_over_wss_tls_stream(
@@ -165,7 +162,7 @@ fn case_vmess_wss_tls_lifecycle_roundtrips_aead_tcp_payload() {
     let server_alpn = handle.join().unwrap();
 
     assert!(report.true_dataplane);
-    assert!(report.rustls_tls_lifecycle);
+    assert!(report.boringssl_tls_lifecycle);
     assert!(report.full_utls_deferred);
     assert!(report.reality_rejected_for_vmess);
     assert_eq!(report.security, vmess::VMESS_AEAD_SECURITY_AES_128_GCM);
@@ -190,13 +187,12 @@ fn case_vmess_https_httpupgrade_tls_lifecycle_roundtrips_aead_tcp_payload() {
     let material = shared_transport::tls_loopback_material(&tls_options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let server_payload = payload.clone();
     let server_uuid = uuid.to_owned();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let conn = rustls::ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         validate_case_httpupgrade(&mut tls, host, path);
         let request = vmess::read_aead_tcp_request_from_stream(&mut tls, &server_uuid).unwrap();
         assert_eq!(request.command, vmess::VMessNetwork::Tcp.byte());
@@ -204,7 +200,7 @@ fn case_vmess_https_httpupgrade_tls_lifecycle_roundtrips_aead_tcp_payload() {
         assert_eq!(request.payload, server_payload);
         let response = vmess::aead_tcp_response_packet(&request, &request.payload).unwrap();
         tls.write_all(&response).unwrap();
-        selected_alpn(tls.conn.alpn_protocol())
+        shared_transport::test_support::selected_tls_alpn(tls.ssl())
     });
 
     let report = vmess::aead_tcp_exchange_over_https_httpupgrade_tls_stream(
@@ -222,7 +218,7 @@ fn case_vmess_https_httpupgrade_tls_lifecycle_roundtrips_aead_tcp_payload() {
     let server_alpn = handle.join().unwrap();
 
     assert!(report.true_dataplane);
-    assert!(report.rustls_tls_lifecycle);
+    assert!(report.boringssl_tls_lifecycle);
     assert_eq!(report.security, vmess::VMESS_AEAD_SECURITY_AES_128_GCM);
     assert_eq!(report.target, target);
     assert_eq!(report.httpupgrade_host, host);
@@ -274,10 +270,4 @@ where
             b"HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n",
         )
         .unwrap();
-}
-
-fn selected_alpn(protocol: Option<&[u8]>) -> String {
-    protocol
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default()
 }

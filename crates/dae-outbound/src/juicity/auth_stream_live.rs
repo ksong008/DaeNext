@@ -2,12 +2,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
-use rcgen::generate_simple_self_signed;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
-
 use crate::error::OutboundError;
 
 use super::auth_stream::{build_auth_stream_transcript, build_deterministic_authenticate_header};
@@ -80,66 +74,6 @@ pub struct JuicityLiveAuthStreamReport {
     pub juicity_true_quic_h3_dataplane_admitted: bool,
 }
 
-#[derive(Debug)]
-struct AcceptAnyServerCertVerifier {
-    provider: Arc<rustls::crypto::CryptoProvider>,
-}
-
-impl AcceptAnyServerCertVerifier {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-        })
-    }
-}
-
-impl ServerCertVerifier for AcceptAnyServerCertVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
-}
-
 pub fn run_live_auth_stream_smoke(
     options: &JuicityLiveAuthStreamOptions,
 ) -> Result<JuicityLiveAuthStreamReport, OutboundError> {
@@ -169,7 +103,7 @@ async fn run_live_auth_stream_smoke_async(
     let expected_transcript = transcript.transcript.clone();
 
     let server_config = build_live_server_config(&options.server_name)?;
-    let server_endpoint = quinn::Endpoint::server(
+    let server_endpoint = crate::shared_transport::test_support::boring_quic_server_endpoint(
         server_config,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
     )
@@ -182,9 +116,10 @@ async fn run_live_auth_stream_smoke_async(
         run_live_auth_stream_server(server_endpoint, expected_transcript, server_iterations).await
     });
 
-    let mut client_endpoint =
-        quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-            .map_err(|err| bad_live_auth_stream(format!("create client endpoint: {err}")))?;
+    let mut client_endpoint = crate::shared_transport::test_support::boring_quic_client_endpoint(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .map_err(|err| bad_live_auth_stream(format!("create client endpoint: {err}")))?;
     client_endpoint.set_default_client_config(build_live_client_config()?);
     let client_connection = client_endpoint
         .connect(loopback_addr, &options.server_name)
@@ -338,38 +273,26 @@ async fn run_live_auth_stream_server(
 pub(super) fn build_live_server_config(
     server_name: &str,
 ) -> Result<quinn::ServerConfig, OutboundError> {
-    let certified = generate_simple_self_signed(vec![server_name.to_owned()])
-        .map_err(|err| bad_live_auth_stream(format!("generate h3 cert: {err}")))?;
-    let cert_der = certified.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der], key_der)
-            .map_err(|err| bad_live_auth_stream(format!("server cert config: {err}")))?;
-    crypto.alpn_protocols = vec![DEFAULT_H3_ALPN.as_bytes().to_vec()];
-    let mut config = quinn::ServerConfig::with_crypto(Arc::new(
-        QuicServerConfig::try_from(crypto)
-            .map_err(|err| bad_live_auth_stream(format!("server quic tls config: {err}")))?,
-    ));
-    config.transport_config(Arc::new(transport_config()?));
-    Ok(config)
+    let identity = crate::shared_transport::test_support::self_signed_tls_identity(&[server_name])
+        .map_err(|err| bad_live_auth_stream(format!("generate h3 BoringSSL cert: {err}")))?;
+    crate::shared_transport::test_support::boring_quic_server_config(
+        &identity,
+        &[DEFAULT_H3_ALPN.as_bytes().to_vec()],
+        Arc::new(transport_config()?),
+    )
+    .map_err(|err| bad_live_auth_stream(format!("BoringSSL server QUIC TLS: {err}")))
 }
 
 pub(super) fn build_live_client_config() -> Result<quinn::ClientConfig, OutboundError> {
-    let mut crypto =
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .dangerous()
-            .with_custom_certificate_verifier(AcceptAnyServerCertVerifier::new())
-            .with_no_client_auth();
-    crypto.alpn_protocols = vec![DEFAULT_H3_ALPN.as_bytes().to_vec()];
-    let mut config = quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)
-            .map_err(|err| bad_live_auth_stream(format!("client quic tls config: {err}")))?,
-    ));
-    config.transport_config(Arc::new(transport_config()?));
-    Ok(config)
+    let policy = crate::shared_transport::boring_quic::BoringQuicClientPolicy::new([
+        DEFAULT_H3_ALPN.as_bytes(),
+    ])?
+    .allow_insecure(true);
+    crate::shared_transport::boring_quic::build_boring_quic_client_config(
+        &policy,
+        Arc::new(transport_config()?),
+    )
+    .map_err(|err| bad_live_auth_stream(format!("BoringSSL client QUIC TLS: {err}")))
 }
 
 fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {

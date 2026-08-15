@@ -1,8 +1,4 @@
 use std::io::{Cursor, Read, Write};
-use std::sync::Arc;
-
-use rustls::ClientConnection;
-use rustls::pki_types::ServerName;
 
 use crate::error::OutboundError;
 use crate::shared_transport::mux::{
@@ -110,12 +106,9 @@ where
     S: Read + Write,
 {
     let spec = cipher_spec(cipher)?;
-    let server_name = ServerName::try_from(options.tls.server_name.clone()).map_err(|err| {
-        OutboundError::BadShadowsocks(format!("invalid v2ray-plugin tls server_name: {err}"))
-    })?;
-    let conn = ClientConnection::new(Arc::clone(&material.client_config), server_name)
+    let mut tls = material
+        .connect(stream, &options.tls.server_name)
         .map_err(|err| OutboundError::BadShadowsocks(format!("v2ray-plugin tls connect: {err}")))?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
 
     let ws_options = HttpUpgradeOptions::new(&options.ws_host, &options.ws_path);
     let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
@@ -156,7 +149,7 @@ where
     let mut decoder = AeadStreamCodec::new(cipher, password, server_salt)?;
     let mut encrypted_reader = Cursor::new(encrypted);
     let echoed_payload = read_encrypted_chunk_from_stream(&mut encrypted_reader, &mut decoder)?;
-    let selected_alpn = selected_alpn(tls.conn.alpn_protocol());
+    let selected_alpn = crate::shared_transport::test_support::selected_tls_alpn(tls.ssl());
     let alpn_validated = selected_alpn == options.tls.alpn_protocol;
 
     Ok(Sip003V2rayPluginExchangeReport {
@@ -277,12 +270,6 @@ fn normalize_ws_path(path: &str) -> String {
     } else {
         format!("/{path}")
     }
-}
-
-fn selected_alpn(protocol: Option<&[u8]>) -> String {
-    protocol
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default()
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

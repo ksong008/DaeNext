@@ -1,8 +1,4 @@
 use std::io::{Cursor, Read, Write};
-use std::sync::Arc;
-
-use rustls::ClientConnection;
-use rustls::pki_types::ServerName;
 
 use crate::error::OutboundError;
 use crate::shadowsocks::{self, AeadTcpSalts};
@@ -68,16 +64,11 @@ where
     S: Read + Write,
 {
     let spec = shadowsocks::cipher_spec(cipher)?;
-    let server_name = ServerName::try_from(tls_options.server_name.clone()).map_err(|err| {
-        OutboundError::BadTrojan(format!(
-            "invalid trojan-go wss inner shadowsocks server_name: {err}"
-        ))
-    })?;
-    let conn =
-        ClientConnection::new(Arc::clone(&material.client_config), server_name).map_err(|err| {
+    let mut tls = material
+        .connect(stream, &tls_options.server_name)
+        .map_err(|err| {
             OutboundError::BadTrojan(format!("trojan-go wss inner shadowsocks tls: {err}"))
         })?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
 
     let ws_options = HttpUpgradeOptions::new(ws_host, ws_path);
     let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
@@ -121,11 +112,7 @@ where
         ));
     }
 
-    let selected_alpn = tls
-        .conn
-        .alpn_protocol()
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default();
+    let selected_alpn = crate::shared_transport::test_support::selected_tls_alpn(tls.ssl());
     let alpn_validated = selected_alpn == tls_options.alpn_protocol;
 
     Ok(TrojanGoWssInnerShadowsocksTcpExchangeReport {

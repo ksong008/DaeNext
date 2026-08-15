@@ -23,7 +23,7 @@ async fn authenticated_session_keeps_quic_open_for_hysteria2_streams() {
     tokio::time::timeout(Duration::from_secs(5), async {
         let (server_config, cert_der) =
             build_hysteria2_server_config(DEFAULT_HYSTERIA2_SERVER_NAME).unwrap();
-        let server_endpoint = quinn::Endpoint::server(
+        let server_endpoint = crate::shared_transport::test_support::boring_quic_server_endpoint(
             server_config,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         )
@@ -32,7 +32,11 @@ async fn authenticated_session_keeps_quic_open_for_hysteria2_streams() {
         let server_task = tokio::spawn(run_auth_then_stream_server(server_endpoint));
 
         let mut client_endpoint =
-            quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+            crate::shared_transport::test_support::boring_quic_client_endpoint(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                0,
+            ))
+            .unwrap();
         let tls_identity = Hysteria2TlsIdentity::from_node_and_global(
             DEFAULT_HYSTERIA2_SERVER_NAME,
             true,

@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 use dae_outbound::juicity::{
     JUICITY_AUTHENTICATE_HEADER_LEN, seal_stream_packet_frame, write_juicity_tcp_request,
 };
-use quinn::crypto::rustls::QuicServerConfig;
-use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+use dae_outbound::shared_transport::test_support::{
+    boring_quic_server_config, self_signed_tls_identity,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio::time;
@@ -60,7 +60,7 @@ impl JuicityTestServer {
         udp_response_batch_size: usize,
         reverse_udp_response_batch: bool,
     ) -> Self {
-        let endpoint = quinn::Endpoint::server(
+        let endpoint = dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
             juicity_server_config(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         )
@@ -297,17 +297,13 @@ async fn read_juicity_address(reader: &mut (impl AsyncRead + Unpin)) -> std::io:
 }
 
 fn juicity_server_config() -> quinn::ServerConfig {
-    let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let cert_der = certified.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der], key_der)
-            .unwrap();
-    crypto.alpn_protocols = vec![b"h3".to_vec()];
-    quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()))
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    boring_quic_server_config(
+        &identity,
+        &[b"h3".to_vec()],
+        Arc::new(quinn::TransportConfig::default()),
+    )
+    .unwrap()
 }
 
 fn juicity_proxy(addr: SocketAddr, generation: u64) -> plan::ResidentProxyBinding {

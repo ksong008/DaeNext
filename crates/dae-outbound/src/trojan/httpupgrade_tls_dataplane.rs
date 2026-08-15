@@ -1,8 +1,4 @@
 use std::io::{Read, Write};
-use std::sync::Arc;
-
-use rustls::ClientConnection;
-use rustls::pki_types::ServerName;
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
@@ -50,16 +46,11 @@ pub fn tcp_exchange_over_httpupgrade_tls_stream<S>(
 where
     S: Read + Write,
 {
-    let server_name = ServerName::try_from(tls_options.server_name.clone()).map_err(|err| {
-        OutboundError::BadTrojan(format!(
-            "invalid trojan-go httpupgrade tls server_name: {err}"
-        ))
-    })?;
-    let conn =
-        ClientConnection::new(Arc::clone(&material.client_config), server_name).map_err(|err| {
+    let mut tls = material
+        .connect(stream, &tls_options.server_name)
+        .map_err(|err| {
             OutboundError::BadTrojan(format!("trojan-go httpupgrade tls connect: {err}"))
         })?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
 
     let upgrade_options = HttpUpgradeOptions::new(httpupgrade_host, httpupgrade_path);
     let upgrade_request = http_upgrade_request(&upgrade_options);
@@ -83,11 +74,7 @@ where
         ));
     }
 
-    let selected_alpn = tls
-        .conn
-        .alpn_protocol()
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default();
+    let selected_alpn = crate::shared_transport::test_support::selected_tls_alpn(tls.ssl());
     let alpn_validated = selected_alpn == tls_options.alpn_protocol;
 
     Ok(TrojanGoHttpUpgradeTcpExchangeReport {

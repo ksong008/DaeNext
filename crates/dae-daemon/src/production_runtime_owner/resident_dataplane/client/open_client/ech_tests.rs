@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use boring::hpke::HpkeKey;
-use boring::pkey::{PKey, Private};
 use boring::ssl::{SslAcceptor, SslConnector, SslEchKeys, SslMethod, SslVersion};
 use boring::x509::X509;
-use rcgen::generate_simple_self_signed;
+use dae_outbound::shared_transport::test_support::{TestTlsIdentity, self_signed_tls_identity};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
@@ -22,21 +21,11 @@ const ECH_CONFIG_2: &str =
     "/g0AOgEAIAAgfvtf7qKidLP//mlRnvrh+kmMYSz60A+MIocOvLAtdiUACAABAAEAAQADAAdlY2guY29tAAA=";
 const ECH_KEY_2: &str = "pzVEJGz+sFNMYn7KLhGPVjzALmqi5686fbRyEx6ItoU=";
 
-struct TestIdentity {
-    certificate: X509,
-    private_key: PKey<Private>,
+fn test_identity() -> TestTlsIdentity {
+    self_signed_tls_identity(&[INNER_NAME, "ech.com"]).unwrap()
 }
 
-fn test_identity() -> TestIdentity {
-    let certified =
-        generate_simple_self_signed(vec![INNER_NAME.to_owned(), "ech.com".to_owned()]).unwrap();
-    TestIdentity {
-        certificate: X509::from_der(certified.cert.der().as_ref()).unwrap(),
-        private_key: PKey::private_key_from_der(&certified.key_pair.serialize_der()).unwrap(),
-    }
-}
-
-fn ech_acceptor(identity: &TestIdentity, config_base64: &str, key_base64: &str) -> SslAcceptor {
+fn ech_acceptor(identity: &TestTlsIdentity, config_base64: &str, key_base64: &str) -> SslAcceptor {
     let mut acceptor = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
     acceptor
         .set_min_proto_version(Some(SslVersion::TLS1_3))

@@ -235,7 +235,7 @@ mod tests {
             ),
             execution(
                 Protocol::VlessStandard,
-                Security::RealityRustls,
+                Security::RealityBoring,
                 Wrapper::Xhttp(ResidentXhttpHttpVersion::H3),
                 Udp::VlessStandard(Stream::XhttpH3),
             ),
@@ -253,7 +253,7 @@ mod tests {
             ),
             execution(
                 Protocol::VlessStandard,
-                Security::RealityRustls,
+                Security::RealityBoring,
                 Wrapper::H2,
                 Udp::VlessStandard(Stream::H2Tls),
             ),

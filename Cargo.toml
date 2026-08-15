@@ -43,8 +43,6 @@ panic = "unwind"
 strip = true
 
 [patch.crates-io]
-rustls = { git = "https://github.com/Watfaq/rustls.git", branch = "watfaq/0.23.40" }
-tokio-rustls = { git = "https://github.com/Watfaq/tokio-rustls.git", branch = "watfaq/0.26.4" }
 boring-sys = { path = "vendor/boring-sys" }
 boring-sys-v4-compat = { package = "boring-sys", path = "vendor/boring-sys-v4-compat" }
 boring-v4-compat = { package = "boring", path = "vendor/boring-v4-compat" }
@@ -59,7 +57,6 @@ repository = "https://github.com/ksong008/DaeNext"
 aho-corasick = "1"
 aes = { version = "0.8", features = ["zeroize"] }
 aes-gcm = { version = "0.10", features = ["zeroize"] }
-aws-lc-rs = "1.17.1"
 argon2 = "0.5"
 aya = { version = "0.13.1", default-features = false }
 aya-ebpf = { version = "0.1.1", default-features = false }
@@ -110,12 +107,10 @@ md-5 = "0.10"
 object = { version = "0.36.7", default-features = false, features = ["elf", "read_core", "std"] }
 percent-encoding = "2.3"
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio"] }
-quinn-boring = { path = "vendor/quinn-boring", default-features = false }
+quinn-boring = { path = "vendor/quinn-boring", default-features = false, features = ["runtime-tokio"] }
 quinn-proto = { version = "0.11.14", default-features = false }
 udp = { package = "quinn-udp", version = "0.5", default-features = false, features = ["tracing"] }
 regex = "1"
-rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
-rustls = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
@@ -124,7 +119,6 @@ sha3 = "0.10"
 socket2 = "0.6"
 tokio = { version = "1.52.3", default-features = false, features = ["rt", "net", "time", "io-util", "sync", "macros"] }
 tokio-boring = "5.0"
-tokio-rustls = "0.26"
 tls-parser = "0.12.2"
 tikv-jemallocator = { version = "0.7", default-features = false, features = ["background_threads_runtime_support", "stats"] }
 tikv-jemalloc-ctl = { version = "0.7", default-features = false, features = ["stats"] }

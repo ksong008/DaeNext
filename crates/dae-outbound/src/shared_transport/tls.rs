@@ -1,16 +1,13 @@
 use std::io::{Read, Write};
 use std::sync::Arc;
 
-#[cfg(any(test, feature = "test-support"))]
-use rcgen::generate_simple_self_signed;
-#[cfg(any(test, feature = "test-support"))]
-use rustls::RootCertStore;
-use rustls::pki_types::ServerName;
-#[cfg(any(test, feature = "test-support"))]
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection};
+use boring::ssl::{SslAcceptor, SslConnector, SslStream};
 
 use crate::error::OutboundError;
+use crate::shared_transport::test_support::{
+    connect_tls_stream, selected_tls_alpn, self_signed_tls_identity, tls13_acceptor,
+    tls13_connector,
+};
 
 pub const DEFAULT_TLS_SERVER_NAME: &str = "shared-tls.fixture.invalid";
 pub const DEFAULT_TLS_ALPN: &str = "http/1.1";
@@ -48,15 +45,15 @@ impl TlsUnderlayOptions {
 }
 
 pub struct TlsLoopbackMaterial {
-    pub client_config: Arc<ClientConfig>,
-    pub server_config: Arc<ServerConfig>,
+    pub client_connector: Arc<SslConnector>,
+    pub server_acceptor: Arc<SslAcceptor>,
     pub certificate_der_len: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TlsUnderlayReport {
     pub true_dataplane: bool,
-    pub rustls_underlay: bool,
+    pub boringssl_underlay: bool,
     pub server_name: String,
     pub alpn_protocol: String,
     pub selected_alpn: String,
@@ -86,33 +83,24 @@ pub struct TlsServerObservation {
 pub fn tls_loopback_material(
     options: &TlsUnderlayOptions,
 ) -> Result<TlsLoopbackMaterial, OutboundError> {
-    let certified = generate_simple_self_signed(vec![options.server_name.clone()])
-        .map_err(|err| OutboundError::BadSharedTransport(format!("generate tls cert: {err}")))?;
-    let cert_der = certified.cert.der().clone();
-    let certificate_der_len = cert_der.len();
-    let key_der =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-
-    let mut server_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert_der.clone()], key_der)
-        .map_err(|err| OutboundError::BadSharedTransport(format!("server tls config: {err}")))?;
-    server_config.alpn_protocols = vec![options.alpn_protocol.as_bytes().to_vec()];
-
-    let mut roots = RootCertStore::empty();
-    roots
-        .add(cert_der)
-        .map_err(|err| OutboundError::BadSharedTransport(format!("client tls roots: {err}")))?;
-    let mut client_config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    client_config.alpn_protocols = vec![options.alpn_protocol.as_bytes().to_vec()];
+    let identity = self_signed_tls_identity(&[options.server_name.as_str()])?;
+    let certificate_der_len = identity.certificate_der()?.len();
+    let alpn = vec![options.alpn_protocol.as_bytes().to_vec()];
 
     Ok(TlsLoopbackMaterial {
-        client_config: Arc::new(client_config),
-        server_config: Arc::new(server_config),
+        client_connector: Arc::new(tls13_connector(&identity, &alpn)?),
+        server_acceptor: Arc::new(tls13_acceptor(&identity, &alpn)?),
         certificate_der_len,
     })
+}
+
+impl TlsLoopbackMaterial {
+    pub fn connect<S>(&self, stream: S, server_name: &str) -> Result<SslStream<S>, OutboundError>
+    where
+        S: Read + Write,
+    {
+        connect_tls_stream(&self.client_connector, server_name, stream)
+    }
 }
 
 pub fn tls_client_echo_exchange<S>(
@@ -124,12 +112,7 @@ pub fn tls_client_echo_exchange<S>(
 where
     S: Read + Write,
 {
-    let server_name = ServerName::try_from(options.server_name.clone()).map_err(|err| {
-        OutboundError::BadSharedTransport(format!("invalid tls server_name: {err}"))
-    })?;
-    let conn = ClientConnection::new(Arc::clone(&material.client_config), server_name)
-        .map_err(|err| OutboundError::BadSharedTransport(format!("client tls connect: {err}")))?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
+    let mut tls = material.connect(stream, &options.server_name)?;
     tls.write_all(payload)
         .map_err(|err| OutboundError::BadSharedTransport(format!("tls client write: {err}")))?;
     tls.flush()
@@ -137,11 +120,11 @@ where
     let mut echoed_payload = vec![0_u8; payload.len()];
     tls.read_exact(&mut echoed_payload)
         .map_err(|err| OutboundError::BadSharedTransport(format!("tls client read: {err}")))?;
-    let selected_alpn = selected_alpn(tls.conn.alpn_protocol());
+    let selected_alpn = selected_tls_alpn(tls.ssl());
     let alpn_validated = selected_alpn == options.alpn_protocol;
     Ok(TlsUnderlayReport {
         true_dataplane: echoed_payload == payload,
-        rustls_underlay: true,
+        boringssl_underlay: true,
         server_name: options.server_name.clone(),
         alpn_protocol: options.alpn_protocol.clone(),
         selected_alpn,
@@ -161,15 +144,15 @@ where
 
 pub fn tls_server_echo<S>(
     stream: S,
-    server_config: Arc<ServerConfig>,
+    server_acceptor: Arc<SslAcceptor>,
     expected_payload_len: usize,
 ) -> Result<TlsServerObservation, OutboundError>
 where
     S: Read + Write,
 {
-    let conn = ServerConnection::new(server_config)
+    let mut tls = server_acceptor
+        .accept(stream)
         .map_err(|err| OutboundError::BadSharedTransport(format!("server tls accept: {err}")))?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
     let mut payload = vec![0_u8; expected_payload_len];
     tls.read_exact(&mut payload)
         .map_err(|err| OutboundError::BadSharedTransport(format!("tls server read: {err}")))?;
@@ -178,16 +161,10 @@ where
     tls.flush()
         .map_err(|err| OutboundError::BadSharedTransport(format!("tls server flush: {err}")))?;
     Ok(TlsServerObservation {
-        selected_alpn: selected_alpn(tls.conn.alpn_protocol()),
+        selected_alpn: selected_tls_alpn(tls.ssl()),
         payload_len: payload.len(),
         echoed_payload: payload,
         tls_handshake_validated: true,
         payload_roundtrip_validated: true,
     })
-}
-
-fn selected_alpn(protocol: Option<&[u8]>) -> String {
-    protocol
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default()
 }

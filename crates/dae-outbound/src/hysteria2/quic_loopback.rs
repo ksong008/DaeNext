@@ -168,7 +168,7 @@ async fn run_hysteria2_quic_loopback_smoke_async(
         &configured_pin_sha256,
     )?;
 
-    let server_endpoint = quinn::Endpoint::server(
+    let server_endpoint = crate::shared_transport::test_support::boring_quic_server_endpoint(
         server_config,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
     )
@@ -189,9 +189,10 @@ async fn run_hysteria2_quic_loopback_smoke_async(
         .await
     });
 
-    let mut client_endpoint =
-        quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-            .map_err(|err| bad_quic_loopback(format!("create Hysteria2 client endpoint: {err}")))?;
+    let mut client_endpoint = crate::shared_transport::test_support::boring_quic_client_endpoint(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .map_err(|err| bad_quic_loopback(format!("create Hysteria2 client endpoint: {err}")))?;
     client_endpoint
         .set_default_client_config(build_hysteria2_runtime_client_config(&tls_identity)?);
     let client_connection = client_endpoint
@@ -318,7 +319,7 @@ async fn run_hysteria2_quic_loopback_smoke_async(
         raw_cert_sha256_hex: raw_cert_hash,
         raw_cert_pin_matched: true,
         certificate_callback_observed: true,
-        certificate_der_len: cert_der.as_ref().len(),
+        certificate_der_len: cert_der.len(),
         stream_iterations: options.stream_iterations,
         datagram_iterations: options.datagram_iterations,
         total_exchange_count,

@@ -95,7 +95,7 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
             .unwrap()
     );
     assert!(
-        report["no_silent_fingerprint_rustls_downgrade_ready"]
+        report["no_silent_fingerprint_provider_downgrade_ready"]
             .as_bool()
             .unwrap()
     );

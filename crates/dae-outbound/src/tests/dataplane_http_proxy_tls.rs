@@ -10,7 +10,7 @@ fn case_https_proxy_tls_connect_dataplane_echoes_payload() {
     let material = shared_transport::tls_loopback_material(&tls_options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let target = "fixture-target.fixture.invalid:443";
     let authority = "front.fixture.fixture.invalid:443";
     let expected_auth = http_proxy::request::basic_auth_header("user", "pass").unwrap();
@@ -18,13 +18,9 @@ fn case_https_proxy_tls_connect_dataplane_echoes_payload() {
     let server_payload = payload.clone();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let conn = rustls::ServerConnection::new(server_config).unwrap();
-        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut tls = server_acceptor.accept(stream).unwrap();
         handle_https_connect_proxy(&mut tls, authority, &expected_auth, &server_payload).unwrap();
-        tls.conn
-            .alpn_protocol()
-            .map(|value| String::from_utf8_lossy(value).to_string())
-            .unwrap_or_default()
+        shared_transport::test_support::selected_tls_alpn(tls.ssl())
     });
     let mut options = http_proxy::HttpConnectOptions::connect(target);
     options.host_override = authority.to_owned();

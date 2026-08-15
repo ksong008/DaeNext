@@ -3,14 +3,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use boring_v4_compat::ssl::{NameType, SslVerifyMode};
 use bytes::{Buf, Bytes};
 use h3::{client, server};
 use http::{Method, Request, Response, StatusCode};
-use quinn::crypto::rustls::{HandshakeData, QuicClientConfig, QuicServerConfig};
-use rcgen::generate_simple_self_signed;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use crate::error::OutboundError;
 use crate::shared_transport::{
@@ -70,72 +66,6 @@ pub struct XHttpH3LoopbackReport {
 struct CertCallbackState {
     observed: bool,
     server_name: String,
-}
-
-#[derive(Debug)]
-struct AcceptAnyCertVerifier {
-    provider: Arc<rustls::crypto::CryptoProvider>,
-    state: Arc<Mutex<CertCallbackState>>,
-}
-
-impl AcceptAnyCertVerifier {
-    fn new(state: Arc<Mutex<CertCallbackState>>) -> Arc<Self> {
-        Arc::new(Self {
-            provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-            state,
-        })
-    }
-}
-
-impl ServerCertVerifier for AcceptAnyCertVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        if let Ok(mut state) = self.state.lock() {
-            state.observed = true;
-            state.server_name = server_name.to_str().into_owned();
-        }
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -203,8 +133,8 @@ async fn run_xhttp_h3_loopback_async(
     options: &XHttpH3LoopbackOptions,
 ) -> Result<XHttpH3LoopbackReport, OutboundError> {
     let (server_config, cert_der) = build_server_config(&options.xhttp.host)?;
-    let certificate_der_len = cert_der.as_ref().len();
-    let server_endpoint = quinn::Endpoint::server(
+    let certificate_der_len = cert_der.len();
+    let server_endpoint = super::test_support::boring_quic_server_endpoint(
         server_config,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
     )
@@ -217,9 +147,11 @@ async fn run_xhttp_h3_loopback_async(
         tokio::spawn(async move { run_xhttp_h3_server(server_endpoint, server_options).await });
 
     let verifier_state = Arc::new(Mutex::new(CertCallbackState::default()));
-    let mut client_endpoint =
-        quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-            .map_err(|err| bad_xhttp_h3(format!("create xHTTP H3 client endpoint: {err}")))?;
+    let mut client_endpoint = super::test_support::boring_quic_client_endpoint(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+    ))
+    .map_err(|err| bad_xhttp_h3(format!("create xHTTP H3 client endpoint: {err}")))?;
     client_endpoint.set_default_client_config(build_client_config(Arc::clone(&verifier_state))?);
     let client_connection = client_endpoint
         .connect(loopback_addr, &options.xhttp.host)
@@ -408,42 +340,39 @@ async fn run_xhttp_h3_server(
     Ok(summary)
 }
 
-fn build_server_config(
-    server_name: &str,
-) -> Result<(quinn::ServerConfig, CertificateDer<'static>), OutboundError> {
-    let certified = generate_simple_self_signed(vec![server_name.to_owned()])
-        .map_err(|err| bad_xhttp_h3(format!("generate xHTTP H3 cert: {err}")))?;
-    let cert_der = certified.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der.clone()], key_der)
-            .map_err(|err| bad_xhttp_h3(format!("xHTTP H3 server cert config: {err}")))?;
-    crypto.alpn_protocols = vec![XHTTP_H3_ALPN.as_bytes().to_vec()];
-    let mut config = quinn::ServerConfig::with_crypto(Arc::new(
-        QuicServerConfig::try_from(crypto)
-            .map_err(|err| bad_xhttp_h3(format!("xHTTP H3 server quic tls config: {err}")))?,
-    ));
-    config.transport_config(Arc::new(transport_config()?));
+fn build_server_config(server_name: &str) -> Result<(quinn::ServerConfig, Vec<u8>), OutboundError> {
+    let identity = super::test_support::self_signed_tls_identity(&[server_name])
+        .map_err(|err| bad_xhttp_h3(format!("generate xHTTP H3 BoringSSL cert: {err}")))?;
+    let cert_der = identity
+        .certificate_der()
+        .map_err(|err| bad_xhttp_h3(format!("encode xHTTP H3 BoringSSL cert: {err}")))?;
+    let config = super::test_support::boring_quic_server_config(
+        &identity,
+        &[XHTTP_H3_ALPN.as_bytes().to_vec()],
+        Arc::new(transport_config()?),
+    )
+    .map_err(|err| bad_xhttp_h3(format!("xHTTP H3 BoringSSL server QUIC TLS: {err}")))?;
     Ok((config, cert_der))
 }
 
 fn build_client_config(
     verifier_state: Arc<Mutex<CertCallbackState>>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let verifier = AcceptAnyCertVerifier::new(verifier_state);
-    let mut crypto =
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
-    crypto.alpn_protocols = vec![XHTTP_H3_ALPN.as_bytes().to_vec()];
-    let mut config = quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)
-            .map_err(|err| bad_xhttp_h3(format!("xHTTP H3 client quic tls config: {err}")))?,
-    ));
+    let policy = super::boring_quic::BoringQuicClientPolicy::new([XHTTP_H3_ALPN.as_bytes()])?
+        .allow_insecure(true);
+    let mut crypto = super::boring_quic::build_boring_quic_client_crypto(&policy)
+        .map_err(|err| bad_xhttp_h3(format!("xHTTP H3 BoringSSL client QUIC TLS: {err}")))?;
+    crypto.set_custom_verify_callback(SslVerifyMode::PEER, move |ssl| {
+        if let Ok(mut state) = verifier_state.lock() {
+            state.observed = true;
+            state.server_name = ssl
+                .servername(NameType::HOST_NAME)
+                .unwrap_or_default()
+                .to_owned();
+        }
+        Ok(())
+    });
+    let mut config = quinn::ClientConfig::new(Arc::new(crypto));
     config.transport_config(Arc::new(transport_config()?));
     Ok(config)
 }
@@ -462,10 +391,7 @@ fn transport_config() -> Result<quinn::TransportConfig, OutboundError> {
 }
 
 fn selected_alpn(connection: &quinn::Connection) -> String {
-    connection
-        .handshake_data()
-        .and_then(|data| data.downcast::<HandshakeData>().ok())
-        .and_then(|data| data.protocol.clone())
+    super::boring_quic::selected_connection_alpn(connection)
         .map(|protocol| String::from_utf8_lossy(&protocol).to_string())
         .unwrap_or_default()
 }

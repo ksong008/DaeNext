@@ -16,12 +16,12 @@ fn case_shared_tls_underlay_echoes_payload_and_validates_alpn() {
     let material = shared_transport::tls_loopback_material(&options).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
-    let server_config = material.server_config.clone();
+    let server_acceptor = material.server_acceptor.clone();
     let payload = b"fixture-shared-tls-underlay-ping".to_vec();
     let expected_payload_len = payload.len();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        shared_transport::tls_server_echo(stream, server_config, expected_payload_len).unwrap()
+        shared_transport::tls_server_echo(stream, server_acceptor, expected_payload_len).unwrap()
     });
 
     let report = shared_transport::tls_client_echo_exchange(
@@ -34,7 +34,7 @@ fn case_shared_tls_underlay_echoes_payload_and_validates_alpn() {
     let server = handle.join().unwrap();
 
     assert!(report.true_dataplane);
-    assert!(report.rustls_underlay);
+    assert!(report.boringssl_underlay);
     assert_eq!(
         report.server_name,
         shared_transport::DEFAULT_TLS_SERVER_NAME

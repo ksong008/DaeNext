@@ -113,10 +113,8 @@ pub(super) fn reality_boring_transcript(ssl: &SslRef) -> Option<RealityBoringTra
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use boring::pkey::PKey;
     use boring::ssl::{SslAcceptor, SslConnector, SslMethod, SslVerifyMode, SslVersion};
-    use boring::x509::X509;
-    use rcgen::generate_simple_self_signed;
+    use dae_outbound::shared_transport::test_support::self_signed_tls_identity;
     use tokio::net::{TcpListener, TcpStream};
 
     use super::*;
@@ -133,9 +131,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reality_transcript_getter_returns_exact_serialized_hello_messages() {
-        let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-        let certificate = X509::from_der(certified.cert.der().as_ref()).unwrap();
-        let private_key = PKey::private_key_from_der(&certified.key_pair.serialize_der()).unwrap();
+        let identity = self_signed_tls_identity(&["localhost"]).unwrap();
         let mut acceptor = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
         acceptor
             .set_min_proto_version(Some(SslVersion::TLS1_3))
@@ -144,8 +140,8 @@ mod tests {
             .set_max_proto_version(Some(SslVersion::TLS1_3))
             .unwrap();
         acceptor.set_curves_list("X25519").unwrap();
-        acceptor.set_certificate(&certificate).unwrap();
-        acceptor.set_private_key(&private_key).unwrap();
+        acceptor.set_certificate(&identity.certificate).unwrap();
+        acceptor.set_private_key(&identity.private_key).unwrap();
         let acceptor = Arc::new(acceptor.build());
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -182,7 +182,7 @@ fn projected_security_surface_is_total(reconciliation: &SourceShapeReconciliatio
                 && (!covers_reality
                     || !matches!(
                         shape.security,
-                        MaterializedSecurity::RealityRustls
+                        MaterializedSecurity::RealityBoring
                             | MaterializedSecurity::RealityFingerprint
                     )
                     || reconciliation.classifies(shape))

@@ -4,14 +4,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use boring::ssl::SslAcceptor;
 use dae_outbound::anytls::{AnyTlsPaddingScheme, contract as anytls_contract, link as anytls_link};
+use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
 use dae_outbound::socks5::Socks5Address;
-use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
-use tokio_rustls::TlsAcceptor;
 
 use super::anytls_owner::start_anytls_owner_registry_with_resources;
 use super::*;
@@ -141,7 +140,7 @@ impl AnyTlsTestServer {
                         let observation = Arc::clone(&task_observation);
                         let respond_to_heartbeats = Arc::clone(&task_heartbeat_policy);
                         connections.spawn(async move {
-                            let Ok(stream) = acceptor.accept(stream).await else {
+                            let Ok(stream) = tokio_boring::accept(&acceptor, stream).await else {
                                 return;
                             };
                             run_anytls_test_connection(
@@ -417,16 +416,9 @@ async fn write_anytls_test_frame(
         .map_err(|error| format!("write AnyTLS test frame: {error}"))
 }
 
-fn anytls_test_tls_acceptor() -> TlsAcceptor {
-    let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let certificate = certified.cert.der().clone();
-    let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let config = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_no_client_auth()
-        .with_single_cert(vec![certificate], private_key)
-        .unwrap();
-    TlsAcceptor::from(Arc::new(config))
+fn anytls_test_tls_acceptor() -> SslAcceptor {
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    tls13_acceptor(&identity, &[b"http/1.1".to_vec()]).unwrap()
 }
 
 fn anytls_proxy(addr: SocketAddr, generation: u64) -> plan::ResidentProxyBinding {

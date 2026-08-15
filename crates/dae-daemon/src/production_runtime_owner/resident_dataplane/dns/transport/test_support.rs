@@ -7,12 +7,13 @@ use std::sync::{
 
 use ::h3::server;
 use bytes::Bytes;
-use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
-use rcgen::generate_simple_self_signed;
-use rustls::{
-    ClientConfig, RootCertStore,
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+use dae_outbound::shared_transport::boring_quic::{
+    BoringQuicClientPolicy, build_boring_quic_client_config,
 };
+use dae_outbound::shared_transport::test_support::{
+    boring_quic_server_config, self_signed_tls_identity,
+};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::production_runtime_owner::resident_dataplane::plan::build_resident_proxy_plan_for_node;
@@ -342,7 +343,7 @@ pub(in crate::production_runtime_owner::resident_dataplane::dns) enum DnsQuicTes
 
 pub(in crate::production_runtime_owner::resident_dataplane::dns) struct DnsQuicTestServer {
     address: SocketAddr,
-    certificate: CertificateDer<'static>,
+    certificate: Vec<u8>,
     protocol: DnsQuicTestProtocol,
     connections: Arc<AtomicUsize>,
     requests: Arc<AtomicUsize>,
@@ -357,20 +358,15 @@ impl DnsQuicTestServer {
         response_delay: std::time::Duration,
     ) -> Self {
         assert!(!responses.is_empty());
-        let certified =
-            generate_simple_self_signed(vec![DNS_TRANSPORT_TEST_SERVER_NAME.to_owned()]).unwrap();
-        let certificate = certified.cert.der().clone();
-        let private_key =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-        let mut crypto =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![certificate.clone()], private_key)
-                .unwrap();
-        crypto.alpn_protocols = vec![protocol.alpn().as_bytes().to_vec()];
-        let server_config =
-            quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()));
-        let endpoint = quinn::Endpoint::server(
+        let identity = self_signed_tls_identity(&[DNS_TRANSPORT_TEST_SERVER_NAME]).unwrap();
+        let certificate = identity.certificate_der().unwrap();
+        let server_config = boring_quic_server_config(
+            &identity,
+            &[protocol.alpn().as_bytes().to_vec()],
+            Arc::new(quinn::TransportConfig::default()),
+        )
+        .unwrap();
+        let endpoint = dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
             server_config,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         )
@@ -457,13 +453,12 @@ impl DnsQuicTestServer {
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn client_config(
         &self,
     ) -> quinn::ClientConfig {
-        let mut roots = RootCertStore::empty();
-        roots.add(self.certificate.clone()).unwrap();
-        let mut crypto = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        crypto.alpn_protocols = vec![self.protocol.alpn().as_bytes().to_vec()];
-        quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).unwrap()))
+        let digest: [u8; 32] = Sha256::digest(&self.certificate).into();
+        let policy = BoringQuicClientPolicy::new([self.protocol.alpn().as_bytes()])
+            .unwrap()
+            .pinned_leaf_sha256(digest, false);
+        build_boring_quic_client_config(&policy, Arc::new(quinn::TransportConfig::default()))
+            .unwrap()
     }
 
     pub(in crate::production_runtime_owner::resident_dataplane::dns) fn connections(

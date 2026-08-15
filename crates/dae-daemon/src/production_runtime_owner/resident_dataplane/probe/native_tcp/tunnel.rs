@@ -262,36 +262,24 @@ mod tests {
     };
 
     use crate::production_runtime_owner::resident_dataplane::ResidentStopSignal;
-    use rcgen::generate_simple_self_signed;
+    use dae_outbound::shared_transport::test_support::{
+        self_signed_tls_identity, tls13_acceptor, tls13_connector,
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
-    use tokio_rustls::TlsAcceptor;
-    use tokio_rustls::rustls;
-    use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 
     use super::*;
 
     #[tokio::test(flavor = "current_thread")]
-    async fn spawned_tunnel_forwards_rustls_application_read_wake() {
-        let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-        let certificate = certified.cert.der().clone();
-        let private_key =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-        let server_config =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![certificate.clone()], private_key)
-                .unwrap();
-        let acceptor = TlsAcceptor::from(Arc::new(server_config));
-        let mut roots = rustls::RootCertStore::empty();
-        roots.add(certificate).unwrap();
-        let client_config = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+    async fn spawned_tunnel_forwards_boringssl_application_read_wake() {
+        let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+        let alpn = [b"http/1.1".to_vec()];
+        let acceptor = tls13_acceptor(&identity, &alpn).unwrap();
+        let connector = tls13_connector(&identity, &alpn).unwrap();
         let (probe_side, server_side) = tokio::io::duplex(64 * 1024);
         let (first_poll_tx, first_poll_rx) = oneshot::channel();
         let relay_task = tokio::spawn(async move {
-            let mut tls = acceptor.accept(server_side).await.unwrap();
+            let mut tls = tokio_boring::accept(&acceptor, server_side).await.unwrap();
             let mut request = [0_u8; 1];
             tls.read_exact(&mut request).await.unwrap();
             first_poll_rx.await.unwrap();
@@ -300,10 +288,10 @@ mod tests {
         });
         let stop = ResidentStopSignal::shared();
         let mut tunnel = SpawnedNativeTcpTunnel::new(probe_side, relay_task, stop);
-        let server_name = ServerName::try_from("localhost".to_owned()).unwrap();
-        let mut tls = tokio_rustls::TlsConnector::from(Arc::new(client_config))
-            .connect(server_name, &mut tunnel)
+        let config = connector.configure().unwrap();
+        let mut tls = tokio_boring::connect(config, "localhost", &mut tunnel)
             .await
+            .map_err(|error| error.to_string())
             .unwrap();
         tls.write_all(b"x").await.unwrap();
         tls.flush().await.unwrap();

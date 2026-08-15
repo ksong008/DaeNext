@@ -59,14 +59,14 @@ fn self_signed_tls_fetch_is_classified_before_node_import() {
 }
 
 fn self_signed_subscription_server() -> (u16, thread::JoinHandle<()>) {
-    let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let certificate = certified.cert.der().clone();
-    let private_key =
-        rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der());
-    let server_config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![certificate], private_key.into())
-        .unwrap();
+    let identity =
+        dae_outbound::shared_transport::test_support::self_signed_tls_identity(&["localhost"])
+            .unwrap();
+    let acceptor = dae_outbound::shared_transport::test_support::tls13_acceptor(
+        &identity,
+        &[b"http/1.1".to_vec()],
+    )
+    .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || {
@@ -78,8 +78,7 @@ fn self_signed_subscription_server() -> (u16, thread::JoinHandle<()>) {
             .unwrap();
         runtime.block_on(async move {
             let stream = tokio::net::TcpStream::from_std(stream).unwrap();
-            let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
-            let _ = acceptor.accept(stream).await;
+            let _ = tokio_boring::accept(&acceptor, stream).await;
         });
     });
     (port, server)

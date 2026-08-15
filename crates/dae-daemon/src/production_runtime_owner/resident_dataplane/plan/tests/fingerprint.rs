@@ -450,7 +450,7 @@ pub(super) fn resident_dataplane_plan_keeps_standard_tls_when_link_fp_is_empty_a
 }
 
 #[test]
-pub(super) fn resident_dataplane_plan_keeps_document_unsafe_auxiliary_rustls_path() {
+pub(super) fn resident_dataplane_plan_keeps_document_unsafe_standard_boringssl_path() {
     let config = fingerprint_config("", vless_vision_fixture_url("unsafe"));
     let plan = build_resident_dataplane_plan(&config).unwrap();
     let proxy = plan.default_proxy_snapshot().unwrap();

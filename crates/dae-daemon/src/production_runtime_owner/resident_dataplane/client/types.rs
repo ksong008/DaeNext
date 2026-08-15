@@ -53,7 +53,7 @@ impl ResidentTlsProvider {
             | ResidentSecurityUnderlayPlan::FragmentedTls => Ok(Self::FingerprintAwareBoring),
             ResidentSecurityUnderlayPlan::FingerprintAwareTls => Ok(Self::FingerprintAwareBoring),
             ResidentSecurityUnderlayPlan::RealityFingerprint => Ok(Self::RealityFingerprintBoring),
-            ResidentSecurityUnderlayPlan::RealityRustls => Ok(Self::RealityFingerprintBoring),
+            ResidentSecurityUnderlayPlan::RealityBoring => Ok(Self::RealityFingerprintBoring),
             other => Err(format!(
                 "resident TLS factory cannot open security underlay {} for protocol {}",
                 other.graph_label(),
@@ -121,7 +121,6 @@ const RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ResidentTlsConfigCacheClearReport {
-    pub(crate) rustls: usize,
     pub(crate) boring: usize,
     pub(crate) boring_sessions: usize,
     pub(crate) boring_session_attempts: u64,
@@ -231,7 +230,6 @@ pub(crate) fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearR
         .unwrap_or_default();
     let _ = dae_outbound::shared_transport::invalidate_system_ca_snapshot();
     ResidentTlsConfigCacheClearReport {
-        rustls: 0,
         boring,
         boring_sessions: boring_sessions.entries,
         boring_session_attempts: boring_sessions.attempted,

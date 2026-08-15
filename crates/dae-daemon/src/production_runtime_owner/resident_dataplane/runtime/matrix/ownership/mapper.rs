@@ -48,7 +48,7 @@ const STANDARD_OR_REALITY_SECURITY: &[SecurityDimension] = &[
     SecurityDimension::InsecureTls,
     SecurityDimension::FragmentedTls,
     SecurityDimension::FingerprintAwareTls,
-    SecurityDimension::RealityRustls,
+    SecurityDimension::RealityBoring,
     SecurityDimension::RealityFingerprint,
 ];
 

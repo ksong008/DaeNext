@@ -1,8 +1,4 @@
 use std::io::{Read, Write};
-use std::sync::Arc;
-
-use rustls::ClientConnection;
-use rustls::pki_types::ServerName;
 
 use crate::error::OutboundError;
 use crate::shared_transport::{TlsLoopbackMaterial, TlsUnderlayOptions};
@@ -38,18 +34,11 @@ pub fn tcp_exchange_over_tls_stream<S>(
 where
     S: Read + Write,
 {
-    let server_name = ServerName::try_from(tls_options.server_name.clone()).map_err(|err| {
-        OutboundError::BadTrojan(format!("invalid trojan tls server_name: {err}"))
-    })?;
-    let conn = ClientConnection::new(Arc::clone(&material.client_config), server_name)
+    let mut tls = material
+        .connect(stream, &tls_options.server_name)
         .map_err(|err| OutboundError::BadTrojan(format!("trojan tls connect: {err}")))?;
-    let mut tls = rustls::StreamOwned::new(conn, stream);
     let inner = tcp_exchange_over_stream(&mut tls, proxy, password, target, payload)?;
-    let selected_alpn = tls
-        .conn
-        .alpn_protocol()
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default();
+    let selected_alpn = crate::shared_transport::test_support::selected_tls_alpn(tls.ssl());
     let alpn_validated = selected_alpn == tls_options.alpn_protocol;
     Ok(TrojanTlsTcpExchangeReport {
         proxy: inner.proxy,

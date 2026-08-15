@@ -15,6 +15,8 @@ pub mod reality;
 pub mod reality_aead;
 pub mod system_ca;
 #[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+#[cfg(any(test, feature = "test-support"))]
 pub mod tls;
 pub mod tls_fragment;
 pub mod utls_fingerprint;

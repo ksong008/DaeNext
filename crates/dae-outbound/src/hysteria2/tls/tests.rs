@@ -2,76 +2,31 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use quinn::crypto::rustls::QuicServerConfig;
-use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyPair, KeyUsagePurpose, date_time_ymd,
-};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-
 use super::*;
 use crate::hysteria2::Hysteria2TlsIdentity;
 use crate::hysteria2::underlay::raw_cert_sha256_hex;
+use crate::shared_transport::test_support::{
+    TestCertificateValidity, TestTlsCertificateChain, boring_quic_server_config,
+    signed_tls_certificate_chain,
+};
 
 const TRUSTED_SERVER_NAME: &str = "trusted.hysteria2.test";
 const WRONG_SERVER_NAME: &str = "wrong.hysteria2.test";
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Clone, Copy)]
-enum LeafValidity {
-    Current,
-    Expired,
-    NotYetValid,
-}
-
 struct CertificateChain {
-    root_pem: String,
-    leaf_der: CertificateDer<'static>,
-    leaf_key_der: Vec<u8>,
+    material: TestTlsCertificateChain,
 }
 
 impl CertificateChain {
-    fn signed(server_name: &str, validity: LeafValidity) -> Self {
-        let root_key = KeyPair::generate().unwrap();
-        let mut root_params = CertificateParams::new(Vec::<String>::new()).unwrap();
-        let mut root_name = DistinguishedName::new();
-        root_name.push(DnType::CommonName, "DaeNext Hysteria2 test root");
-        root_params.distinguished_name = root_name;
-        root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        root_params.key_usages = vec![
-            KeyUsagePurpose::DigitalSignature,
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::CrlSign,
-        ];
-        let root = root_params.self_signed(&root_key).unwrap();
-
-        let leaf_key = KeyPair::generate().unwrap();
-        let mut leaf_params = CertificateParams::new(vec![server_name.to_owned()]).unwrap();
-        let mut leaf_name = DistinguishedName::new();
-        leaf_name.push(DnType::CommonName, server_name);
-        leaf_params.distinguished_name = leaf_name;
-        leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-        match validity {
-            LeafValidity::Current => {}
-            LeafValidity::Expired => {
-                leaf_params.not_before = date_time_ymd(2010, 1, 1);
-                leaf_params.not_after = date_time_ymd(2011, 1, 1);
-            }
-            LeafValidity::NotYetValid => {
-                leaf_params.not_before = date_time_ymd(2099, 1, 1);
-                leaf_params.not_after = date_time_ymd(2100, 1, 1);
-            }
-        }
-        let leaf = leaf_params.signed_by(&leaf_key, &root, &root_key).unwrap();
+    fn signed(server_name: &str, validity: TestCertificateValidity) -> Self {
         Self {
-            root_pem: root.pem(),
-            leaf_der: leaf.der().clone(),
-            leaf_key_der: leaf_key.serialize_der(),
+            material: signed_tls_certificate_chain(server_name, validity).unwrap(),
         }
     }
 
     fn leaf_pin(&self) -> String {
-        raw_cert_sha256_hex(self.leaf_der.as_ref())
+        raw_cert_sha256_hex(&self.material.leaf_identity.certificate_der().unwrap())
     }
 
     fn wrong_leaf_pin(&self) -> String {
@@ -81,14 +36,12 @@ impl CertificateChain {
     }
 
     fn server_config(&self) -> quinn::ServerConfig {
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(self.leaf_key_der.clone()));
-        let mut crypto =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![self.leaf_der.clone()], private_key)
-                .unwrap();
-        crypto.alpn_protocols = vec![DEFAULT_HYSTERIA2_ALPN.as_bytes().to_vec()];
-        quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()))
+        boring_quic_server_config(
+            &self.material.leaf_identity,
+            &[DEFAULT_HYSTERIA2_ALPN.as_bytes().to_vec()],
+            Arc::new(hysteria2_transport_config(0, None).unwrap()),
+        )
+        .unwrap()
     }
 
     fn system_ca_snapshot(&self) -> Arc<crate::shared_transport::SystemCaSnapshot> {
@@ -97,7 +50,7 @@ impl CertificateChain {
             std::process::id(),
             fastrand::u64(..)
         ));
-        std::fs::write(&path, &self.root_pem).unwrap();
+        std::fs::write(&path, self.material.root_pem().unwrap()).unwrap();
         let snapshot = crate::shared_transport::SystemCaSnapshot::load_from_path(path.clone())
             .map(Arc::new)
             .unwrap();
@@ -126,7 +79,7 @@ async fn completes_handshake(
     identity: &Hysteria2TlsIdentity,
     trust_fixture_root: bool,
 ) -> bool {
-    let server_endpoint = quinn::Endpoint::server(
+    let server_endpoint = crate::shared_transport::test_support::boring_quic_server_endpoint(
         chain.server_config(),
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
     )
@@ -147,8 +100,10 @@ async fn completes_handshake(
         server_task.abort();
         return false;
     };
-    let mut client_endpoint =
-        quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+    let mut client_endpoint = crate::shared_transport::test_support::boring_quic_client_endpoint(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .unwrap();
     client_endpoint.set_default_client_config(client_config);
     let connected = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         client_endpoint
@@ -171,7 +126,7 @@ async fn completes_handshake(
 
 #[tokio::test(flavor = "current_thread")]
 async fn webpki_and_leaf_pin_are_composed_during_real_handshakes() {
-    let chain = CertificateChain::signed(TRUSTED_SERVER_NAME, LeafValidity::Current);
+    let chain = CertificateChain::signed(TRUSTED_SERVER_NAME, TestCertificateValidity::Current);
     let right_pin = chain.leaf_pin();
     let wrong_pin = chain.wrong_leaf_pin();
 
@@ -227,7 +182,10 @@ async fn webpki_and_leaf_pin_are_composed_during_real_handshakes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn certificate_validity_remains_required_when_a_pin_matches() {
-    for validity in [LeafValidity::Expired, LeafValidity::NotYetValid] {
+    for validity in [
+        TestCertificateValidity::Expired,
+        TestCertificateValidity::NotYetValid,
+    ] {
         let chain = CertificateChain::signed(TRUSTED_SERVER_NAME, validity);
         assert!(
             !completes_handshake(
@@ -242,7 +200,7 @@ async fn certificate_validity_remains_required_when_a_pin_matches() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn explicit_insecure_mode_accepts_any_certificate_but_still_enforces_a_pin() {
-    let chain = CertificateChain::signed(TRUSTED_SERVER_NAME, LeafValidity::Current);
+    let chain = CertificateChain::signed(TRUSTED_SERVER_NAME, TestCertificateValidity::Current);
     assert!(
         completes_handshake(
             &chain,
@@ -271,7 +229,7 @@ async fn explicit_insecure_mode_accepts_any_certificate_but_still_enforces_a_pin
 
 #[tokio::test(flavor = "current_thread")]
 async fn inherited_insecure_mode_and_node_pin_form_pin_only_verification() {
-    let chain = CertificateChain::signed(TRUSTED_SERVER_NAME, LeafValidity::Current);
+    let chain = CertificateChain::signed(TRUSTED_SERVER_NAME, TestCertificateValidity::Current);
     assert!(
         completes_handshake(
             &chain,

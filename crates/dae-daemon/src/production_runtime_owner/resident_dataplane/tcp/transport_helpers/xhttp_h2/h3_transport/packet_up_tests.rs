@@ -3,10 +3,10 @@ use crate::production_runtime_owner::resident_dataplane::plan::{
     ResidentEchPlan, ResidentUtlsFingerprintPlan,
 };
 use bytes::Buf;
+use dae_outbound::shared_transport::test_support::{
+    boring_quic_server_config, self_signed_tls_identity,
+};
 use h3::server;
-use quinn::crypto::rustls::QuicServerConfig;
-use rcgen::generate_simple_self_signed;
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use tokio::sync::{mpsc, oneshot};
@@ -14,17 +14,13 @@ use tokio::sync::{mpsc, oneshot};
 use crate::production_runtime_owner::resident_dataplane::tcp::transport_helpers::xhttp_h2::xmux::xhttp_xmux_test_lease;
 
 fn server_config() -> quinn::ServerConfig {
-    let certified = generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-    let certificate = certified.cert.der().clone();
-    let private_key =
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let mut crypto =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![certificate], private_key)
-            .unwrap();
-    crypto.alpn_protocols = vec![b"h3".to_vec()];
-    quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(crypto).unwrap()))
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    boring_quic_server_config(
+        &identity,
+        &[b"h3".to_vec()],
+        Arc::new(quinn::TransportConfig::default()),
+    )
+    .unwrap()
 }
 
 fn packet_up_endpoint(server: SocketAddr) -> ResidentXhttpEndpointPlan {
@@ -106,7 +102,11 @@ fn h3_download_provider_and_session_namespace_follow_the_endpoint_plan() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delayed_h3_responses_do_not_serialize_packet_up_requests() {
     let server_endpoint =
-        quinn::Endpoint::server(server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            server_config(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .unwrap();
     let server_address = server_endpoint.local_addr().unwrap();
     let accepting_endpoint = server_endpoint.clone();
     let (accepted_tx, accepted_rx) = oneshot::channel();
@@ -149,7 +149,11 @@ async fn delayed_h3_responses_do_not_serialize_packet_up_requests() {
     });
 
     let endpoint = packet_up_endpoint(server_address);
-    let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+    let mut client_endpoint =
+        dae_outbound::shared_transport::test_support::boring_quic_client_endpoint(
+            "0.0.0.0:0".parse().unwrap(),
+        )
+        .unwrap();
     client_endpoint.set_default_client_config(
         build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Boring, None)
             .unwrap(),
@@ -223,7 +227,11 @@ async fn delayed_h3_responses_do_not_serialize_packet_up_requests() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn low_request_budget_h3_rotation_keeps_the_replacement_lease() {
     let server_endpoint =
-        quinn::Endpoint::server(server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            server_config(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .unwrap();
     let server_address = server_endpoint.local_addr().unwrap();
     let accepting_endpoint = server_endpoint.clone();
     let (accepted_tx, accepted_rx) = oneshot::channel();
@@ -237,7 +245,11 @@ async fn low_request_budget_h3_rotation_keeps_the_replacement_lease() {
     });
 
     let endpoint = packet_up_endpoint(server_address);
-    let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).unwrap();
+    let mut client_endpoint =
+        dae_outbound::shared_transport::test_support::boring_quic_client_endpoint(
+            "0.0.0.0:0".parse().unwrap(),
+        )
+        .unwrap();
     client_endpoint.set_default_client_config(
         build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Boring, None)
             .unwrap(),

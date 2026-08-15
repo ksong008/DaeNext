@@ -37,7 +37,7 @@ pub enum MaterializedSecurity {
     InsecureTls,
     FragmentedTls,
     FingerprintAwareTls,
-    RealityRustls,
+    RealityBoring,
     RealityFingerprint,
     QuicTls,
     Unsupported,

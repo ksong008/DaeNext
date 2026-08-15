@@ -51,7 +51,7 @@ fn vless_reality_variants_have_exact_native_vision_and_wrapper_dispositions() {
     for fingerprint in ["", "chrome"] {
         let expected = MaterializedTlsVariant::new(
             if fingerprint.is_empty() {
-                MaterializedSecurity::RealityRustls
+                MaterializedSecurity::RealityBoring
             } else {
                 MaterializedSecurity::RealityFingerprint
             },

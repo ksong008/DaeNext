@@ -7,7 +7,7 @@ repository.workspace = true
 
 [features]
 default = ["test-boringssl-quic"]
-test-support = ["dep:rcgen", "dep:rustls", "quinn/rustls-aws-lc-rs"]
+test-support = []
 test-boringssl-quic = []
 
 [dependencies]
@@ -35,9 +35,7 @@ percent-encoding.workspace = true
 quinn.workspace = true
 quinn-boring.workspace = true
 quinn-proto.workspace = true
-rcgen = { workspace = true, optional = true }
 regex.workspace = true
-rustls = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
@@ -48,8 +46,4 @@ url.workspace = true
 x25519-dalek.workspace = true
 
 [dev-dependencies]
-aws-lc-rs.workspace = true
 dae-golden.workspace = true
-quinn = { workspace = true, features = ["rustls-aws-lc-rs"] }
-rcgen.workspace = true
-rustls.workspace = true

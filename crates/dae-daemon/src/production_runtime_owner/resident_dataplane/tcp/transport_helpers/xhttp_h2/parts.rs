@@ -8,12 +8,12 @@ pub(crate) use self::stream::open_xhttp_stream_parts;
 
 fn xhttp_primary_tls_underlay_name(proxy: &ResidentProxyPlan) -> &'static str {
     match proxy.execution_plan().security {
-        ResidentSecurityUnderlayPlan::RealityRustls
+        ResidentSecurityUnderlayPlan::RealityBoring
         | ResidentSecurityUnderlayPlan::RealityFingerprint => "reality",
         ResidentSecurityUnderlayPlan::FingerprintAwareTls => "boringssl",
         ResidentSecurityUnderlayPlan::StandardTls
         | ResidentSecurityUnderlayPlan::InsecureTls
-        | ResidentSecurityUnderlayPlan::FragmentedTls => "rustls",
+        | ResidentSecurityUnderlayPlan::FragmentedTls => "boringssl",
         _ => "unsupported",
     }
 }

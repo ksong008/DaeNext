@@ -147,10 +147,6 @@ impl DecapsulationKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_lc_rs::kem::{
-        Ciphertext as AwsCiphertext, DecapsulationKey as AwsDecapsulationKey,
-        EncapsulationKey as AwsEncapsulationKey, ML_KEM_768,
-    };
 
     #[test]
     fn boring_mlkem_round_trip_has_fixed_wire_lengths() {
@@ -179,27 +175,37 @@ mod tests {
     }
 
     #[test]
-    fn boring_encapsulation_interoperates_with_aws_lc_decapsulation() {
-        let aws_private = AwsDecapsulationKey::generate(&ML_KEM_768).unwrap();
-        let public = aws_private
-            .encapsulation_key()
-            .unwrap()
-            .key_bytes()
-            .unwrap();
-        let boring_public = EncapsulationKey::from_encoded(public.as_ref()).unwrap();
-        let (ciphertext, boring_secret) = boring_public.encapsulate();
-        let aws_secret = aws_private
-            .decapsulate(AwsCiphertext::from(ciphertext.as_slice()))
-            .unwrap();
-        assert_eq!(boring_secret.as_bytes(), aws_secret.as_ref());
-    }
-
-    #[test]
-    fn aws_lc_encapsulation_interoperates_with_boring_decapsulation() {
-        let (public, boring_private) = DecapsulationKey::generate();
-        let aws_public = AwsEncapsulationKey::new(&ML_KEM_768, &public).unwrap();
-        let (ciphertext, aws_secret) = aws_public.encapsulate().unwrap();
-        let boring_secret = boring_private.decapsulate(ciphertext.as_ref()).unwrap();
-        assert_eq!(boring_secret.as_bytes(), aws_secret.as_ref());
+    fn boring_seed_round_trip_preserves_decapsulation_interoperability() {
+        let mut public = [0_u8; PUBLIC_KEY_BYTES];
+        let mut seed = [0_u8; 64];
+        let mut generated_private = MaybeUninit::<MLKEM768_private_key>::zeroed();
+        unsafe {
+            MLKEM768_generate_key(
+                public.as_mut_ptr(),
+                seed.as_mut_ptr(),
+                generated_private.as_mut_ptr(),
+            );
+        }
+        let generated_private = DecapsulationKey {
+            key: SecretKey(unsafe { generated_private.assume_init() }),
+        };
+        let mut restored_private = MaybeUninit::<MLKEM768_private_key>::zeroed();
+        let restored = unsafe {
+            boring_sys::MLKEM768_private_key_from_seed(
+                restored_private.as_mut_ptr(),
+                seed.as_ptr(),
+                seed.len(),
+            )
+        };
+        assert_eq!(restored, 1);
+        let restored_private = DecapsulationKey {
+            key: SecretKey(unsafe { restored_private.assume_init() }),
+        };
+        let encapsulation = EncapsulationKey::from_encoded(&public).unwrap();
+        let (ciphertext, sender_secret) = encapsulation.encapsulate();
+        let generated_secret = generated_private.decapsulate(&ciphertext).unwrap();
+        let restored_secret = restored_private.decapsulate(&ciphertext).unwrap();
+        assert_eq!(sender_secret.as_bytes(), generated_secret.as_bytes());
+        assert_eq!(generated_secret.as_bytes(), restored_secret.as_bytes());
     }
 }

@@ -107,7 +107,7 @@ impl SourceShapeProjection {
             Self::TlsFragment => shape.tls_features.fragment,
             Self::Reality => matches!(
                 shape.security,
-                MaterializedSecurity::RealityRustls | MaterializedSecurity::RealityFingerprint
+                MaterializedSecurity::RealityBoring | MaterializedSecurity::RealityFingerprint
             ),
         }
     }
