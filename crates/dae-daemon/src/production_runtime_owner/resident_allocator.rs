@@ -3,16 +3,16 @@ use std::sync::Arc;
 #[cfg(test)]
 use serde_json::Value;
 
-use super::resident_dataplane::facade::{
-    ResidentAllocatorBusyKind, ResidentAllocatorHooks, ResidentAllocatorReclaimReason,
-    ResidentAllocatorRuntimeHooks, ResidentAllocatorWorkerKind, set_resident_allocator_hooks,
-};
 use crate::allocator::{
     AllocatorReclaimBusyKind, AllocatorReclaimReason, AllocatorRuntimeReclaimHooks,
     AllocatorWorkerKind, allocator_reclaim_busy, allocator_request_reclaim,
 };
 #[cfg(test)]
 use crate::allocator::{allocator_stats_json_from, allocator_stats_snapshot};
+use dae_resident_dataplane::facade::{
+    ResidentAllocatorBusyKind, ResidentAllocatorHooks, ResidentAllocatorReclaimReason,
+    ResidentAllocatorRuntimeHooks, ResidentAllocatorWorkerKind, set_resident_allocator_hooks,
+};
 
 #[derive(Debug)]
 struct DaemonResidentAllocatorHooks;

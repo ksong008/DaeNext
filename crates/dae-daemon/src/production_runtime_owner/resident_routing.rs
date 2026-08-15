@@ -17,10 +17,10 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub(super) use super::resident_dataplane::facade::ResidentGeodataStore;
-use super::resident_dataplane::facade::geodata_report_json;
+pub(super) use dae_resident_dataplane::facade::ResidentGeodataStore;
+use dae_resident_dataplane::facade::geodata_report_json;
 #[cfg(test)]
-pub(super) use super::resident_dataplane::facade::{
+pub(super) use dae_resident_dataplane::facade::{
     build_resident_userspace_routing_matcher, build_resident_userspace_routing_matcher_with_geodata,
 };
 use maps::{

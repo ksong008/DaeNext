@@ -250,7 +250,7 @@ pub(super) fn ebpf_runtime_contracts_keep_abi_maps_and_loader_boundaries_explici
     assert_eq!(abi.dae_param_abi_version, BPF_DAE_PARAM_ABI_VERSION);
     assert_eq!(abi.redirect_track_abi_version, REDIRECT_TRACK_ABI_VERSION);
     assert_eq!(abi.task_comm_len, TASK_COMM_LEN);
-    assert_eq!(abi.max_match_set_len, MAX_MATCH_SET_LEN as usize);
+    assert_eq!(abi.max_match_set_len, MAX_MATCH_SET_LEN);
     assert_eq!(abi.tproxy_mark, TPROXY_MARK);
 
     let loader = loader_contract();

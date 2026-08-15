@@ -32,7 +32,7 @@ pub const fn bpf_abi_contract() -> BpfAbiContract {
         dae_param_abi_version: BPF_DAE_PARAM_ABI_VERSION,
         redirect_track_abi_version: REDIRECT_TRACK_ABI_VERSION,
         task_comm_len: TASK_COMM_LEN,
-        max_match_set_len: MAX_MATCH_SET_LEN as usize,
+        max_match_set_len: MAX_MATCH_SET_LEN,
         tproxy_mark: TPROXY_MARK,
         link_hdr_len_none: LINK_HDR_LEN_NONE,
         link_hdr_len_ethernet: LINK_HDR_LEN_ETHERNET,
