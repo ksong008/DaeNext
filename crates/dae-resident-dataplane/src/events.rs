@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use arc_swap::{ArcSwap, ArcSwapOption};
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
@@ -26,8 +27,8 @@ pub type ResidentEventLogPrefilter =
 const DEFAULT_RESIDENT_EVENT_LOG_MAX_ENTRIES: usize = 10_000;
 const DEFAULT_RESIDENT_EVENT_LOG_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
-static EVENT_LOG_SINK: OnceLock<Mutex<Option<ResidentEventLogSink>>> = OnceLock::new();
-static EVENT_LOG_POLICIES: OnceLock<Mutex<ResidentEventLogPolicies>> = OnceLock::new();
+static EVENT_LOG_SINK: OnceLock<ArcSwapOption<ResidentEventLogSinkHolder>> = OnceLock::new();
+static EVENT_LOG_POLICIES: OnceLock<ArcSwap<ResidentEventLogPolicies>> = OnceLock::new();
 static EVENT_LOG_APPEND_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -44,6 +45,10 @@ struct ResidentEventLogPolicies {
     prefilter: Option<ResidentEventLogPrefilter>,
 }
 
+struct ResidentEventLogSinkHolder {
+    sink: ResidentEventLogSink,
+}
+
 impl Default for ResidentEventLogDecision {
     fn default() -> Self {
         Self {
@@ -56,10 +61,9 @@ impl Default for ResidentEventLogDecision {
 }
 
 pub fn set_event_log_sink(sink: Option<ResidentEventLogSink>) {
-    let slot = EVENT_LOG_SINK.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = slot.lock() {
-        *guard = sink;
-    }
+    EVENT_LOG_SINK
+        .get_or_init(ArcSwapOption::empty)
+        .store(sink.map(|sink| Arc::new(ResidentEventLogSinkHolder { sink })));
 }
 
 #[cfg(test)]
@@ -71,11 +75,12 @@ pub fn set_event_log_policies(
     policy: Option<ResidentEventLogPolicy>,
     prefilter: Option<ResidentEventLogPrefilter>,
 ) {
-    let slot = EVENT_LOG_POLICIES.get_or_init(|| Mutex::new(ResidentEventLogPolicies::default()));
-    if let Ok(mut guard) = slot.lock() {
-        guard.value = policy;
-        guard.prefilter = prefilter;
-    }
+    EVENT_LOG_POLICIES
+        .get_or_init(|| ArcSwap::from_pointee(ResidentEventLogPolicies::default()))
+        .store(Arc::new(ResidentEventLogPolicies {
+            value: policy,
+            prefilter,
+        }));
 }
 
 fn clear_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
@@ -135,10 +140,10 @@ pub(super) fn append_admitted_event(
 }
 
 fn append_resident_event(path: &Path, lock: &Mutex<()>, event: ResidentEvent) {
-    if let Some(writer) = writer::active_resident_event_writer_for_path(path) {
-        writer.submit(event);
-        return;
-    }
+    let event = match writer::submit_to_active_resident_event_writer(path, event) {
+        Ok(()) => return,
+        Err(event) => event,
+    };
     let _ = persist_resident_event_direct(path, lock, event);
 }
 
@@ -153,20 +158,24 @@ fn current_unix() -> u64 {
         .as_secs()
 }
 
-fn event_log_sink() -> Option<ResidentEventLogSink> {
-    EVENT_LOG_SINK
-        .get()
-        .and_then(|slot| slot.lock().ok().and_then(|guard| guard.clone()))
-}
-
-fn event_log_policy() -> Option<ResidentEventLogPolicy> {
-    EVENT_LOG_POLICIES
-        .get()
-        .and_then(|slot| slot.lock().ok().and_then(|guard| guard.value.clone()))
+fn dispatch_to_event_log_sink(value: &Value) {
+    let Some(slot) = EVENT_LOG_SINK.get() else {
+        return;
+    };
+    let sink = slot.load();
+    if let Some(sink) = sink.as_ref() {
+        (sink.sink)(value);
+    }
 }
 
 fn event_log_decision(value: &Value) -> ResidentEventLogDecision {
-    event_log_policy()
+    let Some(slot) = EVENT_LOG_POLICIES.get() else {
+        return ResidentEventLogDecision::default();
+    };
+    let policies = slot.load();
+    policies
+        .value
+        .as_ref()
         .map(|policy| normalize_event_log_decision(policy(value)))
         .unwrap_or_default()
 }
@@ -174,9 +183,11 @@ fn event_log_decision(value: &Value) -> ResidentEventLogDecision {
 fn event_log_decision_from_metadata(
     metadata: ResidentEventMetadata,
 ) -> Option<ResidentEventLogDecision> {
-    EVENT_LOG_POLICIES
-        .get()
-        .and_then(|slot| slot.lock().ok().and_then(|guard| guard.prefilter.clone()))
+    let slot = EVENT_LOG_POLICIES.get()?;
+    let policies = slot.load();
+    policies
+        .prefilter
+        .as_ref()
         .map(|prefilter| normalize_event_log_decision(prefilter(metadata)))
 }
 
@@ -208,9 +219,7 @@ fn persist_resident_event_direct(
     }
     let value = event.into_serializable_value();
     EVENT_LOG_APPEND_COUNT.fetch_add(1, Ordering::Relaxed);
-    if let Some(sink) = event_log_sink() {
-        sink(&value);
-    }
+    dispatch_to_event_log_sink(&value);
 
     Ok(ResidentEventPersistOutcome {
         persisted: true,

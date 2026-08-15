@@ -60,6 +60,7 @@ aho-corasick = "1"
 aes = { version = "0.8", features = ["zeroize"] }
 aes-gcm = { version = "0.10", features = ["zeroize"] }
 argon2 = "0.5"
+arc-swap = "1.7"
 aya = { version = "0.13.1", default-features = false }
 aya-ebpf = { version = "0.1.1", default-features = false }
 base64 = "0.22"

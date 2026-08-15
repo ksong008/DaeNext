@@ -75,6 +75,21 @@ impl ProductLogRuntime {
         }))
     }
 
+    pub(crate) fn append_detached(
+        &self,
+        level: String,
+        message: &str,
+        fields: BTreeMap<String, String>,
+        respect_runtime_log_level: bool,
+    ) -> io::Result<()> {
+        self.submit_detached(ProductLogAction::Append(ProductLogAppendRequest {
+            level,
+            message: trim_log_string(message, MAX_LOG_LINE_BYTES),
+            fields: trim_log_fields(fields, MAX_LOG_FIELD_VALUE_LEN),
+            respect_runtime_log_level,
+        }))
+    }
+
     pub(crate) fn clear(&self) -> io::Result<()> {
         self.submit(ProductLogAction::Clear)
     }
@@ -123,6 +138,14 @@ impl ProductLogRuntime {
                 "product log writer stopped before completing the request",
             )),
         }
+    }
+
+    fn submit_detached(&self, action: ProductLogAction) -> io::Result<()> {
+        let (completion, _completed) = mpsc::sync_channel(1);
+        self.metrics.enqueued();
+        self.queue
+            .submit(ProductLogCommand { action, completion }, Duration::ZERO)
+            .inspect_err(|_| self.metrics.enqueue_rollback())
     }
 
     pub(super) fn registry_key(&self) -> &Path {

@@ -14,7 +14,7 @@ pub(crate) fn append_resident_event_product_log(
     }
     let level = resident_event_product_log_level(event_name, event);
     let fields = resident_event_product_log_fields(event_name, event);
-    append_log_fields_for_config(
+    append_log_fields_for_config_detached(
         config_dir,
         state,
         level,
