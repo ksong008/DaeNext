@@ -11,7 +11,7 @@ use dae_outbound::shadowsocks::{self, ShadowsocksLink, ShadowsocksMetadata};
 use dae_outbound::shared_transport;
 use dae_outbound::socks5::{self, Socks5Address, handshake, udp_packet};
 use dae_outbound::trojan::{self, TrojanLink, TrojanMetadata};
-use dae_outbound::tuic::{self, TuicLink};
+use dae_outbound::tuic::{self, TuicLink, TuicUdpRelayMode};
 use dae_outbound::vless::{self, VLESSLink};
 use dae_outbound::vmess::{self, VMessLink, VMessMetadata};
 use serde_json::json;
