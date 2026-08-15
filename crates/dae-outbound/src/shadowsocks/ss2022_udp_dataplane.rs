@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit as BlockKeyInit};
 use aes::{Aes128, Aes256};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes128Gcm, Aes256Gcm};
+use blake3::hazmat::{ContextKey, HasherExt};
 use chacha20poly1305::XChaCha20Poly1305;
 
 use crate::error::OutboundError;
@@ -17,6 +19,7 @@ use super::ss2022::{
 };
 
 const SESSION_SUBKEY_CONTEXT: &str = "shadowsocks 2022 session subkey";
+static SESSION_SUBKEY_CONTEXT_KEY: OnceLock<ContextKey> = OnceLock::new();
 const TIMESTAMP_TOLERANCE_SECS: u64 = 30;
 const AES_BLOCK_LEN: usize = 16;
 

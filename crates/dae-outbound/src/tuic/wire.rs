@@ -129,23 +129,36 @@ pub(super) fn parse_packet_frame(input: &[u8]) -> Result<TuicUdpPacket, Outbound
 }
 
 pub fn encode_tuic_udp_packet(packet: &TuicUdpPacket) -> Result<Vec<u8>, OutboundError> {
-    validate_udp_packet_fields(
+    encode_tuic_udp_payload(
+        packet.assoc_id,
+        packet.packet_id,
         packet.fragment_count,
         packet.fragment_id,
         packet.target.as_deref(),
         &packet.payload,
-    )?;
-    let address = address_for_optional_target(packet.target.as_deref())?;
-    let mut out = Vec::with_capacity(10 + address.encoded_len() + packet.payload.len());
+    )
+}
+
+pub fn encode_tuic_udp_payload(
+    assoc_id: u16,
+    packet_id: u16,
+    fragment_count: u8,
+    fragment_id: u8,
+    target: Option<&str>,
+    payload: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
+    validate_udp_packet_fields(fragment_count, fragment_id, target, payload)?;
+    let address = address_for_optional_target(target)?;
+    let mut out = Vec::with_capacity(10 + address.encoded_len() + payload.len());
     out.push(TUIC_VERSION5);
     out.push(TUIC_PACKET_TYPE);
-    out.extend_from_slice(&packet.assoc_id.to_be_bytes());
-    out.extend_from_slice(&packet.packet_id.to_be_bytes());
-    out.push(packet.fragment_count);
-    out.push(packet.fragment_id);
-    out.extend_from_slice(&(packet.payload.len() as u16).to_be_bytes());
+    out.extend_from_slice(&assoc_id.to_be_bytes());
+    out.extend_from_slice(&packet_id.to_be_bytes());
+    out.push(fragment_count);
+    out.push(fragment_id);
+    out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
     address.write_to(&mut out);
-    out.extend_from_slice(&packet.payload);
+    out.extend_from_slice(payload);
     Ok(out)
 }
 
@@ -179,6 +192,19 @@ pub fn decode_tuic_udp_packet(input: &[u8]) -> Result<TuicUdpPacket, OutboundErr
 
 pub fn encode_tuic_udp_stream_packet(packet: &TuicUdpPacket) -> Result<Vec<u8>, OutboundError> {
     let encoded = encode_tuic_udp_packet(packet)?;
+    if encoded.len() > TUIC_MAX_UDP_STREAM_FRAME_LEN {
+        return Err(bad_wire("TUIC UDP stream packet exceeds frame limit"));
+    }
+    Ok(encoded)
+}
+
+pub fn encode_tuic_udp_stream_payload(
+    assoc_id: u16,
+    packet_id: u16,
+    target: &str,
+    payload: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
+    let encoded = encode_tuic_udp_payload(assoc_id, packet_id, 1, 0, Some(target), payload)?;
     if encoded.len() > TUIC_MAX_UDP_STREAM_FRAME_LEN {
         return Err(bad_wire("TUIC UDP stream packet exceeds frame limit"));
     }
@@ -554,6 +580,20 @@ fn bad_wire(message: impl Into<String>) -> OutboundError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_udp_encoders_match_owned_packet_wire() {
+        let packet = TuicUdpPacket::new(7, 11, "192.0.2.1:53", b"payload").unwrap();
+        let encoded = encode_tuic_udp_packet(&packet).unwrap();
+        assert_eq!(
+            encode_tuic_udp_payload(7, 11, 1, 0, Some("192.0.2.1:53"), b"payload").unwrap(),
+            encoded
+        );
+        assert_eq!(
+            encode_tuic_udp_stream_payload(7, 11, "192.0.2.1:53", b"payload").unwrap(),
+            encode_tuic_udp_stream_packet(&packet).unwrap()
+        );
+    }
 
     #[test]
     fn udp_packet_roundtrips_supported_address_families() {

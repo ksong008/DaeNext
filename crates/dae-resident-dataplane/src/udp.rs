@@ -22,12 +22,13 @@ use dae_outbound::hysteria2::{HYSTERIA2_MAX_UDP_MESSAGE_LENGTH, decode_hysteria2
 #[cfg(test)]
 use dae_outbound::juicity::decode_stream_packet_frame;
 #[cfg(test)]
-use dae_outbound::tuic::decode_tuic_udp_packet;
+use dae_outbound::tuic::{decode_tuic_udp_packet, encode_tuic_udp_stream_packet};
 use dae_outbound::{
     anytls::link as anytls_link,
     hysteria2::{
         HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage, encode_hysteria2_udp_message,
-        fragment_hysteria2_udp_message, hysteria2_udp_payload_capacity,
+        encode_hysteria2_udp_payload, fragment_hysteria2_udp_message,
+        hysteria2_udp_payload_capacity,
     },
     juicity::{
         JUICITY_STREAM_PACKET_MAX_FRAME_LEN, JuicityStreamPacketFrame,
@@ -46,8 +47,8 @@ use dae_outbound::{
     socks5::{Socks5Address, udp_packet},
     trojan::packet as trojan_packet,
     tuic::{
-        TuicUdpPacket, TuicUdpRelayMode, encode_tuic_udp_packet, encode_tuic_udp_stream_packet,
-        fragment_tuic_udp_packet,
+        TuicUdpPacket, TuicUdpRelayMode, encode_tuic_udp_packet, encode_tuic_udp_payload,
+        encode_tuic_udp_stream_payload, fragment_tuic_udp_packet,
     },
     vless::packet,
     vmess,

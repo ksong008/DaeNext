@@ -34,16 +34,26 @@ pub(super) struct Hysteria2UdpSendReport {
     pub(super) final_max_wire_size: Option<usize>,
 }
 
-pub(super) fn send_hysteria2_udp_message(
+pub(super) fn send_hysteria2_udp_payload(
     connection: &quinn::Connection,
-    message: &Hysteria2UdpMessage,
+    session_id: u32,
+    target: &str,
+    payload: &[u8],
     packet_ids: &mut QuicUdpPacketIdAllocator,
     resources: QuicUdpDatagramResourceProfile,
 ) -> Result<Hysteria2UdpSendReport, String> {
     let mut connection = connection.clone();
-    send_hysteria2_udp_message_with(&mut connection, message, packet_ids, resources)
+    send_hysteria2_udp_payload_with(
+        &mut connection,
+        session_id,
+        target,
+        payload,
+        packet_ids,
+        resources,
+    )
 }
 
+#[cfg(test)]
 fn send_hysteria2_udp_message_with<S>(
     sender: &mut S,
     message: &Hysteria2UdpMessage,
@@ -53,7 +63,28 @@ fn send_hysteria2_udp_message_with<S>(
 where
     S: Hysteria2UdpDatagramSender,
 {
-    let whole = encode_hysteria2_udp_message(message)
+    send_hysteria2_udp_payload_with(
+        sender,
+        message.session_id(),
+        message.target(),
+        message.payload(),
+        packet_ids,
+        resources,
+    )
+}
+
+fn send_hysteria2_udp_payload_with<S>(
+    sender: &mut S,
+    session_id: u32,
+    target: &str,
+    payload: &[u8],
+    packet_ids: &mut QuicUdpPacketIdAllocator,
+    resources: QuicUdpDatagramResourceProfile,
+) -> Result<Hysteria2UdpSendReport, String>
+where
+    S: Hysteria2UdpDatagramSender,
+{
+    let whole = encode_hysteria2_udp_payload(session_id, 0, 0, 1, target, payload)
         .map_err(|err| format!("encode complete Hysteria2 UDP datagram: {err}"))?;
     match sender.send_datagram(Bytes::from(whole)) {
         Ok(()) => {
@@ -70,14 +101,17 @@ where
         }
     }
 
+    let message = Hysteria2UdpMessage::new(session_id, target, payload)
+        .map_err(|err| format!("build oversized Hysteria2 UDP datagram: {err}"))?;
+
     let mut max_wire_size = sender.max_datagram_size().ok_or_else(|| {
         "Hysteria2 peer disabled QUIC datagrams after reporting an oversized datagram".to_owned()
     })?;
     let mut datagrams_sent = 0_usize;
     for fragment_layout in 1..=resources.pmtu_retries() {
         let packet_id = packet_ids.allocate()?;
-        let fragments =
-            fragment_hysteria2_udp_message(message, packet_id, max_wire_size).map_err(|err| {
+        let fragments = fragment_hysteria2_udp_message(&message, packet_id, max_wire_size)
+            .map_err(|err| {
                 format!(
                     "fragment Hysteria2 UDP datagram for {max_wire_size}-byte QUIC limit: {err}"
                 )

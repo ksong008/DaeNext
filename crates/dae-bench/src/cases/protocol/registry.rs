@@ -72,6 +72,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             run: bench_shadowsocks_ss2022_psk_split,
         },
         BenchCase {
+            id: "protocol/shadowsocks_ss2022_udp_encode",
+            default_iters: 100_000,
+            run: bench_shadowsocks_ss2022_udp_encode,
+        },
+        BenchCase {
             id: "protocol/trojan_parse_link",
             default_iters: 10_000,
             run: bench_trojan_parse_link,
@@ -117,6 +122,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             run: bench_hysteria2_pin_normalize,
         },
         BenchCase {
+            id: "protocol/hysteria2_udp_encode",
+            default_iters: 100_000,
+            run: bench_hysteria2_udp_encode,
+        },
+        BenchCase {
             id: "protocol/tuic_parse_link",
             default_iters: 10_000,
             run: bench_tuic_parse_link,
@@ -130,6 +140,11 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "protocol/tuic_alpn_split",
             default_iters: 100_000,
             run: bench_tuic_alpn_split,
+        },
+        BenchCase {
+            id: "protocol/tuic_udp_encode",
+            default_iters: 100_000,
+            run: bench_tuic_udp_encode,
         },
         BenchCase {
             id: "protocol/juicity_parse_link",

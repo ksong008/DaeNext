@@ -21,11 +21,22 @@ impl Ss2022UdpCodec {
             .last()
             .ok_or_else(|| OutboundError::BadShadowsocks("SS2022 PSK list is empty".to_owned()))?
             .clone();
+        let client_header_cipher = Ss2022AesBlockCipher::new(&psk_list[0])?;
+        let server_header_cipher = Ss2022AesBlockCipher::new(&upsk)?;
+        let client_payload_cipher = if conf.packet_cipher {
+            None
+        } else {
+            Some(separate_payload_cipher(&conf, &upsk, &session_id)?)
+        };
         Ok(Self {
             conf,
             cipher: cipher.to_owned(),
             psk_list,
             upsk,
+            client_header_cipher,
+            server_header_cipher,
+            client_payload_cipher,
+            server_payload_cipher: None,
             session_id,
             next_packet_id: 0,
             server_replay: Ss2022UdpReplayTable::new(replay_policy)?,
@@ -69,9 +80,14 @@ impl Ss2022UdpCodec {
             )
         } else {
             encode_separate_header_client_packet(
-                &self.conf,
                 &self.cipher,
                 &self.psk_list,
+                &self.client_header_cipher,
+                self.client_payload_cipher.as_ref().ok_or_else(|| {
+                    OutboundError::BadShadowsocks(
+                        "SS2022 client payload cipher is not initialized".to_owned(),
+                    )
+                })?,
                 self.session_id,
                 packet_id,
                 target,
@@ -89,7 +105,15 @@ impl Ss2022UdpCodec {
         let decoded = if self.conf.packet_cipher {
             decode_merged_header_packet(&self.conf, &self.cipher, &self.upsk, input, now)?
         } else {
-            decode_separate_header_server_packet(&self.conf, &self.cipher, &self.upsk, input, now)?
+            decode_separate_header_server_packet(
+                &self.conf,
+                &self.cipher,
+                &self.upsk,
+                &self.server_header_cipher,
+                &mut self.server_payload_cipher,
+                input,
+                now,
+            )?
         };
         if decoded.packet_type != HEADER_TYPE_SERVER_PACKET {
             return Err(OutboundError::BadShadowsocks(format!(
@@ -109,6 +133,18 @@ impl Ss2022UdpCodec {
 
     pub fn replay_metrics_snapshot(&self) -> Ss2022UdpReplayMetricsSnapshot {
         self.server_replay.metrics_snapshot()
+    }
+
+    #[cfg(test)]
+    pub fn client_payload_cipher_cached(&self) -> bool {
+        self.client_payload_cipher.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn cached_server_payload_session(&self) -> Option<[u8; 8]> {
+        self.server_payload_cipher
+            .as_ref()
+            .map(|(session_id, _)| *session_id)
     }
 
     pub fn prune_expired_replay_sessions(&mut self, now: u64) {

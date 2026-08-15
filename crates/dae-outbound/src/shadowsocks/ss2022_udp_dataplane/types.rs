@@ -40,9 +40,36 @@ pub struct Ss2022UdpCodec {
     pub(super) cipher: String,
     pub(super) psk_list: Vec<Vec<u8>>,
     pub(super) upsk: Vec<u8>,
+    pub(super) client_header_cipher: Ss2022AesBlockCipher,
+    pub(super) server_header_cipher: Ss2022AesBlockCipher,
+    pub(super) client_payload_cipher: Option<Ss2022SeparatePayloadCipher>,
+    pub(super) server_payload_cipher: Option<([u8; 8], Ss2022SeparatePayloadCipher)>,
     pub(super) session_id: [u8; 8],
     pub(super) next_packet_id: u64,
     pub(super) server_replay: Ss2022UdpReplayTable,
+}
+
+pub(super) enum Ss2022AesBlockCipher {
+    Aes128(Aes128),
+    Aes256(Aes256),
+}
+
+impl std::fmt::Debug for Ss2022SeparatePayloadCipher {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Aes128(_) => "Ss2022SeparatePayloadCipher::Aes128",
+            Self::Aes256(_) => "Ss2022SeparatePayloadCipher::Aes256",
+        })
+    }
+}
+
+impl std::fmt::Debug for Ss2022AesBlockCipher {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Aes128(_) => "Ss2022AesBlockCipher::Aes128",
+            Self::Aes256(_) => "Ss2022AesBlockCipher::Aes256",
+        })
+    }
 }
 
 #[derive(Debug, Default)]

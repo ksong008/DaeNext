@@ -25,6 +25,8 @@ pub(super) struct VmessAeadUdpOverTcpSession {
     wrapper: VmessAeadUdpWrapperKind,
     underlay: Option<VmessAeadUdpUnderlay>,
     upload: Option<vmess::VMessAeadTcpUploadCodec>,
+    upload_buffer: Vec<u8>,
+    upload_payload_offset: usize,
     request: Option<vmess::VMessAeadTcpRequest>,
     response: Option<vmess::VMessAeadTcpResponseReader>,
     response_plaintext: Vec<u8>,
@@ -86,6 +88,8 @@ impl VmessAeadUdpOverTcpSession {
             wrapper,
             underlay: None,
             upload: None,
+            upload_buffer: Vec::new(),
+            upload_payload_offset: 0,
             request: None,
             response: None,
             response_plaintext: Vec::new(),
@@ -132,6 +136,8 @@ impl VmessAeadUdpOverTcpSession {
             self.response = None;
             self.response_plaintext.clear();
         }
+        self.upload_buffer = start.upload.new_owned_chunk_buffer(0);
+        self.upload_payload_offset = self.upload_buffer.len();
         self.underlay = Some(underlay);
         self.upload = Some(start.upload);
         self.request = Some(start.request);
@@ -142,18 +148,20 @@ impl VmessAeadUdpOverTcpSession {
     }
 
     async fn exchange_next(&mut self, payload: &[u8]) -> Result<UdpExchangeResult, String> {
-        let chunk = self
+        self.upload_buffer.truncate(self.upload_payload_offset);
+        self.upload_buffer.extend_from_slice(payload);
+        let chunk_len = self
             .upload
             .as_mut()
             .ok_or_else(|| "VMess AEAD UDP-over-TCP upload codec is not initialized".to_owned())?
-            .seal_chunk(payload)
+            .seal_owned_chunk_in_place(&mut self.upload_buffer, 0, payload.len())
             .map_err(|err| format!("seal VMess AEAD UDP-over-TCP session packet: {err}"))?;
         {
             let underlay = self
                 .underlay
                 .as_mut()
                 .ok_or_else(|| "VMess AEAD UDP-over-TCP underlay is not initialized".to_owned())?;
-            write_vmess_wrapped_bytes(underlay, &chunk).await?;
+            write_vmess_wrapped_bytes(underlay, &self.upload_buffer[..chunk_len]).await?;
         }
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
@@ -406,6 +414,8 @@ async fn open_vmess_underlay(
 impl VmessAeadUdpOverTcpSession {
     pub(super) async fn shutdown(&mut self) {
         self.upload = None;
+        self.upload_buffer.clear();
+        self.upload_payload_offset = 0;
         self.request = None;
         self.response = None;
         self.response_plaintext.clear();

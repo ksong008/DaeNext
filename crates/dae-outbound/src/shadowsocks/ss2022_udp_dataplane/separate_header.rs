@@ -1,26 +1,23 @@
 use super::*;
-// SS2022 UDP packet encoding mirrors the wire fields explicitly.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn encode_separate_header_client_packet(
-    conf: &CipherConf2022,
     cipher: &str,
     psk_list: &[Vec<u8>],
+    header_cipher: &Ss2022AesBlockCipher,
+    payload_cipher: &Ss2022SeparatePayloadCipher,
     session_id: [u8; 8],
     packet_id: u64,
     target: &str,
     payload: &[u8],
     timestamp: u64,
 ) -> Result<Ss2022UdpEncodedPacket, OutboundError> {
-    let upsk = psk_list
-        .last()
-        .ok_or_else(|| OutboundError::BadShadowsocks("SS2022 PSK list is empty".to_owned()))?;
     let separate_header = separate_header(session_id, packet_id);
     let mut out = Vec::new();
-    out.extend_from_slice(&encrypt_aes_block(&psk_list[0], &separate_header)?);
+    out.extend_from_slice(&header_cipher.encrypt_block(&separate_header)?);
     let identity_headers = encode_udp_identity_headers(psk_list, &separate_header)?;
     out.extend_from_slice(&identity_headers);
     let message = encode_client_message(target, payload, timestamp)?;
-    let sealed = seal_separate_payload(conf, upsk, &separate_header, &message)?;
+    let sealed = payload_cipher.encrypt(&separate_header[4..16], &message)?;
     out.extend_from_slice(&sealed);
     Ok(Ss2022UdpEncodedPacket {
         wire: out,
@@ -134,6 +131,8 @@ pub(super) fn decode_separate_header_server_packet(
     conf: &CipherConf2022,
     cipher: &str,
     upsk: &[u8],
+    header_cipher: &Ss2022AesBlockCipher,
+    payload_cipher: &mut Option<([u8; 8], Ss2022SeparatePayloadCipher)>,
     input: &[u8],
     now: u64,
 ) -> Result<Ss2022UdpDecodedPacket, OutboundError> {
@@ -142,15 +141,26 @@ pub(super) fn decode_separate_header_server_packet(
             "SS2022 UDP server packet missing separate header".to_owned(),
         ));
     }
-    let separate_header = decrypt_aes_block(upsk, &input[..AES_BLOCK_LEN])?;
-    let payload = open_separate_payload(conf, upsk, &separate_header, &input[AES_BLOCK_LEN..])?;
+    let separate_header = header_cipher.decrypt_block(&input[..AES_BLOCK_LEN])?;
+    let session_id = separate_header[..8].try_into().expect("header len");
+    let sealed_payload = &input[AES_BLOCK_LEN..];
+    let payload = if let Some((cached_session_id, cipher)) = payload_cipher.as_ref()
+        && cached_session_id == &session_id
+    {
+        cipher.decrypt(&separate_header[4..16], sealed_payload)?
+    } else {
+        let cipher = separate_payload_cipher(conf, upsk, &session_id)?;
+        let payload = cipher.decrypt(&separate_header[4..16], sealed_payload)?;
+        *payload_cipher = Some((session_id, cipher));
+        payload
+    };
     let parsed = parse_server_message(&payload, now)?;
     Ok(Ss2022UdpDecodedPacket {
         cipher: cipher.to_owned(),
         branch: "aes-separate-header",
         packet_type: parsed.packet_type,
         packet_id: u64::from_be_bytes(separate_header[8..16].try_into().expect("header len")),
-        session_id: separate_header[..8].try_into().expect("header len"),
+        session_id,
         client_session_id: Some(parsed.client_session_id),
         target: parsed.target,
         target_metadata_len: parsed.target_metadata_len,

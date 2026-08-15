@@ -13,6 +13,7 @@ pub(super) enum ResidentUdpPinnedRoute {
     ResidentDns,
     Proxy {
         proxy: ResidentProxyBinding,
+        graph_identity_hash: String,
         selected_network_type: NetworkType,
         force_proxy_packet: bool,
         route: ResidentUdpRouteSelection,
@@ -87,6 +88,7 @@ impl ResidentUdpPinnedRoute {
             }
             Self::Proxy {
                 proxy,
+                graph_identity_hash,
                 selected_network_type,
                 force_proxy_packet,
                 route,
@@ -98,14 +100,20 @@ impl ResidentUdpPinnedRoute {
                 {
                     let dispatch_lane =
                         dns_request_dispatch_lane(&packet.payload, forced_dns_session_lanes);
-                    UdpSessionKey::with_dispatch_lane(
+                    UdpSessionKey::with_dispatch_lane_and_graph_identity_hash(
                         proxy,
+                        graph_identity_hash,
                         packet.peer,
                         original_dst,
                         dispatch_lane,
                     )
                 } else {
-                    UdpSessionKey::new(proxy, packet.peer, original_dst)
+                    UdpSessionKey::new_with_graph_identity_hash(
+                        proxy,
+                        graph_identity_hash,
+                        packet.peer,
+                        original_dst,
+                    )
                 };
                 let managed = ManagedUdpPacket {
                     packet,

@@ -962,15 +962,19 @@ fn bind_manager_packet(
     };
     let route = match selection {
         ResidentUdpSelection::ResidentDns => ResidentUdpPinnedRoute::ResidentDns,
-        ResidentUdpSelection::Proxy(selection) => ResidentUdpPinnedRoute::Proxy {
-            proxy: selection.proxy,
-            selected_network_type: selection.selected_network_type,
-            force_proxy_packet: selection.force_proxy_packet,
-            route: selection.route,
-            data_udp_availability: selection.data_udp_availability,
-            sniffed_domain,
-            dscp: ready.initial.dscp,
-        },
+        ResidentUdpSelection::Proxy(selection) => {
+            let graph_identity_hash = graph_identity_hash(selection.proxy.plan());
+            ResidentUdpPinnedRoute::Proxy {
+                proxy: selection.proxy,
+                graph_identity_hash,
+                selected_network_type: selection.selected_network_type,
+                force_proxy_packet: selection.force_proxy_packet,
+                route: selection.route,
+                data_udp_availability: selection.data_udp_availability,
+                sniffed_domain,
+                dscp: ready.initial.dscp,
+            }
+        }
         ResidentUdpSelection::Direct(selection) => ResidentUdpPinnedRoute::Direct {
             route: selection.route,
             sniffed_domain,

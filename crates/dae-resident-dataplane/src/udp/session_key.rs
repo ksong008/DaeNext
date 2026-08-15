@@ -62,6 +62,7 @@ impl UdpSessionKey {
         Self::build(proxy, peer, original_dst, None)
     }
 
+    #[cfg(test)]
     pub(super) fn with_dispatch_lane(
         proxy: &ResidentProxyPlan,
         peer: SocketAddr,
@@ -71,8 +72,50 @@ impl UdpSessionKey {
         Self::build(proxy, peer, original_dst, Some(dispatch_lane))
     }
 
+    pub(super) fn new_with_graph_identity_hash(
+        proxy: &ResidentProxyPlan,
+        graph_identity_hash: &str,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
+    ) -> Self {
+        Self::build_with_graph_identity_hash(proxy, graph_identity_hash, peer, original_dst, None)
+    }
+
+    pub(super) fn with_dispatch_lane_and_graph_identity_hash(
+        proxy: &ResidentProxyPlan,
+        graph_identity_hash: &str,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
+        dispatch_lane: u16,
+    ) -> Self {
+        Self::build_with_graph_identity_hash(
+            proxy,
+            graph_identity_hash,
+            peer,
+            original_dst,
+            Some(dispatch_lane),
+        )
+    }
+
     fn build(
         proxy: &ResidentProxyPlan,
+        peer: SocketAddr,
+        original_dst: SocketAddr,
+        dispatch_lane: Option<u16>,
+    ) -> Self {
+        let graph_identity_hash = graph_identity_hash(proxy);
+        Self::build_with_graph_identity_hash(
+            proxy,
+            &graph_identity_hash,
+            peer,
+            original_dst,
+            dispatch_lane,
+        )
+    }
+
+    fn build_with_graph_identity_hash(
+        proxy: &ResidentProxyPlan,
+        graph_identity_hash: &str,
         peer: SocketAddr,
         original_dst: SocketAddr,
         dispatch_lane: Option<u16>,
@@ -81,7 +124,7 @@ impl UdpSessionKey {
         let source_contract = udp_source_contract(proxy, packet_semantics);
         Self {
             graph_id: proxy.graph_id.clone(),
-            graph_identity_hash: graph_identity_hash(proxy),
+            graph_identity_hash: graph_identity_hash.to_owned(),
             graph_link_hash: proxy.graph_link_hash.clone(),
             redacted_link_source: proxy.redacted_link_source.clone(),
             outbound: proxy.group_name.clone(),
@@ -333,7 +376,7 @@ fn source_contract_from_identity(
     }
 }
 
-fn graph_identity_hash(proxy: &ResidentProxyPlan) -> String {
+pub(super) fn graph_identity_hash(proxy: &ResidentProxyPlan) -> String {
     compact_sha256("graph", &[&proxy.graph_id, &proxy.graph_link_hash])
 }
 
