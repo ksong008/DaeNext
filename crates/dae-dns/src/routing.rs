@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+pub use dae_core_types::{DnsRequestOutboundIndex, DnsResponseOutboundIndex};
 use dae_routing::{DomainKey, DomainMatcher, IpPrefix, SharedDomainSet};
 use serde_json::Value;
 
@@ -10,60 +11,6 @@ const MATCH_TYPE_IP_SET: &str = "ip_set";
 const MATCH_TYPE_QTYPE: &str = "qtype";
 const MATCH_TYPE_UPSTREAM: &str = "upstream";
 const MATCH_TYPE_FALLBACK: &str = "fallback";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DnsRequestOutboundIndex(pub u8);
-
-impl DnsRequestOutboundIndex {
-    pub const REJECT: Self = Self(0xfc);
-    pub const ASIS: Self = Self(0xfd);
-    pub const LOGICAL_OR: Self = Self(0xfe);
-    pub const LOGICAL_AND: Self = Self(0xff);
-    pub const LOGICAL_MASK: Self = Self(0xfe);
-
-    pub const fn value(self) -> u8 {
-        self.0
-    }
-}
-
-impl std::fmt::Display for DnsRequestOutboundIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            Self::REJECT => f.write_str("reject"),
-            Self::ASIS => f.write_str("asis"),
-            Self::LOGICAL_OR => f.write_str("<OR>"),
-            Self::LOGICAL_AND => f.write_str("<AND>"),
-            _ => write!(f, "<index: {}>", self.0),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DnsResponseOutboundIndex(pub u8);
-
-impl DnsResponseOutboundIndex {
-    pub const ACCEPT: Self = Self(0xfc);
-    pub const REJECT: Self = Self(0xfd);
-    pub const LOGICAL_OR: Self = Self(0xfe);
-    pub const LOGICAL_AND: Self = Self(0xff);
-    pub const LOGICAL_MASK: Self = Self(0xfe);
-
-    pub const fn value(self) -> u8 {
-        self.0
-    }
-}
-
-impl std::fmt::Display for DnsResponseOutboundIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            Self::ACCEPT => f.write_str("accept"),
-            Self::REJECT => f.write_str("reject"),
-            Self::LOGICAL_OR => f.write_str("<OR>"),
-            Self::LOGICAL_AND => f.write_str("<AND>"),
-            _ => write!(f, "<index: {}>", self.0),
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct RequestMatcher {
@@ -477,14 +424,8 @@ fn request_outbound_from_fixture(value: &str) -> Result<DnsRequestOutboundIndex,
         "asis" => Ok(DnsRequestOutboundIndex::ASIS),
         "logical_or" | "<OR>" => Ok(DnsRequestOutboundIndex::LOGICAL_OR),
         "logical_and" | "<AND>" => Ok(DnsRequestOutboundIndex::LOGICAL_AND),
-        value if value.starts_with("index:") => value[6..]
-            .parse::<u8>()
-            .map(DnsRequestOutboundIndex)
-            .map_err(|_| DnsError::Resolve(format!("unknown request outbound: {value}"))),
-        value if value.starts_with("upstream:") => value[9..]
-            .parse::<u8>()
-            .map(DnsRequestOutboundIndex)
-            .map_err(|_| DnsError::Resolve(format!("unknown request outbound: {value}"))),
+        value if value.starts_with("index:") => parse_request_user_defined(&value[6..], value),
+        value if value.starts_with("upstream:") => parse_request_user_defined(&value[9..], value),
         _ => Err(DnsError::Resolve(format!(
             "unknown request outbound: {value}"
         ))),
@@ -497,18 +438,34 @@ fn response_outbound_from_fixture(value: &str) -> Result<DnsResponseOutboundInde
         "reject" => Ok(DnsResponseOutboundIndex::REJECT),
         "logical_or" | "<OR>" => Ok(DnsResponseOutboundIndex::LOGICAL_OR),
         "logical_and" | "<AND>" => Ok(DnsResponseOutboundIndex::LOGICAL_AND),
-        value if value.starts_with("index:") => value[6..]
-            .parse::<u8>()
-            .map(DnsResponseOutboundIndex)
-            .map_err(|_| DnsError::Resolve(format!("unknown response outbound: {value}"))),
-        value if value.starts_with("upstream:") => value[9..]
-            .parse::<u8>()
-            .map(DnsResponseOutboundIndex)
-            .map_err(|_| DnsError::Resolve(format!("unknown response outbound: {value}"))),
+        value if value.starts_with("index:") => parse_response_user_defined(&value[6..], value),
+        value if value.starts_with("upstream:") => parse_response_user_defined(&value[9..], value),
         _ => Err(DnsError::Resolve(format!(
             "unknown response outbound: {value}"
         ))),
     }
+}
+
+fn parse_request_user_defined(
+    raw_index: &str,
+    original: &str,
+) -> Result<DnsRequestOutboundIndex, DnsError> {
+    raw_index
+        .parse::<usize>()
+        .ok()
+        .and_then(|index| DnsRequestOutboundIndex::try_from(index).ok())
+        .ok_or_else(|| DnsError::Resolve(format!("unknown request outbound: {original}")))
+}
+
+fn parse_response_user_defined(
+    raw_index: &str,
+    original: &str,
+) -> Result<DnsResponseOutboundIndex, DnsError> {
+    raw_index
+        .parse::<usize>()
+        .ok()
+        .and_then(|index| DnsResponseOutboundIndex::try_from(index).ok())
+        .ok_or_else(|| DnsError::Resolve(format!("unknown response outbound: {original}")))
 }
 
 fn bitmap_has(bitmap: &[u32], bit: usize) -> bool {
@@ -542,6 +499,21 @@ fn required_array<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>, Dns
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_user_defined_outbounds_reject_reserved_indices() {
+        assert_eq!(
+            request_outbound_from_fixture("index:251").unwrap(),
+            DnsRequestOutboundIndex::USER_DEFINED_MAX
+        );
+        assert!(request_outbound_from_fixture("index:252").is_err());
+        assert_eq!(
+            response_outbound_from_fixture("upstream:251").unwrap(),
+            DnsResponseOutboundIndex::USER_DEFINED_MAX
+        );
+        assert!(response_outbound_from_fixture("upstream:252").is_err());
+        assert!(request_outbound_from_fixture("index:65536").is_err());
+    }
 
     #[test]
     fn request_matcher_covers_qname_qtype_not_and_fallback() {

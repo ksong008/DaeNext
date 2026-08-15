@@ -27,9 +27,8 @@ pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstream
     let mut request_actions = Vec::new();
     let mut response_actions = Vec::new();
     for (index, raw) in config.dns.upstream.iter().enumerate() {
-        if index >= DnsRequestOutboundIndex::REJECT.value() as usize {
-            return Err("too many DNS upstreams for resident request routing".to_owned());
-        }
+        let outbound_index = DnsRequestOutboundIndex::try_from(index)
+            .map_err(|_| "too many DNS upstreams for resident request routing".to_owned())?;
         let (tag, link) = split_keyable_link(raw);
         let Some(tag) = tag else {
             return Err(format!("bad DNS upstream format: {raw:?} has no tag"));
@@ -38,14 +37,14 @@ pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstream
             return Err(format!("duplicated DNS upstream tag {tag:?}"));
         }
         let upstream = parse_dns_upstream_with_refresh_interval(
-            index as u8,
+            outbound_index.value(),
             &tag,
             &link,
             fallback_resolver,
             resolver_mark,
             refresh_interval,
         )?;
-        tag_to_index.insert(tag.clone(), index as u8);
+        tag_to_index.insert(tag.clone(), outbound_index.value());
         request_actions.push(ResidentDnsRequestAction::Upstream(upstream.clone()));
         response_actions.push(ResidentDnsResponseAction::Upstream(upstream.clone()));
         by_tag.insert(tag, upstream);
