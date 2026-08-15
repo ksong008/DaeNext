@@ -5,7 +5,7 @@ use super::types::{
 };
 use super::*;
 
-use crate::boring_tls::{BoringTlsVerification, build_boring_tls_context, connect_boring_tls_sync};
+use dae_tls::{BoringTlsVerification, build_boring_tls_context, connect_boring_tls_sync};
 
 pub(super) fn fetch_geodata_url(
     control_runtime: &ProductControlRuntime,

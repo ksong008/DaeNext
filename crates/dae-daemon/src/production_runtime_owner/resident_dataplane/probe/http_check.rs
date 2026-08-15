@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use crate::boring_tls::{
-    BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async,
-};
+use dae_tls::{BoringTlsVerification, build_boring_tls_context, connect_boring_tls_async};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time;
 

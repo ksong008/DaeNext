@@ -6,13 +6,13 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use crate::production_runtime_owner::resident_dataplane::udp::{
+    ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit,
+};
 use crate::production_runtime_owner::resident_dataplane::{
     ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
 };
-use crate::production_runtime_owner::udp_io::{UdpSendMessage, try_sendmmsg};
-use crate::production_runtime_owner::udp_payload_admission::{
-    ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit,
-};
+use dae_datapath::udp_io::{UdpSendMessage, try_sendmmsg};
 
 use super::super::*;
 

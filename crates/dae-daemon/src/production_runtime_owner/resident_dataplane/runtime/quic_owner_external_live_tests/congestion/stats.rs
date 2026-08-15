@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::production_runtime_owner::resident_dataplane::resident_allocator_stats_json;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct ProcessResourceSample {
     rss_kib: u64,
@@ -68,8 +70,7 @@ pub(super) fn percentile(samples: &[u64], percentile: usize) -> Option<u64> {
 }
 
 pub(super) fn allocator_sample() -> Value {
-    let snapshot = crate::allocator::allocator_stats_snapshot();
-    crate::allocator::allocator_stats_json_from(snapshot.as_ref())
+    resident_allocator_stats_json()
 }
 
 fn directory_entry_count(path: &Path) -> Option<usize> {

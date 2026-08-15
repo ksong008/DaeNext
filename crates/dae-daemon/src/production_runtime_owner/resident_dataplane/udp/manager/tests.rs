@@ -6,7 +6,7 @@ use dae_outbound::NetworkType;
 use crate::production_runtime_owner::resident_dataplane::plan::{
     RESIDENT_CONTROL_PLANE_SO_MARK, ResidentXhttpSettingsPlan,
 };
-use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadAdmission;
+use crate::production_runtime_owner::resident_dataplane::udp::ResidentUdpPayloadAdmission;
 
 use super::*;
 

@@ -1,7 +1,7 @@
 use super::*;
 use crate::production_runtime_owner::resident_dataplane::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::production_runtime_owner::resident_dataplane::plan::ResidentXhttpSettingsPlan;
-use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadAdmission;
+use crate::production_runtime_owner::resident_dataplane::udp::ResidentUdpPayloadAdmission;
 use dae_dns::DnsPacketView;
 use dae_outbound::shadowsocks::{decode_udp_packet, encode_udp_packet};
 use std::{

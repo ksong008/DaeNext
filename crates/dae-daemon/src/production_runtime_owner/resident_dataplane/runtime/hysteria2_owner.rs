@@ -23,7 +23,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
 
-use crate::production_runtime_owner::udp_payload_admission::{
+use crate::production_runtime_owner::resident_dataplane::udp::{
     ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit,
 };
 

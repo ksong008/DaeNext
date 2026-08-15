@@ -1,4 +1,4 @@
-use super::super::geodata::geodata_report_json;
+use super::super::super::resident_dataplane::geodata::geodata_report_json;
 use super::super::plan::{
     build_routing_plan_with_asset_dirs, build_routing_plan_with_geodata_resolver,
 };
@@ -46,12 +46,12 @@ routing {
     assert!(
         plan.lpm_sets[0]
             .iter()
-            .any(|prefix| { prefix.addr.to_string() == "10.0.0.0" && prefix.bits == 8 })
+            .any(|prefix| prefix.addr().to_string() == "10.0.0.0" && prefix.bits() == 8)
     );
     assert!(
         plan.lpm_sets[0]
             .iter()
-            .any(|prefix| { prefix.addr.to_string() == "192.168.0.0" && prefix.bits == 16 })
+            .any(|prefix| prefix.addr().to_string() == "192.168.0.0" && prefix.bits() == 16)
     );
     let ip_set = plan
         .matches
@@ -122,14 +122,14 @@ routing {
     assert_eq!(plan.lpm_sets.len(), 2);
     assert!(plan.lpm_sets.iter().any(|set| {
         set.iter()
-            .any(|prefix| prefix.addr.to_string() == "10.0.0.0" && prefix.bits == 8)
+            .any(|prefix| prefix.addr().to_string() == "10.0.0.0" && prefix.bits() == 8)
             && set
                 .iter()
-                .any(|prefix| prefix.addr.to_string() == "172.16.0.0" && prefix.bits == 12)
+                .any(|prefix| prefix.addr().to_string() == "172.16.0.0" && prefix.bits() == 12)
     }));
     assert!(plan.lpm_sets.iter().any(|set| {
         set.iter()
-            .any(|prefix| prefix.addr.to_string() == "203.0.113.0" && prefix.bits == 24)
+            .any(|prefix| prefix.addr().to_string() == "203.0.113.0" && prefix.bits() == 24)
     }));
 }
 

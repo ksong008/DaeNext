@@ -12,6 +12,8 @@ use super::{
     JuicityTransportLease, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
     TuicOwnerRegistryHandle, TuicUdpAssociationLease,
 };
+#[cfg(not(test))]
+use super::{ResidentAllocatorReclaimReason, resident_allocator_request_reclaim};
 
 use bytes::Bytes;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
@@ -54,11 +56,6 @@ use serde_json::json;
 use tokio::time;
 
 use super::super::PRODUCTION_NETNS;
-#[cfg(test)]
-use super::super::udp_io::UdpOriginalDstRecvError;
-use super::super::udp_io::{
-    UdpBatchReceiver, UdpOriginalDstPacket, UdpPayloadPool, UdpSendMessage, try_sendmmsg,
-};
 #[cfg(test)]
 use super::RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX;
 use super::client::{
@@ -109,9 +106,19 @@ use super::{
     XUDP_OPTION_DATA, apply_resident_udp_socket_buffer_tuning, resident_socket_addr_display,
     resident_udp_network_name,
 };
+#[cfg(test)]
+use dae_datapath::udp_io::UdpOriginalDstRecvError;
+use dae_datapath::udp_io::{
+    UdpBatchReceiver, UdpOriginalDstPacket, UdpPayloadPool, UdpSendMessage, try_sendmmsg,
+};
 
+mod admission;
 mod worker;
 pub(super) use self::worker::*;
+pub(crate) use admission::{
+    ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
+    admit_udp_payload,
+};
 mod task_shutdown;
 use self::task_shutdown::*;
 mod session_key;

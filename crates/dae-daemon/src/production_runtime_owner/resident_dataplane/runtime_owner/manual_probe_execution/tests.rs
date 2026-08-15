@@ -38,18 +38,14 @@ fn manual_probe_runtime_workers_keep_the_helper_control_identity() {
     });
 
     assert_eq!(
-        crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME,
-        "daed-latency",
+        RESIDENT_MANUAL_PROBE_TASK_NAME, "daed-latency",
         "the helper task name is an existing eBPF routing contract"
     );
     assert_eq!(
         worker_name.as_deref(),
-        Some(crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME)
+        Some(RESIDENT_MANUAL_PROBE_TASK_NAME)
     );
-    assert_eq!(
-        task_comm,
-        crate::production_runtime_owner::RESIDENT_MANUAL_PROBE_TASK_NAME
-    );
+    assert_eq!(task_comm, RESIDENT_MANUAL_PROBE_TASK_NAME);
     runtime.shutdown();
 }
 

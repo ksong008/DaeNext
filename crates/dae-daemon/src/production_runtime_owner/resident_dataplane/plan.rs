@@ -40,9 +40,9 @@ use dae_outbound::{
 use serde_json::{Value, json};
 use url::Url;
 
-use super::super::resident_routing::ResidentGeodataStore;
 #[cfg(test)]
 use super::RESIDENT_TCP_LATENCY_PROBE_TIMEOUT;
+use super::geodata::GeodataResolver as ResidentGeodataStore;
 use super::{
     dns::{ResidentDnsPlan, build_resident_dns_plan},
     execution_link_hash, link_hash, redacted_link_source, resident_tcp_health_probe_timeout,

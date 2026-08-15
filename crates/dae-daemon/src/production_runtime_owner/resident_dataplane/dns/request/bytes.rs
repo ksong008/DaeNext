@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::{ProxyDnsRequestContext, ProxyDnsRequestStage};
 use crate::production_runtime_owner::resident_dataplane::ResidentDataplaneMetrics;
-use crate::production_runtime_owner::udp_payload_admission::ResidentUdpPayloadPermit;
+use crate::production_runtime_owner::resident_dataplane::udp::ResidentUdpPayloadPermit;
 
 pub(in crate::production_runtime_owner::resident_dataplane) struct ProxyDnsQueuedRequestBytes {
     permit: Option<ResidentUdpPayloadPermit>,
