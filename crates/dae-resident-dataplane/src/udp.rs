@@ -20,7 +20,7 @@ use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 #[cfg(test)]
 use dae_outbound::hysteria2::{HYSTERIA2_MAX_UDP_MESSAGE_LENGTH, decode_hysteria2_udp_message};
 #[cfg(test)]
-use dae_outbound::juicity::decode_stream_packet_frame;
+use dae_outbound::juicity::{decode_stream_packet_frame, seal_stream_packet_frame};
 #[cfg(test)]
 use dae_outbound::tuic::{decode_tuic_udp_packet, encode_tuic_udp_stream_packet};
 use dae_outbound::{
@@ -31,8 +31,8 @@ use dae_outbound::{
         hysteria2_udp_payload_capacity,
     },
     juicity::{
-        JUICITY_STREAM_PACKET_MAX_FRAME_LEN, JuicityStreamPacketFrame,
-        decode_stream_packet_frame_prefix, seal_stream_packet_frame,
+        JUICITY_STREAM_PACKET_MAX_FRAME_LEN, JuicityStreamPacketPayload,
+        decode_stream_packet_payload_prefix, encode_stream_packet_frame,
     },
     shadowsocks::{
         Ss2022UdpCodec, Ss2022UdpReplayMetricsSnapshot,

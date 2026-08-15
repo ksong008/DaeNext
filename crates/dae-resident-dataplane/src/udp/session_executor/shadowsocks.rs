@@ -43,15 +43,21 @@ impl ShadowsocksAeadDatagramSession {
     }
 
     pub(super) fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        let Some(response) = self.relay.poll_response("Shadowsocks")? else {
-            return Ok(None);
-        };
-        self.decode_response(&response).map(Some)
+        let cipher = &self.cipher;
+        let password = &self.password;
+        self.relay.poll_response_with("Shadowsocks", |response| {
+            decode_aead_response(cipher, password, response)
+        })
     }
 
     pub(super) async fn wait_response(&mut self) -> Result<UdpExchangeResult, String> {
-        let response = self.relay.wait_response("Shadowsocks").await?;
-        self.decode_response(&response)
+        let cipher = &self.cipher;
+        let password = &self.password;
+        self.relay
+            .wait_response_with("Shadowsocks", |response| {
+                decode_aead_response(cipher, password, response)
+            })
+            .await
     }
 
     pub(super) fn has_response_buffer(&self) -> bool {
@@ -62,13 +68,9 @@ impl ShadowsocksAeadDatagramSession {
         self.relay.reclaim_response_buffer()
     }
 
+    #[cfg(test)]
     fn decode_response(&self, response: &[u8]) -> Result<UdpExchangeResult, String> {
-        let decoded = decode_shadowsocks_udp_packet(&self.cipher, &self.password, response)
-            .map_err(|err| format!("decode Shadowsocks UDP packet: {err}"))?;
-        let result = UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
-            .with_session_executor("tokio-datagram-relay")
-            .with_underlay_reuse("udp-socket-reused");
-        Ok(response_with_source_identity(result, &decoded.target))
+        decode_aead_response(&self.cipher, &self.password, response)
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {
@@ -156,15 +158,35 @@ impl Shadowsocks2022DatagramSession {
     }
 
     pub(super) fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        let Some(response) = self.relay.poll_response("Shadowsocks 2022")? else {
+        let codec = &mut self.codec;
+        let Some((decoded, replay_metrics)) =
+            self.relay
+                .poll_response_with("Shadowsocks 2022", |response| {
+                    let codec = codec.as_mut().ok_or_else(|| {
+                        "Shadowsocks 2022 UDP codec is not initialized".to_owned()
+                    })?;
+                    Ok(decode_ss2022_response(codec, response))
+                })?
+        else {
             return Ok(None);
         };
-        self.decode_response(&response).map(Some)
+        self.observe_replay_metrics(replay_metrics);
+        decoded.map(Some)
     }
 
     pub(super) async fn wait_response(&mut self) -> Result<UdpExchangeResult, String> {
-        let response = self.relay.wait_response("Shadowsocks 2022").await?;
-        self.decode_response(&response)
+        let codec = &mut self.codec;
+        let (decoded, replay_metrics) = self
+            .relay
+            .wait_response_with("Shadowsocks 2022", |response| {
+                let codec = codec
+                    .as_mut()
+                    .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
+                Ok(decode_ss2022_response(codec, response))
+            })
+            .await?;
+        self.observe_replay_metrics(replay_metrics);
+        decoded
     }
 
     pub(super) fn has_response_buffer(&self) -> bool {
@@ -175,32 +197,15 @@ impl Shadowsocks2022DatagramSession {
         self.relay.reclaim_response_buffer()
     }
 
+    #[cfg(test)]
     fn decode_response(&mut self, response: &[u8]) -> Result<UdpExchangeResult, String> {
-        let (decoded, replay_metrics) = {
-            let codec = self
-                .codec
-                .as_mut()
-                .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
-            let decoded = codec.decode_server_packet(response, ss2022_udp_unix_timestamp_now());
-            (decoded, codec.replay_metrics_snapshot())
-        };
+        let codec = self
+            .codec
+            .as_mut()
+            .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
+        let (decoded, replay_metrics) = decode_ss2022_response(codec, response);
         self.observe_replay_metrics(replay_metrics);
-        let decoded =
-            decoded.map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))?;
-        let observed_identity = decoded.client_session_id.and_then(|session_id| {
-            UdpResponseIdentityToken::from_protocol_identity(
-                SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN,
-                &session_id,
-            )
-        });
-        let result = UdpExchangeResult::new(decoded.payload, "udp-datagram-aead-2022")
-            .with_session_executor("tokio-datagram-relay")
-            .with_underlay_reuse("udp-socket-and-codec-session-reused");
-        Ok(response_with_source_and_protocol_identity(
-            result,
-            &decoded.target,
-            observed_identity,
-        ))
+        decoded
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {
@@ -215,6 +220,44 @@ impl Shadowsocks2022DatagramSession {
         }
         self.replay_metrics = current;
     }
+}
+
+fn decode_aead_response(
+    cipher: &str,
+    password: &str,
+    response: &[u8],
+) -> Result<UdpExchangeResult, String> {
+    let decoded = decode_shadowsocks_udp_packet(cipher, password, response)
+        .map_err(|err| format!("decode Shadowsocks UDP packet: {err}"))?;
+    let result = UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
+        .with_session_executor("tokio-datagram-relay")
+        .with_underlay_reuse("udp-socket-reused");
+    Ok(response_with_source_identity(result, &decoded.target))
+}
+
+fn decode_ss2022_response(
+    codec: &mut Ss2022UdpCodec,
+    response: &[u8],
+) -> (
+    Result<UdpExchangeResult, String>,
+    Ss2022UdpReplayMetricsSnapshot,
+) {
+    let decoded = codec
+        .decode_server_packet(response, ss2022_udp_unix_timestamp_now())
+        .map_err(|err| format!("decode Shadowsocks 2022 UDP packet: {err}"))
+        .map(|decoded| {
+            let observed_identity = decoded.client_session_id.and_then(|session_id| {
+                UdpResponseIdentityToken::from_protocol_identity(
+                    SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN,
+                    &session_id,
+                )
+            });
+            let result = UdpExchangeResult::new(decoded.payload, "udp-datagram-aead-2022")
+                .with_session_executor("tokio-datagram-relay")
+                .with_underlay_reuse("udp-socket-and-codec-session-reused");
+            response_with_source_and_protocol_identity(result, &decoded.target, observed_identity)
+        });
+    (decoded, codec.replay_metrics_snapshot())
 }
 
 impl Drop for Shadowsocks2022DatagramSession {
@@ -253,6 +296,17 @@ mod tests {
 
     const SS2022_CIPHER: &str = "2022-blake3-aes-128-gcm";
     const SS2022_PASSWORD: &str = "AQIDBAUGBwgJCgsMDQ4PEA==:ERITFBUWFxgZGhscHR4fIA==";
+
+    #[test]
+    fn ss2022_poll_without_a_response_does_not_require_an_initialized_codec() {
+        let mut session = Shadowsocks2022DatagramSession::new(
+            SS2022_CIPHER.to_owned(),
+            SS2022_PASSWORD.to_owned(),
+            0,
+        );
+
+        assert!(session.poll_response().unwrap().is_none());
+    }
 
     #[test]
     fn aead_response_source_is_verified_at_the_consumer_boundary() {

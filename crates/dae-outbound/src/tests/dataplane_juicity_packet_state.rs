@@ -67,7 +67,7 @@ fn case_juicity_stream_packet_frame_roundtrips_without_trojan_crlf() {
     assert_eq!(frame.target, "fixture-stream.fixture.invalid:5353");
     assert_eq!(frame.payload_len, payload.len());
     assert_eq!(decoded.target, frame.target);
-    assert_eq!(decoded.payload, payload);
+    assert_eq!(decoded.payload(), payload);
     assert_eq!(decoded.metadata_len, frame.metadata_len);
     assert_eq!(decoded.encoded, frame.encoded);
     assert_eq!(

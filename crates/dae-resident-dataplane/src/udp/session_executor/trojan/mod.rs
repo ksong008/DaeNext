@@ -10,6 +10,7 @@ pub(in crate::udp) struct TrojanUdpStreamSession {
     carrier_kind: TrojanUdpCarrierKind,
     carrier: Option<TrojanUdpCarrier>,
     response_plaintext: Vec<u8>,
+    response_plaintext_cursor: usize,
 }
 
 impl TrojanUdpStreamSession {
@@ -35,6 +36,7 @@ impl TrojanUdpStreamSession {
             carrier_kind,
             carrier: None,
             response_plaintext: Vec::new(),
+            response_plaintext_cursor: 0,
         }
     }
 
@@ -94,6 +96,10 @@ impl TrojanUdpStreamSession {
         let Some(chunk) = carrier.read_chunk(mode).await? else {
             return Ok(None);
         };
+        compact_trojan_response_buffer(
+            &mut self.response_plaintext,
+            &mut self.response_plaintext_cursor,
+        );
         let new_len = self.response_plaintext.len().saturating_add(chunk.len());
         if new_len > TROJAN_UDP_RESPONSE_BUFFER_CAPACITY {
             self.shutdown().await;
@@ -109,26 +115,34 @@ impl TrojanUdpStreamSession {
 
     fn try_pop_response_packet(
         &mut self,
-    ) -> Result<Option<dae_outbound::trojan::TrojanUdpPacket>, String> {
-        let Some((packet, consumed)) =
-            dae_outbound::trojan::decode_udp_packet_prefix(&self.response_plaintext)
-                .map_err(|err| format!("decode Trojan UDP session response: {err}"))?
+    ) -> Result<Option<dae_outbound::trojan::TrojanUdpPacketPayload>, String> {
+        let Some((packet, consumed)) = dae_outbound::trojan::decode_udp_packet_payload_prefix(
+            &self.response_plaintext[self.response_plaintext_cursor..],
+        )
+        .map_err(|err| format!("decode Trojan UDP session response: {err}"))?
         else {
             return Ok(None);
         };
-        self.response_plaintext.drain(..consumed);
+        self.response_plaintext_cursor += consumed;
+        compact_trojan_response_buffer(
+            &mut self.response_plaintext,
+            &mut self.response_plaintext_cursor,
+        );
         Ok(Some(packet))
     }
 
-    fn response_result(&self, packet: dae_outbound::trojan::TrojanUdpPacket) -> UdpExchangeResult {
+    fn response_result(
+        &self,
+        packet: dae_outbound::trojan::TrojanUdpPacketPayload,
+    ) -> UdpExchangeResult {
         let (session_executor, underlay_reuse, tls_underlay) = self.evidence_fields();
         let result = UdpExchangeResult::new(packet.payload, "tls-udp-over-tcp")
             .with_tls_underlay(tls_underlay)
             .with_session_executor(session_executor)
             .with_underlay_reuse(underlay_reuse);
-        match packet.target.parse::<SocketAddr>() {
-            Ok(source) => result.with_decoded_response_identity(Some(source), None),
-            Err(_) => {
+        match packet.target.socket_addr() {
+            Some(source) => result.with_decoded_response_identity(Some(source), None),
+            None => {
                 result.with_rejected_response_identity(UdpResponseDropReason::MalformedIdentity)
             }
         }
@@ -154,6 +168,22 @@ impl TrojanUdpStreamSession {
             carrier.shutdown().await;
         }
         self.response_plaintext.clear();
+        self.response_plaintext_cursor = 0;
+    }
+}
+
+fn compact_trojan_response_buffer(buffer: &mut Vec<u8>, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    if *cursor >= buffer.len() {
+        buffer.clear();
+        *cursor = 0;
+        return;
+    }
+    if *cursor >= 8192 && cursor.saturating_mul(2) >= buffer.len() {
+        buffer.drain(..*cursor);
+        *cursor = 0;
     }
 }
 
@@ -184,6 +214,8 @@ mod tests {
             Some(b"two".to_vec()),
         );
         assert_eq!(session.try_pop_response_packet().unwrap(), None);
+        assert_eq!(session.response_plaintext_cursor, 0);
+        assert!(session.response_plaintext.is_empty());
     }
 
     #[test]

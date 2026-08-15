@@ -90,7 +90,14 @@ impl DatagramRelay {
         }
     }
 
-    pub(super) fn poll_response(&mut self, label: &str) -> Result<Option<Vec<u8>>, String> {
+    pub(super) fn poll_response_with<T, F>(
+        &mut self,
+        label: &str,
+        decode: F,
+    ) -> Result<Option<T>, String>
+    where
+        F: FnOnce(&[u8]) -> Result<T, String>,
+    {
         let Some(socket) = self.socket.as_ref() else {
             return Ok(None);
         };
@@ -99,13 +106,20 @@ impl DatagramRelay {
         }
         self.response_buffer_reclaimed = false;
         match socket.try_recv_from(&mut self.response_buf) {
-            Ok((read, _)) => Ok(Some(self.response_buf[..read].to_vec())),
+            Ok((read, _)) => decode(&self.response_buf[..read]).map(Some),
             Err(err) if response_receive_is_pending(&err) => Ok(None),
             Err(err) => Err(format!("receive {label} UDP datagram: {err}")),
         }
     }
 
-    pub(super) async fn wait_response(&mut self, label: &str) -> Result<Vec<u8>, String> {
+    pub(super) async fn wait_response_with<T, F>(
+        &mut self,
+        label: &str,
+        decode: F,
+    ) -> Result<T, String>
+    where
+        F: FnOnce(&[u8]) -> Result<T, String>,
+    {
         let Some(socket) = self.socket.as_ref() else {
             return Err(format!("{label} UDP relay socket is not initialized"));
         };
@@ -123,7 +137,7 @@ impl DatagramRelay {
             .await
             .map_err(|err| format!("receive {label} UDP datagram: {err}"))?;
         self.response_buffer_reclaimed = false;
-        Ok(self.response_buf[..read].to_vec())
+        decode(&self.response_buf[..read])
     }
 
     pub(super) fn has_response_buffer(&self) -> bool {

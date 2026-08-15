@@ -288,6 +288,7 @@ pub(crate) struct ResidentProxyGroupPlan {
     pub(crate) group_policy: ResidentGroupPolicyPlan,
     pub(crate) matched_candidate_count: usize,
     pub(crate) candidates: Vec<ResidentProxyCandidatePlan>,
+    pub(super) candidate_index_by_node_tag: Arc<std::collections::HashMap<String, usize>>,
     pub(crate) selector: Arc<std::sync::RwLock<DialerGroup>>,
     pub(crate) check_interval: Duration,
     pub(crate) probe_profile: Arc<ResidentProbeProfile>,
@@ -862,11 +863,7 @@ impl ResidentProxyGroupPlan {
         latency_ms: Option<i64>,
         checked_at_unix: i64,
     ) -> Result<(), String> {
-        let Some(index) = self
-            .candidates
-            .iter()
-            .position(|candidate| candidate.binding.plan().node_tag == node_tag)
-        else {
+        let Some(index) = self.candidate_index_by_node_tag.get(node_tag).copied() else {
             return Err(format!(
                 "resident dataplane group {} has no admitted candidate named {node_tag}",
                 self.group_name
@@ -892,11 +889,7 @@ impl ResidentProxyGroupPlan {
         latency_ms: Option<i64>,
         checked_at_unix: i64,
     ) -> Result<(), String> {
-        let Some(index) = self
-            .candidates
-            .iter()
-            .position(|candidate| candidate.binding.plan().node_tag == node_tag)
-        else {
+        let Some(index) = self.candidate_index_by_node_tag.get(node_tag).copied() else {
             return Err(format!(
                 "resident dataplane group {} has no admitted candidate named {node_tag}",
                 self.group_name
@@ -1170,11 +1163,19 @@ impl ResidentProxyGroupPlan {
             RESIDENT_TCP_LATENCY_PROBE_TIMEOUT,
         ));
         let probe_candidates = share_group_probe_plans(&candidates, Arc::clone(&probe_profile));
+        let mut candidate_index_by_node_tag =
+            std::collections::HashMap::with_capacity(candidates.len());
+        for (index, candidate) in candidates.iter().enumerate() {
+            candidate_index_by_node_tag
+                .entry(candidate.binding.plan().node_tag.clone())
+                .or_insert(index);
+        }
         Self {
             group_name,
             group_policy: ResidentGroupPolicyPlan::Fixed { index: 0 },
             matched_candidate_count: 1,
             candidates,
+            candidate_index_by_node_tag: Arc::new(candidate_index_by_node_tag),
             selector: Arc::new(std::sync::RwLock::new(DialerGroup::new(
                 "test",
                 vec![Dialer::new("test", "")],

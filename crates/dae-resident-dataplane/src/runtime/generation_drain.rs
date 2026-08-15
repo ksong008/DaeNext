@@ -73,6 +73,7 @@ impl ResidentDrainableGeneration for ResidentDataplaneGeneration {
 #[derive(Clone, Debug)]
 pub(super) struct ResidentGenerationDrain {
     state: Arc<Mutex<ResidentGenerationDrainState>>,
+    wake: Arc<tokio::sync::Notify>,
     policy: ResidentGenerationDrainPolicy,
 }
 
@@ -170,6 +171,7 @@ impl ResidentGenerationDrain {
         assert!(policy.maximum_retired > 0);
         Self {
             state: Arc::new(Mutex::new(ResidentGenerationDrainState::default())),
+            wake: Arc::new(tokio::sync::Notify::new()),
             policy,
         }
     }
@@ -251,9 +253,17 @@ impl ResidentGenerationDrain {
     pub(super) async fn run(self, stop: SharedResidentStopSignal) {
         let mut stop_listener = stop.listener();
         loop {
-            tokio::select! {
-                _ = stop_listener.cancelled() => break,
-                _ = tokio::time::sleep(RESIDENT_IDLE_SLEEP) => self.reap(Instant::now()),
+            if self.has_pending_retirements() {
+                tokio::select! {
+                    _ = stop_listener.cancelled() => break,
+                    _ = self.wake.notified() => self.reap(Instant::now()),
+                    _ = tokio::time::sleep(RESIDENT_IDLE_SLEEP) => self.reap(Instant::now()),
+                }
+            } else {
+                tokio::select! {
+                    _ = stop_listener.cancelled() => break,
+                    _ = self.wake.notified() => self.reap(Instant::now()),
+                }
             }
         }
         self.stop_all();
@@ -370,25 +380,37 @@ impl ResidentGenerationDrain {
         let deadline = retired_at
             .checked_add(self.policy.maximum_age)
             .unwrap_or(retired_at);
-        let mut state = self
+        {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            debug_assert!(state.retired.len() < self.policy.maximum_retired);
+            debug_assert!(
+                state
+                    .retired
+                    .iter()
+                    .all(|retired| retired.id() != control.id())
+            );
+            state.retired_total = state.retired_total.saturating_add(1);
+            state.retired.push(RetiredResidentGeneration {
+                generation: Some(generation),
+                control,
+                retired_at,
+                deadline,
+                stop_reason: None,
+            });
+        }
+        self.wake.notify_one();
+    }
+
+    fn has_pending_retirements(&self) -> bool {
+        !self
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        debug_assert!(state.retired.len() < self.policy.maximum_retired);
-        debug_assert!(
-            state
-                .retired
-                .iter()
-                .all(|retired| retired.id() != control.id())
-        );
-        state.retired_total = state.retired_total.saturating_add(1);
-        state.retired.push(RetiredResidentGeneration {
-            generation: Some(generation),
-            control,
-            retired_at,
-            deadline,
-            stop_reason: None,
-        });
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retired
+            .is_empty()
     }
 
     fn reap(&self, now: Instant) {

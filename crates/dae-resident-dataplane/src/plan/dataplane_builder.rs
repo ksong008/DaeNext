@@ -359,12 +359,20 @@ pub(crate) fn resident_proxy_plans(
             resident_tcp_health_probe_timeout(),
         ));
         let probe_candidates = share_group_probe_plans(&candidates, Arc::clone(&probe_profile));
+        let mut candidate_index_by_node_tag =
+            std::collections::HashMap::with_capacity(candidates.len());
+        for (index, candidate) in candidates.iter().enumerate() {
+            candidate_index_by_node_tag
+                .entry(candidate.binding.plan().node_tag.clone())
+                .or_insert(index);
+        }
         let group_plan = ResidentProxyGroupPlan {
             group_name: group.name.clone(),
             group_policy,
             matched_candidate_count,
             selector: Arc::new(std::sync::RwLock::new(selector)),
             candidates,
+            candidate_index_by_node_tag: Arc::new(candidate_index_by_node_tag),
             check_interval: group_check_interval(config, group),
             probe_profile,
             probe_candidates,

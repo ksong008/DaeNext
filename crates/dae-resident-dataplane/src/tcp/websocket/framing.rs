@@ -32,6 +32,7 @@ pub(crate) struct WebSocketBinaryFrameDecoder {
 }
 
 impl WebSocketBinaryFrameDecoder {
+    #[cfg(test)]
     pub(crate) fn push(&mut self, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
         self.extend(input)?;
         let mut messages = Vec::new();

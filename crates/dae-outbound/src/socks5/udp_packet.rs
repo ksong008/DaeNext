@@ -11,11 +11,25 @@ pub struct Socks5UdpDatagram {
 }
 
 pub fn wrap(target: &Socks5Address, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(3 + target.encoded_len() + payload.len());
     out.extend_from_slice(&[0, 0, 0]);
     target.write_to(&mut out)?;
     out.extend_from_slice(payload);
     Ok(out)
+}
+
+pub fn wrap_socket_addr(target: SocketAddr, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    let target = match target {
+        SocketAddr::V4(target) => Socks5Address::Ipv4 {
+            addr: *target.ip(),
+            port: target.port(),
+        },
+        SocketAddr::V6(target) => Socks5Address::Ipv6 {
+            addr: *target.ip(),
+            port: target.port(),
+        },
+    };
+    wrap(&target, payload)
 }
 
 pub fn wrap_target(target: &str, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
@@ -36,3 +50,4 @@ pub fn unwrap(input: &[u8]) -> Result<Socks5UdpDatagram, OutboundError> {
         payload: input[3 + consumed..].to_vec(),
     })
 }
+use std::net::SocketAddr;

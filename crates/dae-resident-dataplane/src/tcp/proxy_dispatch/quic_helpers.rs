@@ -9,7 +9,7 @@ use std::fmt;
 use std::future::Future;
 use std::io::{self, IoSliceMut};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use blake2::{
@@ -19,6 +19,7 @@ use blake2::{
 use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
 
 const HYSTERIA2_SALAMANDER_HASH_LEN: usize = 32;
+const HYSTERIA2_SALAMANDER_SALT_BATCH: usize = 64;
 const QUIC_STREAM_RELAY_BUFFER_SIZE: usize = 16 * 1024;
 pub(crate) async fn relay_tcp_over_quic_stream_async(
     inbound: &mut TokioTcpStream,
@@ -227,6 +228,7 @@ impl quinn::Runtime for Hysteria2SalamanderRuntime {
         Ok(Arc::new(Hysteria2SalamanderUdpSocket {
             inner,
             key: Arc::clone(&self.key),
+            send_state: Mutex::new(SalamanderSendState::new()),
         }))
     }
 
@@ -238,6 +240,46 @@ impl quinn::Runtime for Hysteria2SalamanderRuntime {
 struct Hysteria2SalamanderUdpSocket {
     inner: Arc<dyn quinn::AsyncUdpSocket>,
     key: Arc<Vec<u8>>,
+    send_state: Mutex<SalamanderSendState>,
+}
+
+struct SalamanderSendState {
+    packet: Vec<u8>,
+    salts: Vec<u8>,
+    next_salt: usize,
+}
+
+impl SalamanderSendState {
+    fn new() -> Self {
+        let mut state = Self {
+            packet: Vec::new(),
+            salts: vec![
+                0_u8;
+                HYSTERIA2_SALAMANDER_SALT_BATCH * HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD
+            ],
+            next_salt: 0,
+        };
+        state.refill_salts();
+        state
+    }
+
+    fn refill_salts(&mut self) {
+        if getrandom::fill(&mut self.salts).is_err() {
+            fastrand::fill(&mut self.salts);
+        }
+        self.next_salt = 0;
+    }
+
+    fn take_salt(&mut self) -> [u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD] {
+        if self.next_salt + HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD > self.salts.len() {
+            self.refill_salts();
+        }
+        let mut salt = [0_u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD];
+        let end = self.next_salt + HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD;
+        salt.copy_from_slice(&self.salts[self.next_salt..end]);
+        self.next_salt = end;
+        salt
+    }
 }
 
 impl fmt::Debug for Hysteria2SalamanderUdpSocket {
@@ -259,12 +301,17 @@ impl quinn::AsyncUdpSocket for Hysteria2SalamanderUdpSocket {
         if segment_size == 0 {
             return self.inner.try_send(transmit);
         }
+        let mut send_state = self
+            .send_state
+            .lock()
+            .map_err(|_| io::Error::other("Hysteria2 Salamander send state lock is poisoned"))?;
         for chunk in transmit.contents.chunks(segment_size) {
-            let packet = salamander_obfuscate_packet(&self.key, chunk);
+            let salt = send_state.take_salt();
+            salamander_obfuscate_packet_into(&self.key, chunk, &salt, &mut send_state.packet);
             let obfs_transmit = udp::Transmit {
                 destination: transmit.destination,
                 ecn: transmit.ecn,
-                contents: &packet,
+                contents: &send_state.packet,
                 segment_size: None,
                 src_ip: transmit.src_ip,
             };
@@ -307,18 +354,17 @@ impl quinn::AsyncUdpSocket for Hysteria2SalamanderUdpSocket {
     }
 }
 
-fn salamander_obfuscate_packet(key: &[u8], payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD + payload.len());
-    let mut salt = [0_u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD];
-    if getrandom::fill(&mut salt).is_err() {
-        fastrand::fill(&mut salt);
-    }
-    out.extend_from_slice(&salt);
-    let hash = salamander_hash(key, &salt);
-    for (index, byte) in payload.iter().enumerate() {
-        out.push(*byte ^ hash[index % HYSTERIA2_SALAMANDER_HASH_LEN]);
-    }
-    out
+fn salamander_obfuscate_packet_into(
+    key: &[u8],
+    payload: &[u8],
+    salt: &[u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD],
+    out: &mut Vec<u8>,
+) {
+    out.clear();
+    out.extend_from_slice(salt);
+    out.extend_from_slice(payload);
+    let hash = salamander_hash(key, salt);
+    salamander_xor_in_place(&mut out[HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD..], &hash);
 }
 
 fn salamander_deobfuscate_received(
@@ -351,13 +397,34 @@ fn salamander_deobfuscate_one(
     salt.copy_from_slice(&raw[..HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD]);
     let hash = salamander_hash(key, &salt);
     let payload_len = raw.len() - HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD;
-    for index in 0..payload_len {
-        raw[index] = raw[index + HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD]
-            ^ hash[index % HYSTERIA2_SALAMANDER_HASH_LEN];
-    }
+    raw.copy_within(HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD.., 0);
+    salamander_xor_in_place(&mut raw[..payload_len], &hash);
     meta.len = payload_len;
     meta.stride = payload_len;
     true
+}
+
+fn salamander_xor_in_place(payload: &mut [u8], hash: &[u8; HYSTERIA2_SALAMANDER_HASH_LEN]) {
+    let mut chunks = payload.chunks_exact_mut(HYSTERIA2_SALAMANDER_HASH_LEN);
+    for chunk in &mut chunks {
+        for (byte, hash_byte) in chunk.iter_mut().zip(hash) {
+            *byte ^= *hash_byte;
+        }
+    }
+    for (index, byte) in chunks.into_remainder().iter_mut().enumerate() {
+        *byte ^= hash[index];
+    }
+}
+
+#[cfg(test)]
+fn salamander_obfuscate_packet(key: &[u8], payload: &[u8]) -> Vec<u8> {
+    let mut salt = [0_u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD];
+    if getrandom::fill(&mut salt).is_err() {
+        fastrand::fill(&mut salt);
+    }
+    let mut out = Vec::with_capacity(HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD + payload.len());
+    salamander_obfuscate_packet_into(key, payload, &salt, &mut out);
+    out
 }
 
 fn salamander_hash(key: &[u8], salt: &[u8; HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD]) -> [u8; 32] {

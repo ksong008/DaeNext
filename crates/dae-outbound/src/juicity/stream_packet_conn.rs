@@ -201,7 +201,7 @@ async fn run_stream_packet_conn_smoke_async(
         client_response_read_count += 1;
         let decoded = decode_stream_packet_frame(&response)?;
         if decoded.target == options.response_target
-            && decoded.payload == options.response_payload
+            && decoded.payload() == options.response_payload
             && decoded.encoded == response_frame.encoded
         {
             client_response_match_count += 1;
@@ -354,7 +354,7 @@ async fn run_stream_packet_conn_server(
         if parsed.network_byte == TrojanNetwork::Udp.byte()
             && parsed.initial_target == expected_target
             && parsed.frame.target == expected_target
-            && parsed.frame.payload == expected_payload
+            && parsed.frame.payload() == expected_payload
         {
             request_match_count += 1;
         }
