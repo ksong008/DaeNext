@@ -261,6 +261,7 @@ fn spawn_async_tcp_flow(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod accept_loop_tests {
     use super::*;
 

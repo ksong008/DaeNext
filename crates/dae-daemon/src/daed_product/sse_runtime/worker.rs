@@ -62,6 +62,7 @@ impl Drop for ProductSseWorkerCompletion {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_product_sse_runtime(
     app: std::sync::Weak<AppState>,
     mut receiver: tokio::sync::mpsc::Receiver<ProductSseJob>,

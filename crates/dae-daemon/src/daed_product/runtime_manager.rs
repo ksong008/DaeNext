@@ -147,8 +147,144 @@ impl RuntimeCleanupState {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(super) enum ProductRuntimeInstance {
-    Resident(ResidentProductionRuntime),
+    Resident(Arc<ResidentProductRuntimeSlot>),
     Fake(FakeProductRuntime),
+}
+
+#[derive(Debug)]
+pub(super) struct ResidentProductRuntimeSlot {
+    runtime: Mutex<Option<ResidentProductionRuntime>>,
+    read_handle: Arc<ResidentProductionRuntimeReadHandle>,
+}
+
+impl ResidentProductRuntimeSlot {
+    fn new(runtime: ResidentProductionRuntime) -> Self {
+        let read_handle = runtime.read_handle();
+        Self {
+            runtime: Mutex::new(Some(runtime)),
+            read_handle,
+        }
+    }
+
+    fn with_runtime<T>(&self, read: impl FnOnce(&ResidentProductionRuntime) -> T) -> Option<T> {
+        let runtime = self
+            .runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        runtime.as_ref().map(read)
+    }
+
+    fn with_runtime_result<T>(
+        &self,
+        operation: &str,
+        mutate: impl FnOnce(&mut ResidentProductionRuntime) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| format!("resident runtime slot poisoned during {operation}"))?;
+        mutate(
+            runtime
+                .as_mut()
+                .ok_or_else(|| format!("resident runtime is unavailable during {operation}"))?,
+        )
+    }
+
+    pub(super) fn active_generation_snapshot(&self) -> Option<ResidentActiveGenerationSnapshot> {
+        self.with_runtime(ResidentProductionRuntime::active_generation_snapshot)
+            .flatten()
+    }
+
+    pub(super) fn publish_prepared_generation(
+        &self,
+        prepared: ResidentPreparedGeneration,
+        latency_seed: &[Value],
+        preserve_dns_cache: bool,
+    ) -> Result<Value, String> {
+        self.with_runtime_result("generation publication", |runtime| {
+            runtime.publish_prepared_generation(prepared, latency_seed, preserve_dns_cache)
+        })
+    }
+
+    pub(super) fn restore_active_generation(
+        &self,
+        snapshot: &ResidentActiveGenerationSnapshot,
+    ) -> Result<Value, String> {
+        self.with_runtime_result("generation restore", |runtime| {
+            runtime.restore_active_generation(snapshot)
+        })
+    }
+
+    pub(super) fn finalize_generation_publication(&self) {
+        let _ = self.with_runtime(ResidentProductionRuntime::finalize_generation_publication);
+    }
+
+    pub(super) fn owns_generation_snapshot(
+        &self,
+        snapshot: &ResidentActiveGenerationSnapshot,
+    ) -> bool {
+        self.with_runtime(|runtime| runtime.owns_generation_snapshot(snapshot))
+            .unwrap_or(false)
+    }
+
+    pub(super) fn read_handle(&self) -> Arc<ResidentProductionRuntimeReadHandle> {
+        Arc::clone(&self.read_handle)
+    }
+
+    pub(super) fn resident_interface_reattach_ready_snapshot(&self) -> Option<Value> {
+        self.with_runtime(ResidentProductionRuntime::resident_interface_reattach_ready_snapshot)
+            .flatten()
+    }
+
+    pub(super) fn resident_dataplane_traffic_counters(&self) -> Option<ResidentTrafficCounters> {
+        self.with_runtime(ResidentProductionRuntime::resident_dataplane_traffic_counters)
+            .flatten()
+    }
+
+    pub(super) fn snapshot_health_states(&self) -> Vec<Value> {
+        self.with_runtime(ResidentProductionRuntime::snapshot_health_states)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn group_selector_snapshot_map(&self) -> BTreeMap<String, Value> {
+        self.with_runtime(ResidentProductionRuntime::group_selector_snapshot_map)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn dns_reload_snapshot(&self) -> Result<ResidentDnsReloadSnapshot, String> {
+        self.with_runtime(ResidentProductionRuntime::dns_reload_snapshot)
+            .unwrap_or_else(|| Ok(ResidentDnsReloadSnapshot::default()))
+    }
+
+    pub(super) fn manual_probe_handle(&self) -> Option<ResidentManualProbeHandle> {
+        self.with_runtime(ResidentProductionRuntime::manual_probe_handle)
+            .flatten()
+    }
+
+    pub(super) fn prune_event_log(&self) -> io::Result<()> {
+        self.with_runtime(ResidentProductionRuntime::prune_event_log)
+            .unwrap_or(Ok(()))
+    }
+
+    pub(super) fn clear_event_log(&self) -> io::Result<()> {
+        self.with_runtime(ResidentProductionRuntime::clear_event_log)
+            .unwrap_or(Ok(()))
+    }
+
+    pub(super) fn cleanup(&self) -> Option<Value> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
+        runtime.cleanup()
+    }
+}
+
+impl ProductRuntimeInstance {
+    fn resident(runtime: ResidentProductionRuntime) -> Self {
+        Self::Resident(Arc::new(ResidentProductRuntimeSlot::new(runtime)))
+    }
 }
 
 #[derive(Debug)]
@@ -520,29 +656,47 @@ fn publish_resident_runtime_generation(
         .lock()
         .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
     ensure_cleanup_allows_start_for_inner(inner)?;
+    let (runtime, preserve_dns_cache, latency_seed) = {
+        let state = inner
+            .lock()
+            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        let preserve_dns_cache = state
+            .config
+            .as_ref()
+            .is_some_and(|active| active.dns == config.dns);
+        let live_latency_seed = state
+            .runtime
+            .as_ref()
+            .map(runtime_instance_health_states)
+            .unwrap_or_default();
+        let latency_seed =
+            runtime_health_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
+        let runtime = match state.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => Arc::clone(runtime),
+            Some(ProductRuntimeInstance::Fake(_)) => {
+                return Err("cannot publish a resident generation on a fake runtime".to_owned());
+            }
+            None => {
+                return Err("cannot publish a generation without an active runtime".to_owned());
+            }
+        };
+        (runtime, preserve_dns_cache, latency_seed)
+    };
+
+    // Generation construction can initialize protocol owners and migrate DNS
+    // state. Keep it behind the resident runtime slot, but outside the product
+    // state mutex so overview, SSE, and metadata readers remain responsive.
+    let publication =
+        runtime.publish_prepared_generation(resident, &latency_seed, preserve_dns_cache)?;
     let mut state = inner
         .lock()
         .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-    let preserve_dns_cache = state
-        .config
-        .as_ref()
-        .is_some_and(|active| active.dns == config.dns);
-    let live_latency_seed = state
-        .runtime
-        .as_ref()
-        .map(runtime_instance_health_states)
-        .unwrap_or_default();
-    let latency_seed =
-        runtime_health_seed_snapshots(latency_seed.iter().cloned().chain(live_latency_seed));
-    let runtime = match state.runtime.as_mut() {
-        Some(ProductRuntimeInstance::Resident(runtime)) => runtime,
-        Some(ProductRuntimeInstance::Fake(_)) => {
-            return Err("cannot publish a resident generation on a fake runtime".to_owned());
+    match state.runtime.as_ref() {
+        Some(ProductRuntimeInstance::Resident(active)) if Arc::ptr_eq(active, &runtime) => {}
+        _ => {
+            return Err("resident runtime changed during generation publication".to_owned());
         }
-        None => return Err("cannot publish a generation without an active runtime".to_owned()),
-    };
-    let publication =
-        runtime.publish_prepared_generation(resident, &latency_seed, preserve_dns_cache)?;
+    }
     state.lifecycle_epoch = state.lifecycle_epoch.wrapping_add(1);
     state.config = Some(config);
     state.config_content = config_content;

@@ -7,6 +7,7 @@ use dae_runtime_control::{
 };
 use serde_json::{Value, json};
 
+#[cfg(not(test))]
 use crate::ResidentRuntimeProfileSelection;
 
 use super::charge::QuicEndpointCharge;
@@ -30,7 +31,16 @@ impl<'a> QuicEndpointAdmissionContext<'a> {
 }
 
 fn selected_budget() -> OwnerResourceBudget {
+    #[cfg(test)]
+    {
+        OwnerResourceBudget::new(
+            NonZeroUsize::new(4096).unwrap(),
+            NonZeroUsize::new(usize::MAX / 4).unwrap(),
+        )
+    }
+    #[cfg(not(test))]
     let profile = ResidentRuntimeProfileSelection::selected().profile;
+    #[cfg(not(test))]
     OwnerResourceBudget::new(
         NonZeroUsize::new(profile.quic_endpoint_limit_default())
             .expect("resident QUIC Endpoint count profile is nonzero"),

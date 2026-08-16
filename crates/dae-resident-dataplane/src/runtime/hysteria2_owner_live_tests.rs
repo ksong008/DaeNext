@@ -90,7 +90,10 @@ impl Hysteria2OwnerTestServer {
                         return;
                     };
                     task_connection_count.fetch_add(1, Ordering::Relaxed);
-                    *task_current_connection.lock().unwrap() = Some(connection.clone());
+                    *task_current_connection
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        Some(connection.clone());
                     serve_hysteria2_owner_connection(
                         connection,
                         task_auth_count,
@@ -112,7 +115,12 @@ impl Hysteria2OwnerTestServer {
     }
 
     fn close_current(&self) {
-        if let Some(connection) = self.current_connection.lock().unwrap().as_ref() {
+        if let Some(connection) = self
+            .current_connection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
             connection.close(0_u32.into(), b"owner rebuild test");
         }
     }

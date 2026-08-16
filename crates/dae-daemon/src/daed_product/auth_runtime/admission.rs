@@ -88,6 +88,19 @@ impl ProductAuthAdmission {
             .lock()
             .map_err(|_| ProductAuthAdmissionRejection::Unavailable)?;
         prune_expired_backoffs(&mut state, now, self.config.backoff_ttl);
+        if backoff_table_saturated(
+            &state.source_backoff,
+            source,
+            now,
+            self.config.tracked_key_capacity,
+        ) || backoff_table_saturated(
+            &state.username_backoff,
+            username,
+            now,
+            self.config.tracked_key_capacity,
+        ) {
+            return Err(ProductAuthAdmissionRejection::Capacity);
+        }
         if let Some(retry_after) = active_backoff(&state, source, username, now) {
             return Err(ProductAuthAdmissionRejection::Backoff(retry_after));
         }
@@ -158,6 +171,17 @@ impl ProductAuthAdmission {
     }
 }
 
+fn backoff_table_saturated<K: Eq + std::hash::Hash>(
+    map: &HashMap<K, ProductAuthBackoffEntry>,
+    key: K,
+    now: Instant,
+    capacity: usize,
+) -> bool {
+    !map.contains_key(&key)
+        && map.len() >= capacity
+        && map.values().all(|entry| entry.blocked_until > now)
+}
+
 impl ProductAuthAdmissionLease {
     pub(super) fn complete(mut self, outcome: ProductAuthAttemptOutcome) {
         self.admission.finish(self.source, self.username, outcome);
@@ -224,14 +248,22 @@ fn update_backoff<K: Eq + std::hash::Hash + Copy>(
     now: Instant,
     config: ProductAuthRuntimeConfig,
 ) {
-    if !map.contains_key(&key)
-        && map.len() >= config.tracked_key_capacity
-        && let Some(oldest) = map
+    if !map.contains_key(&key) && map.len() >= config.tracked_key_capacity {
+        // Prefer evicting a tracked key that is no longer actively blocking:
+        // dropping a still-restricted key would let that source bypass the
+        // backoff entirely.  If every tracked key is still restricted, refuse
+        // to track the new key rather than evict an active restriction.
+        let evictable = map
             .iter()
+            .filter(|(_, entry)| entry.blocked_until <= now)
             .min_by_key(|(_, entry)| entry.updated_at)
-            .map(|(key, _)| *key)
-    {
-        map.remove(&oldest);
+            .map(|(key, _)| *key);
+        match evictable {
+            Some(evict) => {
+                map.remove(&evict);
+            }
+            None => return,
+        }
     }
     let entry = map.entry(key).or_insert(ProductAuthBackoffEntry {
         failures: 0,

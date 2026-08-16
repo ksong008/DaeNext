@@ -293,7 +293,14 @@ impl ResidentEvent {
         self.class.is_lossless(self.severity)
     }
 
-    pub(super) fn block_on_full_queue(&self) -> bool {
+    /// Critical lifecycle events: Startup/Reload lifecycle classes and any
+    /// Fatal-severity event.
+    ///
+    /// These used to block on a full writer queue. Event submission is now
+    /// non-blocking (see `writer::submit_event`): when the bounded queue forces
+    /// a drop, the loss of a critical event is surfaced in the writer error
+    /// metrics instead of being silently counted.
+    pub(super) fn is_critical(&self) -> bool {
         matches!(
             (self.class, self.severity),
             (ResidentEventLifecycleClass::Startup, _)

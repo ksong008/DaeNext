@@ -69,6 +69,16 @@ const UDP_ROUTE_REASON_QUEUED: &str = "queued packet for resident UDP session";
 #[cfg(test)]
 const UDP_ROUTE_REASON_DNS_FAST_PATH: &str = "handled resident DNS packet without UDP session";
 
+/// Upper bound on `UdpGenerationPin` entries in the manager loop.
+///
+/// Pins are only reclaimed by the periodic idle sweep
+/// (`retire_idle_udp_generations`), so under high tuple churn the map would
+/// otherwise grow with `churn_rate * idle_timeout`. The cap follows the same
+/// order of magnitude as the UDP sniffers' `UDP_PACKET_SNIFFER_MAX_ENTRIES`
+/// (1024); evicting the pin whose expiry is closest only costs one re-route
+/// for the next packet of that tuple, never a session teardown.
+const UDP_GENERATION_PIN_MAX_ENTRIES: usize = 4096;
+
 #[derive(Clone)]
 pub(crate) struct ResidentUdpGenerationPlan {
     router: Arc<ResidentUdpRouter>,
@@ -598,6 +608,9 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                         )
                                     })
                                     .unwrap_or(session_idle_timeout);
+                                if pins.len() >= UDP_GENERATION_PIN_MAX_ENTRIES {
+                                    evict_oldest_udp_generation_pin(&mut pins);
+                                }
                                 pins.insert(
                                     pin_key,
                                     UdpGenerationPin {
@@ -780,6 +793,23 @@ fn udp_generation_pin_is_eligible(pin: &UdpGenerationPin, active_generation: u64
             .route
             .as_ref()
             .is_some_and(ResidentUdpPinnedRoute::follows_active_generation)
+}
+
+/// Evict the pin with the earliest expiry once the map is at its cap.
+///
+/// Pins with the earliest `expires_at` are the ones closest to being reclaimed
+/// by the idle sweep, so evicting them loses the least active routing state.
+/// Active sessions keep refreshing their pin's `expires_at`, so an eviction
+/// only forces the next packet of that tuple to be re-routed.
+fn evict_oldest_udp_generation_pin(pins: &mut HashMap<UdpGenerationPinKey, UdpGenerationPin>) {
+    let Some(oldest) = pins
+        .iter()
+        .min_by_key(|(_, pin)| pin.expires_at)
+        .map(|(key, _)| *key)
+    else {
+        return;
+    };
+    pins.remove(&oldest);
 }
 
 #[cfg(test)]

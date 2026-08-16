@@ -220,6 +220,75 @@ fn auth_runtime_bounds_backoff_tracking_cardinality() {
     assert!(snapshot["trackedUsernameBackoffs"].as_u64().unwrap() <= 8);
 }
 
+fn admission_config() -> ProductAuthRuntimeConfig {
+    let mut config = ProductAuthRuntimeConfig::for_test();
+    config.tracked_key_capacity = 4;
+    config.backoff_base = Duration::from_millis(250);
+    config.backoff_max = Duration::from_millis(250);
+    config
+}
+
+fn admission_ip(index: u8) -> Option<IpAddr> {
+    Some(IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, index)))
+}
+
+fn fail_admission(admission: &Arc<ProductAuthAdmission>, source: Option<IpAddr>, username: &str) {
+    let lease = admission
+        .acquire(source, username)
+        .unwrap_or_else(|_| panic!("admission acquire unexpectedly rejected"));
+    lease.complete(ProductAuthAttemptOutcome::CredentialFailure);
+}
+
+#[test]
+fn auth_backoff_eviction_prefers_unrestricted_entries() {
+    let admission = Arc::new(ProductAuthAdmission::new(admission_config()));
+    // One key whose block has already expired, then a full table of keys that
+    // are still actively restricted.
+    fail_admission(&admission, admission_ip(1), "user-1");
+    thread::sleep(Duration::from_millis(350));
+    for index in 2..=4_u8 {
+        fail_admission(&admission, admission_ip(index), &format!("user-{index}"));
+    }
+    // Table is full with one unrestricted + three restricted keys. A new
+    // failure must evict the unrestricted key, never a restricted one.
+    fail_admission(&admission, admission_ip(5), "user-5");
+    let snapshot = admission.snapshot();
+    assert_eq!(snapshot.tracked_source_backoffs, 4);
+    assert_eq!(snapshot.tracked_username_backoffs, 4);
+    // The new key is tracked (blocked)...
+    assert!(matches!(
+        admission.acquire(admission_ip(5), "user-5"),
+        Err(ProductAuthAdmissionRejection::Backoff(_))
+    ));
+    // ... while an evicted identity cannot bypass the now-full active table.
+    assert!(matches!(
+        admission.acquire(admission_ip(1), "user-1"),
+        Err(ProductAuthAdmissionRejection::Capacity)
+    ));
+}
+
+#[test]
+fn auth_backoff_full_table_of_restricted_keys_does_not_evict() {
+    let admission = Arc::new(ProductAuthAdmission::new(admission_config()));
+    for index in 1..=4_u8 {
+        fail_admission(&admission, admission_ip(index), &format!("user-{index}"));
+    }
+    // Every tracked key is still restricted; an untrackable new identity must
+    // fail closed instead of bypassing backoff under cardinality pressure.
+    assert!(matches!(
+        admission.acquire(admission_ip(5), "user-5"),
+        Err(ProductAuthAdmissionRejection::Capacity)
+    ));
+    let snapshot = admission.snapshot();
+    assert_eq!(snapshot.tracked_source_backoffs, 4);
+    assert_eq!(snapshot.tracked_username_backoffs, 4);
+    // Existing restrictions are preserved.
+    assert!(matches!(
+        admission.acquire(admission_ip(1), "user-1"),
+        Err(ProductAuthAdmissionRejection::Backoff(_))
+    ));
+}
+
 #[test]
 fn auth_runtime_survives_a_panicking_job() {
     let runtime = ProductAuthRuntime::start(ProductAuthRuntimeConfig::for_test()).unwrap();

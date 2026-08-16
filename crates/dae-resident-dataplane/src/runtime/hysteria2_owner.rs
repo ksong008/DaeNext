@@ -628,7 +628,13 @@ impl Hysteria2UdpSessionManager {
         ),
         String,
     > {
-        let mut state = self.state.lock().unwrap();
+        // Poisoned locks are recovered via into_inner: the critical section
+        // below is pure state access, so a single panic must not permanently
+        // wedge the session manager.
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.closed {
             return Err("Hysteria2 UDP session manager is closed".to_owned());
         }
@@ -690,7 +696,10 @@ impl Hysteria2UdpSessionManager {
     fn dispatch(&self, message: Hysteria2UdpMessage) {
         let session_id = message.session_id();
         let (sender, session_payload_admission) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             self.expire_quarantine(&mut state, Instant::now());
             let Some(queue) = state.sessions.get(&session_id) else {
                 if state.quarantine.contains_key(&session_id) {
@@ -777,7 +786,10 @@ impl Hysteria2UdpSessionManager {
 
     fn unregister(&self, session_id: u32) {
         let removed = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let removed = state.sessions.remove(&session_id).is_some();
             if removed && !state.closed {
                 self.insert_quarantine(&mut state, session_id);
@@ -790,7 +802,10 @@ impl Hysteria2UdpSessionManager {
     }
 
     fn is_closed(&self) -> bool {
-        self.state.lock().unwrap().closed
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .closed
     }
 
     #[cfg(test)]
@@ -800,7 +815,10 @@ impl Hysteria2UdpSessionManager {
 
     #[cfg(test)]
     fn quarantine_len(&self) -> usize {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.expire_quarantine(&mut state, Instant::now());
         state.quarantine.len()
     }
@@ -815,7 +833,10 @@ impl Hysteria2UdpSessionManager {
 
     fn close(&self) {
         let (removed, quarantined) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             state.closed = true;
             let removed = state.sessions.len();
             let quarantined = state.quarantine.len();
@@ -1058,7 +1079,10 @@ impl Hysteria2OwnerRegistryHandle {
             ));
         }
         let (cell, decision) = {
-            let mut index = self.index.lock().unwrap();
+            let mut index = self
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if index.draining {
                 return Err("Hysteria2 owner registry is draining".to_owned());
             }
@@ -1138,7 +1162,10 @@ impl Hysteria2OwnerRegistryHandle {
     }
 
     pub(crate) fn metrics_snapshot(&self) -> Value {
-        let index = self.index.lock().unwrap();
+        let index = self
+            .index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut cell_states = [0_usize; 5];
         for cell in index.cells.values() {
             let state_index = match cell.snapshot().state {
@@ -1326,7 +1353,9 @@ fn remove_quiescent_owner_cell(
     expected_cell: &Arc<Hysteria2OwnerCell>,
     expected_revision: u64,
 ) -> bool {
-    let mut index = index.lock().unwrap();
+    let mut index = index
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let removable = index.cells.get(&key).is_some_and(|cell| {
         if !Arc::ptr_eq(cell, expected_cell) {
             return false;
@@ -1534,7 +1563,7 @@ async fn run_hysteria2_owner_registry(
                             && let Some(owner) = owners.remove(&key)
                         {
                             {
-                                let mut index = index.lock().unwrap();
+                                let mut index = index.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                                 if index
                                     .cells
                                     .get(&key)
@@ -1564,7 +1593,9 @@ async fn run_hysteria2_owner_registry(
     cancellation.cancel(dae_runtime_control::OwnerCancellation::GenerationDraining);
     receiver.close();
     let cells = {
-        let mut index = index.lock().unwrap();
+        let mut index = index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         index.draining = true;
         let cells = index.cells.values().cloned().collect::<Vec<_>>();
         index.cells.clear();
@@ -1776,6 +1807,7 @@ impl Hysteria2OwnerBuildError {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_hysteria2_transport(
     key: Hysteria2OwnerKey,
     binding: ResidentProxyBinding,
@@ -1967,17 +1999,23 @@ mod tests {
         metrics.owner_opened();
         let index = Arc::new(Mutex::new(Hysteria2OwnerIndex::new()));
         let cell = Arc::new(Hysteria2OwnerCell::new());
-        index.lock().unwrap().cells.insert(
-            Hysteria2OwnerKey::fixture(30, b"cancelled-registry"),
-            Arc::clone(&cell),
-        );
+        index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cells
+            .insert(
+                Hysteria2OwnerKey::fixture(30, b"cancelled-registry"),
+                Arc::clone(&cell),
+            );
 
         drop(Hysteria2RegistryOwnershipReconciler::new(
             Arc::clone(&metrics),
             Arc::clone(&index),
         ));
 
-        let index = index.lock().unwrap();
+        let index = index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(index.draining);
         assert!(index.cells.is_empty());
         assert_eq!(
@@ -2079,14 +2117,22 @@ mod tests {
             let key = Hysteria2OwnerKey::fixture(31, &sequence.to_be_bytes());
             let (cell, revision) = quiescent_failed_cell();
             {
-                let mut guard = index.lock().unwrap();
+                let mut guard = index
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 assert!(guard.cells.len() < 2);
                 guard.cells.insert(key, Arc::clone(&cell));
             }
             record_quiescent_owner_cell_removal(&index, &metrics, key, &cell, revision);
         }
 
-        assert!(index.lock().unwrap().cells.is_empty());
+        assert!(
+            index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .cells
+                .is_empty()
+        );
         assert_eq!(
             metrics.failed_cell_evictions.load(Ordering::Relaxed),
             churn as u64
@@ -2103,7 +2149,11 @@ mod tests {
         let metrics = Hysteria2OwnerRegistryMetrics::default();
         let key = Hysteria2OwnerKey::fixture(32, b"same-key");
         let (cell, old_revision) = quiescent_failed_cell();
-        index.lock().unwrap().cells.insert(key, Arc::clone(&cell));
+        index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cells
+            .insert(key, Arc::clone(&cell));
         let cancellation = OwnerCancellationSignal::new();
         let deadline =
             AbsoluteDeadline::from_now(Instant::now(), std::time::Duration::from_secs(1));
@@ -2119,7 +2169,7 @@ mod tests {
         assert!(
             index
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .cells
                 .get(&key)
                 .is_some_and(|current| Arc::ptr_eq(current, &cell))
@@ -2143,7 +2193,7 @@ mod tests {
         let replacement = Arc::new(Hysteria2OwnerCell::new());
         index
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .cells
             .insert(key, Arc::clone(&replacement));
 
@@ -2152,7 +2202,7 @@ mod tests {
         assert!(
             index
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .cells
                 .get(&key)
                 .is_some_and(|current| Arc::ptr_eq(current, &replacement))
@@ -2280,7 +2330,14 @@ mod tests {
         drop(first_registration);
         drop(second_registration);
         assert_eq!(metrics.active_udp_sessions.load(Ordering::Relaxed), 0);
-        assert!(manager.state.lock().unwrap().sessions.is_empty());
+        assert!(
+            manager
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .sessions
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2349,7 +2406,14 @@ mod tests {
 
         drop(sessions);
         assert_eq!(metrics.active_udp_sessions.load(Ordering::Relaxed), 0);
-        assert!(manager.state.lock().unwrap().sessions.is_empty());
+        assert!(
+            manager
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .sessions
+                .is_empty()
+        );
         assert_eq!(
             manager.quarantine_len(),
             resources.udp_session_quarantine_limit()
@@ -2386,15 +2450,34 @@ mod tests {
             udp_test_resources(3, 1),
             Arc::clone(&metrics),
         );
-        manager.state.lock().unwrap().next_session_id = u32::MAX;
+        manager
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .next_session_id = u32::MAX;
         let (wrapped_id, _wrapped_rx, wrapped_registration) = manager.register().unwrap();
         assert_eq!(wrapped_id, 1);
-        manager.state.lock().unwrap().next_session_id = u32::MAX;
+        manager
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .next_session_id = u32::MAX;
         let (collision_id, _collision_rx, collision_registration) = manager.register().unwrap();
         assert_eq!(collision_id, 2);
         drop(wrapped_registration);
-        assert!(manager.state.lock().unwrap().quarantine.contains_key(&1));
-        manager.state.lock().unwrap().next_session_id = u32::MAX;
+        assert!(
+            manager
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .quarantine
+                .contains_key(&1)
+        );
+        manager
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .next_session_id = u32::MAX;
         let (quarantine_id, _quarantine_rx, quarantine_registration) = manager.register().unwrap();
         assert_eq!(quarantine_id, 3);
         manager.dispatch(Hysteria2UdpMessage::new(1, "192.0.2.4:53", b"late").unwrap());

@@ -203,7 +203,9 @@ mod tests {
     #[test]
     fn health_runtime_builds_current_and_multi_thread_executors() {
         #[cfg(target_os = "linux")]
-        let _guard = HEALTH_RUNTIME_TEST_LOCK.lock().unwrap();
+        let _guard = HEALTH_RUNTIME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let current = ResidentHealthRuntimeConfig::from_parallelism(1, 4, 4, 16);
         let runtime = build_resident_health_runtime(current).unwrap();
         assert_eq!(runtime.block_on(async { 3 }), 3);
@@ -218,7 +220,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn health_runtime_worker_and_blocking_thread_counts_match_detected_bounds() {
-        let _guard = HEALTH_RUNTIME_TEST_LOCK.lock().unwrap();
+        let _guard = HEALTH_RUNTIME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let config = ResidentHealthRuntimeConfig::from_parallelism(64, 128, 8, 1_024);
         let runtime = build_resident_health_runtime(config).unwrap();
         let active = Arc::new(AtomicUsize::new(0));

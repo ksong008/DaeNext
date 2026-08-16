@@ -72,7 +72,11 @@ impl Default for ReloadOptions {
             progress_file: PROGRESS_FILE_PATH.into(),
             abort_file: ABORT_FILE_PATH.into(),
             abort_connections: false,
-            timeout: None,
+            // A reload must always terminate: without a deadline, a permanent
+            // progress-file fault (or a wedged daemon) would leave the caller
+            // polling forever without success or error.  120s covers slow
+            // config validation plus runtime swap; callers may override.
+            timeout: Some(Duration::from_secs(120)),
         }
     }
 }

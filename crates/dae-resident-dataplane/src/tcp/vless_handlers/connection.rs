@@ -554,11 +554,7 @@ pub(crate) async fn handle_vless_meek_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let tls_underlay = if selection.proxy.utls_fingerprint.is_some() {
-        "boringssl"
-    } else {
-        "boringssl"
-    };
+    let tls_underlay = "boringssl";
     let key = selection.proxy.vless_key()?;
     let options = meek_options_from_proxy(&selection, peer, original_dst);
     let initial_payload = sniff.take_payload();

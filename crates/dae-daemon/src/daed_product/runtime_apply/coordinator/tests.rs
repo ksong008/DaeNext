@@ -39,3 +39,35 @@ fn stop_epoch_supersedes_an_apply_that_was_already_waiting() {
     stop.join().unwrap().unwrap();
     assert_eq!(coordinator.summary()["lastResult"], json!("stopped"));
 }
+
+#[test]
+fn begin_apply_rejects_after_gate_wait_timeout() {
+    let coordinator = Arc::new(RuntimeApplyCoordinator::with_gate_wait_timeout(
+        Duration::from_millis(150),
+    ));
+    let first = coordinator
+        .begin_apply(RuntimeApplyIntent::ApiReload)
+        .unwrap();
+    let started_at = Instant::now();
+    let rejected = coordinator.begin_apply(RuntimeApplyIntent::LocalControlReload);
+    let elapsed = started_at.elapsed();
+    let message = match rejected {
+        Err(message) => message,
+        Ok(_) => panic!("begin_apply should be rejected while the gate is busy"),
+    };
+    assert!(
+        message.contains("gate busy") && message.contains("intent rejected"),
+        "unexpected rejection message: {message}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "rejection should only happen after the gate wait timeout, got {elapsed:?}"
+    );
+    // The stuck holder keeps the gate; once it finishes, later applies work.
+    first.finish("succeeded");
+    let later = coordinator
+        .begin_apply(RuntimeApplyIntent::LocalControlReload)
+        .unwrap();
+    later.finish("succeeded");
+    assert_eq!(coordinator.summary()["lastResult"], json!("succeeded"));
+}

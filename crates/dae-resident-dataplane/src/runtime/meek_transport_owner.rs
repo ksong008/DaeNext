@@ -150,9 +150,21 @@ pub(crate) struct MeekTransportGenerationOwnerHandle {
 
 impl MeekTransportGenerationOwnerHandle {
     pub(crate) fn metrics_snapshot(&self) -> Value {
-        let pools = self.owner.pools.lock().unwrap();
+        // Poisoned locks are recovered via into_inner: the critical sections
+        // below are pure state access, so a single panic must not permanently
+        // wedge the transport owner.
+        let pools = self
+            .owner
+            .pools
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let registered_keys = pools.len();
-        let registered_build_tasks = self.owner.builds.lock().unwrap().len();
+        let registered_build_tasks = self
+            .owner
+            .builds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len();
         let owner_state_bytes_lower_bound = registered_keys
             .saturating_mul(
                 std::mem::size_of::<MeekTransportKey>()

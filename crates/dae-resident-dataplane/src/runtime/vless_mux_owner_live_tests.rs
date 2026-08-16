@@ -165,8 +165,14 @@ async fn serve_vless_mux_test_connection(
             match frame.status {
                 SESSION_STATUS_NEW => {
                     active.insert(sid);
-                    new_sids.lock().unwrap().push(sid);
-                    let injected = injection.lock().unwrap().take();
+                    new_sids
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(sid);
+                    let injected = injection
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take();
                     let injected_frame = match injected {
                         Some(VlessMuxTestInjection::UnknownSid) => {
                             mux_data_frame(u16::MAX.to_be_bytes(), b"unknown").ok()
@@ -185,7 +191,10 @@ async fn serve_vless_mux_test_connection(
                     }
                 }
                 SESSION_STATUS_KEEP if active.contains(&sid) => {
-                    payloads.lock().unwrap().push((sid, frame.payload.clone()));
+                    payloads
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push((sid, frame.payload.clone()));
                     let Ok(response) = mux_data_frame(frame.id, &frame.payload) else {
                         return;
                     };
@@ -385,11 +394,18 @@ fn vless_mux_owner_demultiplexes_concurrent_streams_and_isolates_close_and_failu
                 .unwrap();
             assert!(second_failure.is_err());
             assert!(third_failure.is_err());
-            let sids = server.new_sids.lock().unwrap().clone();
+            let sids = server
+                .new_sids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
             assert_eq!(sids.len(), 3);
             assert_eq!(sids.iter().copied().collect::<HashSet<_>>().len(), 3);
             {
-                let payloads = server.payloads.lock().unwrap();
+                let payloads = server
+                    .payloads
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 assert!(payloads.iter().any(|(_, payload)| payload == b"logical-a"));
                 assert!(
                     payloads

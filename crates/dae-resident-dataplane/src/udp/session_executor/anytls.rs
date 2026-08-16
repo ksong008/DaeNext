@@ -66,7 +66,8 @@ impl AnyTlsPacketStreamSession {
             self.logical = Some(logical);
         }
         if !opening_logical_stream {
-            let packet = anytls_link::packet_next_write(payload);
+            let packet = anytls_link::packet_next_write(payload)
+                .map_err(|err| format!("build AnyTLS UDP next packet write: {err}"))?;
             let logical = self
                 .logical
                 .as_mut()
@@ -235,8 +236,8 @@ mod tests {
 
     #[test]
     fn anytls_udp_stream_pops_concatenated_packet_payloads() {
-        let first = anytls_link::packet_next_write(b"one");
-        let second = anytls_link::packet_next_write(b"two");
+        let first = anytls_link::packet_next_write(b"one").unwrap();
+        let second = anytls_link::packet_next_write(b"two").unwrap();
         let mut session = AnyTlsPacketStreamSession::new(test_anytls_binding(), None);
         session.response_plaintext.extend_from_slice(&first);
         session.response_plaintext.extend_from_slice(&second);

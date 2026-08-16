@@ -133,11 +133,17 @@ async fn serve_meek_test_connection(
             return;
         };
         requests.fetch_add(1, Ordering::Relaxed);
-        session_ids.lock().unwrap().push(session_id);
-        bodies.lock().unwrap().push(body.clone());
+        session_ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(session_id);
+        bodies
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(body.clone());
         let reply = replies
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .pop_front()
             .unwrap_or(MeekTestReply::Echo);
         match reply {
@@ -376,11 +382,18 @@ fn meek_transport_reuses_one_physical_across_caller_runtimes_and_sessions() {
             assert_eq!(server.tcp_connections.load(Ordering::Relaxed), 1);
             assert_eq!(server.tls_handshakes.load(Ordering::Relaxed), 1);
             assert_eq!(
-                server.bodies.lock().unwrap().as_slice(),
+                server
+                    .bodies
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_slice(),
                 [b"first".to_vec(), b"second".to_vec()]
             );
             {
-                let sessions = server.session_ids.lock().unwrap();
+                let sessions = server
+                    .session_ids
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 assert_eq!(sessions.len(), 2);
                 assert_ne!(sessions[0], sessions[1]);
             }
@@ -442,7 +455,11 @@ fn meek_transport_retires_close_and_lying_framing_without_replay() {
             assert_eq!(server.requests.load(Ordering::Relaxed), 3);
             assert_eq!(server.tcp_connections.load(Ordering::Relaxed), 3);
             assert_eq!(
-                server.bodies.lock().unwrap().as_slice(),
+                server
+                    .bodies
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_slice(),
                 [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
             );
             let metrics = owner.metrics_snapshot();
@@ -504,7 +521,11 @@ fn cancelled_meek_poll_retires_uncertain_physical_and_generations_drain() {
             assert_eq!(server.requests.load(Ordering::Relaxed), 2);
             assert_eq!(server.tcp_connections.load(Ordering::Relaxed), 2);
             assert_eq!(
-                server.bodies.lock().unwrap().as_slice(),
+                server
+                    .bodies
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_slice(),
                 [b"uncertain".to_vec(), b"safe".to_vec()]
             );
 

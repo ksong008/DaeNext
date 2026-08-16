@@ -85,7 +85,7 @@ impl JuicityTestServer {
                                     connection.stable_id() as u64,
                                     Ordering::Relaxed,
                                 );
-                                *observation.current_connection.lock().unwrap() =
+                                *observation.current_connection.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
                                     Some(connection.clone());
                                 run_juicity_server_connection(
                                     connection,
@@ -112,7 +112,13 @@ impl JuicityTestServer {
     }
 
     fn close_current(&self) {
-        if let Some(connection) = self.observation.current_connection.lock().unwrap().as_ref() {
+        if let Some(connection) = self
+            .observation
+            .current_connection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
             connection.close(0_u32.into(), b"juicity test remote close");
         }
     }

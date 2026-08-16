@@ -29,10 +29,10 @@ impl SpawnedLogicalStream {
         let terminal_error = Arc::new(Mutex::new(None));
         let task_error = Arc::clone(&terminal_error);
         let task = tokio::spawn(async move {
-            if let Err(error) = driver(transport_side).await {
-                if let Ok(mut terminal) = task_error.lock() {
-                    *terminal = Some(error);
-                }
+            if let Err(error) = driver(transport_side).await
+                && let Ok(mut terminal) = task_error.lock()
+            {
+                *terminal = Some(error);
             }
         });
         Self {

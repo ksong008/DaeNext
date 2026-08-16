@@ -31,13 +31,20 @@ pub(crate) async fn relay_tcp_over_shadowsocks_simple_obfs_tls_async(
     let options = Sip003SimpleObfsTlsOptions::new(host);
     let obfs_request = simple_obfs_tls_client_hello_with_body(&options, &encrypted_initial)
         .map_err(|err| format!("build Shadowsocks simple-obfs TLS request: {err}"))?;
-    proxy
-        .write_all(&obfs_request)
-        .await
-        .map_err(|err| format!("write Shadowsocks simple-obfs TLS request: {err}"))?;
-    let response_payload = read_simple_obfs_tls_response_payload_from_async_stream(proxy)
-        .await
-        .map_err(|err| format!("read Shadowsocks simple-obfs TLS response: {err}"))?;
+    // Bound the whole TLS handshake stage (request write + response read) so a
+    // peer that never answers cannot hold the flow permit for longer than the
+    // shared connect timeout used by the other resident handshake paths.
+    let response_payload = time::timeout(RESIDENT_CONNECT_TIMEOUT, async {
+        proxy
+            .write_all(&obfs_request)
+            .await
+            .map_err(|err| format!("write Shadowsocks simple-obfs TLS request: {err}"))?;
+        read_simple_obfs_tls_response_payload_from_async_stream(proxy)
+            .await
+            .map_err(|err| format!("read Shadowsocks simple-obfs TLS response: {err}"))
+    })
+    .await
+    .map_err(|_| "Shadowsocks simple-obfs TLS handshake timeout".to_owned())??;
 
     let mut stats = DirectTcpRelayStats::default();
     if !initial_payload.is_empty() {

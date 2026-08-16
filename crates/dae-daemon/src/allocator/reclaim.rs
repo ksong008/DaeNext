@@ -151,7 +151,6 @@ fn trim_system_allocator_sidecar() -> Value {
 #[cfg(all(test, feature = "allocator-jemalloc"))]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[test]
     fn generic_reclaim_purges_every_initialized_arena() {
@@ -181,25 +180,35 @@ mod tests {
 
     #[test]
     fn scoped_and_global_reclaim_never_overlap() {
-        let entered = Arc::new(std::sync::Barrier::new(2));
-        let release = Arc::new(std::sync::Barrier::new(2));
-        let worker_entered = Arc::clone(&entered);
-        let worker_release = Arc::clone(&release);
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
         let global = std::thread::spawn(move || {
-            allocator_with_reclaim_gate(
-                "global",
-                || {},
-                || {
-                    worker_entered.wait();
-                    worker_release.wait();
-                    ("pass", json!({"operation": "test-global"}))
-                },
-            )
+            (0..200)
+                .find_map(|_| {
+                    let result = allocator_with_reclaim_gate(
+                        "global",
+                        || {},
+                        || {
+                            entered_tx.send(()).unwrap();
+                            release_rx.recv().unwrap();
+                            ("pass", json!({"operation": "test-global"}))
+                        },
+                    );
+                    if result.0 == "merged_pending" {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        None
+                    } else {
+                        Some(result)
+                    }
+                })
+                .expect("allocator reclaim gate remained occupied")
         });
 
-        entered.wait();
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("global reclaim did not acquire the gate");
         let (status, detail) = allocator_purge_control_plane_arena();
-        release.wait();
+        release_tx.send(()).unwrap();
         let (global_status, _) = global.join().unwrap();
 
         assert_eq!(global_status, "pass");

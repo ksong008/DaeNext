@@ -3,6 +3,23 @@ use super::*;
 const LOG_SSE_SCAN_BATCH_SIZE: usize = 256;
 const LOG_SSE_SCAN_BATCHES_PER_TICK: usize = 4;
 
+/// Classify log-scan IO errors that are expected to be momentary (log
+/// rotation, transient IO hiccups) versus fatal.  A transient error must not
+/// tear down a long-lived SSE connection: skip the poll cycle and retry on
+/// the next tick.  Fatal errors (e.g. persistent permission problems) still
+/// close the stream so the failure surfaces to the client.
+fn is_transient_log_stream_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound
+            | io::ErrorKind::Interrupted
+            | io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+    )
+}
+
 pub(super) async fn stream_runtime_events_async(
     stream: &mut tokio::net::TcpStream,
     app: &AppState,
@@ -133,19 +150,27 @@ pub(super) async fn stream_log_events_async(
                 _ = interval.tick() => {}
             }
         }
-        let current_last_id = cached_last_log_id(&log_file)?;
+        let current_last_id = match cached_last_log_id(&log_file) {
+            Ok(id) => id,
+            Err(error) if is_transient_log_stream_error(&error) => continue,
+            Err(error) => return Err(error),
+        };
         if current_last_id < last_seen_id {
             last_seen_id = 0;
             cursor = ProductLogScanCursor::start();
         }
         if current_last_id != last_seen_id {
             for _ in 0..LOG_SSE_SCAN_BATCHES_PER_TICK {
-                let batch = read_log_entry_batch_from_cursor(
+                let batch = match read_log_entry_batch_from_cursor(
                     &app.config_dir,
                     cursor,
                     last_seen_id,
                     LOG_SSE_SCAN_BATCH_SIZE,
-                )?;
+                ) {
+                    Ok(batch) => batch,
+                    Err(error) if is_transient_log_stream_error(&error) => break,
+                    Err(error) => return Err(error),
+                };
                 cursor = batch.state.cursor;
                 if batch.state.max_seen_id > last_seen_id {
                     last_seen_id = batch.state.max_seen_id;
@@ -164,6 +189,40 @@ pub(super) async fn stream_log_events_async(
         if last_heartbeat.elapsed() >= LOG_STREAM_HEARTBEAT_INTERVAL {
             write_sse_heartbeat(stream).await?;
             last_heartbeat = Instant::now();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_log_stream_io_errors_are_classified() {
+        let transient = [
+            io::ErrorKind::NotFound,
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+        ];
+        for kind in transient {
+            assert!(
+                is_transient_log_stream_error(&io::Error::new(kind, "probe")),
+                "{kind:?} must be treated as transient"
+            );
+        }
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::InvalidData,
+            io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::Other,
+        ] {
+            assert!(
+                !is_transient_log_stream_error(&io::Error::new(kind, "probe")),
+                "{kind:?} must be treated as fatal"
+            );
         }
     }
 }

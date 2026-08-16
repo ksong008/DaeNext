@@ -566,7 +566,13 @@ impl AnyTlsOwnerRegistryHandle {
     }
 
     pub(crate) fn metrics_snapshot(&self) -> Value {
-        let index = self.index.lock().unwrap();
+        // Poisoned locks are recovered via into_inner: the critical section
+        // below is pure state access, so a single panic must not permanently
+        // wedge the owner registry.
+        let index = self
+            .index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let physical_count = index.physical_count();
         let owner_padding_scheme_bytes = index
             .pools
@@ -1218,7 +1224,9 @@ async fn run_anytls_owner_registry(
         }
     }
     let senders = {
-        let mut index = index.lock().unwrap();
+        let mut index = index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         index.draining = true;
         index
             .pools
@@ -1244,7 +1252,11 @@ async fn run_anytls_owner_registry(
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
     }
-    index.lock().unwrap().pools.clear();
+    index
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .pools
+        .clear();
     metrics.idle_physical.store(0, Ordering::Relaxed);
     metrics.active_builds.store(0, Ordering::Relaxed);
 }
@@ -1257,7 +1269,9 @@ fn admit_anytls_acquire(
     resources: AnyTlsOwnerResourceProfile,
     metrics: &Arc<AnyTlsOwnerMetrics>,
 ) {
-    let mut index_guard = index.lock().unwrap();
+    let mut index_guard = index
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if index_guard.draining {
         let _ = command.response.send(Err(AnyTlsAcquireFailure::Terminal(
             "AnyTLS owner registry is draining".to_owned(),
@@ -1381,7 +1395,9 @@ fn apply_anytls_physical_event(
             instance_id,
             scheme,
         } => {
-            let mut index = index.lock().unwrap();
+            let mut index = index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(pool) = index.pools.get_mut(&key)
                 && pool.physical.contains_key(&instance_id)
             {
@@ -1393,7 +1409,9 @@ fn apply_anytls_physical_event(
             return;
         }
     };
-    let mut index = index.lock().unwrap();
+    let mut index = index
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(pool) = index.pools.get_mut(&key) else {
         return;
     };
@@ -1424,7 +1442,9 @@ fn remove_anytls_physical(
     index: &Arc<Mutex<AnyTlsOwnerIndex>>,
     metrics: &AnyTlsOwnerMetrics,
 ) {
-    let mut index = index.lock().unwrap();
+    let mut index = index
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(pool) = index.pools.get_mut(&completion.key)
         && pool
             .physical
@@ -1739,6 +1759,7 @@ async fn write_anytls_frame_until(
         .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn wait_anytls_synack_until(
     client: &mut AsyncResidentTlsClient,
     frame_reader: &mut AnyTlsFrameReader,
@@ -2003,6 +2024,7 @@ async fn run_anytls_active_stream(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn wait_anytls_idle_command(
     client: &mut AsyncResidentTlsClient,
     frame_reader: &mut AnyTlsFrameReader,

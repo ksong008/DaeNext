@@ -267,13 +267,29 @@ pub(crate) fn authority_from_host_port(host: &str, port: u16) -> String {
     }
 }
 
+/// Generate a 16-bit DNS transaction ID from the OS CSPRNG.
+///
+/// Transaction IDs are echoed back by the resolver and are the only
+/// spoofing/poisoning guard on the fallback path, so they must not come from
+/// a predictable PRNG. `getrandom` failure is practically unreachable on
+/// supported platforms; if it ever happens, fall back to the previous PRNG so
+/// resolution still proceeds instead of failing the whole lookup.
+fn dns_transaction_id() -> u16 {
+    let mut bytes = [0_u8; 2];
+    if getrandom::fill(&mut bytes).is_ok() {
+        u16::from_be_bytes(bytes)
+    } else {
+        fastrand::u16(..)
+    }
+}
+
 async fn resolve_host_qtype_with_fallback_dns(
     host: &str,
     fallback_resolver: SocketAddr,
     mark: u32,
     qtype: u16,
 ) -> Result<FallbackDnsAnswers, String> {
-    let request = build_dns_query_packet(fastrand::u16(..), host, qtype)?;
+    let request = build_dns_query_packet(dns_transaction_id(), host, qtype)?;
     let request_view = DnsPacketView::parse(&request)
         .map_err(|err| format!("parse fallback resolver request: {err}"))?;
     let response = send_fallback_dns_query(fallback_resolver, mark, &request).await?;
@@ -372,6 +388,21 @@ mod tests {
         assert_eq!(select_first_socket_addr([ipv4, ipv6]), Some(ipv4));
         assert_eq!(select_first_socket_addr([ipv6, ipv4]), Some(ipv6));
         assert_eq!(select_first_socket_addr([ipv4]), Some(ipv4));
+    }
+
+    #[test]
+    fn dns_transaction_ids_are_not_constant() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..64 {
+            let id = dns_transaction_id();
+            seen.insert(id);
+        }
+        // All 64 IDs being equal has probability 2^-1008; a constant txid would
+        // defeat the spoofing protection this function exists to provide.
+        assert!(
+            seen.len() >= 2,
+            "transaction IDs must vary across calls, got {seen:?}"
+        );
     }
 
     #[test]

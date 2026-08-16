@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 #[test]
@@ -36,12 +37,12 @@ fn resident_event_writer_drops_datapath_errors_when_queue_is_full() {
 }
 
 #[test]
-fn resident_event_full_queue_blocking_policy_is_lifecycle_only() {
-    assert!(ResidentEvent::new(json!({"event": "tcp_worker_started"})).block_on_full_queue());
-    assert!(ResidentEvent::new(json!({"event": "runtime_reload_finished"})).block_on_full_queue());
-    assert!(ResidentEvent::new(json!({"event": "resident_fatal_error"})).block_on_full_queue());
-    assert!(!ResidentEvent::new(json!({"event": "tcp_connection_failed"})).block_on_full_queue());
-    assert!(!ResidentEvent::new(json!({"event": "udp_exchange_failed"})).block_on_full_queue());
+fn resident_event_full_queue_critical_policy_is_lifecycle_only() {
+    assert!(ResidentEvent::new(json!({"event": "tcp_worker_started"})).is_critical());
+    assert!(ResidentEvent::new(json!({"event": "runtime_reload_finished"})).is_critical());
+    assert!(ResidentEvent::new(json!({"event": "resident_fatal_error"})).is_critical());
+    assert!(!ResidentEvent::new(json!({"event": "tcp_connection_failed"})).is_critical());
+    assert!(!ResidentEvent::new(json!({"event": "udp_exchange_failed"})).is_critical());
 }
 
 #[test]
@@ -145,4 +146,117 @@ fn resident_event_writer_shutdown_does_not_join_a_blocked_writer_past_deadline()
         runtime.wait_for_completion_until(deadline_after(Duration::from_secs(1))),
         Some(ResidentEventWriterExit::Completed)
     );
+}
+
+#[test]
+fn resident_event_writer_critical_drop_does_not_block_when_queue_is_full() {
+    let (sender, _receiver) = mpsc::sync_channel(1);
+    sender
+        .send(ResidentEventWriterCommand::Event(ResidentEvent::new(
+            json!({"event": "tcp_worker_started"}),
+        )))
+        .unwrap();
+    let metrics = Arc::new(ResidentEventWriterMetrics::new(1));
+    let handle = ResidentEventWriterHandle {
+        inner: Arc::new(ResidentEventWriterInner {
+            path: std::env::temp_dir().join(format!(
+                "resident-event-writer-critical-drop-test-{}",
+                std::process::id()
+            )),
+            lock: Arc::new(Mutex::new(())),
+            sender,
+            metrics: Arc::clone(&metrics),
+        }),
+    };
+
+    // A Startup-class (critical) event with a full queue used to block the
+    // caller for up to the 5s control timeout; the async hot path must never
+    // block on event submission.
+    let started = Instant::now();
+    handle.submit(ResidentEvent::new(json!({"event": "tcp_worker_started"})));
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "critical event submit blocked for {elapsed:?}; async hot path must be non-blocking"
+    );
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot["droppedCount"], json!(1));
+    assert_eq!(snapshot["droppedByClass"]["startup"], json!(1));
+    assert!(
+        snapshot["lastWriteError"].is_string(),
+        "dropping a critical event must be surfaced in the writer error metrics"
+    );
+}
+
+#[test]
+fn resident_event_writer_panic_clears_active_writer_and_events_are_delivered_directly() {
+    let _guard = super::super::tests::event_test_guard();
+    let dir = std::env::temp_dir().join(format!(
+        "resident-event-writer-panic-test-{}-{}",
+        std::process::id(),
+        super::super::current_unix()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("events.jsonl");
+    let fallback_lock = Arc::new(Mutex::new(()));
+    let captured = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let sink_panics = Arc::new(AtomicBool::new(true));
+    let sink_panics_captured = Arc::clone(&sink_panics);
+    let captured_sink = Arc::clone(&captured);
+    super::super::set_event_log_sink(Some(Arc::new(move |event| {
+        if sink_panics_captured.swap(false, Ordering::Relaxed) {
+            panic!("injected sink panic");
+        }
+        captured_sink.lock().unwrap().push(event.clone());
+    })));
+    super::super::set_event_log_policies(None, None);
+    let mut writer = ResidentEventWriterRuntime::start(path.clone(), Arc::clone(&fallback_lock), 2);
+
+    // Event 1 is processed by the writer thread, whose sink dispatch panics.
+    super::super::append_event(
+        &path,
+        &fallback_lock,
+        json!({"event": "tcp_worker_started"}),
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if writer
+            .thread
+            .as_ref()
+            .is_some_and(|thread| thread.is_finished())
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "writer thread did not exit after injected sink panic"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    // The panicked writer must no longer be the active writer, otherwise
+    // submissions would hit the disconnected channel and be lost forever.
+    let slot = ACTIVE_EVENT_WRITER.get();
+    assert!(
+        slot.is_none_or(|slot| slot.load().is_none()),
+        "panicked writer must be cleared from ACTIVE_EVENT_WRITER"
+    );
+
+    // Event 2 falls back to direct sink dispatch and must still be delivered.
+    super::super::append_event(
+        &path,
+        &fallback_lock,
+        json!({"event": "tcp_worker_started"}),
+    );
+
+    let events = captured.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["event"], json!("tcp_worker_started"));
+    drop(events);
+
+    writer.shutdown();
+    super::super::set_event_log_sink(None);
+    std::fs::remove_dir_all(dir).unwrap();
 }
