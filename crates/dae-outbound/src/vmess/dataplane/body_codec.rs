@@ -215,7 +215,7 @@ impl BodyCodec {
                 let mut output = payload.to_vec();
                 let mut authentication = [0_u8; MAX_CHUNK_AUTHENTICATION_SIZE];
                 cipher
-                    .seal_in_place(&self.nonce.next()?, &mut output, &mut authentication, &[])
+                    .seal_in_place(&self.nonce.next(), &mut output, &mut authentication, &[])
                     .map_err(|_| {
                         OutboundError::BadVmess("VMess AES-GCM body encryption failed".to_owned())
                     })?;
@@ -223,7 +223,7 @@ impl BodyCodec {
                 Ok(output)
             }
             BodyCipher::Chacha20Poly1305(cipher) => cipher
-                .encrypt(ChaChaNonce::from_slice(&self.nonce.next()?), payload)
+                .encrypt(ChaChaNonce::from_slice(&self.nonce.next()), payload)
                 .map_err(|err| OutboundError::BadVmess(err.to_string())),
             BodyCipher::None => Ok(payload.to_vec()),
             BodyCipher::Raw => unreachable!("raw VMess body bypasses chunk sealing"),
@@ -243,14 +243,14 @@ impl BodyCodec {
                     })?;
                 let mut output = payload[..plain_len].to_vec();
                 cipher
-                    .open_in_place(&self.nonce.next()?, &mut output, &payload[plain_len..], &[])
+                    .open_in_place(&self.nonce.next(), &mut output, &payload[plain_len..], &[])
                     .map_err(|_| {
                         OutboundError::BadVmess("VMess AES-GCM body decryption failed".to_owned())
                     })?;
                 Ok(output)
             }
             BodyCipher::Chacha20Poly1305(cipher) => cipher
-                .decrypt(ChaChaNonce::from_slice(&self.nonce.next()?), payload)
+                .decrypt(ChaChaNonce::from_slice(&self.nonce.next()), payload)
                 .map_err(|err| OutboundError::BadVmess(err.to_string())),
             BodyCipher::None => Ok(payload.to_vec()),
             BodyCipher::Raw => unreachable!("raw VMess body bypasses chunk opening"),
@@ -275,7 +275,7 @@ fn chacha20_poly1305_key(key: &[u8; 16]) -> [u8; 32] {
 
 pub(super) struct ChunkNonce {
     pub(super) base: [u8; 12],
-    pub(super) count: u32,
+    pub(super) count: u16,
 }
 
 impl ChunkNonce {
@@ -285,16 +285,11 @@ impl ChunkNonce {
         Self { base, count: 0 }
     }
 
-    pub(super) fn next(&mut self) -> Result<[u8; 12], OutboundError> {
-        if self.count > u32::from(u16::MAX) {
-            return Err(OutboundError::BadVmess(
-                "VMess chunk nonce exhausted".to_owned(),
-            ));
-        }
+    pub(super) fn next(&mut self) -> [u8; 12] {
         let mut nonce = self.base;
-        nonce[..2].copy_from_slice(&(self.count as u16).to_be_bytes());
-        self.count += 1;
-        Ok(nonce)
+        nonce[..2].copy_from_slice(&self.count.to_be_bytes());
+        self.count = self.count.wrapping_add(1);
+        nonce
     }
 }
 

@@ -65,7 +65,7 @@ impl BodyCodec {
                     })?;
                 let (plain, authentication) = payload.split_at_mut(plain_len);
                 cipher
-                    .open_in_place(&self.nonce.next()?, plain, authentication, &[])
+                    .open_in_place(&self.nonce.next(), plain, authentication, &[])
                     .map_err(|_| {
                         OutboundError::BadVmess("VMess AES-GCM body decryption failed".to_owned())
                     })?;
@@ -84,7 +84,7 @@ impl BodyCodec {
                 let authentication = GenericArray::from_slice(authentication);
                 cipher
                     .decrypt_in_place_detached(
-                        ChaChaNonce::from_slice(&self.nonce.next()?),
+                        ChaChaNonce::from_slice(&self.nonce.next()),
                         &[],
                         plain,
                         authentication,
