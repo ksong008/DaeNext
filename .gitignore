@@ -1,8 +1,8 @@
 /target/
 **/*.rs.bk
+/tools/utls-fixture-generator/daenext-utls-fixture-generator
 
 # Local editor and OS files.
 .DS_Store
 *.swp
 *.swo
-
