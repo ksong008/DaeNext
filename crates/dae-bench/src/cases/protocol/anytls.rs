@@ -27,7 +27,7 @@ pub(super) fn bench_anytls_frame(iters: u64, warmup: u64) -> Result<Measurement,
     Ok(measure(
         || {
             let frame = dae_outbound::anytls::link::frame(black_box(4), black_box(1), &settings);
-            black_box(frame.len() as u64)
+            black_box(frame.map(|frame| frame.len() as u64).unwrap_or_default())
         },
         iters,
         warmup,

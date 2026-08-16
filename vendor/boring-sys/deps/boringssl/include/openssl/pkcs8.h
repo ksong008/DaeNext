@@ -93,14 +93,14 @@ OPENSSL_EXPORT int PKCS12_get_key_and_certs(EVP_PKEY **out_key,
 OPENSSL_EXPORT void PKCS12_PBE_add(void);
 
 // d2i_PKCS12 is a dummy function that copies |*ber_bytes| into a
-// |PKCS12| structure. The |out_p12| argument should be NULL(✝). On exit,
+// |PKCS12| structure. The |out_p12| argument should be NULL(*). On exit,
 // |*ber_bytes| will be advanced by |ber_len|. It returns a fresh |PKCS12|
 // structure or NULL on error.
 //
 // Note: unlike other d2i functions, |d2i_PKCS12| will always consume |ber_len|
 // bytes.
 //
-// (✝) If |out_p12| is not NULL and the function is successful, |*out_p12| will
+// (*) If |out_p12| is not NULL and the function is successful, |*out_p12| will
 // be freed if not NULL itself and the result will be written to |*out_p12|.
 // New code should not depend on this.
 OPENSSL_EXPORT PKCS12 *d2i_PKCS12(PKCS12 **out_p12, const uint8_t **ber_bytes,

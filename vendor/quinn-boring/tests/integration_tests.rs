@@ -208,8 +208,10 @@ async fn zero_rtt_success() -> Result<()> {
 
     // Create the first connection (1-RTT).
     info!("sending 1-RTT");
-    let cc1 = client_crypto();
-    let session_cache = cc1.get_session_cache();
+    let session_cache: Arc<dyn quinn_boring::SessionCache> =
+        Arc::new(quinn_boring::SimpleCache::new(8));
+    let mut cc1 = client_crypto();
+    cc1.set_session_cache(Arc::clone(&session_cache));
     let client1 = server.connect_1rtt(client_config(cc1)).await?;
     client1.send_ping().await?;
     client1.receive_pong().await?;
@@ -270,8 +272,10 @@ async fn zero_rtt_rejected() -> Result<()> {
 
     // Create the first 1-RTT connection.
     info!("sending 1-RTT");
-    let cc1 = client_crypto();
-    let session_cache = cc1.get_session_cache();
+    let session_cache: Arc<dyn quinn_boring::SessionCache> =
+        Arc::new(quinn_boring::SimpleCache::new(8));
+    let mut cc1 = client_crypto();
+    cc1.set_session_cache(Arc::clone(&session_cache));
     let client1 = server.connect_1rtt(client_config(cc1)).await?;
     client1.send_ping().await?;
     client1.receive_pong().await?;

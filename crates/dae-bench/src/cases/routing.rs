@@ -173,7 +173,10 @@ fn bench_routing_lpm_native_plan_build(iters: u64, warmup: u64) -> Result<Measur
                 black_box(template),
             )
             .expect("routing native plan");
-            black_box(plan.checksum())
+            let digest = plan.checksum();
+            black_box(u64::from_le_bytes(
+                digest.as_bytes()[..8].try_into().unwrap(),
+            ))
         },
         iters,
         warmup,

@@ -390,25 +390,6 @@ fn scoped_session_cache_key(namespace: &[u8], server_name: &str) -> Bytes {
     key.freeze()
 }
 
-#[cfg(test)]
-mod session_cache_key_tests {
-    use super::*;
-
-    #[test]
-    fn cache_key_scopes_the_same_sni_by_typed_policy_namespace() {
-        let ordinary = scoped_session_cache_key(b"ordinary-h3", "example.com");
-        let pinned = scoped_session_cache_key(b"pinned-h3", "example.com");
-        let other_sni = scoped_session_cache_key(b"ordinary-h3", "other.example");
-
-        assert_ne!(ordinary, pinned);
-        assert_ne!(ordinary, other_sni);
-        assert_eq!(
-            ordinary,
-            scoped_session_cache_key(b"ordinary-h3", "example.com")
-        );
-    }
-}
-
 impl crypto::Session for Session {
     fn initial_keys(&self, dcid: &ConnectionId, side: Side) -> crypto::Keys {
         self.state.initial_keys(dcid, side)
@@ -497,4 +478,23 @@ fn encode_params(params: &TransportParameters) -> Bytes {
     let mut out = BytesMut::with_capacity(128);
     params.write(&mut out);
     out.freeze()
+}
+
+#[cfg(test)]
+mod session_cache_key_tests {
+    use super::*;
+
+    #[test]
+    fn cache_key_scopes_the_same_sni_by_typed_policy_namespace() {
+        let ordinary = scoped_session_cache_key(b"ordinary-h3", "example.com");
+        let pinned = scoped_session_cache_key(b"pinned-h3", "example.com");
+        let other_sni = scoped_session_cache_key(b"ordinary-h3", "other.example");
+
+        assert_ne!(ordinary, pinned);
+        assert_ne!(ordinary, other_sni);
+        assert_eq!(
+            ordinary,
+            scoped_session_cache_key(b"ordinary-h3", "example.com")
+        );
+    }
 }

@@ -160,6 +160,11 @@ fn bench_engine_necessary_outbounds(iters: u64, warmup: u64) -> Result<Measureme
 fn bench_engine_read_config_file_minimal(iters: u64, warmup: u64) -> Result<Measurement, String> {
     let tree = TempConfig::new("dae-bench-engine-read-config")?;
     let path = tree.write("config.dae", "global {}\nrouting {}\n")?;
+    // Assessment (kept as-is): this case measures reading a config file from
+    // disk, so the read inside merge_config_file is the workload itself, not
+    // pollution. dae-config exposes no in-memory merge that would let the IO
+    // move to a warmup phase; the warmup loop pre-heats the page cache and the
+    // residual open/read syscall cost is part of what this case measures.
     Ok(measure(
         || {
             let merged = dae_config::merger::merge_config_file(black_box(&path))
@@ -191,6 +196,12 @@ fn bench_engine_subscription_persist_cleanup(
     fs::create_dir_all(&persist)
         .map_err(|err| format!("create {} failed: {err}", persist.display()))?;
 
+    // Assessment (kept as-is): this case measures subscription persist-file
+    // cleanup, which is inherently disk-bound: the measured closure writes the
+    // fixture files and cleanup_subscription_persist_files scans the directory
+    // on disk. There is no in-memory variant of the cleanup API to move the IO
+    // into a warmup phase, so the disk operations stay inside the timed window
+    // and are the subject of the measurement.
     let measurement = measure(
         || {
             fs::write(persist.join("active.sub"), b"payload").expect("write active persist file");
