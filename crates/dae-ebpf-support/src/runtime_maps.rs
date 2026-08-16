@@ -263,7 +263,56 @@ pub fn map_info(fd: i32) -> io::Result<RuntimeMapInfo> {
     })
 }
 
+/// Resolve the map's declared key/value sizes, used to validate caller slices
+/// before handing raw pointers to the kernel.
+///
+/// Fails when the sizes cannot be queried (the fd is not a BPF map, or the
+/// kernel denies `BPF_OBJ_GET_INFO_BY_FD`).  This is a safe public API: it
+/// must not rely on an implicit caller precondition, so an unqueryable map
+/// rejects the call instead of degrading to an unchecked syscall that could
+/// write past a caller buffer.
+fn map_elem_sizes(map_fd: RawFd) -> io::Result<(u32, u32)> {
+    let info = map_info(map_fd)?;
+    Ok((info.key_size, info.value_size))
+}
+
+/// Reject buffers shorter than the map's declared element size.
+///
+/// The kernel copies exactly `key_size`/`value_size` bytes through the raw
+/// pointer passed to the syscall; a shorter caller slice is an out-of-bounds
+/// read (update/delete) or write (lookup) on the caller's buffer.  Longer
+/// slices are fine — the kernel only touches the first `size` bytes.
+fn validate_elem_len(
+    op: &str,
+    which: &str,
+    map_fd: RawFd,
+    len: usize,
+    size: u32,
+) -> io::Result<()> {
+    if len >= size as usize {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{op}_map_elem_bytes: {which} slice too short for map fd {map_fd}: \
+                 len {len} < map {which}_size {size}"
+            ),
+        ))
+    }
+}
+
 pub fn update_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &[u8]) -> io::Result<()> {
+    // Buffer-size contract: `key`/`value` must each be at least as long as the
+    // map's key_size/value_size, because the kernel copies exactly that many
+    // bytes from these pointers.  Sizes come from a fresh BPF_OBJ_GET_INFO_BY_FD
+    // query per call — deliberately no cross-call cache, since RawFd numbers can
+    // be reused after close and a stale entry would either wrongly reject valid
+    // calls or silently accept undersized buffers.  An unqueryable map rejects
+    // the call: this is a safe API and must not pass unchecked pointers through.
+    let (key_size, value_size) = map_elem_sizes(map_fd)?;
+    validate_elem_len("update", "key", map_fd, key.len(), key_size)?;
+    validate_elem_len("update", "value", map_fd, value.len(), value_size)?;
     let attr = BpfMapUpdateElemAttr {
         map_fd: map_fd as u32,
         key: key.as_ptr() as u64,
@@ -288,6 +337,12 @@ pub fn update_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &[u8]) -> io::Res
 }
 
 pub fn delete_map_elem_bytes(map_fd: RawFd, key: &[u8]) -> io::Result<()> {
+    // Same buffer-size contract as `update_map_elem_bytes`: the kernel reads
+    // exactly key_size bytes from `key`, so a shorter slice is an out-of-bounds
+    // read.  An unqueryable map rejects the call (safe API, no implicit
+    // precondition).
+    let (key_size, _) = map_elem_sizes(map_fd)?;
+    validate_elem_len("delete", "key", map_fd, key.len(), key_size)?;
     let attr = BpfMapDeleteElemAttr {
         map_fd: map_fd as u32,
         key: key.as_ptr() as u64,
@@ -310,6 +365,14 @@ pub fn delete_map_elem_bytes(map_fd: RawFd, key: &[u8]) -> io::Result<()> {
 }
 
 pub fn lookup_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &mut [u8]) -> io::Result<()> {
+    // Buffer-size contract: `key` must be at least key_size bytes and `value`
+    // at least value_size bytes — the kernel reads from `key` and WRITES
+    // exactly value_size bytes into `value`, so a short `value` slice is a
+    // heap/stack buffer overflow on the caller's side.  An unqueryable map
+    // rejects the call (safe API, no implicit precondition).
+    let (key_size, value_size) = map_elem_sizes(map_fd)?;
+    validate_elem_len("lookup", "key", map_fd, key.len(), key_size)?;
+    validate_elem_len("lookup", "value", map_fd, value.len(), value_size)?;
     let attr = BpfMapLookupElemAttr {
         map_fd: map_fd as u32,
         key: key.as_ptr() as u64,

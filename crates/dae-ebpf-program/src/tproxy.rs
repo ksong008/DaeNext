@@ -3,8 +3,8 @@ use core::{ffi::c_void, ptr};
 use aya_ebpf::bindings::{__sk_buff, bpf_sock};
 
 use crate::abi::{
-    BpfRedirectEntry, BpfRedirectKey, BpfTuplesKey, BpfUdpConnState, REDIRECT_TRACK_ABI_VERSION,
-    TPROXY_MARK,
+    BpfRedirectEntry, BpfRedirectKey, BpfTproxyMetrics, BpfTuplesKey, BpfUdpConnState,
+    REDIRECT_TRACK_ABI_VERSION, TPROXY_MARK,
 };
 use crate::packet::{
     self, BpfSockTuple, ETH_HLEN, ETH_PROTO_OFFSET, ETH_SRC_OFFSET, IPPROTO_ICMPV6, IPPROTO_TCP,
@@ -31,6 +31,45 @@ const SKB_CB_TPROXY_L4PROTO: usize = 1;
 const SKB_CB_TPROXY_IS_IPV4: usize = 2;
 const REDIRECT_LINK_LAYER_L2: u8 = 2;
 const REDIRECT_LINK_LAYER_L3: u8 = 3;
+const TPROXY_METRICS_KEY: u32 = 0;
+const METRIC_SK_ASSIGN_FAILURE: u32 = 0;
+const METRIC_REDIRECT_PREP_STORE_FAILURE: u32 = 1;
+const METRIC_REDIRECT_RESTORE_STORE_FAILURE: u32 = 2;
+
+// tproxy failure counters live in the per-CPU `tproxy_metrics` map.  They make
+// helper failures observable (sk_assign / skb_store_bytes). Store failures
+// are counted and dropped fail-closed; sk_assign retains its prior packet
+// disposition and is counted. Userspace reads the map through the same
+// PerCpuArray-by-id machinery as udp_state_metrics.
+#[inline(never)]
+fn increment_tproxy_metric(metric: u32) {
+    let key = TPROXY_METRICS_KEY;
+    let metrics = unsafe {
+        helpers::bpf_map_lookup_elem(
+            maps::tproxy_metrics_map_ptr(),
+            ptr::addr_of!(key).cast::<c_void>(),
+        )
+    }
+    .cast::<BpfTproxyMetrics>();
+    if metrics.is_null() {
+        return;
+    }
+    let counter = unsafe {
+        match metric {
+            METRIC_SK_ASSIGN_FAILURE => ptr::addr_of_mut!((*metrics).sk_assign_failure_total),
+            METRIC_REDIRECT_PREP_STORE_FAILURE => {
+                ptr::addr_of_mut!((*metrics).redirect_prep_store_failure_total)
+            }
+            METRIC_REDIRECT_RESTORE_STORE_FAILURE => {
+                ptr::addr_of_mut!((*metrics).redirect_restore_store_failure_total)
+            }
+            _ => return,
+        }
+    };
+    unsafe {
+        counter.write_volatile(counter.read_volatile().wrapping_add(1));
+    }
+}
 
 #[inline(always)]
 fn redirect_link_layer_for_header_len(link_h_len: u32) -> u8 {
@@ -123,7 +162,13 @@ unsafe fn assign_listener(skb: *mut __sk_buff, l4proto: u32, is_ipv4: u32) {
         return;
     }
     unsafe {
-        let _ = helpers::bpf_sk_assign(skb.cast::<c_void>(), sock, 0);
+        // A failed bpf_sk_assign leaves the packet with the tproxy mark but
+        // without a listener socket: the connection is not redirected into
+        // the dae listener (a redirect hole).  Count the failure instead of
+        // discarding it; bpf_sk_release must still run either way.
+        if helpers::bpf_sk_assign(skb.cast::<c_void>(), sock, 0) != 0 {
+            increment_tproxy_metric(METRIC_SK_ASSIGN_FAILURE);
+        }
         let _ = helpers::bpf_sk_release(sock);
     }
 }
@@ -170,7 +215,7 @@ unsafe fn prep_redirect_to_control_plane(
         if unsafe { helpers::bpf_skb_change_head(skb_void, ETH_HLEN, 0) } != 0 {
             return false;
         }
-        let _ = unsafe {
+        if unsafe {
             helpers::bpf_skb_store_bytes(
                 skb_void,
                 ETH_PROTO_OFFSET,
@@ -178,14 +223,18 @@ unsafe fn prep_redirect_to_control_plane(
                 2,
                 0,
             )
-        };
+        } != 0
+        {
+            increment_tproxy_metric(METRIC_REDIRECT_PREP_STORE_FAILURE);
+            return false;
+        }
     }
     if !unsafe { redirect_vlan::strip(skb, info) } {
         return false;
     }
 
     let dae0peer_mac = crate::abi::param_dae0peer_mac();
-    let _ = unsafe {
+    if unsafe {
         helpers::bpf_skb_store_bytes(
             skb_void,
             packet::ETH_DST_OFFSET,
@@ -193,7 +242,11 @@ unsafe fn prep_redirect_to_control_plane(
             6,
             0,
         )
-    };
+    } != 0
+    {
+        increment_tproxy_metric(METRIC_REDIRECT_PREP_STORE_FAILURE);
+        return false;
+    }
 
     unsafe {
         redirect_key::from_forward_tuple(key, redirect_track_key);
@@ -324,20 +377,28 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
             if !redirect_vlan::restore(skb, entry, info.h_proto as u16) {
                 return TC_ACT_SHOT;
             }
-            let _ = helpers::bpf_skb_store_bytes(
+            if helpers::bpf_skb_store_bytes(
                 skb.cast::<c_void>(),
                 ETH_SRC_OFFSET,
                 ptr::addr_of!((*entry).dmac).cast::<c_void>(),
                 6,
                 0,
-            );
-            let _ = helpers::bpf_skb_store_bytes(
+            ) != 0
+            {
+                increment_tproxy_metric(METRIC_REDIRECT_RESTORE_STORE_FAILURE);
+                return TC_ACT_SHOT;
+            }
+            if helpers::bpf_skb_store_bytes(
                 skb.cast::<c_void>(),
                 packet::ETH_DST_OFFSET,
                 ptr::addr_of!((*entry).smac).cast::<c_void>(),
                 6,
                 0,
-            );
+            ) != 0
+            {
+                increment_tproxy_metric(METRIC_REDIRECT_RESTORE_STORE_FAILURE);
+                return TC_ACT_SHOT;
+            }
         } else if !redirect_entry_uses_l3_no_mac_redirect(entry) {
             return TC_ACT_SHOT;
         }

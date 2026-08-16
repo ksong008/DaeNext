@@ -48,7 +48,7 @@ impl RuntimeMapRole {
             b"redirect_track" => Self::Tracking,
             b"domain_routing_map" => Self::DomainRouting,
             b"udp_conn_state_map" => Self::UdpState,
-            b"udp_state_metrics" => Self::Observability,
+            b"udp_state_metrics" | b"tproxy_metrics" => Self::Observability,
             b"lpm_array_map" | b"unused_lpm_type" => Self::InnerMapCatalog,
             _ => Self::Other,
         }
@@ -84,12 +84,18 @@ pub fn runtime_map_contract() -> Vec<RuntimeMapContract> {
 
 const PINNED_REUSE_MAPS: [&str; 2] = ["cookie_pid_map", "routing_tuples_map"];
 
-const MAP_CATALOG: [MapSpec; 12] = [
+// The .rodata data-section map holds the `PARAM` global (BpfDaeParam).  Its
+// value_size is the size of the whole data section, which is exactly the ABI
+// struct the control plane rewrites into it.  Derive it from the ABI type so
+// the catalog can never drift from the layout tests again: a stale literal
+// (previously 32) makes `loaded_map_spec_mismatches` reject real objects whose
+// data section is 48 bytes.
+const MAP_CATALOG: [MapSpec; 13] = [
     MapSpec {
         name: ".rodata",
         map_type: "Array",
         key_size: 4,
-        value_size: 32,
+        value_size: core::mem::size_of::<dae_ebpf_abi::BpfDaeParam>() as u32,
         max_entries: 1,
         flags: 128,
         pinning: "PinNone",
@@ -165,6 +171,15 @@ const MAP_CATALOG: [MapSpec; 12] = [
         max_entries: 131072,
         flags: 0,
         pinning: "PinByName",
+    },
+    MapSpec {
+        name: "tproxy_metrics",
+        map_type: "PerCpuArray",
+        key_size: 4,
+        value_size: core::mem::size_of::<dae_ebpf_abi::BpfTproxyMetrics>() as u32,
+        max_entries: 1,
+        flags: 0,
+        pinning: "PinNone",
     },
     MapSpec {
         name: "udp_conn_state_map",

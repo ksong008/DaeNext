@@ -14,8 +14,8 @@ use aya_ebpf::{
 
 use crate::abi::{
     BpfDomainRouting, BpfLpmKey, BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname,
-    BpfRedirectEntry, BpfRedirectKey, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState,
-    BpfUdpStateMetrics, MAX_COOKIE_PID_PNAME_MAPPING_NUM, MAX_DOMAIN_ROUTING_NUM,
+    BpfRedirectEntry, BpfRedirectKey, BpfRoutingResult, BpfTproxyMetrics, BpfTuplesKey,
+    BpfUdpConnState, BpfUdpStateMetrics, MAX_COOKIE_PID_PNAME_MAPPING_NUM, MAX_DOMAIN_ROUTING_NUM,
     MAX_DST_MAPPING_NUM, MAX_LPM_NUM, MAX_LPM_SIZE, MAX_MATCH_SET_LEN,
 };
 
@@ -189,6 +189,20 @@ static UDP_STATE_METRICS: RawMap = RawMap::new(
     PIN_NONE,
 );
 
+// Per-CPU failure counters for the tproxy redirect path (sk_assign /
+// skb_store_bytes failures that must not go fully silent).  Mirrors the
+// udp_state_metrics pattern: userspace reads it through the same
+// PerCpuArray-by-id machinery.
+#[map(name = "tproxy_metrics")]
+static TPROXY_METRICS: RawMap = RawMap::new(
+    BPF_MAP_TYPE_PERCPU_ARRAY,
+    size_of::<u32>(),
+    size_of::<BpfTproxyMetrics>(),
+    1,
+    0,
+    PIN_NONE,
+);
+
 #[btf_map(name = "udp_conn_state_map")]
 static UDP_CONN_STATE_MAP: BtfMapDef<
     BpfTuplesKey,
@@ -232,6 +246,11 @@ pub(crate) fn udp_conn_state_map_ptr() -> *mut c_void {
 #[inline(always)]
 pub(crate) fn udp_state_metrics_map_ptr() -> *mut c_void {
     map_ptr(&UDP_STATE_METRICS)
+}
+
+#[inline(always)]
+pub(crate) fn tproxy_metrics_map_ptr() -> *mut c_void {
+    map_ptr(&TPROXY_METRICS)
 }
 
 #[inline(always)]

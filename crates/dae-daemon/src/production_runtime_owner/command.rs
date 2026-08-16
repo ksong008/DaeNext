@@ -19,7 +19,12 @@ pub(super) fn wait_for_loaded_map_cleanup(discovered_map_ids: &[Option<u32>]) ->
         .iter()
         .filter_map(|id| *id)
         .collect::<Vec<_>>();
-    let mut current = map_ids().unwrap_or_default();
+    // `map_ids` failure must NOT be treated as "already cleaned": an
+    // unreadable bpffs would otherwise produce a false-positive cleanup
+    // verdict.  Report the failure as not-clean so the caller fails closed.
+    let Ok(mut current) = map_ids() else {
+        return (Vec::new(), false);
+    };
     if ids.is_empty() {
         return (current, true);
     }
@@ -28,7 +33,10 @@ pub(super) fn wait_for_loaded_map_cleanup(discovered_map_ids: &[Option<u32>]) ->
     }
     for _ in 0..20 {
         thread::sleep(Duration::from_millis(50));
-        current = map_ids().unwrap_or_default();
+        let Ok(next) = map_ids() else {
+            return (current, false);
+        };
+        current = next;
         if ids.iter().all(|id| !current.contains(id)) {
             return (current, true);
         }

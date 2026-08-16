@@ -17,6 +17,23 @@ impl NativeEbpfRuntimeReadHandle {
                     })
                 })
             });
+            // tproxy redirect failure counters (sk_assign / skb_store_bytes).
+            // Optional: the map exists on the current object, but reading is
+            // best-effort so a transient fd failure does not fail the whole
+            // metrics report.
+            let tproxy_metrics = self.tproxy_metrics_map_id.map(|map_id| {
+                match dae_ebpf_support::read_aya_tproxy_metrics_by_id(map_id) {
+                    Ok(metrics) => json!({
+                        "skAssignFailureTotal": metrics.sk_assign_failure_total,
+                        "redirectPrepStoreFailureTotal": metrics.redirect_prep_store_failure_total,
+                        "redirectRestoreStoreFailureTotal": metrics.redirect_restore_store_failure_total,
+                    }),
+                    Err(error) => json!({
+                        "status": "error",
+                        "error": error,
+                    }),
+                }
+            });
             match metrics {
                 Some(Ok(metrics)) => json!({
                     "status": "pass",
@@ -29,6 +46,7 @@ impl NativeEbpfRuntimeReadHandle {
                     "redirectTrackGeneration": self.redirect_generation.map(|generation| generation.to_string()),
                     "redirectTrackMigration": "fresh-unpinned-map-per-runtime",
                     "udpStateMetrics": metrics,
+                    "tproxyMetrics": tproxy_metrics,
                 }),
                 Some(Err(error)) => json!({
                     "status": "error",
@@ -38,6 +56,7 @@ impl NativeEbpfRuntimeReadHandle {
                     "udpStateSaturationPolicy": "fail-closed",
                     "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
                     "redirectTrackGeneration": self.redirect_generation.map(|generation| generation.to_string()),
+                    "tproxyMetrics": tproxy_metrics,
                 }),
                 None => json!({
                     "status": "unavailable",
@@ -45,6 +64,7 @@ impl NativeEbpfRuntimeReadHandle {
                     "udpStateSaturationPolicy": "fail-closed",
                     "redirectTrackAbiVersion": REDIRECT_TRACK_ABI_VERSION,
                     "redirectTrackGeneration": self.redirect_generation.map(|generation| generation.to_string()),
+                    "tproxyMetrics": tproxy_metrics,
                 }),
             }
         }
