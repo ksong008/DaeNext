@@ -113,19 +113,65 @@ impl<'a> Lexer<'a> {
         let quote = self.bytes[self.offset];
         self.offset += 1;
         let start = self.offset;
-        while self.offset < self.bytes.len() && self.bytes[self.offset] != quote {
+        // Double-quoted literals are unescaped symmetrically with
+        // crate::ast::quote_string (\\, \", \n, \r, \t) so that
+        // parse(marshal(value)) == value. Single-quoted literals keep their
+        // bytes verbatim (no escape processing), preserving the previous
+        // behavior for single-quoted values.
+        let mut value = String::new();
+        let mut run_start = start;
+        while self.offset < self.bytes.len() {
+            let byte = self.bytes[self.offset];
+            if byte == quote {
+                value.push_str(&self.input[run_start..self.offset]);
+                self.offset += 1;
+                return Ok(value);
+            }
+            if quote == b'"' && byte == b'\\' {
+                value.push_str(&self.input[run_start..self.offset]);
+                self.offset += 1;
+                if self.offset >= self.bytes.len() {
+                    return Err(parse_error(
+                        self.input,
+                        start,
+                        "unterminated quoted literal",
+                    ));
+                }
+                let escaped = self.bytes[self.offset];
+                self.offset += 1;
+                match escaped {
+                    b'\\' => value.push('\\'),
+                    b'"' => value.push('"'),
+                    b'n' => value.push('\n'),
+                    b'r' => value.push('\r'),
+                    b't' => value.push('\t'),
+                    // quote_string never emits any other escape; keep the
+                    // backslash and the character verbatim so hand-written
+                    // configs with stray backslashes are unchanged.  `escaped`
+                    // may be the first byte of a multi-byte UTF-8 character:
+                    // treat it as a full `char` and advance past all its bytes
+                    // so the next `run_start` slice stays on a char boundary
+                    // (a single-byte advance would slice mid-character later).
+                    other => {
+                        let ch = self.input[self.offset - 1..]
+                            .chars()
+                            .next()
+                            .unwrap_or(other as char);
+                        value.push('\\');
+                        value.push(ch);
+                        self.offset += ch.len_utf8() - 1;
+                    }
+                }
+                run_start = self.offset;
+                continue;
+            }
             self.offset += 1;
         }
-        if self.offset >= self.bytes.len() {
-            return Err(parse_error(
-                self.input,
-                start,
-                "unterminated quoted literal",
-            ));
-        }
-        let value = self.input[start..self.offset].to_owned();
-        self.offset += 1;
-        Ok(value)
+        Err(parse_error(
+            self.input,
+            start,
+            "unterminated quoted literal",
+        ))
     }
 
     pub(super) fn read_bare(&mut self) -> Result<String, ConfigError> {

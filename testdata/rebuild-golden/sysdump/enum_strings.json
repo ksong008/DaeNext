@@ -2,6 +2,22 @@
   "name": "sysdump-enum-strings",
   "protocol": [
     {
+      "string": "17",
+      "value": 17
+    },
+    {
+      "string": "18",
+      "value": 18
+    },
+    {
+      "string": "255",
+      "value": 255
+    },
+    {
+      "string": "99",
+      "value": 99
+    },
+    {
       "string": "babel",
       "value": 42
     },
@@ -22,8 +38,48 @@
       "value": 16
     },
     {
+      "string": "dnrouted",
+      "value": 13
+    },
+    {
+      "string": "eigrp",
+      "value": 192
+    },
+    {
+      "string": "gated",
+      "value": 8
+    },
+    {
+      "string": "isis",
+      "value": 187
+    },
+    {
       "string": "kernel",
       "value": 2
+    },
+    {
+      "string": "mrt",
+      "value": 10
+    },
+    {
+      "string": "ntk",
+      "value": 15
+    },
+    {
+      "string": "ospf",
+      "value": 188
+    },
+    {
+      "string": "ra",
+      "value": 9
+    },
+    {
+      "string": "redirect",
+      "value": 1
+    },
+    {
+      "string": "rip",
+      "value": 189
     },
     {
       "string": "static",
@@ -34,8 +90,12 @@
       "value": 0
     },
     {
-      "string": "unknown",
-      "value": 255
+      "string": "xorp",
+      "value": 14
+    },
+    {
+      "string": "zebra",
+      "value": 11
     }
   ],
   "route_type": [
@@ -98,6 +158,7 @@
       "value": 255
     }
   ],
+  "notes": "protocol values follow Linux rtnetlink.h RTPROT_* (0-16); 17 is the RTPROT_NRTPROT sentinel and 18/99 are non-standard, so they render as their decimal string; daemon protocols 42/186/187/188/189/192 follow the iproute2 rt_protos table.",
   "source": [
     "cmd/sysdump.go"
   ]

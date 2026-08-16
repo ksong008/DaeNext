@@ -120,9 +120,86 @@ fn find_sni_extension(search: &[u8]) -> Result<&str, SniffingError> {
                         .map_err(|_| SniffingError::NotApplicable)?;
                     return Ok(sni.trim_end_matches('.'));
                 }
-                j += indicator_len;
+                // Skip the entry's 3-byte header (1 type + 2 length) plus its
+                // value. Advancing past the header is mandatory even for a
+                // zero-length non-host_name entry: with `j += indicator_len`
+                // alone, `j` would never move (3 + 0 > 0) and `j + 3 <= next`
+                // would stay true forever (CPU-spin DoS, client-controlled).
+                j += 3 + indicator_len;
             }
         }
         i = next;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a full TLS record carrying a ClientHello whose SNI extension
+    /// contains exactly `entries` (each `(type, name)`), mirroring the wire
+    /// path a real client-controlled packet takes into `sniff_tls_sni`.
+    fn build_client_hello_sni(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let mut list = Vec::new();
+        for (ty, name) in entries {
+            list.push(ty[0]);
+            list.extend_from_slice(&(name.len() as u16).to_be_bytes());
+            list.extend_from_slice(name);
+        }
+        let list_len = list.len();
+
+        let mut ext = Vec::new();
+        ext.extend_from_slice(&TLS_EXTENSION_SERVER_NAME.to_be_bytes());
+        ext.extend_from_slice(&((list_len + 2) as u16).to_be_bytes());
+        ext.extend_from_slice(&(list_len as u16).to_be_bytes());
+        ext.extend_from_slice(&list);
+
+        let mut handshake = Vec::new();
+        handshake.push(HANDSHAKE_TYPE_HELLO);
+        handshake.extend_from_slice(&[0, 0, 0]); // body length, patched below
+        handshake.extend_from_slice(&VERSION_TLS_1_2);
+        handshake.extend_from_slice(&[0xAA; 32]); // random
+        handshake.push(0); // session id length
+        handshake.extend_from_slice(&2u16.to_be_bytes()); // cipher suites length
+        handshake.extend_from_slice(&[0x00, 0x2f]); // TLS_RSA_WITH_AES_128_CBC_SHA
+        handshake.push(1); // compression methods length
+        handshake.push(0x00); // null compression
+        handshake.extend_from_slice(&(ext.len() as u16).to_be_bytes());
+        handshake.extend_from_slice(&ext);
+
+        let body_len = handshake.len() - 4;
+        handshake[1..4].copy_from_slice(&(body_len as u32).to_be_bytes()[1..]);
+
+        let mut record = Vec::new();
+        record.push(CONTENT_TYPE_HANDSHAKE);
+        record.extend_from_slice(&VERSION_TLS_1_2);
+        record.extend_from_slice(&(handshake.len() as u16).to_be_bytes());
+        record.extend_from_slice(&handshake);
+        record
+    }
+
+    /// Regression test: a zero-length SNI entry whose type is not host_name
+    /// must not stall the parser (previously `j += indicator_len` never moved
+    /// `j`, so `j + 3 <= next` stayed true forever). The function must return
+    /// normally and still find a subsequent host_name entry.
+    #[test]
+    fn sni_zero_length_non_host_entry_does_not_hang_and_host_is_found() {
+        let data = build_client_hello_sni(&[(&[0x01], &[]), (&[0x00], b"example.com")]);
+        let got = sniff_tls_sni(&data).unwrap();
+        assert_eq!(got, "example.com");
+    }
+
+    #[test]
+    fn sni_host_name_first_still_works() {
+        let data = build_client_hello_sni(&[(&[0x00], b"example.com")]);
+        assert_eq!(sniff_tls_sni(&data).unwrap(), "example.com");
+    }
+
+    /// A non-host_name entry carrying payload must be skipped by its full
+    /// 3-byte header plus value length, so the next entry is not misaligned.
+    #[test]
+    fn sni_non_host_entry_with_payload_does_not_misalign() {
+        let data = build_client_hello_sni(&[(&[0x01], b"deadbeef"), (&[0x00], b"example.org")]);
+        assert_eq!(sniff_tls_sni(&data).unwrap(), "example.org");
     }
 }

@@ -30,6 +30,34 @@ pub mod xhttp_h3;
 pub const XHTTP_H3_ALPN: &str = "h3";
 pub const XHTTP_H3_KEEPALIVE_SECS: u64 = 5;
 pub const XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS: u64 = 8;
+pub(crate) const MAX_HTTP_MESSAGE_BODY_BYTES: usize = 1024 * 1024;
+
+pub(crate) fn bounded_http_message_body_length(
+    length: usize,
+    context: &str,
+) -> Result<usize, crate::error::OutboundError> {
+    if length > MAX_HTTP_MESSAGE_BODY_BYTES {
+        return Err(crate::error::OutboundError::BadSharedTransport(format!(
+            "{context} body too large: {length} bytes (max {MAX_HTTP_MESSAGE_BODY_BYTES})"
+        )));
+    }
+    Ok(length)
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod body_length_tests {
+    use super::*;
+
+    #[test]
+    fn http_message_body_length_is_bounded() {
+        assert!(bounded_http_message_body_length(MAX_HTTP_MESSAGE_BODY_BYTES, "fixture").is_ok());
+        let error = bounded_http_message_body_length(MAX_HTTP_MESSAGE_BODY_BYTES + 1, "fixture")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("body too large"));
+    }
+}
 
 pub use dataplane::{
     DEFAULT_WS_KEY, HttpUpgradeOptions, SharedTransportLoopbackReport, SimpleObfsHttpOptions,

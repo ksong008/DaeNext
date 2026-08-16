@@ -20,6 +20,56 @@ struct CachedResidentHealthTargetFamilies {
     valid_until: Instant,
 }
 
+/// One in-flight cache refresh.
+///
+/// The leader publishes its outcome to followers through a watch channel so
+/// concurrent callers that observed the same expired cache wait for one shared
+/// A+AAAA resolution instead of each firing its own query and UDP socket pair.
+#[derive(Debug)]
+struct ResidentHealthTargetRefreshFlight {
+    result: tokio::sync::watch::Sender<Option<ResidentHealthTargetFamilies>>,
+}
+
+impl ResidentHealthTargetRefreshFlight {
+    fn new() -> Self {
+        let (result, _) = tokio::sync::watch::channel(None);
+        Self { result }
+    }
+}
+
+/// Clears the in-flight marker when the leader's resolution future is dropped
+/// (including cancellation).
+///
+/// Without this, a leader cancelled mid-await would leave `self.refresh`
+/// holding the flight forever: followers wait on `changed()` which never
+/// completes because the leader's sender is still alive, so the "degrade to
+/// resolving directly" fallback is unreachable and every caller hangs.
+struct RefreshFlightGuard<'a> {
+    refresh: &'a Mutex<Option<Arc<ResidentHealthTargetRefreshFlight>>>,
+    flight: Arc<ResidentHealthTargetRefreshFlight>,
+}
+
+impl Drop for RefreshFlightGuard<'_> {
+    fn drop(&mut self) {
+        if self.flight.result.borrow().is_none() {
+            // Followers keep an Arc to the flight (and therefore to this
+            // Sender), so merely clearing `refresh` does not close the watch
+            // channel. Bump its version explicitly to wake them immediately.
+            self.flight.result.send_replace(None);
+        }
+        if let Ok(mut refresh) = self.refresh.lock()
+            && let Some(current) = refresh.as_ref()
+            && Arc::ptr_eq(current, &self.flight)
+        {
+            *refresh = None;
+        }
+    }
+}
+
+/// Follower bound on waiting for a refresh leader.  Beyond this the follower
+/// resolves directly so a stuck or cancelled leader cannot hang probes.
+const REFRESH_FOLLOWER_WAIT: Duration = Duration::from_secs(5);
+
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentHealthTargetResolver {
     host: String,
@@ -29,8 +79,18 @@ pub(crate) struct ResidentHealthTargetResolver {
     resolver_mark: u32,
     refresh_interval: Duration,
     cache: Arc<Mutex<Option<CachedResidentHealthTargetFamilies>>>,
+    refresh: Arc<Mutex<Option<Arc<ResidentHealthTargetRefreshFlight>>>>,
     #[cfg(test)]
     test_result: Option<ResidentHealthTargetFamilies>,
+    #[cfg(test)]
+    test_refresh: Option<Arc<TestHealthTargetRefreshHook>>,
+}
+
+#[cfg(test)]
+#[derive(Default, Debug)]
+struct TestHealthTargetRefreshHook {
+    calls: std::sync::atomic::AtomicUsize,
+    release: tokio::sync::Notify,
 }
 
 impl ResidentHealthTargetResolver {
@@ -50,14 +110,23 @@ impl ResidentHealthTargetResolver {
             resolver_mark,
             refresh_interval,
             cache: Arc::new(Mutex::new(None)),
+            refresh: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             test_result: None,
+            #[cfg(test)]
+            test_refresh: None,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn with_test_result(mut self, result: ResidentHealthTargetFamilies) -> Self {
         self.test_result = Some(result);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_test_refresh(mut self, hook: Arc<TestHealthTargetRefreshHook>) -> Self {
+        self.test_refresh = Some(hook);
         self
     }
 
@@ -75,6 +144,84 @@ impl ResidentHealthTargetResolver {
             && cached.valid_until > now
         {
             return cached.value.clone();
+        }
+
+        // Single-flight refresh: the first caller that observed the expired
+        // cache becomes the leader and performs the DNS resolution; concurrent
+        // callers wait for its outcome. Without this, every concurrent probe
+        // firing around the cache-expiry boundary triggers its own A+AAAA
+        // lookup (thundering herd of queries and sockets).
+        let (flight, is_leader) = {
+            let Ok(mut refresh) = self.refresh.lock() else {
+                // Poisoned refresh lock: degrade to resolving directly.
+                return self.refresh_resolution().await;
+            };
+            if let Some(flight) = refresh.as_ref() {
+                (Arc::clone(flight), false)
+            } else {
+                let flight = Arc::new(ResidentHealthTargetRefreshFlight::new());
+                *refresh = Some(Arc::clone(&flight));
+                (flight, true)
+            }
+        };
+        // The refresh lock is dropped here so the leader's resolution await
+        // below does not hold a `MutexGuard` across an await (which would make
+        // this future `!Send`).
+        if is_leader {
+            return self.resolve_as_refresh_leader(flight).await;
+        }
+        let mut receiver = flight.result.subscribe();
+        if receiver.borrow().is_none() {
+            // Wait for the leader to publish (or for the flight to be dropped).
+            // `changed` completes immediately if the leader sent between the
+            // check and the await, so the notification cannot be missed.
+            // The wait is bounded: a leader that is cancelled mid-resolution
+            // (without the guard having run yet) or that wedges on DNS must
+            // not hang followers forever — after the bound the follower
+            // resolves directly.
+            let notified = receiver.changed();
+            tokio::pin!(notified);
+            let _ = tokio::time::timeout(REFRESH_FOLLOWER_WAIT, notified.as_mut()).await;
+        }
+        if let Some(result) = receiver.borrow().clone() {
+            return result;
+        }
+        // The leader never published (e.g. it was cancelled mid-flight or the
+        // wait timed out): resolve directly so the caller still gets an
+        // outcome.
+        self.refresh_resolution().await
+    }
+
+    async fn resolve_as_refresh_leader(
+        &self,
+        flight: Arc<ResidentHealthTargetRefreshFlight>,
+    ) -> ResidentHealthTargetFamilies {
+        // If this future is cancelled mid-await, the guard's Drop clears the
+        // in-flight marker so the next caller becomes a fresh leader instead
+        // of waiting on a dead flight.
+        let _guard = RefreshFlightGuard {
+            refresh: &self.refresh,
+            flight: Arc::clone(&flight),
+        };
+        let value = self.refresh_resolution().await;
+        let _ = flight.result.send(Some(value.clone()));
+        // The guard's Drop clears the in-flight marker (it still matches by
+        // Arc::ptr_eq); followers already hold their own `Arc` to this flight.
+        value
+    }
+
+    async fn refresh_resolution(&self) -> ResidentHealthTargetFamilies {
+        #[cfg(test)]
+        if let Some(hook) = self.test_refresh.as_ref() {
+            hook.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            hook.release.notified().await;
+            return ResidentHealthTargetFamilies {
+                ipv4: ResidentHealthTargetFamily::Present(vec![SocketAddr::new(
+                    IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                    80,
+                )]),
+                ipv6: ResidentHealthTargetFamily::Absent,
+            };
         }
         let resolved = resolve_host_addrs_with_configured_fallback_dns_ttl(
             &self.host,
@@ -253,5 +400,110 @@ mod tests {
             unknown.ipv4,
             ResidentHealthTargetFamily::Unknown(_)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_cache_expiry_refresh_is_single_flighted() {
+        let hook = Arc::new(TestHealthTargetRefreshHook::default());
+        let resolver = Arc::new(
+            ResidentHealthTargetResolver::new(
+                "health-target.invalid".to_owned(),
+                80,
+                Vec::new(),
+                SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 53),
+                0,
+                Duration::from_secs(1),
+            )
+            .with_test_refresh(Arc::clone(&hook)),
+        );
+
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let resolver = Arc::clone(&resolver);
+            tasks.spawn(async move { resolver.resolve().await });
+        }
+
+        // Wait until exactly one leader has started resolving.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while hook.calls.load(std::sync::atomic::Ordering::SeqCst) < 1 && Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(
+            hook.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "exactly one refresh must start"
+        );
+        // Hold the leader to prove the followers are waiting, not resolving.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            hook.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "followers must wait for the leader instead of resolving"
+        );
+        hook.release.notify_one();
+
+        let mut results = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            results.push(result.unwrap());
+        }
+        assert_eq!(results.len(), 8);
+        for resolved in results {
+            assert!(
+                matches!(
+                    resolved.ipv4,
+                    ResidentHealthTargetFamily::Present(ref addrs) if addrs.len() == 1
+                ),
+                "all followers must receive the leader's outcome"
+            );
+        }
+        assert_eq!(
+            hook.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the whole refresh must be a single flight"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_refresh_leader_wakes_followers_without_waiting_for_timeout() {
+        let hook = Arc::new(TestHealthTargetRefreshHook::default());
+        let resolver = Arc::new(
+            ResidentHealthTargetResolver::new(
+                "health-target.invalid".to_owned(),
+                80,
+                Vec::new(),
+                SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 53),
+                0,
+                Duration::from_secs(1),
+            )
+            .with_test_refresh(Arc::clone(&hook)),
+        );
+
+        let leader = {
+            let resolver = Arc::clone(&resolver);
+            tokio::spawn(async move { resolver.resolve().await })
+        };
+        while hook.calls.load(std::sync::atomic::Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+        let follower = {
+            let resolver = Arc::clone(&resolver);
+            tokio::spawn(async move { resolver.resolve().await })
+        };
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        leader.abort();
+
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while hook.calls.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("follower must start its fallback refresh immediately");
+        hook.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), follower)
+            .await
+            .expect("follower completion")
+            .expect("follower task");
     }
 }

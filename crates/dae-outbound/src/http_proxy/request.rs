@@ -223,6 +223,7 @@ fn transport_put_request(options: &HttpConnectOptions) -> Result<Vec<u8>, Outbou
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 

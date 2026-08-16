@@ -15,7 +15,6 @@ pub(crate) fn start_subscription_scheduler(
 }
 
 const SUBSCRIPTION_SCHEDULER_TICK: Duration = Duration::from_secs(60);
-const SUBSCRIPTION_SCHEDULER_LOOKBACK_LIMIT_SECS: u64 = 366 * 24 * 60 * 60;
 
 #[derive(Clone, Debug)]
 struct ScheduledSubscription {
@@ -49,15 +48,6 @@ struct CronExpression {
 struct CronField {
     wildcard: bool,
     values: BTreeSet<u8>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct CronMoment {
-    minute: u8,
-    hour: u8,
-    day_of_month: u8,
-    month: u8,
-    day_of_week: u8,
 }
 
 #[cfg(test)]
@@ -246,16 +236,162 @@ fn subscription_cron_due_since(
         return Ok(false);
     }
     let cron = parse_cron_expression(cron_exp)?;
-    let end = (now_unix / 60) * 60;
-    let lower = last_unix.max(now_unix.saturating_sub(SUBSCRIPTION_SCHEDULER_LOOKBACK_LIMIT_SECS));
-    let mut cursor = ((lower / 60) + 1) * 60;
-    while cursor <= end {
-        if cron.matches_unix(cursor) {
-            return Ok(true);
-        }
-        cursor = cursor.saturating_add(60);
+    // Due iff the next cron moment after `last_unix` has already arrived,
+    // which is exactly "some scheduled moment fell in (last_unix, now]".
+    Ok(next_cron_moment_after(&cron, last_unix, now_unix).is_some())
+}
+
+/// Smallest cron moment strictly after `after_unix` that is still <=
+/// `horizon_unix`, or None when no such moment exists.  The search walks the
+/// cron fields (month/day/hour/minute) instead of probing every minute, so a
+/// stale subscription whose `updated_at` sits a year in the past costs a
+/// handful of calendar jumps rather than a ~527k-minute window scan per tick.
+fn next_cron_moment_after(
+    cron: &CronExpression,
+    after_unix: u64,
+    horizon_unix: u64,
+) -> Option<u64> {
+    let start = ((after_unix / 60) + 1) * 60;
+    if start > horizon_unix {
+        return None;
     }
-    Ok(false)
+    let (mut year, mut month, mut day, mut hour, mut minute) = decompose_unix(start);
+    let horizon_year = decompose_unix(horizon_unix).0;
+    loop {
+        if year > horizon_year {
+            return None;
+        }
+        if !cron.month.matches(month as u8) {
+            advance_to_next_matching_month(&mut year, &mut month, &cron.month.values)?;
+            day = 1;
+            hour = 0;
+            minute = i64::from(first_field_value(&cron.minute.values)?);
+            continue;
+        }
+        if !cron_day_matches(cron, year, month, day) {
+            if day < days_in_month(year, month) {
+                day += 1;
+            } else {
+                advance_to_next_matching_month(&mut year, &mut month, &cron.month.values)?;
+                day = 1;
+            }
+            hour = 0;
+            minute = i64::from(first_field_value(&cron.minute.values)?);
+            continue;
+        }
+        if !cron.hour.matches(hour as u8) {
+            match next_field_value(&cron.hour.values, hour as u8) {
+                Some(next) => hour = i64::from(next),
+                None => {
+                    if day < days_in_month(year, month) {
+                        day += 1;
+                    } else {
+                        advance_to_next_matching_month(&mut year, &mut month, &cron.month.values)?;
+                        day = 1;
+                    }
+                    hour = i64::from(first_field_value(&cron.hour.values)?);
+                }
+            }
+            minute = i64::from(first_field_value(&cron.minute.values)?);
+            continue;
+        }
+        if !cron.minute.matches(minute as u8) {
+            match next_field_value(&cron.minute.values, minute as u8) {
+                Some(next) => minute = i64::from(next),
+                None => {
+                    match next_field_value(&cron.hour.values, hour as u8) {
+                        Some(next) => hour = i64::from(next),
+                        None => {
+                            if day < days_in_month(year, month) {
+                                day += 1;
+                            } else {
+                                advance_to_next_matching_month(
+                                    &mut year,
+                                    &mut month,
+                                    &cron.month.values,
+                                )?;
+                                day = 1;
+                            }
+                            hour = i64::from(first_field_value(&cron.hour.values)?);
+                        }
+                    }
+                    minute = i64::from(first_field_value(&cron.minute.values)?);
+                }
+            }
+            continue;
+        }
+        // Every field matches: this is the smallest matching moment at or
+        // after the start position, and positions only move forward from
+        // here, so a candidate beyond the horizon ends the search.
+        let candidate = unix_from_components(year, month, day, hour, minute)?;
+        return if candidate >= start && candidate <= horizon_unix {
+            Some(candidate)
+        } else {
+            None
+        };
+    }
+}
+
+/// Advance to the next matching month, rolling into the following year when
+/// the current year has no later matching month.  Returns None only for an
+/// empty month field (defensive; parsing rejects it).
+fn advance_to_next_matching_month(
+    year: &mut i64,
+    month: &mut i64,
+    month_values: &BTreeSet<u8>,
+) -> Option<()> {
+    match next_field_value(month_values, *month as u8) {
+        Some(next) => *month = i64::from(next),
+        None => {
+            *year += 1;
+            *month = i64::from(first_field_value(month_values)?);
+        }
+    }
+    Some(())
+}
+
+fn decompose_unix(unix: u64) -> (i64, i64, i64, i64, i64) {
+    let seconds = unix as i64;
+    let days = seconds.div_euclid(86_400);
+    let rem = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    (year, month, day, rem / 3_600, (rem % 3_600) / 60)
+}
+
+fn unix_from_components(year: i64, month: i64, day: i64, hour: i64, minute: i64) -> Option<u64> {
+    let days = days_from_civil(year, month, day)?;
+    Some((days as u64) * 86_400 + (hour * 3_600 + minute * 60) as u64)
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn cron_day_matches(cron: &CronExpression, year: i64, month: i64, day: i64) -> bool {
+    days_from_civil(year, month, day)
+        .map(|days| {
+            let day_of_week = (days + 4).rem_euclid(7) as u8;
+            cron.matches_day(day as u8, day_of_week)
+        })
+        .unwrap_or(false)
+}
+
+fn first_field_value(values: &BTreeSet<u8>) -> Option<u8> {
+    values.iter().next().copied()
+}
+
+fn next_field_value(values: &BTreeSet<u8>, current: u8) -> Option<u8> {
+    values.iter().find(|value| **value > current).copied()
 }
 
 fn parse_cron_expression(raw: &str) -> Result<CronExpression, String> {
@@ -371,14 +507,6 @@ fn normalize_cron_value(
 }
 
 impl CronExpression {
-    fn matches_unix(&self, unix: u64) -> bool {
-        let moment = cron_moment_from_unix(unix);
-        self.minute.matches(moment.minute)
-            && self.hour.matches(moment.hour)
-            && self.month.matches(moment.month)
-            && self.matches_day(moment.day_of_month, moment.day_of_week)
-    }
-
     fn matches_day(&self, day_of_month: u8, day_of_week: u8) -> bool {
         if !self.day_of_month.wildcard && !self.day_of_week.wildcard {
             return self.day_of_month.matches(day_of_month)
@@ -391,20 +519,6 @@ impl CronExpression {
 impl CronField {
     fn matches(&self, value: u8) -> bool {
         self.values.contains(&value)
-    }
-}
-
-fn cron_moment_from_unix(unix: u64) -> CronMoment {
-    let seconds = unix as i64;
-    let days = seconds.div_euclid(86_400);
-    let rem = seconds.rem_euclid(86_400);
-    let (_year, month, day) = civil_from_days(days);
-    CronMoment {
-        minute: ((rem % 3_600) / 60) as u8,
-        hour: (rem / 3_600) as u8,
-        day_of_month: day as u8,
-        month: month as u8,
-        day_of_week: (days + 4).rem_euclid(7) as u8,
     }
 }
 
@@ -461,6 +575,47 @@ mod tests {
 
         assert!(subscription_cron_due_since("10 */6 * * *", last, due).unwrap());
         assert!(!subscription_cron_due_since("10 */6 * * *", due, before_next).unwrap());
+    }
+
+    #[test]
+    fn subscription_cron_due_since_handles_stale_subscriptions_without_window_scan() {
+        // A subscription last updated over a year ago must still be reported
+        // due when a cron moment fell between its last update and now (the
+        // old minute-by-minute window scan cost ~527k probes per tick here).
+        let stale_last = unix_utc(2024, 1, 1, 0, 0, 0);
+        let now = unix_utc(2025, 6, 17, 10, 0, 0);
+        assert!(subscription_cron_due_since("0 0 * * *", stale_last, now).unwrap());
+        // Not due while the next cron moment is still in the future.
+        let recent_last = unix_utc(2025, 6, 17, 0, 0, 0);
+        assert!(!subscription_cron_due_since("0 0 * * *", recent_last, now).unwrap());
+        // A cron that can never match (Feb 30) must terminate and report not
+        // due instead of scanning forever.
+        assert!(!subscription_cron_due_since("0 0 30 2 *", stale_last, now).unwrap());
+    }
+
+    #[test]
+    fn next_cron_moment_after_finds_the_first_matching_moment() {
+        let far_future = unix_utc(2040, 1, 1, 0, 0, 0);
+        let cron = parse_cron_expression("10 */6 * * *").unwrap();
+        assert_eq!(
+            next_cron_moment_after(&cron, unix_utc(2026, 6, 17, 0, 11, 0), far_future).unwrap(),
+            unix_utc(2026, 6, 17, 6, 10, 0)
+        );
+        // A Feb-29 schedule skips non-leap years.
+        let feb29 = parse_cron_expression("0 0 29 2 *").unwrap();
+        assert_eq!(
+            next_cron_moment_after(&feb29, unix_utc(2026, 3, 1, 0, 0, 0), far_future).unwrap(),
+            unix_utc(2028, 2, 29, 0, 0, 0)
+        );
+        // The horizon caps the search: the next moment exists but is later.
+        assert_eq!(
+            next_cron_moment_after(
+                &cron,
+                unix_utc(2026, 6, 17, 6, 10, 0),
+                unix_utc(2026, 6, 17, 7, 0, 0)
+            ),
+            None
+        );
     }
 
     #[test]

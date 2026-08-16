@@ -63,16 +63,25 @@ pub fn xhttp_request_path(options: &XHttpLifecycleOptions) -> String {
 
 fn read_http_response_body(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundError> {
     let (head, mut leftover) = read_http_head_and_leftover(stream)?;
-    let content_length = content_length(&head)?;
+    let content_length = crate::shared_transport::bounded_http_message_body_length(
+        content_length(&head)?,
+        "xhttp response",
+    )?;
     while leftover.len() < content_length {
-        let mut buf = vec![0_u8; content_length - leftover.len()];
+        let mut buf = [0_u8; 8192];
+        let wanted = (content_length - leftover.len()).min(buf.len());
         let n = stream
-            .read(&mut buf)
+            .read(&mut buf[..wanted])
             .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
         if n == 0 {
             break;
         }
         leftover.extend_from_slice(&buf[..n]);
+    }
+    if leftover.len() < content_length {
+        return Err(OutboundError::BadSharedTransport(
+            "incomplete xhttp response body".to_owned(),
+        ));
     }
     leftover.truncate(content_length);
     Ok(leftover)
@@ -91,6 +100,11 @@ fn read_http_head_and_leftover(stream: &mut TcpStream) -> Result<(String, Vec<u8
             ));
         }
         data.extend_from_slice(&buf[..n]);
+        if data.len() > 8192 {
+            return Err(OutboundError::BadSharedTransport(
+                "xhttp response header too large".to_owned(),
+            ));
+        }
         if let Some(index) = data.windows(4).position(|window| window == b"\r\n\r\n") {
             let body_start = index + 4;
             let leftover = data[body_start..].to_vec();

@@ -3,7 +3,13 @@ pub(super) struct Parser<'a> {
     pub(super) input: &'a str,
     pub(super) tokens: Vec<Token>,
     pub(super) pos: usize,
+    section_depth: usize,
 }
+
+/// Maximum nesting depth for sections.  `parse_section` recurses for nested
+/// sections; without a bound, a deeply nested configuration would overflow
+/// the stack (user-controlled input on the validate/reload path).
+const MAX_SECTION_DEPTH: usize = 128;
 
 impl<'a> Parser<'a> {
     pub(super) fn new(input: &'a str, tokens: Vec<Token>) -> Self {
@@ -11,6 +17,7 @@ impl<'a> Parser<'a> {
             input,
             tokens,
             pos: 0,
+            section_depth: 0,
         }
     }
 
@@ -23,6 +30,18 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_section(&mut self) -> Result<Section, ConfigError> {
+        if self.section_depth >= MAX_SECTION_DEPTH {
+            return Err(self.error_here(&format!(
+                "section nesting exceeds limit of {MAX_SECTION_DEPTH}"
+            )));
+        }
+        self.section_depth += 1;
+        let result = self.parse_section_inner();
+        self.section_depth -= 1;
+        result
+    }
+
+    fn parse_section_inner(&mut self) -> Result<Section, ConfigError> {
         let name = self.expect_literal("section name")?;
         self.expect(TokenKindName::LBrace)?;
         let mut items = Vec::new();
