@@ -149,7 +149,7 @@ fn http_rust_native_matches_nativelden_fixture() {
         options.transport.enabled = case["transport"].as_bool().unwrap();
         options.transport.path = case["path"].as_str().unwrap().to_owned();
         assert_eq!(
-            hex_encode(&crate::http_proxy::request::connect_request(&options)),
+            hex_encode(&crate::http_proxy::request::connect_request(&options).unwrap()),
             case["request_hex"].as_str().unwrap(),
             "{}",
             case["name"].as_str().unwrap()

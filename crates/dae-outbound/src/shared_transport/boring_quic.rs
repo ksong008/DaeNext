@@ -393,6 +393,23 @@ fn configure_client_hello_profile(
     Ok(())
 }
 
+/// Upper bound for a decompressed TLS certificate chain accepted by the
+/// Chrome certificate-compression callback.
+///
+/// The wire format caps `uncompressed_length` at 24 bits (~16 MiB) per
+/// RFC 8879, so 16 MiB is a strict superset of any valid certificate. The
+/// cap exists to bound memory in the Rust-side decompression buffer even if
+/// the peer lies about the declared length (brotli zip-bomb defence).
+///
+/// Note: the bound is a *read* budget, not an exact allocation cap: `Vec`
+/// growth may transiently hold up to ~2x the bound while `read_to_end`
+/// appends, so peak allocation stays below ~32 MiB per certificate exchange.
+pub const BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum bytes of brotli-compressed certificate input we are willing to
+/// feed to the decompressor before rejecting the exchange.
+pub const BORING_QUIC_MAX_COMPRESSED_CERTIFICATE_BYTES: usize = 1024 * 1024;
+
 unsafe extern "C" fn decompress_brotli_certificate(
     _ssl: *mut boring_sys::SSL,
     out: *mut *mut boring_sys::CRYPTO_BUFFER,
@@ -400,10 +417,24 @@ unsafe extern "C" fn decompress_brotli_certificate(
     input: *const u8,
     input_len: usize,
 ) -> c_int {
+    if uncompressed_len > BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES {
+        return 0;
+    }
+    if input_len > BORING_QUIC_MAX_COMPRESSED_CERTIFICATE_BYTES {
+        return 0;
+    }
     let compressed = unsafe { std::slice::from_raw_parts(input, input_len) };
-    let mut decompressed = Vec::with_capacity(uncompressed_len);
+    let mut decompressed =
+        Vec::with_capacity(uncompressed_len.min(BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES));
     let mut decoder = brotli::Decompressor::new(compressed, 4096);
-    if decoder.read_to_end(&mut decompressed).is_err() || decompressed.len() != uncompressed_len {
+    let decoded = decoder
+        .by_ref()
+        .take(BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES as u64 + 1)
+        .read_to_end(&mut decompressed);
+    if decoded.is_err()
+        || decompressed.len() > BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES
+        || decompressed.len() != uncompressed_len
+    {
         return 0;
     }
     let buffer = unsafe {
@@ -443,6 +474,7 @@ fn validate_alpn(alpn: &[Vec<u8>]) -> Result<(), OutboundError> {
 #[cfg(test)]
 mod tests {
     use foreign_types::ForeignTypeRef;
+    use std::io::Write;
 
     use super::*;
 
@@ -518,6 +550,79 @@ mod tests {
                 require_webpki: false,
             }
         ));
+    }
+
+    #[test]
+    fn brotli_certificate_decompression_rejects_declared_length_beyond_the_cap() {
+        // uncompressed_len is peer-controlled; it must be rejected before any
+        // decompression work happens (zip-bomb defence).
+        let result = unsafe {
+            decompress_brotli_certificate(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES + 1,
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn brotli_certificate_decompression_rejects_expansion_beyond_the_cap() {
+        // A stream that decompresses beyond the cap must fail even when the
+        // declared length lies within it. 20 MiB of zeros compresses to a few
+        // KB, so this is a true decompression bomb.
+        let plaintext = vec![0_u8; 20 * 1024 * 1024];
+        let mut compressed = Vec::new();
+        {
+            let mut writer = brotli::CompressorWriter::new(&mut compressed, 4096, 5, 22);
+            std::io::Write::write_all(&mut writer, &plaintext).unwrap();
+            writer.flush().unwrap();
+        }
+        assert!(
+            compressed.len() < 64 * 1024,
+            "fixture should be a real bomb"
+        );
+
+        let mut out: *mut boring_sys::CRYPTO_BUFFER = std::ptr::null_mut();
+        let result = unsafe {
+            decompress_brotli_certificate(
+                std::ptr::null_mut(),
+                &mut out,
+                BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES,
+                compressed.as_ptr(),
+                compressed.len(),
+            )
+        };
+        // The decompressor must stop at the cap instead of expanding to the
+        // full 20 MiB, and the length mismatch must fail the exchange.
+        assert_eq!(result, 0);
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn brotli_certificate_decompression_rejects_mismatched_length() {
+        // Decompressed length must equal the peer-declared length.
+        let plaintext = b"hello cert chain";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = brotli::CompressorWriter::new(&mut compressed, 4096, 5, 22);
+            std::io::Write::write_all(&mut writer, plaintext).unwrap();
+            writer.flush().unwrap();
+        }
+        let mut out: *mut boring_sys::CRYPTO_BUFFER = std::ptr::null_mut();
+        let result = unsafe {
+            decompress_brotli_certificate(
+                std::ptr::null_mut(),
+                &mut out,
+                plaintext.len() + 1, // lies about the length
+                compressed.as_ptr(),
+                compressed.len(),
+            )
+        };
+        assert_eq!(result, 0);
+        assert!(out.is_null());
     }
 
     #[test]

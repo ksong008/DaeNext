@@ -207,7 +207,8 @@ pub(crate) async fn http_proxy_connect_async(
     options.transport.enabled = transport;
     options.host_override = transport_host.to_owned();
     options.transport.path = transport_path.to_owned();
-    let request = http_request::connect_request(&options);
+    let request = http_request::connect_request(&options)
+        .map_err(|err| format!("build HTTPS proxy CONNECT request: {err}"))?;
     stream
         .write_plain_all(&request, "write HTTPS proxy CONNECT request")
         .await?;
