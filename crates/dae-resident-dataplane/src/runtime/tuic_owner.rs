@@ -456,7 +456,13 @@ impl TuicAssociationManager {
             return Err("TUIC association manager is closed".to_owned());
         }
         let now = Instant::now();
-        let mut state = self.state.lock().unwrap();
+        // Poisoned locks are recovered via into_inner: the critical section
+        // below is pure state access, so a single panic must not permanently
+        // wedge the association manager.
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.purge_quarantine(&mut state, now);
         if state.sessions.len() >= self.resources.udp_association_limit() {
             self.metrics
@@ -501,7 +507,10 @@ impl TuicAssociationManager {
         let bytes = packet.payload().len();
         let now = Instant::now();
         let queue = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             self.purge_quarantine(&mut state, now);
             let Some(queue) = state.sessions.get(&association_id) else {
                 if state.quarantine.contains_key(&association_id) {
@@ -561,7 +570,10 @@ impl TuicAssociationManager {
     fn remove_association(&self, association_id: u16) {
         let now = Instant::now();
         let removed = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             self.purge_quarantine(&mut state, now);
             let removed = state.sessions.remove(&association_id).is_some();
             if removed {
@@ -625,7 +637,11 @@ impl TuicAssociationManager {
     }
 
     fn active_associations(&self) -> usize {
-        self.state.lock().unwrap().sessions.len()
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .sessions
+            .len()
     }
 
     fn is_closed(&self) -> bool {
@@ -637,7 +653,10 @@ impl TuicAssociationManager {
             return;
         }
         let (sessions, quarantine) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let sessions = state.sessions.len();
             let quarantine = state.quarantine.len();
             state.sessions.clear();
@@ -914,7 +933,10 @@ impl TuicOwnerRegistryHandle {
             ));
         }
         let cell = {
-            let mut index = self.index.lock().unwrap();
+            let mut index = self
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if index.draining {
                 return Err("TUIC owner registry is draining".to_owned());
             }
@@ -989,7 +1011,10 @@ impl TuicOwnerRegistryHandle {
     }
 
     pub(crate) fn metrics_snapshot(&self) -> Value {
-        let index = self.index.lock().unwrap();
+        let index = self
+            .index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         json!({
             "schemaVersion": 1,
             "owner": "resident-tuic-owner-registry",
@@ -1304,7 +1329,9 @@ async fn run_tuic_owner_registry(
     cancellation.cancel(dae_runtime_control::OwnerCancellation::GenerationDraining);
     receiver.close();
     let cells = {
-        let mut index = index.lock().unwrap();
+        let mut index = index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         index.draining = true;
         let cells = index.cells.values().cloned().collect::<Vec<_>>();
         index.cells.clear();
@@ -1353,7 +1380,9 @@ async fn retire_tuic_owner(
         return;
     };
     {
-        let mut index = index.lock().unwrap();
+        let mut index = index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if index
             .cells
             .get(&key)
@@ -1743,20 +1772,26 @@ mod tests {
         metrics.owner_opened();
         let index = Arc::new(Mutex::new(TuicOwnerIndex::new()));
         let cell = Arc::new(TuicOwnerCell::new());
-        index.lock().unwrap().cells.insert(
-            TuicOwnerKey {
-                generation: OwnerGeneration::new(70),
-                digest: [0_u8; 32],
-            },
-            Arc::clone(&cell),
-        );
+        index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cells
+            .insert(
+                TuicOwnerKey {
+                    generation: OwnerGeneration::new(70),
+                    digest: [0_u8; 32],
+                },
+                Arc::clone(&cell),
+            );
 
         drop(TuicRegistryOwnershipReconciler::new(
             Arc::clone(&metrics),
             Arc::clone(&index),
         ));
 
-        let index = index.lock().unwrap();
+        let index = index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(index.draining);
         assert!(index.cells.is_empty());
         assert_eq!(

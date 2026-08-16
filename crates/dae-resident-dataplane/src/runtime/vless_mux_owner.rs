@@ -178,6 +178,7 @@ struct VlessMuxGenerationOwner {
     next_physical_id: AtomicU64,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum VlessMuxCarrier {
     Plain(AsyncResidentTlsClient),
     Encrypted(VlessEncryptedStream<AsyncResidentTlsClient>),
@@ -230,12 +231,24 @@ pub(crate) struct VlessMuxGenerationOwnerHandle {
 
 impl VlessMuxGenerationOwnerHandle {
     pub(crate) fn metrics_snapshot(&self) -> Value {
-        let pools = self.owner.pools.lock().unwrap();
+        // Poisoned locks are recovered via into_inner: the critical sections
+        // below are pure state access, so a single panic must not permanently
+        // wedge the mux owner.
+        let pools = self
+            .owner
+            .pools
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let physical = pools
             .values()
             .map(|pool| pool.physical.lock().map_or(0, |physical| physical.len()))
             .sum::<usize>();
-        let registered_build_tasks = self.owner.builds.lock().unwrap().len();
+        let registered_build_tasks = self
+            .owner
+            .builds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len();
         let owner_state_bytes_lower_bound = pools
             .len()
             .saturating_mul(

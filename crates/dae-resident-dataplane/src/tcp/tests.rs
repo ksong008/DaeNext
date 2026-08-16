@@ -631,9 +631,11 @@ fn resident_vless_response_stripper_borrows_payload_after_coalesced_header() {
 #[tokio::test]
 async fn resident_anytls_reused_frame_buffer_keeps_back_to_back_boundaries() {
     let first =
-        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 7, b"first");
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 7, b"first")
+            .unwrap();
     let second =
-        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 9, b"second");
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 9, b"second")
+            .unwrap();
     let (mut writer, mut reader) = tokio::io::duplex(first.len() + second.len() + 1);
     writer.write_all(&first).await.unwrap();
     writer.write_all(&second).await.unwrap();
@@ -651,12 +653,14 @@ async fn resident_anytls_reused_frame_buffer_keeps_back_to_back_boundaries() {
 
 #[tokio::test]
 async fn resident_anytls_frame_reader_keeps_idle_control_after_active_fin() {
-    let fin = dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_FIN, 7, &[]);
+    let fin =
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_FIN, 7, &[]).unwrap();
     let heartbeat = dae_outbound::anytls::link::frame(
         dae_outbound::anytls::contract::CMD_HEART_REQUEST,
         0,
         &[],
-    );
+    )
+    .unwrap();
     let (mut writer, mut reader) = tokio::io::duplex(fin.len() + heartbeat.len() + 1);
     writer.write_all(&fin).await.unwrap();
     writer.write_all(&heartbeat).await.unwrap();
@@ -684,9 +688,11 @@ async fn resident_anytls_frame_reader_handles_split_header_payload_and_next_fram
         dae_outbound::anytls::contract::CMD_PSH,
         11,
         b"payload split across reads",
-    );
+    )
+    .unwrap();
     let second =
-        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_FIN, 11, &[]);
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_FIN, 11, &[])
+            .unwrap();
     let mut wire = first.clone();
     wire.extend_from_slice(&second);
     let mut reader = ChunkedAsyncRead::new(wire, 2);
@@ -715,7 +721,8 @@ async fn resident_anytls_frame_reader_rejects_truncated_header_and_payload() {
     );
 
     let mut truncated =
-        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 3, b"payload");
+        dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 3, b"payload")
+            .unwrap();
     truncated.pop();
     let mut reader = ChunkedAsyncRead::new(truncated, 3);
     let mut frames = AnyTlsFrameReader::default();

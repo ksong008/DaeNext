@@ -368,18 +368,38 @@ const NETWORK_WAIT_LINKS: &[&str] = &[
 const NETWORK_WAIT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const NETWORK_WAIT_RETRY_DELAY: Duration = Duration::from_secs(5);
 
+/// Resolve a probe host with a hard deadline.
+///
+/// Delegates to the shared bounded resolver in `service_contract`, which runs
+/// a single process-lifetime resolver thread: `ToSocketAddrs` (getaddrinfo)
+/// has no built-in timeout and can block far longer than the connect timeout
+/// on a stalled resolver.  A per-call detached thread would be leaked on
+/// timeout; the shared resolver queues stuck resolutions instead and never
+/// leaks threads.  The caller gives up after the deadline and fails the
+/// probe, which is correct since the network is not usable.
+fn resolve_probe_addresses(host: &str, port: u16) -> Vec<std::net::SocketAddr> {
+    crate::service_contract::resolve_probe_addresses_bounded(host, port)
+}
+
 /// Match legacy's pre-subscription network gate without coupling it to the
 /// resident dataplane.  Startup waits until one of the captive-portal probes
-/// returns an HTTP status below 500; `DAED_NETWORK_WAIT_MAX_ATTEMPTS` is an
-/// intentionally explicit diagnostic escape hatch (zero/unset means keep
-/// waiting, as legacy does).
+/// returns an HTTP status below 500.  The retry budget is bounded by default
+/// (60 probe attempts, one every `NETWORK_WAIT_RETRY_DELAY` plus probe time)
+/// so an unreachable network fails the reload with a clear error instead of
+/// permanently occupying the HTTP worker thread; `DAED_NETWORK_WAIT_MAX_ATTEMPTS`
+/// overrides the budget and an explicit 0 opts back into the legacy unbounded
+/// behavior.
 fn wait_for_network_before_subscriptions(config: &Config) -> Result<(), String> {
-    use std::net::ToSocketAddrs;
-
+    // A probe that already succeeded for this process is authoritative:
+    // re-probing here would only re-block the HTTP worker on a network that
+    // was reachable.
+    if crate::service_contract::network_ready_cached() {
+        return Ok(());
+    }
     let max_attempts = std::env::var("DAED_NETWORK_WAIT_MAX_ATTEMPTS")
         .ok()
         .and_then(|value| value.trim().parse::<u32>().ok())
-        .unwrap_or(0);
+        .unwrap_or(60);
     let mut attempts = 0_u32;
     loop {
         attempts = attempts.saturating_add(1);
@@ -391,15 +411,17 @@ fn wait_for_network_before_subscriptions(config: &Config) -> Result<(), String> 
                 continue;
             };
             let port = url.port_or_known_default().unwrap_or(80);
-            let Ok(addresses) = (host, port).to_socket_addrs() else {
-                continue;
-            };
+            let addresses = resolve_probe_addresses(host, port);
             for address in addresses {
                 let Ok(mut stream) =
                     TcpStream::connect_timeout(&address, NETWORK_WAIT_CONNECT_TIMEOUT)
                 else {
                     continue;
                 };
+                // Bound the whole probe: a peer that accepts the connection
+                // but never responds must not wedge the HTTP worker thread.
+                let _ = stream.set_read_timeout(Some(NETWORK_WAIT_CONNECT_TIMEOUT));
+                let _ = stream.set_write_timeout(Some(NETWORK_WAIT_CONNECT_TIMEOUT));
                 let request = format!(
                     "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
                     url.path(),
@@ -419,13 +441,14 @@ fn wait_for_network_before_subscriptions(config: &Config) -> Result<(), String> 
                     .and_then(|status| status.parse::<u16>().ok())
                     .is_some_and(|status| (200..500).contains(&status));
                 if status_ok {
+                    crate::service_contract::mark_network_ready();
                     return Ok(());
                 }
             }
         }
         if max_attempts != 0 && attempts >= max_attempts {
             return Err(format!(
-                "network did not become ready after {attempts} probe attempts"
+                "network did not become ready after {attempts} probe attempts (max_attempts={max_attempts})"
             ));
         }
         thread::sleep(NETWORK_WAIT_RETRY_DELAY);

@@ -87,20 +87,34 @@ pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String
         return Err(io::Error::last_os_error().to_string());
     }
 
+    wait_for_reload_progress(&options.progress_file, options.timeout)
+}
+
+fn wait_for_reload_progress(
+    progress_file: &Path,
+    timeout: Option<Duration>,
+) -> Result<String, String> {
     let started = Instant::now();
+    let mut last_read_error: Option<String> = None;
     loop {
-        if options
-            .timeout
-            .is_some_and(|timeout| started.elapsed() >= timeout)
-        {
-            return Err("reload progress timed out".to_owned());
+        if timeout.is_some_and(|timeout| started.elapsed() >= timeout) {
+            return match last_read_error {
+                Some(err) => Err(format!("reload progress timed out: {err}")),
+                None => Err("reload progress timed out".to_owned()),
+            };
         }
         thread::sleep(Duration::from_millis(200));
-        let Ok((code, content)) = read_progress(&options.progress_file) else {
-            return Ok("OK\n".to_owned());
-        };
-        if code == RELOAD_DONE || code == RELOAD_ERROR {
-            return Ok(format!("{content}\n"));
+        match read_progress(progress_file) {
+            Ok((code, content)) => {
+                if code == RELOAD_DONE || code == RELOAD_ERROR {
+                    return Ok(format!("{content}\n"));
+                }
+            }
+            // A transient read failure (e.g. the daemon atomically replacing
+            // the file) must never be reported as success. Keep polling
+            // until the overall timeout and surface the last error with
+            // context instead of pretending the reload completed.
+            Err(err) => last_read_error = Some(err),
         }
     }
 }
@@ -369,4 +383,98 @@ pub(super) fn wait_service_signal() -> Result<i32, String> {
         }
     }
     Ok(received)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wait_for_reload_progress;
+    use dae_core_types::reload::{RELOAD_DONE, RELOAD_ERROR, RELOAD_PROCESSING};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    fn test_root() -> PathBuf {
+        // Unique per call: tests run in parallel and each one removes its
+        // own tree, so a shared path would race between tests.
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "dae-daemon-reload-progress-test-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn reload_progress_read_failure_times_out_with_context_instead_of_ok() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        // A directory cannot be read as a progress file, so every read
+        // attempt fails. This must surface as an error with context, not as
+        // a fake "OK\n" success.
+        let progress_dir = root.join("progress-as-directory");
+        fs::create_dir_all(&progress_dir).unwrap();
+        let err =
+            wait_for_reload_progress(&progress_dir, Some(Duration::from_millis(50))).unwrap_err();
+        assert!(err.contains("reload progress timed out"), "err: {err}");
+        assert!(err.contains("failed to read"), "err: {err}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reload_progress_recovers_from_transient_read_failure() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        // The daemon replaces the progress file; early reads fail while it
+        // is not yet in place. The poller must keep waiting instead of
+        // aborting or reporting success.
+        let progress_file = root.join("progress.late");
+        let writer_file = progress_file.clone();
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            fs::write(&writer_file, [RELOAD_DONE, b'\n', b'O', b'K']).unwrap();
+        });
+        let result =
+            wait_for_reload_progress(&progress_file, Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(result, "OK\n");
+        writer.join().unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reload_progress_returns_done_or_error_content() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        let done_file = root.join("progress.done");
+        fs::write(&done_file, [RELOAD_DONE, b'\n', b'O', b'K']).unwrap();
+        assert_eq!(
+            wait_for_reload_progress(&done_file, Some(Duration::from_secs(2))).unwrap(),
+            "OK\n"
+        );
+        let error_file = root.join("progress.error");
+        let mut error_bytes = vec![RELOAD_ERROR, b'\n'];
+        error_bytes.extend_from_slice(b"boom");
+        fs::write(&error_file, error_bytes).unwrap();
+        assert_eq!(
+            wait_for_reload_progress(&error_file, Some(Duration::from_secs(2))).unwrap(),
+            "boom\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reload_progress_times_out_while_still_processing() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        let progress_file = root.join("progress.processing");
+        fs::write(&progress_file, [RELOAD_PROCESSING, b'\n']).unwrap();
+        let err =
+            wait_for_reload_progress(&progress_file, Some(Duration::from_millis(50))).unwrap_err();
+        assert!(err.contains("reload progress timed out"), "err: {err}");
+        // Reads succeeded here, so the timeout error must not carry a
+        // read-failure context.
+        assert!(!err.contains("failed to read"), "err: {err}");
+        let _ = fs::remove_dir_all(&root);
+    }
 }

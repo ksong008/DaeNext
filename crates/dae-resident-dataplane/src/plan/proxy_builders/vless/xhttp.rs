@@ -10,6 +10,21 @@ use self::parsing::{
 use self::quic_tls::validate_resident_xhttp_reality_http_version;
 use self::settings::resident_xhttp_settings_and_xmux_plan;
 
+type ResidentXhttpDownloadTlsSettings = (
+    String,
+    Vec<String>,
+    bool,
+    Option<ResidentUtlsFingerprintPlan>,
+    Option<ResidentEchPlan>,
+);
+type ResidentXhttpDownloadRealitySettings = (
+    String,
+    Vec<String>,
+    bool,
+    Option<ResidentUtlsFingerprintPlan>,
+    Option<ResidentRealityUnderlayPlan>,
+);
+
 #[derive(Default)]
 pub(super) struct ResidentXhttpExtraPlan {
     pub(super) download: Option<ResidentXhttpEndpointPlan>,
@@ -235,16 +250,7 @@ fn resident_xhttp_download_tls_settings(
     primary_server_name: &str,
     global_allow_insecure: bool,
     node_tag: &str,
-) -> Result<
-    (
-        String,
-        Vec<String>,
-        bool,
-        Option<ResidentUtlsFingerprintPlan>,
-        Option<ResidentEchPlan>,
-    ),
-    String,
-> {
+) -> Result<ResidentXhttpDownloadTlsSettings, String> {
     let Some(tls_settings) = tls_settings else {
         return Ok((
             if primary_server_name.is_empty() {
@@ -330,16 +336,7 @@ fn resident_xhttp_download_reality_settings(
     primary_fingerprint: Option<&ResidentUtlsFingerprintPlan>,
     global_allow_insecure: bool,
     node_tag: &str,
-) -> Result<
-    (
-        String,
-        Vec<String>,
-        bool,
-        Option<ResidentUtlsFingerprintPlan>,
-        Option<ResidentRealityUnderlayPlan>,
-    ),
-    String,
-> {
+) -> Result<ResidentXhttpDownloadRealitySettings, String> {
     let Some(reality_settings) = reality_settings else {
         let Some(primary_reality) = primary_reality else {
             return Err(format!(

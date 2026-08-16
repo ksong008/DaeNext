@@ -268,6 +268,7 @@ pub(super) fn dns_upstream_targets_failed(
 /// candidates. The attempt closure is reused so its request context/deadline
 /// remains unchanged; transport implementations enforce the original absolute
 /// deadline through that context.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn race_dns_upstream_targets_with_refresh<F, Fut, R, RFut>(
     upstream: &ResidentDnsUpstream,
     _resolved: &ResidentDnsResolvedTargetSnapshot,

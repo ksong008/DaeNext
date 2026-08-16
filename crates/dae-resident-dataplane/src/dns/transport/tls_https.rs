@@ -21,6 +21,7 @@ mod proxy;
 use self::proxy::{forward_dns_https_to_proxy_async, forward_dns_tls_to_proxy_async};
 
 const DNS_HTTPS_H2_RETRY_COOLDOWN: std::time::Duration = RESIDENT_UDP_RESPONSE_TIMEOUT;
+type ResidentDnsTlsContextCache = Mutex<BTreeMap<(SystemCaIdentity, String), Arc<SslContext>>>;
 
 pub(super) async fn forward_dns_tls_async(
     upstream: &ResidentDnsUpstream,
@@ -247,8 +248,7 @@ pub(super) async fn open_dns_boring_tls_stream_async(
 }
 
 fn resident_dns_boring_context(alpn: &[&str]) -> Result<Arc<SslContext>, String> {
-    static CACHE: OnceLock<Mutex<BTreeMap<(SystemCaIdentity, String), Arc<SslContext>>>> =
-        OnceLock::new();
+    static CACHE: OnceLock<ResidentDnsTlsContextCache> = OnceLock::new();
     let snapshot =
         system_ca_snapshot().map_err(|err| format!("load DNS system CA bundle: {err}"))?;
     let key = (snapshot.identity().clone(), alpn.join("\0"));

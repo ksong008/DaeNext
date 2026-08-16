@@ -1,9 +1,13 @@
 use std::io::{self, Read};
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+
+const HOST_COMMAND_STREAM_LIMIT: usize = 1024 * 1024;
+const HOST_COMMAND_TRUNCATED_SUFFIX: &[u8] = b"\n...[output truncated]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HostOpKind {
@@ -251,12 +255,13 @@ impl HostOps {
 }
 
 fn run_output_with_timeout(spec: &HostOpSpec, timeout: Duration) -> HostCommandOutput {
-    let mut child = match Command::new(spec.program())
+    let mut command = Command::new(spec.program());
+    command
         .args(spec.args())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-    {
+        .process_group(0);
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
             return HostCommandOutput {
@@ -265,53 +270,124 @@ fn run_output_with_timeout(spec: &HostOpSpec, timeout: Duration) -> HostCommandO
             };
         }
     };
+
+    // Drain both pipes on dedicated threads while the child runs. Without a
+    // concurrent reader, a child that writes more than the pipe capacity
+    // (64 KiB on Linux) before exiting would block on write forever, be
+    // misreported as a timeout, and lose its output.
+    let stdout_reader = match spawn_pipe_reader("stdout", child.stdout.take()) {
+        Ok(reader) => reader,
+        Err(err) => {
+            let _ = terminate_child_process_group(&mut child);
+            return HostCommandOutput {
+                output: Err(err),
+                timed_out: false,
+            };
+        }
+    };
+    let stderr_reader = match spawn_pipe_reader("stderr", child.stderr.take()) {
+        Ok(reader) => reader,
+        Err(err) => {
+            let _ = terminate_child_process_group(&mut child);
+            let _ = stdout_reader.join();
+            return HostCommandOutput {
+                output: Err(err),
+                timed_out: false,
+            };
+        }
+    };
+
     let started = Instant::now();
-    loop {
+    let mut timed_out = false;
+    let wait_result = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                return HostCommandOutput {
-                    output: collect_child_output(child, status),
-                    timed_out: false,
-                };
-            }
+            Ok(Some(status)) => break Ok(status),
             Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = thread::spawn(move || {
-                    let _ = child.wait();
-                });
-                return HostCommandOutput {
-                    output: Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("command timed out after {} ms", duration_millis(timeout)),
-                    )),
-                    timed_out: true,
-                };
+                timed_out = true;
+                // The child is the leader of its own process group. Killing
+                // the group also terminates descendants that inherited the
+                // output pipes; otherwise joining the pipe readers below can
+                // block until an unrelated grandchild finally exits.
+                break terminate_child_process_group(&mut child);
             }
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(err) => {
-                return HostCommandOutput {
-                    output: Err(err),
-                    timed_out: false,
-                };
+                // try_wait failed (e.g. ECHILD). Kill and reap to close the
+                // pipes so the reader threads can finish before we join them.
+                let _ = terminate_child_process_group(&mut child);
+                break Err(err);
+            }
+        }
+    };
+
+    // Joining on every path (normal exit, timeout, or error) prevents
+    // leaking the reader threads.
+    let stdout = join_pipe_reader(stdout_reader, "stdout");
+    let stderr = join_pipe_reader(stderr_reader, "stderr");
+
+    let output = match (wait_result, stdout, stderr) {
+        (Ok(status), Ok(stdout), Ok(stderr)) => Ok(Output {
+            status,
+            stdout,
+            stderr,
+        }),
+        (_, Err(err), _) | (_, _, Err(err)) => Err(err),
+        (Err(err), _, _) => Err(err),
+    };
+    HostCommandOutput { output, timed_out }
+}
+
+fn terminate_child_process_group(
+    child: &mut std::process::Child,
+) -> io::Result<std::process::ExitStatus> {
+    if let Ok(pid) = i32::try_from(child.id()) {
+        let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
+    }
+    let _ = child.kill();
+    child.wait()
+}
+
+fn spawn_pipe_reader<R>(
+    stream_name: &str,
+    pipe: Option<R>,
+) -> io::Result<thread::JoinHandle<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::Builder::new()
+        .name(format!("dae-host-{stream_name}"))
+        .spawn(move || read_pipe_bounded(pipe))
+}
+
+fn read_pipe_bounded<R: Read>(pipe: Option<R>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let Some(mut pipe) = pipe else {
+        return bytes;
+    };
+    let mut chunk = [0_u8; 8192];
+    let mut truncated = false;
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let remaining = HOST_COMMAND_STREAM_LIMIT.saturating_sub(bytes.len());
+                let retained = remaining.min(read);
+                bytes.extend_from_slice(&chunk[..retained]);
+                truncated |= retained < read;
             }
         }
     }
+    if truncated {
+        bytes.truncate(HOST_COMMAND_STREAM_LIMIT - HOST_COMMAND_TRUNCATED_SUFFIX.len());
+        bytes.extend_from_slice(HOST_COMMAND_TRUNCATED_SUFFIX);
+    }
+    bytes
 }
 
-fn collect_child_output(mut child: std::process::Child, status: ExitStatus) -> io::Result<Output> {
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        pipe.read_to_end(&mut stdout)?;
-    }
-    if let Some(mut pipe) = child.stderr.take() {
-        pipe.read_to_end(&mut stderr)?;
-    }
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
-    })
+fn join_pipe_reader(reader: thread::JoinHandle<Vec<u8>>, stream_name: &str) -> io::Result<Vec<u8>> {
+    reader
+        .join()
+        .map_err(|_| io::Error::other(format!("{stream_name} reader thread panicked")))
 }
 
 fn timeout_stderr(stderr: &str, timeout_ms: u64) -> String {
@@ -337,7 +413,7 @@ fn duration_millis(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostOpKind, HostOpSpec, HostOps};
+    use super::{HOST_COMMAND_STREAM_LIMIT, HostOpKind, HostOpSpec, HostOps};
 
     #[test]
     fn classifies_host_operation_kind() {
@@ -408,5 +484,61 @@ mod tests {
         assert_eq!(value["timed_out"], true);
         assert_eq!(value["timeout_ms"], 20);
         assert!(value["stderr"].as_str().unwrap().contains("timed out"));
+    }
+
+    #[test]
+    fn command_timeout_kills_descendants_holding_output_pipes() {
+        let started = std::time::Instant::now();
+        let value = HostOps::run_command_backend_with_timeout(
+            None,
+            HostOpSpec::new("sh", ["-c", "sleep 5 & wait"]),
+            std::time::Duration::from_millis(20),
+        )
+        .to_step_json();
+
+        assert_eq!(value["timed_out"], true);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "timeout waited for a descendant to close inherited pipes"
+        );
+    }
+
+    #[test]
+    fn large_output_is_captured_without_false_timeout() {
+        // Each stream exceeds the 64 KiB pipe capacity; without concurrent
+        // pipe draining the child would block on write and be misreported
+        // as a timeout with its output lost.
+        let value = HostOps::run_command_backend_with_timeout(
+            None,
+            HostOpSpec::new(
+                "sh",
+                ["-c", "head -c 262144 /dev/zero | tr '\\0' 'A'; head -c 262144 /dev/zero | tr '\\0' 'B' >&2"],
+            ),
+            std::time::Duration::from_secs(10),
+        )
+        .to_step_json();
+
+        assert_eq!(value["status"], "pass");
+        assert_eq!(value["timed_out"], false);
+        assert_eq!(value["stdout"].as_str().unwrap().len(), 262_144);
+        assert!(value["stdout"].as_str().unwrap().chars().all(|c| c == 'A'));
+        assert_eq!(value["stderr"].as_str().unwrap().len(), 262_144);
+        assert!(value["stderr"].as_str().unwrap().chars().all(|c| c == 'B'));
+    }
+
+    #[test]
+    fn command_output_is_drained_but_retained_within_limit() {
+        let value = HostOps::run_command_backend_with_timeout(
+            None,
+            HostOpSpec::new("sh", ["-c", "head -c 2097152 /dev/zero | tr '\\0' 'A'"]),
+            std::time::Duration::from_secs(10),
+        )
+        .to_step_json();
+
+        assert_eq!(value["status"], "pass");
+        assert_eq!(value["timed_out"], false);
+        let stdout = value["stdout"].as_str().unwrap();
+        assert_eq!(stdout.len(), HOST_COMMAND_STREAM_LIMIT);
+        assert!(stdout.ends_with("\n...[output truncated]"));
     }
 }

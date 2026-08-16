@@ -293,5 +293,17 @@ pub(super) fn duration_nanos_to_millis(nanos: i64) -> i64 {
     if nanos <= 0 {
         return 0;
     }
-    (nanos + 999_999) / 1_000_000
+    nanos / 1_000_000 + i64::from(nanos % 1_000_000 != 0)
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::duration_nanos_to_millis;
+
+    #[test]
+    fn nanos_to_millis_rounds_up_without_overflow() {
+        assert_eq!(duration_nanos_to_millis(1), 1);
+        assert_eq!(duration_nanos_to_millis(1_000_000), 1);
+        assert_eq!(duration_nanos_to_millis(i64::MAX), i64::MAX / 1_000_000 + 1);
+    }
 }

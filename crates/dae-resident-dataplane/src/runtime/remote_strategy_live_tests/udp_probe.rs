@@ -172,12 +172,12 @@ pub fn resident_live_adapter_udp_probe(
     if let Some((_, thread)) = anytls_owner_runtime {
         let _ = thread.join();
     }
-    if let Some((_, task)) = h2_carrier_runtime {
-        if let Ok(runtime) = &probe_runtime {
-            runtime.block_on(async {
-                let _ = task.await;
-            });
-        }
+    if let Some((_, task)) = h2_carrier_runtime
+        && let Ok(runtime) = &probe_runtime
+    {
+        runtime.block_on(async {
+            let _ = task.await;
+        });
     }
     let pass_count = rows
         .iter()

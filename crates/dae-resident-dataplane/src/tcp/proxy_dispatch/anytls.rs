@@ -243,7 +243,7 @@ impl AnyTlsFrameReader {
             } else {
                 ANYTLS_FRAME_READ_CHUNK_SIZE
             };
-            let read_limit = needed.min(ANYTLS_FRAME_READ_CHUNK_SIZE).max(1);
+            let read_limit = needed.clamp(1, ANYTLS_FRAME_READ_CHUNK_SIZE);
             self.buffered.reserve(read_limit);
             let mut limited = client.take(read_limit as u64);
             let read = time::timeout(

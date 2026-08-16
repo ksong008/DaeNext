@@ -684,7 +684,10 @@ mod tests {
                     Duration::from_millis(5)
                 };
                 tokio::time::sleep(delay).await;
-                completion_order.lock().unwrap().push(candidate);
+                completion_order
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(candidate);
                 active.fetch_sub(1, Ordering::Relaxed);
                 HealthCheckRoundStatus::Completed
             }
@@ -693,7 +696,12 @@ mod tests {
 
         assert_eq!(status, HealthCheckRoundStatus::Completed);
         assert_eq!(maximum_active.load(Ordering::Relaxed), 2);
-        assert_eq!(*completion_order.lock().unwrap(), vec![1, 2, 0]);
+        assert_eq!(
+            *completion_order
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![1, 2, 0]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

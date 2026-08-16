@@ -121,6 +121,61 @@ fn udp_generation_pin_is_fixed_by_peer_and_original_destination_until_expiry() {
 }
 
 #[test]
+fn udp_generation_pins_are_capped_and_evict_the_earliest_expiry() {
+    let now = Instant::now();
+    let mut pins = HashMap::new();
+    for index in 0..UDP_GENERATION_PIN_MAX_ENTRIES {
+        let key = UdpGenerationPinKey {
+            peer: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000 + index as u16),
+            original_dst: SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443),
+        };
+        pins.insert(
+            key,
+            UdpGenerationPin {
+                generation: 7,
+                // Earlier entries expire first: entry 0 is the most idle.
+                expires_at: now + Duration::from_secs((index + 1) as u64),
+                route: None,
+            },
+        );
+    }
+    assert_eq!(pins.len(), UDP_GENERATION_PIN_MAX_ENTRIES);
+
+    // A new tuple at the cap must evict the pin with the earliest expiry
+    // instead of growing the map without bound.
+    let newest_key = UdpGenerationPinKey {
+        peer: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 59000),
+        original_dst: SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443),
+    };
+    let newest = UdpGenerationPin {
+        generation: 7,
+        expires_at: now + Duration::from_secs(10_000),
+        route: None,
+    };
+    if pins.len() >= UDP_GENERATION_PIN_MAX_ENTRIES {
+        evict_oldest_udp_generation_pin(&mut pins);
+    }
+    pins.insert(newest_key, newest);
+
+    assert_eq!(pins.len(), UDP_GENERATION_PIN_MAX_ENTRIES);
+    // The evicted pin was the one expiring first.
+    let first_key = UdpGenerationPinKey {
+        peer: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000),
+        original_dst: SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443),
+    };
+    assert!(
+        !pins.contains_key(&first_key),
+        "oldest-expiring pin evicted"
+    );
+    // The newest pin survived.
+    assert!(pins.contains_key(&newest_key));
+    // All remaining pins are still the ones with the latest expiries.
+    let mut expiries = pins.values().map(|pin| pin.expires_at).collect::<Vec<_>>();
+    expiries.sort();
+    assert!(expiries.windows(2).all(|pair| pair[0] <= pair[1]));
+}
+
+#[test]
 fn resident_dns_pin_follows_the_active_generation_after_reload() {
     let key = UdpGenerationPinKey {
         peer: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000),

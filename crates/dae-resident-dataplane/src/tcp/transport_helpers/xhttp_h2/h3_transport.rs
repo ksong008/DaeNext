@@ -155,6 +155,7 @@ pub(super) async fn open_xhttp_h3_endpoint_client(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn open_xhttp_h3_connection(
     proxy: &ResidentProxyPlan,
     generation: OwnerGeneration,

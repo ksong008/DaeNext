@@ -16,7 +16,8 @@ use super::{
 
 mod control;
 
-use self::control::{deadline_after, send_command_until};
+#[cfg(test)]
+use self::control::deadline_after;
 
 const RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -76,10 +77,17 @@ impl ResidentEventWriterRuntime {
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
             let exit = match catch_unwind(AssertUnwindSafe(|| {
-                run_event_writer(thread_inner, receiver)
+                run_event_writer(Arc::clone(&thread_inner), receiver)
             })) {
                 Ok(()) => ResidentEventWriterExit::Completed,
-                Err(_) => ResidentEventWriterExit::Panicked,
+                Err(_) => {
+                    thread_inner.metrics.record_error(
+                        "resident event writer thread panicked; active writer cleared; \
+                         events fall back to direct sink dispatch",
+                    );
+                    clear_active_resident_event_writer(&thread_inner);
+                    ResidentEventWriterExit::Panicked
+                }
             };
             let _ = completion_tx.send(exit);
         });
@@ -100,10 +108,14 @@ impl ResidentEventWriterRuntime {
         self.handle.clone()
     }
 
+    /// Clears the resident event log; documented no-op in dispatch-only mode
+    /// (see [`ResidentEventWriterHandle::clear`]).
     pub(crate) fn clear(&self) -> std::io::Result<()> {
         self.handle.clear()
     }
 
+    /// Prunes the resident event log; documented no-op in dispatch-only mode
+    /// (see [`ResidentEventWriterHandle::prune`]).
     pub(crate) fn prune(&self) -> std::io::Result<()> {
         self.handle.prune()
     }
@@ -114,7 +126,7 @@ impl ResidentEventWriterRuntime {
     }
 
     pub(crate) fn shutdown_until(&mut self, deadline: Instant) -> Value {
-        clear_active_resident_event_writer(&self.handle.inner.path);
+        clear_active_resident_event_writer(&self.handle.inner);
         if self.thread.is_none() {
             return json!({
                 "schemaVersion": 1,
@@ -192,41 +204,53 @@ impl ResidentEventWriterHandle {
         self.inner.metrics.snapshot()
     }
 
+    /// Requests a clear of the resident event log.
+    ///
+    /// Resident events are dispatch-only: the module retains no log file or
+    /// buffer, so this is a documented no-op that reports success. Retention
+    /// limits are enforced by the sink consumer (daemon product log).
     pub(crate) fn clear(&self) -> std::io::Result<()> {
         self.control(ResidentEventWriterCommand::Clear)
     }
 
+    /// Requests a prune of the resident event log.
+    ///
+    /// Resident events are dispatch-only: the module retains no log file or
+    /// buffer, so this is a documented no-op that reports success. Retention
+    /// limits are enforced by the sink consumer (daemon product log).
     pub(crate) fn prune(&self) -> std::io::Result<()> {
         self.control(ResidentEventWriterCommand::Prune)
     }
 }
 
+/// Enqueues an event without ever blocking the caller.
+///
+/// The caller is on an async hot path (accept loop / health scheduler / dns /
+/// udp). Submission is a single `try_send`: on a full or disconnected queue the
+/// event is dropped immediately and counted in the dropped metrics. Critical
+/// lifecycle events (Startup/Reload/Fatal) additionally surface their loss in
+/// the writer error metrics so operators can observe a missed critical event.
+/// Blocking delivery semantics survive only on the control plane
+/// (`control_until` / `send_command_until`), which runs off the async hot path.
 fn submit_event(inner: &ResidentEventWriterInner, event: ResidentEvent) {
     let class = event.class();
-    let block_on_full_queue = event.block_on_full_queue();
+    let critical = event.is_critical();
     inner.metrics.command_enqueued();
     match inner
         .sender
         .try_send(ResidentEventWriterCommand::Event(event))
     {
         Ok(()) => {}
-        Err(TrySendError::Full(ResidentEventWriterCommand::Event(event)))
-            if block_on_full_queue =>
-        {
-            if let Err(err) = send_command_until(
-                &inner.sender,
-                ResidentEventWriterCommand::Event(event),
-                deadline_after(RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT),
-            ) {
-                inner.metrics.command_rejected();
-                inner
-                    .metrics
-                    .record_error(format!("send resident event: {err}"));
-            }
-        }
         Err(TrySendError::Full(ResidentEventWriterCommand::Event(_))) => {
             inner.metrics.command_rejected();
             inner.metrics.dropped(class);
+            if critical {
+                inner.metrics.record_error(format!(
+                    "dropped critical resident event ({}); writer queue full — \
+                     submission is non-blocking on the async hot path",
+                    class.as_str()
+                ));
+            }
         }
         Err(TrySendError::Disconnected(ResidentEventWriterCommand::Event(_))) => {
             inner.metrics.command_rejected();
@@ -277,12 +301,18 @@ fn set_active_resident_event_writer(writer: Option<&ResidentEventWriterHandle>) 
         .store(writer.map(|writer| Arc::clone(&writer.inner)));
 }
 
-fn clear_active_resident_event_writer(path: &Path) {
+fn clear_active_resident_event_writer(writer: &Arc<ResidentEventWriterInner>) {
     let Some(slot) = ACTIVE_EVENT_WRITER.get() else {
         return;
     };
     let active = slot.load();
-    if active.as_ref().is_some_and(|writer| writer.path == path) {
+    // Identity, not path: a replacement writer on the same path must not be
+    // cleared by the old writer's thread exiting (panic or shutdown).  Only
+    // the exact instance that is currently active is removed.
+    if active
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, writer))
+    {
         slot.store(None);
     }
 }

@@ -217,7 +217,7 @@ pub fn parse_message(packet: &[u8]) -> Result<DnsMessage, DnsError> {
     let ancount = read_u16(packet, 6)? as usize;
     let mut offset = 12;
 
-    let mut questions = Vec::with_capacity(qdcount);
+    let mut questions = Vec::with_capacity(qdcount.min((packet.len() - 12) / 5));
     for _ in 0..qdcount {
         let (qname, next) = read_name(packet, offset, 0)?;
         offset = next;
@@ -227,7 +227,7 @@ pub fn parse_message(packet: &[u8]) -> Result<DnsMessage, DnsError> {
         questions.push(DnsQuestion::new(qname, qtype, qclass));
     }
 
-    let mut answers = Vec::with_capacity(ancount);
+    let mut answers = Vec::with_capacity(ancount.min(packet.len().saturating_sub(offset) / 11));
     for _ in 0..ancount {
         let (name, next) = read_name(packet, offset, 0)?;
         offset = next;
@@ -414,6 +414,15 @@ fn hex_nibble(ch: u8) -> Result<u8, DnsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_header_counts_do_not_drive_large_preallocation() {
+        let packet = [0, 1, 0, 0, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0];
+        assert!(matches!(
+            parse_message(&packet),
+            Err(DnsError::UnexpectedEof)
+        ));
+    }
 
     #[test]
     fn packed_response_and_validation_match_golden_fixture() {

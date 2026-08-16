@@ -186,6 +186,7 @@ fn hysteria2_endpoint_open_failure(error: QuicEndpointOpenError) -> Hysteria2Fai
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_tuic_quic_connection_candidates_async(
     binding: &ResidentProxyBinding,
     alpn: &[String],

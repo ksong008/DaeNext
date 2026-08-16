@@ -31,6 +31,13 @@ static EVENT_LOG_SINK: OnceLock<ArcSwapOption<ResidentEventLogSinkHolder>> = Onc
 static EVENT_LOG_POLICIES: OnceLock<ArcSwap<ResidentEventLogPolicies>> = OnceLock::new();
 static EVENT_LOG_APPEND_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Per-event admission decision produced by the resident event log policy.
+///
+/// `max_entries` / `max_bytes` are **advisory** retention bounds carried for
+/// the sink consumer (e.g. the daemon product log, which enforces its own
+/// limits from its configuration). The resident events module is
+/// dispatch-only: it retains no log file or buffer, so it does not hard-enforce
+/// these bounds itself.
 #[derive(Clone, Debug)]
 pub struct ResidentEventLogDecision {
     pub persist: bool,
@@ -83,6 +90,14 @@ pub fn set_event_log_policies(
         }));
 }
 
+/// No-op retained for control-plane compatibility; see
+/// [`prune_resident_event_log_file_direct`].
+///
+/// File-based persistence was removed: resident events are dispatch-only to the
+/// configured sink and the module retains no log file or buffer to clear. The
+/// only in-module state is the (informational) append counter, which is reset
+/// here. Reports success so the clear control-plane contract is preserved;
+/// actual log retention is owned by the sink consumer (daemon product log).
 fn clear_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
     let _ = path;
     EVENT_LOG_APPEND_COUNT.store(0, Ordering::Relaxed);
@@ -191,6 +206,12 @@ fn event_log_decision_from_metadata(
         .map(|prefilter| normalize_event_log_decision(prefilter(metadata)))
 }
 
+/// Normalizes a policy decision to non-degenerate values.
+///
+/// `max_entries` / `max_bytes` are advisory retention bounds (see
+/// [`ResidentEventLogDecision`]); the clamps guarantee that any consumer of a
+/// decision never observes a zero or empty bound, even if the policy function
+/// returns one.
 fn normalize_event_log_decision(
     mut decision: ResidentEventLogDecision,
 ) -> ResidentEventLogDecision {
@@ -199,11 +220,24 @@ fn normalize_event_log_decision(
     decision
 }
 
+/// No-op retained for control-plane compatibility.
+///
+/// File-based persistence was removed: resident events are dispatch-only to the
+/// configured sink and the module retains no log file or buffer to prune.
+/// Retention limits (`max_entries` / `max_bytes`) are enforced by the sink
+/// consumer (daemon product log), not by this module. Reports success so the
+/// prune control-plane contract is preserved.
 fn prune_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
     let _ = path;
     Ok(())
 }
 
+/// Dispatches a resident event to the configured sink; no file is written.
+///
+/// File persistence was replaced by sink dispatch: this counts the append and
+/// forwards the serialized event to [`dispatch_to_event_log_sink`]. The caller
+/// (writer thread or the no-writer fallback) observes
+/// [`ResidentEventPersistOutcome`] to drive the persisted/filtered metrics.
 fn persist_resident_event_direct(
     path: &Path,
     lock: &Mutex<()>,
@@ -235,7 +269,8 @@ mod tests {
 
     static EVENT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-    fn event_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    /// Serializes tests that mutate the global sink/policy singletons.
+    pub(super) fn event_test_guard() -> std::sync::MutexGuard<'static, ()> {
         EVENT_TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()

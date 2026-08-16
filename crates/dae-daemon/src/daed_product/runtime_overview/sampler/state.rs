@@ -27,6 +27,7 @@ pub(crate) struct ProductRuntimeSampleView {
 }
 
 impl ProductRuntimeSamplerState {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record(
         &mut self,
         counter_epoch: u64,

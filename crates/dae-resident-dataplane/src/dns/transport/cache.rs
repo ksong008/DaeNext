@@ -653,6 +653,35 @@ impl ResidentDnsForwarderCache {
         if self.closing.load(std::sync::atomic::Ordering::Acquire) {
             return Err("resident DNS forwarder cache is closing".to_owned());
         }
+        // Fast path: existing entry, under the lock. A hit only refreshes the
+        // LRU tick and returns the cached forwarder.
+        {
+            let mut state = cache_state
+                .lock()
+                .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
+            if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("resident DNS forwarder cache is closing".to_owned());
+            }
+            if let Some(entry) = state.entries.get(&key) {
+                let forwarder = extract(&entry.kind).ok_or_else(|| {
+                    format!("resident DNS forwarder cache kind mismatch for {kind_name}")
+                })?;
+                let last_used = next_dns_forwarder_tick(&mut state);
+                if let Some(entry) = state.entries.get_mut(&key) {
+                    entry.last_used = last_used;
+                }
+                debug_assert!(state.lru.iter().any(|(_, indexed_key)| indexed_key == &key));
+                return Ok(forwarder);
+            }
+        }
+        // Miss: build the forwarder *outside* the lock. `build` may create
+        // sockets or spawn actor tasks; holding the process-wide cache lock
+        // across it would serialize every DNS query behind the first miss.
+        let forwarder = build()?;
+        let kind = wrap(Arc::clone(&forwarder));
+        // Double-checked insertion: another thread may have inserted the same
+        // key while we were building. If so, discard our build (its owner
+        // observation releases itself on drop) and return the winner.
         let mut state = cache_state
             .lock()
             .map_err(|_| "resident DNS forwarder cache lock poisoned".to_owned())?;
@@ -674,8 +703,6 @@ impl ResidentDnsForwarderCache {
             evict_oldest_dns_forwarder(&mut state);
         }
         let last_used = next_dns_forwarder_tick(&mut state);
-        let forwarder = build()?;
-        let kind = wrap(Arc::clone(&forwarder));
         let owner_observation = kind.owner_observation();
         state.entries.insert(
             key.clone(),
@@ -904,8 +931,23 @@ fn empty_dns_forwarder_key_component() -> Arc<str> {
     Arc::clone(EMPTY.get_or_init(|| Arc::from("")))
 }
 
+/// Retired-forwarder list size at which an eviction prunes dead entries.
+///
+/// See `evict_oldest_dns_forwarder`: the list only grows on evictions and each
+/// scan is amortized over `THRESHOLD` pushes, so eviction cost stays
+/// `O(evictions / THRESHOLD * retired)` instead of `O(evictions * retired)`.
+const DNS_RETIRED_FORWARDER_RETAIN_THRESHOLD: usize = 32;
+
 fn evict_oldest_dns_forwarder(state: &mut ResidentDnsForwarderCacheState) {
-    state.retired.retain(ResidentDnsRetiredForwarder::is_alive);
+    // The retired list only holds forwarders still referenced by in-flight
+    // requests at eviction time, so it is normally tiny. Scanning it on every
+    // eviction would make the total cost O(evictions * retired); batching the
+    // `retain` until the list crosses a threshold amortizes that cost while
+    // still bounding the list (a scan runs at least once per `THRESHOLD`
+    // pushes, and dead entries cannot accumulate past that).
+    if state.retired.len() >= DNS_RETIRED_FORWARDER_RETAIN_THRESHOLD {
+        state.retired.retain(ResidentDnsRetiredForwarder::is_alive);
+    }
     while let Some((last_used, key)) = state.lru.pop_first() {
         let Some(current_last_used) = state.entries.get(&key).map(|entry| entry.last_used) else {
             continue;
@@ -1171,6 +1213,57 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(builds.get(), 1);
+    }
+
+    #[test]
+    fn concurrent_misses_share_one_inserted_forwarder() {
+        let cache = Arc::new(ResidentDnsForwarderCache::default());
+        let upstream = parse_dns_upstream(
+            0,
+            "concurrent",
+            "udp://127.0.0.1:53",
+            "127.0.0.1:53".parse().unwrap(),
+            0,
+        )
+        .unwrap();
+        let target = "127.0.0.1:53".parse().unwrap();
+        let selection = ResidentDnsUpstreamSelection::Direct { mark: 0 };
+
+        // All workers miss at the same time (barrier) so several of them build
+        // outside the lock; the double-checked insertion must still end up with
+        // exactly one entry and every caller must receive the same forwarder.
+        const WORKERS: usize = 8;
+        let barrier = Arc::new(std::sync::Barrier::new(WORKERS));
+        let handles = (0..WORKERS)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let upstream = upstream.clone();
+                let selection = selection.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    cache
+                        .udp_forwarder(&upstream, target, 0, &selection)
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let forwarders = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(
+            forwarders
+                .iter()
+                .all(|forwarder| Arc::ptr_eq(&forwarders[0], forwarder)),
+            "all concurrent callers must receive the same forwarder"
+        );
+        assert_eq!(
+            cache.len(),
+            1,
+            "double-checked insert must win exactly once"
+        );
     }
 
     #[test]

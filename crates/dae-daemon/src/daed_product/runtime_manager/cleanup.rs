@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn cleanup_runtime_instance(runtime: Option<ProductRuntimeInstance>) -> Option<Value> {
     match runtime? {
-        ProductRuntimeInstance::Resident(mut runtime) => runtime.cleanup(),
+        ProductRuntimeInstance::Resident(runtime) => runtime.cleanup(),
         ProductRuntimeInstance::Fake(fake) => Some(json!({
             "status": "pass",
             "cleanupRuntime": "fake-resident-runtime-test-only",

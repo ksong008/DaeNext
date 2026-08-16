@@ -22,6 +22,7 @@ pub(super) fn boring_vless_connector(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn boring_connector_cached(
     key: ResidentTlsClientConfigKey,
     context: &'static str,

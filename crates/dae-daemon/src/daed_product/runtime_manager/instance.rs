@@ -95,7 +95,7 @@ pub(in crate::daed_product) fn start_product_runtime_instance_with_dns_reload_sn
         "residentDataplane": state["residentDataplane"].clone(),
         "residentStartupEvidence": state["startupEvidence"].clone(),
     });
-    Ok((ProductRuntimeInstance::Resident(runtime), report))
+    Ok((ProductRuntimeInstance::resident(runtime), report))
 }
 
 pub(in crate::daed_product) struct PreparedProductRuntime {
@@ -216,7 +216,7 @@ fn admitted_resident_runtime_report(
         "residentDataplane": state["residentDataplane"].clone(),
         "residentStartupEvidence": state["startupEvidence"].clone(),
     });
-    Ok((ProductRuntimeInstance::Resident(runtime), report))
+    Ok((ProductRuntimeInstance::resident(runtime), report))
 }
 
 pub(in crate::daed_product) fn preflight_product_runtime_candidate(

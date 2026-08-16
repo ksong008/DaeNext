@@ -50,7 +50,7 @@ impl AnyTlsServerObservation {
         let sender = self
             .connection_senders
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&connection_id)
             .cloned()
             .expect("AnyTLS test connection sender is registered");
@@ -68,7 +68,7 @@ impl AnyTlsServerObservation {
         let sender = self
             .connection_senders
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&connection_id)
             .cloned()
             .expect("AnyTLS test connection sender is registered");
@@ -80,7 +80,7 @@ impl AnyTlsServerObservation {
         let sender = self
             .connection_senders
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&connection_id)
             .cloned()
             .expect("AnyTLS test connection sender is registered");
@@ -160,7 +160,7 @@ impl AnyTlsTestServer {
             let senders = task_observation
                 .connection_senders
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .drain()
                 .map(|(_, sender)| sender)
                 .collect::<Vec<_>>();
@@ -232,7 +232,7 @@ async fn run_anytls_test_connection<S>(
     observation
         .connection_senders
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(connection_id, command_sender);
     let mut logical = HashMap::<u32, AnyTlsTestStreamState>::new();
     let mut read_paused = false;
@@ -259,12 +259,12 @@ async fn run_anytls_test_connection<S>(
                         observation
                             .logical_settings
                             .lock()
-                            .unwrap()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .push((connection_id, frame.sid));
                         observation
                             .logical_setting_payloads
                             .lock()
-                            .unwrap()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .push(frame.data.clone());
                         logical.entry(frame.sid).or_default();
                     }
@@ -300,7 +300,7 @@ async fn run_anytls_test_connection<S>(
                             observation
                                 .logical_application_payloads
                                 .lock()
-                                .unwrap()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
                                 .push((connection_id, frame.sid, frame.data.clone()));
                             state.application_writes = state.application_writes.saturating_add(1);
                             if write_anytls_test_frame(
@@ -360,7 +360,7 @@ async fn run_anytls_test_connection<S>(
     observation
         .connection_senders
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .remove(&connection_id);
     let _ = stream.shutdown().await;
 }
@@ -379,7 +379,8 @@ fn anytls_test_application_response(state: &AnyTlsTestStreamState, data: &[u8]) 
         dae_outbound::anytls::decode_packet_next_write(data)
     };
     decoded
-        .map(|packet| anytls_link::packet_next_write(&packet.payload))
+        .ok()
+        .and_then(|packet| anytls_link::packet_next_write(&packet.payload).ok())
         .unwrap_or_default()
 }
 
@@ -410,8 +411,10 @@ async fn write_anytls_test_frame(
     sid: u32,
     data: &[u8],
 ) -> Result<(), String> {
+    let frame = anytls_link::frame(cmd, sid, data)
+        .map_err(|error| format!("build AnyTLS test frame: {error}"))?;
     stream
-        .write_all(&anytls_link::frame(cmd, sid, data))
+        .write_all(&frame)
         .await
         .map_err(|error| format!("write AnyTLS test frame: {error}"))
 }
@@ -704,7 +707,12 @@ fn anytls_owner_reuses_one_auth_across_caller_runtimes_and_drops_late_sid_frames
                 0
             );
             assert_eq!(
-                server.observation.logical_settings.lock().unwrap().clone(),
+                server
+                    .observation
+                    .logical_settings
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
                 vec![(1, 1), (1, 2), (1, 3), (2, 1)]
             );
             let updated_settings = AnyTlsPaddingScheme::parse(updated_padding)
@@ -714,7 +722,7 @@ fn anytls_owner_reuses_one_auth_across_caller_runtimes_and_drops_late_sid_frames
                 .observation
                 .logical_setting_payloads
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone();
             assert_eq!(setting_payloads[0], anytls_link::settings_bytes());
             assert_eq!(setting_payloads[1], anytls_link::settings_bytes());
@@ -783,7 +791,7 @@ fn anytls_udp_sends_one_bounded_initial_payload_before_synack_and_preserves_earl
                 .observation
                 .logical_application_payloads
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone();
             assert_eq!(application_payloads.len(), 1);
             assert_eq!(application_payloads[0].0, 1);

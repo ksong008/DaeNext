@@ -63,6 +63,19 @@ where
         .await
         .map_err(|err| format!("read simple-obfs TLS response payload length: {err}"))?;
     let payload_len = u16::from_be_bytes(len) as usize;
+    // The response payload is a single TLS application-data record carrying
+    // the server salt plus the first encrypted Shadowsocks AEAD chunk.  A
+    // strict 16 KiB cap (the per-frame bound AsyncSimpleObfsTlsAppDataReader
+    // enforces below) would reject a legitimate full-size first chunk
+    // (32-byte salt + max chunk wire 2+16+16383+16 = 16449 bytes), so bound
+    // by the TLS record payload ceiling instead.  This keeps a peer-controlled
+    // length from forcing a large allocation or an unbounded read that would
+    // pin a flow permit indefinitely.
+    if payload_len > TLS_RECORD_MAX_PAYLOAD_LEN {
+        return Err(format!(
+            "simple-obfs TLS response payload too large: {payload_len}"
+        ));
+    }
     let mut payload = vec![0_u8; payload_len];
     stream
         .read_exact(&mut payload)
