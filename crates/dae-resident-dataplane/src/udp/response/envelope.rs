@@ -70,7 +70,6 @@ impl UdpResponseEnvelope {
         self
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::udp) fn with_decoded_response_identity(
         mut self,
         wire_source: Option<std::net::SocketAddr>,
@@ -83,7 +82,6 @@ impl UdpResponseEnvelope {
         self
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::udp) fn with_session_bound_response_identity(
         mut self,
         source: std::net::SocketAddr,
@@ -96,7 +94,6 @@ impl UdpResponseEnvelope {
         self
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::udp) fn with_session_fixed_target(
         self,
         binding: super::UdpSessionFixedTarget,
@@ -107,7 +104,6 @@ impl UdpResponseEnvelope {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::udp) fn with_rejected_response_identity(
         mut self,
         reason: UdpResponseDropReason,

@@ -32,7 +32,7 @@ pub(in crate::daed_product) fn runtime_started_at_after_success(
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(in crate::daed_product) fn start_product_runtime_instance(
     config: &Config,
     source: &str,

@@ -26,7 +26,6 @@ impl TuicUdpDatagramSender for quinn::Connection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct TuicUdpSendReport {
     pub(super) whole_datagram_sent: bool,
     pub(super) datagrams_sent: usize,

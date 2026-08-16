@@ -1,16 +1,4 @@
 use super::*;
-#[allow(dead_code)]
-pub(crate) fn start_resident_production_runtime_with_latency_seed(
-    config: &Config,
-    latency_seed: &[Value],
-) -> Result<ResidentProductionRuntime, String> {
-    start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot(
-        config,
-        latency_seed,
-        None,
-    )
-}
-
 pub(crate) fn start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot(
     config: &Config,
     latency_seed: &[Value],

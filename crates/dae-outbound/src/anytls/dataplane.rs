@@ -1,11 +1,14 @@
+#[cfg(any(test, feature = "test-support"))]
 use std::io::{Read, Write};
 
+#[cfg(any(test, feature = "test-support"))]
 use crate::error::OutboundError;
 #[cfg(any(test, feature = "test-support"))]
 use crate::shared_transport::{TlsLoopbackMaterial, TlsUnderlayOptions};
 #[cfg(any(test, feature = "test-support"))]
 use crate::socks5::Socks5Address;
 
+#[cfg(any(test, feature = "test-support"))]
 use super::{contract, link};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,6 +19,7 @@ pub struct AnyTlsFrame {
 }
 
 impl AnyTlsFrame {
+    #[cfg(any(test, feature = "test-support"))]
     pub fn data_len(&self) -> usize {
         self.data.len()
     }
@@ -153,6 +157,7 @@ where
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn read_frame_from_stream<S>(stream: &mut S) -> Result<AnyTlsFrame, OutboundError>
 where
     S: Read,
@@ -173,6 +178,7 @@ where
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn decode_frame(input: &[u8]) -> Result<AnyTlsFrame, OutboundError> {
     if input.len() < contract::HEADER_OVERHEAD_SIZE {
         return Err(OutboundError::BadAnyTLS(format!(
@@ -196,6 +202,7 @@ pub fn decode_frame(input: &[u8]) -> Result<AnyTlsFrame, OutboundError> {
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn write_frame_to_stream<S>(
     stream: &mut S,
     cmd: u8,

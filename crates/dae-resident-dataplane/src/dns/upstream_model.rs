@@ -557,9 +557,12 @@ pub(in crate::dns) enum ResidentDnsForwarderTransport {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(in crate::dns) enum ResidentDnsForwarderSelectionKey {
+    #[cfg(test)]
     Unrouted,
     Direct,
-    Proxy { graph_link_hash: String },
+    Proxy {
+        graph_link_hash: String,
+    },
 }
 
 impl ResidentDnsForwarderSelectionKey {
