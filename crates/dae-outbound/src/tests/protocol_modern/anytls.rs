@@ -99,27 +99,29 @@ pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
         session["padding"]["settings"].as_str().unwrap()
     );
     assert_eq!(
-        hex_encode(&crate::anytls::link::frame(
-            crate::anytls::contract::CMD_SETTINGS,
-            1,
-            &crate::anytls::link::settings_bytes()
-        )),
+        hex_encode(
+            &crate::anytls::link::frame(
+                crate::anytls::contract::CMD_SETTINGS,
+                1,
+                &crate::anytls::link::settings_bytes()
+            )
+            .unwrap()
+        ),
         session["frame"]["settings_frame_hex"].as_str().unwrap()
     );
     assert_eq!(
-        hex_encode(&crate::anytls::link::frame(
-            crate::anytls::contract::CMD_SYN,
-            1,
-            &[]
-        )),
+        hex_encode(&crate::anytls::link::frame(crate::anytls::contract::CMD_SYN, 1, &[]).unwrap()),
         session["frame"]["syn_frame_hex"].as_str().unwrap()
     );
     assert_eq!(
-        hex_encode(&crate::anytls::link::frame(
-            crate::anytls::contract::CMD_PSH,
-            1,
-            &crate::anytls::link::socks_addr("fixture.invalid:443").unwrap()
-        )),
+        hex_encode(
+            &crate::anytls::link::frame(
+                crate::anytls::contract::CMD_PSH,
+                1,
+                &crate::anytls::link::socks_addr("fixture.invalid:443").unwrap()
+            )
+            .unwrap()
+        ),
         session["frame"]["psh_addr_frame_hex"].as_str().unwrap()
     );
 
@@ -144,7 +146,7 @@ pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
         packet["first_write_hex"].as_str().unwrap()
     );
     assert_eq!(
-        hex_encode(&crate::anytls::link::packet_next_write(b"ping")),
+        hex_encode(&crate::anytls::link::packet_next_write(b"ping").unwrap()),
         packet["next_write_hex"].as_str().unwrap()
     );
 

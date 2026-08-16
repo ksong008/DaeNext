@@ -77,3 +77,25 @@ fn in_place_opening_matches_allocating_wire_for_all_body_modes() {
         assert!(pending.is_none());
     }
 }
+
+#[test]
+fn chunk_nonce_errors_instead_of_wrapping_when_counter_exhausted() {
+    let mut nonce = ChunkNonce::new(&[0x5a; 16]);
+    for _ in 0..=u16::MAX {
+        assert!(
+            nonce.next().is_ok(),
+            "all 65,536 distinct u16 nonce values must be usable once"
+        );
+    }
+    let err = nonce
+        .next()
+        .expect_err("VMess chunk nonce counter must error instead of wrapping");
+    assert!(err.to_string().contains("nonce exhausted"));
+
+    // Direct boundary construction: a counter already at u16::MAX fails immediately.
+    let mut at_max = ChunkNonce {
+        base: [0_u8; 12],
+        count: u32::from(u16::MAX) + 1,
+    };
+    assert!(at_max.next().is_err());
+}

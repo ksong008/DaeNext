@@ -80,20 +80,20 @@ where
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
     let settings = link::settings_bytes();
-    let settings_frame = link::frame(contract::CMD_SETTINGS, 1, &settings);
+    let settings_frame = link::frame(contract::CMD_SETTINGS, 1, &settings)?;
     tls.write_all(&settings_frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
-    let syn_frame = link::frame(contract::CMD_SYN, 1, &[]);
+    let syn_frame = link::frame(contract::CMD_SYN, 1, &[])?;
     tls.write_all(&syn_frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
     let target_addr = link::socks_addr(target)?;
-    let psh_addr_frame = link::frame(contract::CMD_PSH, 1, &target_addr);
+    let psh_addr_frame = link::frame(contract::CMD_PSH, 1, &target_addr)?;
     tls.write_all(&psh_addr_frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
-    let psh_payload_frame = link::frame(contract::CMD_PSH, 1, payload);
+    let psh_payload_frame = link::frame(contract::CMD_PSH, 1, payload)?;
     tls.write_all(&psh_payload_frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
@@ -212,7 +212,7 @@ pub fn write_frame_to_stream<S>(
 where
     S: Write,
 {
-    let frame = link::frame(cmd, sid, data);
+    let frame = link::frame(cmd, sid, data)?;
     stream
         .write_all(&frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;

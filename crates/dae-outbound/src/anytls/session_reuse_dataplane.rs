@@ -74,11 +74,11 @@ pub fn stream_lifecycle_frames(
     let target_addr = link::socks_addr(target)?;
     Ok(AnyTlsStreamLifecycleFrames {
         sid,
-        settings_frame: link::frame(contract::CMD_SETTINGS, sid, &settings),
-        syn_frame: link::frame(contract::CMD_SYN, sid, &[]),
-        psh_addr_frame: link::frame(contract::CMD_PSH, sid, &target_addr),
-        psh_payload_frame: link::frame(contract::CMD_PSH, sid, payload),
-        fin_frame: link::frame(contract::CMD_FIN, sid, &[]),
+        settings_frame: link::frame(contract::CMD_SETTINGS, sid, &settings)?,
+        syn_frame: link::frame(contract::CMD_SYN, sid, &[])?,
+        psh_addr_frame: link::frame(contract::CMD_PSH, sid, &target_addr)?,
+        psh_payload_frame: link::frame(contract::CMD_PSH, sid, payload)?,
+        fin_frame: link::frame(contract::CMD_FIN, sid, &[])?,
         target_addr_len: target_addr.len(),
     })
 }

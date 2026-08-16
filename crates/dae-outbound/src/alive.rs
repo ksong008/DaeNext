@@ -92,25 +92,37 @@ impl AliveDialerSet {
         };
 
         let Some(raw_latency) = raw_latency else {
+            // 无新延迟样本（如 ring 清空 / moving average 归零）：先清除本 index 的
+            // 陈旧延迟，防止上一次检查的延迟重入 latency_order 参与 min 排序；
+            // 置 None 后 insert_latency_entry 为 no-op。
+            self.latencies_ms[index] = None;
             self.insert_latency_entry(index);
-            if alive && self.policy.needs_latency_state() && self.min_index.is_none() {
-                self.min_index = Some(index);
-            }
-            if !alive && self.min_index == Some(index) {
+            if self.min_index == Some(index) {
+                // The current minimum lost its latency sample: drop it and
+                // reselect from the remaining entries, so a stale latency
+                // cannot keep masquerading as the minimum.
                 self.min_index = None;
                 self.recalc_min();
             }
+            // 候选保证：min 策略必须始终有一个存活候选。当前节点存活时优先
+            // 自己；当前节点死亡（fallback 死亡）时从其余存活节点中选——否则
+            // 多个"存活但无延迟样本"节点中一个死亡后，recalc_min 只看有延迟
+            // 集合，会再次丢失其余可用节点（NoAliveDialer 回退）。
+            self.ensure_min_candidate(alive.then_some(index));
             return;
         };
         self.latencies_ms[index] = Some(raw_latency);
-        let sorting_latency = raw_latency + self.latency_offset(index);
+        let sorting_latency = raw_latency.saturating_add(self.latency_offset(index));
         self.insert_latency_entry(index);
         match self.min_index {
             None if alive => {
                 self.min_index = Some(index);
                 self.min_latency_ms = sorting_latency;
             }
-            Some(_) if alive && sorting_latency <= self.min_latency_ms - self.tolerance_ms => {
+            Some(_)
+                if alive
+                    && sorting_latency <= self.min_latency_ms.saturating_sub(self.tolerance_ms) =>
+            {
                 self.min_index = Some(index);
                 self.min_latency_ms = sorting_latency;
             }
@@ -122,6 +134,11 @@ impl AliveDialerSet {
                         self.min_index = None;
                     }
                     self.recalc_min();
+                    if !alive {
+                        // 当前 min（有历史延迟）死亡后可能只剩无样本存活节点：
+                        // recalc 只看有延迟集合，会再次丢失候选；补候选保证。
+                        self.ensure_min_candidate(None);
+                    }
                 }
             }
             _ => {}
@@ -146,6 +163,29 @@ impl AliveDialerSet {
                 self.min_index = None;
                 self.recalc_min();
             }
+            // 死亡清候选 / 复活后都可能缺 min 候选：统一补一次候选保证
+            // （有延迟样本时 recalc 选出，无样本时从存活节点兜底）。
+            self.ensure_min_candidate(alive.then_some(index));
+        }
+    }
+
+    /// Min 策略的候选保证：当 `min_index` 无候选且策略需要延迟状态时，
+    /// 优先从带延迟样本的集合重算选出；否则从存活节点兜底一个
+    /// （`prefer` 优先，其次任意存活节点）。没有存活节点时保持无候选
+    /// （`NoAliveDialer` 是正确结果）。`min_latency_ms` 在兜底时不更新，
+    /// 真实延迟到达后由正常的 Some 分支接管。
+    fn ensure_min_candidate(&mut self, prefer: Option<usize>) {
+        if !self.policy.needs_latency_state() || self.min_index.is_some() {
+            return;
+        }
+        if !self.latency_order.is_empty() {
+            self.recalc_min();
+            return;
+        }
+        if let Some(prefer) = prefer.filter(|i| *i < self.alive.len() && self.alive[*i]) {
+            self.min_index = Some(prefer);
+        } else if let Some(&other) = self.alive_indices.first() {
+            self.min_index = Some(other);
         }
     }
 
@@ -193,7 +233,7 @@ impl AliveDialerSet {
     fn remove_latency_entry(&mut self, index: usize) {
         if let Some(latency) = self.latencies_ms[index] {
             self.latency_order
-                .remove(&(latency + self.latency_offset(index), index));
+                .remove(&(latency.saturating_add(self.latency_offset(index)), index));
         }
     }
 
@@ -202,7 +242,7 @@ impl AliveDialerSet {
             && let Some(latency) = self.latencies_ms[index]
         {
             self.latency_order
-                .insert((latency + self.latency_offset(index), index));
+                .insert((latency.saturating_add(self.latency_offset(index)), index));
         }
     }
 

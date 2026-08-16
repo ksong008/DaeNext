@@ -111,7 +111,7 @@ impl PaddingPart {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct PaddingPlan {
     lengths: Vec<PaddingPart>,
     gaps: Vec<PaddingPart>,
@@ -180,15 +180,6 @@ impl PaddingPlan {
 
     fn encoded_fragment_lengths(&self) -> (Vec<usize>, Vec<std::time::Duration>) {
         self.sample()
-    }
-}
-
-impl Default for PaddingPlan {
-    fn default() -> Self {
-        Self {
-            lengths: Vec::new(),
-            gaps: Vec::new(),
-        }
     }
 }
 

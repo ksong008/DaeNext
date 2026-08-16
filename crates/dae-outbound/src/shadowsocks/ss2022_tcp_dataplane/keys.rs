@@ -101,6 +101,7 @@ pub(super) fn increment_nonce_le_12(nonce: &mut [u8; 12]) {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::increment_nonce_le_12;
 

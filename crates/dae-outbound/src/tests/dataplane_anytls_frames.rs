@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn case_anytls_frame_roundtrip_decodes_header_and_payload() {
     let settings = anytls::link::settings_bytes();
-    let frame = anytls::link::frame(anytls::contract::CMD_SETTINGS, 7, &settings);
+    let frame = anytls::link::frame(anytls::contract::CMD_SETTINGS, 7, &settings).unwrap();
     let decoded = anytls::decode_frame(&frame).unwrap();
 
     assert_eq!(decoded.cmd, anytls::contract::CMD_SETTINGS);
@@ -26,11 +26,12 @@ fn case_anytls_tcp_first_flight_matches_native_session_order() {
         anytls::contract::CMD_SETTINGS,
         1,
         &anytls::link::settings_bytes(),
-    );
-    let syn_frame = anytls::link::frame(anytls::contract::CMD_SYN, 1, &[]);
+    )
+    .unwrap();
+    let syn_frame = anytls::link::frame(anytls::contract::CMD_SYN, 1, &[]).unwrap();
     let target_addr = anytls::link::socks_addr(target).unwrap();
-    let psh_addr_frame = anytls::link::frame(anytls::contract::CMD_PSH, 1, &target_addr);
-    let psh_payload_frame = anytls::link::frame(anytls::contract::CMD_PSH, 1, payload);
+    let psh_addr_frame = anytls::link::frame(anytls::contract::CMD_PSH, 1, &target_addr).unwrap();
+    let psh_payload_frame = anytls::link::frame(anytls::contract::CMD_PSH, 1, payload).unwrap();
 
     let settings = anytls::decode_frame(&settings_frame).unwrap();
     let syn = anytls::decode_frame(&syn_frame).unwrap();
@@ -59,4 +60,17 @@ fn case_anytls_udp_magic_domain_and_underlay_preserve_native_boundary() {
     assert_eq!(underlay.underlay_network, "tcp");
     assert_eq!(underlay.underlay_mark, 1234);
     assert!(underlay.underlay_mptcp);
+}
+
+#[test]
+fn case_anytls_frame_rejects_oversized_payload_instead_of_truncating() {
+    let oversized = vec![0_u8; u16::MAX as usize + 1];
+    let err = anytls::link::frame(anytls::contract::CMD_PSH, 1, &oversized)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("frame payload too large"));
+
+    // 边界值 u16::MAX 恰好填满长度字段，仍可正常编码。
+    let max = vec![0_u8; u16::MAX as usize];
+    assert!(anytls::link::frame(anytls::contract::CMD_PSH, 1, &max).is_ok());
 }

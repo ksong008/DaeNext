@@ -30,6 +30,7 @@ pub(super) fn open_separate_payload(
     cipher.decrypt(&separate_header[4..16], input)
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Ss2022SeparatePayloadCipher {
     Aes128(Aes128Gcm),
     Aes256(Aes256Gcm),

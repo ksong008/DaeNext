@@ -25,7 +25,7 @@ pub(super) fn build_aead_request_chunks(
     network: VMessNetwork,
     payloads: &[&[u8]],
 ) -> Result<VMessAeadChunkedRequestPacket, OutboundError> {
-    let material = VMessAeadMaterial::default();
+    let material = VMessAeadMaterial::random()?;
     let normalized_uuid = normalize_vmess_uuid(uuid);
     let cmd_key = vmess_cmd_key_from_uuid(&normalized_uuid)?;
     let eauth_id = put_eauth_id(&cmd_key, unix_timestamp_now()?, material.eauth_random)?;

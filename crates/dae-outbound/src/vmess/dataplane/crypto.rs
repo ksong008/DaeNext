@@ -197,9 +197,15 @@ pub(super) fn fnv1a32(input: &[u8]) -> u32 {
 pub(super) fn parse_uuid_bytes(input: &str) -> Result<[u8; 16], OutboundError> {
     let mut hex = String::with_capacity(32);
     for ch in input.chars() {
-        if ch != '-' {
-            hex.push(ch);
+        if ch == '-' {
+            continue;
         }
+        if !ch.is_ascii_hexdigit() {
+            return Err(OutboundError::BadVmess(format!(
+                "bad VMess UUID character: {ch:?}"
+            )));
+        }
+        hex.push(ch);
     }
     if hex.len() != 32 {
         return Err(OutboundError::BadVmess(format!(
@@ -241,4 +247,34 @@ pub(super) fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_uuid_bytes_accepts_canonical_hex_uuid() {
+        let parsed = parse_uuid_bytes("7c12c745-63a5-433d-9e60-022e469b5bd4").unwrap();
+        assert_eq!(parsed.len(), 16);
+    }
+
+    #[test]
+    fn parse_uuid_bytes_rejects_non_hex_chars_without_panicking() {
+        // 32 characters including a 3-byte UTF-8 char ('€'). The old
+        // implementation sliced the dedashed string by byte offsets and panicked
+        // on a mid-character boundary; it must now return BadVmess instead.
+        let input = "\u{20ac}1234567890123456789012345678901";
+        assert_eq!(input.len(), 34);
+        assert_eq!(input.chars().count(), 32);
+
+        let err =
+            parse_uuid_bytes(input).expect_err("non-hex VMess UUID must be rejected, not panic");
+        assert!(matches!(err, OutboundError::BadVmess(_)));
+
+        // Plain non-hex ASCII characters are also rejected up front.
+        let err = parse_uuid_bytes("gggggggggggggggggggggggggggggggg")
+            .expect_err("non-hex ASCII VMess UUID must be rejected");
+        assert!(matches!(err, OutboundError::BadVmess(_)));
+    }
 }
