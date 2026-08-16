@@ -47,17 +47,20 @@ impl Hash for JuicityOwnerKey {
 }
 
 impl JuicityOwnerKey {
-    fn for_binding(binding: &ResidentProxyBinding) -> Self {
+    fn for_binding(binding: &ResidentProxyBinding) -> Result<Self, String> {
         let proxy = binding.plan();
         let ResidentProxyProtocolPlan::JuicityQuicTcp { congestion, .. } = &proxy.handler else {
-            panic!("Juicity owner key received a non-Juicity proxy shape");
+            return Err(
+                "Juicity owner key received a non-Juicity proxy shape; refusing to panic on the data plane"
+                    .to_owned(),
+            );
         };
-        Self {
+        Ok(Self {
             generation: binding.runtime_generation(),
             graph_link_hash: proxy.graph_link_hash.clone(),
             mark: binding.effective_socket_mark(),
             congestion: *congestion,
-        }
+        })
     }
 
     fn report_identity(&self) -> String {
@@ -406,7 +409,7 @@ impl JuicityOwnerRegistryHandle {
         caller: QuicEndpointCallerClass,
         deadline: AbsoluteDeadline,
     ) -> Result<JuicityTransportLease, String> {
-        let key = JuicityOwnerKey::for_binding(&binding);
+        let key = JuicityOwnerKey::for_binding(&binding)?;
         if key.generation != self.generation {
             return Err(format!(
                 "Juicity owner generation mismatch: requested={} active={}",

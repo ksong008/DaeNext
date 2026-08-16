@@ -30,9 +30,11 @@ use crate::tcp::{
     wait_quic_endpoint_idle_after_close, wait_quic_endpoints_idle_until,
 };
 
+/// Consecutive heartbeat datagram failures tolerated before the TUIC control
+/// writer gives up and lets owner retirement tear the shared connection down.
+const TUIC_HEARTBEAT_FAILURE_LIMIT: u32 = 3;
 const TUIC_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/tuic-owner/v1";
 const TUIC_OWNER_IDENTITY_NAMESPACE: &str = "tuic-transport";
-const TUIC_CONTROL_STREAM_ERROR_CODE: u32 = 0x104;
 const TUIC_UDP_STREAM_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -52,7 +54,7 @@ impl std::fmt::Debug for TuicOwnerKey {
 }
 
 impl TuicOwnerKey {
-    fn for_binding(binding: &ResidentProxyBinding) -> Self {
+    fn for_binding(binding: &ResidentProxyBinding) -> Result<Self, String> {
         let proxy = binding.plan();
         let generation = binding.runtime_generation();
         let ResidentProxyProtocolPlan::TuicQuicTcp {
@@ -61,7 +63,10 @@ impl TuicOwnerKey {
             ..
         } = &proxy.handler
         else {
-            panic!("TUIC owner key received a non-TUIC proxy shape");
+            return Err(
+                "TUIC owner key received a non-TUIC proxy shape; refusing to panic on the data plane"
+                    .to_owned(),
+            );
         };
         let mut digest = Sha256::new();
         digest.update(TUIC_OWNER_IDENTITY_DOMAIN);
@@ -69,10 +74,10 @@ impl TuicOwnerKey {
         update_identity_part(&mut digest, &binding.effective_socket_mark().to_be_bytes());
         update_identity_part(&mut digest, congestion.as_str().as_bytes());
         update_identity_part(&mut digest, udp_relay_mode.as_str().as_bytes());
-        Self {
+        Ok(Self {
             generation,
             digest: digest.finalize().into(),
-        }
+        })
     }
 
     fn redacted_identity(self) -> RedactedOwnerIdentity {
@@ -415,7 +420,6 @@ struct TuicAssociationManager {
     resources: TuicOwnerResourceProfile,
     metrics: Arc<TuicOwnerRegistryMetrics>,
     control_sender: mpsc::Sender<u16>,
-    connection: quinn::Connection,
     closed: AtomicBool,
 }
 
@@ -424,7 +428,6 @@ impl TuicAssociationManager {
         resources: TuicOwnerResourceProfile,
         metrics: Arc<TuicOwnerRegistryMetrics>,
         control_sender: mpsc::Sender<u16>,
-        connection: quinn::Connection,
     ) -> Self {
         Self {
             state: Mutex::new(TuicAssociationState {
@@ -435,7 +438,6 @@ impl TuicAssociationManager {
             resources,
             metrics,
             control_sender,
-            connection,
             closed: AtomicBool::new(false),
         }
     }
@@ -572,13 +574,14 @@ impl TuicAssociationManager {
         }
         self.metrics.association_closed();
         if self.control_sender.try_send(association_id).is_err() {
+            // The dissociate could not be queued. Do not tear down the whole
+            // QUIC connection: only this one UDP association is affected,
+            // and it will be reaped by its own inactivity timeout. Closing
+            // the connection here would cascade the failure onto every
+            // unrelated stream sharing it.
             self.metrics
                 .dissociate_failures
                 .fetch_add(1, Ordering::Relaxed);
-            self.connection.close(
-                TUIC_CONTROL_STREAM_ERROR_CODE.into(),
-                b"tuic dissociate queue unavailable",
-            );
         }
     }
 
@@ -902,7 +905,7 @@ impl TuicOwnerRegistryHandle {
         caller: QuicEndpointCallerClass,
         deadline: AbsoluteDeadline,
     ) -> Result<TuicTransportLease, String> {
-        let key = TuicOwnerKey::for_binding(&binding);
+        let key = TuicOwnerKey::for_binding(&binding)?;
         if key.generation != self.generation {
             return Err(format!(
                 "TUIC owner generation mismatch: requested={} active={}",
@@ -1476,6 +1479,7 @@ async fn run_tuic_control_writer(
     let heartbeat_interval =
         std::time::Duration::from_secs(dae_outbound::tuic::DEFAULT_TUIC_KEEPALIVE_SECS);
     let mut heartbeat = time::interval(heartbeat_interval);
+    let mut consecutive_heartbeat_failures = 0_u32;
     heartbeat.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
     heartbeat.tick().await;
     loop {
@@ -1485,14 +1489,15 @@ async fn run_tuic_control_writer(
                     break;
                 };
                 if send_tuic_dissociate(&connection, association_id).await.is_err() {
+                    // A single failed dissociate only affects this UDP
+                    // association; the server reaps it via its own idle
+                    // timeout. Closing the QUIC connection here would
+                    // cascade the failure onto all unrelated streams, so
+                    // degrade instead and keep the control writer alive.
                     metrics.dissociate_failures.fetch_add(1, Ordering::Relaxed);
-                    connection.close(
-                        TUIC_CONTROL_STREAM_ERROR_CODE.into(),
-                        b"tuic dissociate failed",
-                    );
-                    break;
+                } else {
+                    metrics.dissociate_commands.fetch_add(1, Ordering::Relaxed);
                 }
-                metrics.dissociate_commands.fetch_add(1, Ordering::Relaxed);
             }
             _ = heartbeat.tick() => {
                 if leases.active() == 0 && associations.active_associations() == 0 {
@@ -1501,10 +1506,19 @@ async fn run_tuic_control_writer(
                 match connection.send_datagram(Bytes::copy_from_slice(&build_tuic_heartbeat_frame())) {
                     Ok(()) => {
                         metrics.heartbeat_commands.fetch_add(1, Ordering::Relaxed);
+                        consecutive_heartbeat_failures = 0;
                     }
                     Err(_) => {
                         metrics.heartbeat_failures.fetch_add(1, Ordering::Relaxed);
-                        break;
+                        consecutive_heartbeat_failures =
+                            consecutive_heartbeat_failures.saturating_add(1);
+                        if consecutive_heartbeat_failures >= TUIC_HEARTBEAT_FAILURE_LIMIT {
+                            // Only tear the control writer down after repeated
+                            // failures; a single transient datagram error must
+                            // not cascade into a shared-connection close via
+                            // ControlStopped -> owner retirement.
+                            break;
+                        }
                     }
                 }
             }
@@ -1699,7 +1713,6 @@ async fn build_tuic_transport(
         resources,
         metrics,
         control_sender,
-        connection.clone(),
     ));
     static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
     let instance_id = NEXT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed).max(1);
