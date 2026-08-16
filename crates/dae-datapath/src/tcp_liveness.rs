@@ -78,7 +78,9 @@ fn tcp_liveness_option_error(option: &str, err: io::Error) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::fd::FromRawFd;
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
 
     #[test]
     fn required_option_failures_are_contextual_and_close_the_socket() {
@@ -87,8 +89,10 @@ mod tests {
             (1, "TCP_KEEPIDLE"),
             (2, "TCP_KEEPINTVL"),
         ] {
-            let fd = open_tcp_socket();
-            let raw_fd = fd.as_raw_fd();
+            let (socket, mut peer) = UnixStream::pair().unwrap();
+            peer.set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let fd: OwnedFd = socket.into();
             let mut call = 0_usize;
             let result = apply_tcp_liveness_policy_with(
                 fd,
@@ -108,21 +112,12 @@ mod tests {
                 err.to_string().contains(expected_option),
                 "missing option context in {err}"
             );
-            let status = unsafe { libc::fcntl(raw_fd, libc::F_GETFD) };
-            assert_eq!(status, -1, "failed configuration leaked fd {raw_fd}");
-            assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+            let mut byte = [0_u8; 1];
+            assert_eq!(
+                peer.read(&mut byte).unwrap(),
+                0,
+                "failed configuration leaked socket"
+            );
         }
-    }
-
-    fn open_tcp_socket() -> OwnedFd {
-        let raw_fd = unsafe {
-            libc::socket(
-                libc::AF_INET,
-                libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
-                libc::IPPROTO_TCP,
-            )
-        };
-        assert!(raw_fd >= 0);
-        unsafe { OwnedFd::from_raw_fd(raw_fd) }
     }
 }
