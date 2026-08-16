@@ -19,7 +19,7 @@ fn case_anytls_udp_packet_first_write_matches_native_packet_stream() {
 #[test]
 fn case_anytls_udp_packet_next_write_carries_only_length_and_payload() {
     let payload = b"fixture-next-packet";
-    let encoded = anytls::link::packet_next_write(payload);
+    let encoded = anytls::link::packet_next_write(payload).unwrap();
     let decoded = anytls::decode_packet_next_write(&encoded).unwrap();
 
     assert_eq!(
@@ -37,10 +37,11 @@ fn case_anytls_udp_packet_stream_uses_magic_domain_and_tcp_underlay() {
     let session_target = anytls::link::udp_stream_target(original_target).unwrap();
     let stream_target_addr = anytls::link::socks_addr(&session_target).unwrap();
     let first_write = anytls::link::packet_first_write(original_target, b"fixture-first").unwrap();
-    let next_write = anytls::link::packet_next_write(b"fixture-next");
-    let psh_stream_target = anytls::link::frame(anytls::contract::CMD_PSH, 1, &stream_target_addr);
-    let psh_first = anytls::link::frame(anytls::contract::CMD_PSH, 1, &first_write);
-    let psh_next = anytls::link::frame(anytls::contract::CMD_PSH, 1, &next_write);
+    let next_write = anytls::link::packet_next_write(b"fixture-next").unwrap();
+    let psh_stream_target =
+        anytls::link::frame(anytls::contract::CMD_PSH, 1, &stream_target_addr).unwrap();
+    let psh_first = anytls::link::frame(anytls::contract::CMD_PSH, 1, &first_write).unwrap();
+    let psh_next = anytls::link::frame(anytls::contract::CMD_PSH, 1, &next_write).unwrap();
     let underlay = anytls::link::underlay_contract("udp", 1234, true);
 
     assert_eq!(session_target, "sp.v2.udp-over-tcp.arpa:5353");
@@ -64,4 +65,17 @@ fn case_anytls_udp_packet_stream_uses_magic_domain_and_tcp_underlay() {
     assert_eq!(underlay.underlay_network, "tcp");
     assert_eq!(underlay.underlay_mark, 1234);
     assert!(underlay.underlay_mptcp);
+}
+
+#[test]
+fn case_anytls_udp_packet_writes_reject_oversized_payload() {
+    let oversized = vec![0_u8; u16::MAX as usize + 1];
+    let first_err = anytls::link::packet_first_write("fixture.invalid:53", &oversized)
+        .unwrap_err()
+        .to_string();
+    assert!(first_err.contains("udp payload too large"));
+    let next_err = anytls::link::packet_next_write(&oversized)
+        .unwrap_err()
+        .to_string();
+    assert!(next_err.contains("udp payload too large"));
 }

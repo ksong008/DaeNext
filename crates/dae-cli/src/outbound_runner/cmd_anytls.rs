@@ -111,14 +111,26 @@ pub(super) fn run_anytls_frame(args: &[String]) -> RunnerOutput {
         Ok(addr) => addr,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
     };
+    let settings_frame = match anytls::link::frame(anytls::contract::CMD_SETTINGS, 1, &settings) {
+        Ok(frame) => frame,
+        Err(err) => return RunnerOutput::stdout_error(err.to_string()),
+    };
+    let syn_frame = match anytls::link::frame(anytls::contract::CMD_SYN, 1, &[]) {
+        Ok(frame) => frame,
+        Err(err) => return RunnerOutput::stdout_error(err.to_string()),
+    };
+    let psh_addr_frame = match anytls::link::frame(anytls::contract::CMD_PSH, 1, &addr) {
+        Ok(frame) => frame,
+        Err(err) => return RunnerOutput::stdout_error(err.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
             "target": target,
             "settings_hex": hex_encode(&settings),
-            "settings_frame_hex": hex_encode(&anytls::link::frame(anytls::contract::CMD_SETTINGS, 1, &settings)),
-            "syn_frame_hex": hex_encode(&anytls::link::frame(anytls::contract::CMD_SYN, 1, &[])),
-            "psh_addr_frame_hex": hex_encode(&anytls::link::frame(anytls::contract::CMD_PSH, 1, &addr)),
+            "settings_frame_hex": hex_encode(&settings_frame),
+            "syn_frame_hex": hex_encode(&syn_frame),
+            "psh_addr_frame_hex": hex_encode(&psh_addr_frame),
         })
     ))
 }
@@ -134,6 +146,10 @@ pub(super) fn run_anytls_packet(args: &[String]) -> RunnerOutput {
         Ok(first) => first,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
     };
+    let next_write = match anytls::link::packet_next_write(payload.as_bytes()) {
+        Ok(next_write) => next_write,
+        Err(err) => return RunnerOutput::stdout_error(err.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
@@ -142,7 +158,7 @@ pub(super) fn run_anytls_packet(args: &[String]) -> RunnerOutput {
             "udp_stream_target": stream_target,
             "udp_original_packet_addr": target,
             "first_write_hex": hex_encode(&first),
-            "next_write_hex": hex_encode(&anytls::link::packet_next_write(payload.as_bytes())),
+            "next_write_hex": hex_encode(&next_write),
         })
     ))
 }

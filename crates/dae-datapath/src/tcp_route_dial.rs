@@ -206,6 +206,16 @@ pub fn route_dial_tcp_plan(input: &RouteDialTcpPlanInput) -> RouteDialTcpPlan {
 }
 
 fn format_domain_target(domain: &str, port: u16) -> (String, bool) {
+    // Full socket-address literal in the sniffed host (e.g. "[::1]:6666" or
+    // "1.2.3.4:6666"): parse it directly and take the IP so the
+    // caller-supplied real destination port always wins over the
+    // client-controlled port smuggled inside the host.
+    if let Ok(addr) = domain.parse::<SocketAddr>() {
+        return (SocketAddr::new(addr.ip(), port).to_string(), true);
+    }
+    // Bare IP literal (with or without brackets), e.g. "127.0.0.1", "::1",
+    // "[::1]".  The literal parse runs before the string path below so an
+    // IPv4 dotted quad is never mistaken for a "host:port" pair.
     let stripped = domain
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
@@ -213,23 +223,35 @@ fn format_domain_target(domain: &str, port: u16) -> (String, bool) {
     if let Ok(ip) = stripped.parse::<IpAddr>() {
         return (SocketAddr::new(ip, port).to_string(), true);
     }
-    if has_explicit_port(domain) {
-        return (domain.to_owned(), false);
-    }
-    (join_host_port(domain, port), false)
+    // Domain, possibly carrying a smuggled ":port" suffix: keep the host and
+    // attach the real port.
+    let host = strip_host_port(domain);
+    (join_host_port(host, port), false)
 }
 
-fn has_explicit_port(value: &str) -> bool {
+// Strip a trailing explicit ":port" from a sniffed domain host.  Only reached
+// for values that are neither a socket-address nor a bare IP literal, so a
+// colon here is a "host:port" separator; a bracketless IPv6 literal would
+// already have been handled by the IpAddr branch above.
+fn strip_host_port(value: &str) -> &str {
     if let Some(rest) = value.strip_prefix('[') {
-        let Some((_, port)) = rest.rsplit_once("]:") else {
-            return false;
+        let Some((host, port)) = rest.rsplit_once("]:") else {
+            return value;
         };
-        return port.parse::<u16>().is_ok();
+        return if port.parse::<u16>().is_ok() {
+            host
+        } else {
+            value
+        };
     }
     let Some((host, port)) = value.rsplit_once(':') else {
-        return false;
+        return value;
     };
-    !host.contains(':') && port.parse::<u16>().is_ok()
+    if !host.contains(':') && port.parse::<u16>().is_ok() {
+        host
+    } else {
+        value
+    }
 }
 
 fn join_host_port(host: &str, port: u16) -> String {
@@ -237,5 +259,50 @@ fn join_host_port(host: &str, port: u16) -> String {
         format!("[{host}]:{port}")
     } else {
         format!("{host}:{port}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_domain_target_ignores_smuggled_port_in_domain() {
+        // A client-controlled ":port" in the sniffed host must not override
+        // the real destination port.
+        assert_eq!(
+            format_domain_target("evil.com:6666", 443),
+            ("evil.com:443".to_owned(), false)
+        );
+        assert_eq!(
+            format_domain_target("[::1]:6666", 443),
+            ("[::1]:443".to_owned(), true)
+        );
+        assert_eq!(
+            format_domain_target("1.2.3.4:6666", 443),
+            ("1.2.3.4:443".to_owned(), true)
+        );
+    }
+
+    #[test]
+    fn format_domain_target_preserves_plain_hosts_and_ip_literals() {
+        assert_eq!(
+            format_domain_target("example.com", 443),
+            ("example.com:443".to_owned(), false)
+        );
+        // Dotted quads and bracketed/bracketless IPv6 are IP literals, not
+        // "host:port" pairs, and keep the IP-dial flag.
+        assert_eq!(
+            format_domain_target("127.0.0.1", 443),
+            ("127.0.0.1:443".to_owned(), true)
+        );
+        assert_eq!(
+            format_domain_target("::1", 443),
+            ("[::1]:443".to_owned(), true)
+        );
+        assert_eq!(
+            format_domain_target("[2606:4700:20::681a:d1f]", 443),
+            ("[2606:4700:20::681a:d1f]:443".to_owned(), true)
+        );
     }
 }

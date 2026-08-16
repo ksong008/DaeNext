@@ -457,10 +457,10 @@ where
             inner.write_all(&client_hello[cursor..end]).await?;
             inner.flush().await?;
             cursor = end;
-            if let Some(gap) = padding.1.get(index) {
-                if !gap.is_zero() {
-                    tokio::time::sleep(*gap).await;
-                }
+            if let Some(gap) = padding.1.get(index)
+                && !gap.is_zero()
+            {
+                tokio::time::sleep(*gap).await;
             }
         }
         if cursor != client_hello.len() {
@@ -532,7 +532,7 @@ where
         };
         if spec.mode.random_records() {
             write_ctr = Some(AesCtr::new(&united_key, &iv));
-            read_ctr = Some(AesCtr::new(&united_key, &*ticket_bytes));
+            read_ctr = Some(AesCtr::new(&united_key, &ticket_bytes));
         }
         read_aead = Some(peer_aead);
         Ok(Self {
@@ -1027,7 +1027,7 @@ fn encode_len(value: usize) -> [u8; 2] {
 }
 
 fn io_other(message: impl Into<String>) -> io::Error {
-    Error::new(ErrorKind::Other, message.into())
+    Error::other(message.into())
 }
 
 #[cfg(test)]

@@ -100,9 +100,9 @@ impl TuicLink {
             Vec::new()
         };
         Ok(Self {
-            name: url.fragment().unwrap_or_default().to_owned(),
-            user: url.username().to_owned(),
-            password: url.password().unwrap_or_default().to_owned(),
+            name: percent_decode(url.fragment().unwrap_or_default())?,
+            user: percent_decode(url.username())?,
+            password: percent_decode(url.password().unwrap_or_default())?,
             server: host,
             port,
             sni,
@@ -158,7 +158,7 @@ impl TuicLink {
         }
         if !self.name.is_empty() {
             out.push('#');
-            out.push_str(&self.name);
+            out.push_str(&percent_encode_uri_component(&self.name));
         }
         out
     }
@@ -289,7 +289,55 @@ fn push_authority(out: &mut String, host: &str, port: u16) {
 }
 
 fn escape_userinfo(input: &str) -> String {
-    input.to_owned()
+    percent_encode_uri_component(input)
+}
+
+fn percent_decode(input: &str) -> Result<String, OutboundError> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(OutboundError::BadTuic(
+                    "truncated percent escape".to_owned(),
+                ));
+            }
+            out.push((hex_nibble(bytes[i + 1])? << 4) | hex_nibble(bytes[i + 2])?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|err| OutboundError::BadTuic(err.to_string()))
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, OutboundError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(OutboundError::BadTuic(format!(
+            "bad percent escape byte: {byte}"
+        ))),
+    }
+}
+
+fn percent_encode_uri_component(input: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut encoded = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
 }
 
 impl MagicNetwork {
@@ -335,5 +383,28 @@ mod tests {
             .to_string();
         assert!(unknown_error.contains("unsupported UDP relay mode"));
         assert!(!unknown_error.contains(unknown));
+    }
+
+    #[test]
+    fn export_url_roundtrips_special_characters_in_userinfo_and_name() {
+        let link = TuicLink {
+            name: "node #1 / 100%".to_owned(),
+            user: "user".to_owned(),
+            password: "p@ss:w%rd&+?=#".to_owned(),
+            server: "example.com".to_owned(),
+            port: 443,
+            sni: "sni.example.com".to_owned(),
+            allow_insecure: true,
+            disable_sni: false,
+            congestion_control: "bbr".to_owned(),
+            alpn: vec!["h3".to_owned(), "h2".to_owned()],
+            udp_relay_mode: "native".to_owned(),
+            protocol: "tuic".to_owned(),
+        };
+        let exported = link.export_url();
+        assert!(exported.contains("p%40ss%3Aw%25rd"));
+        assert!(exported.contains("%23")); // name 中的 '#' 必须百分号编码
+        let parsed = TuicLink::parse(&exported).unwrap();
+        assert_eq!(parsed, link);
     }
 }

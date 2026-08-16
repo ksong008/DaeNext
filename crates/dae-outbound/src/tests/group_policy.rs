@@ -450,6 +450,39 @@ fn random_alive_index_tracks_swap_removal_and_reinsertion() {
 }
 
 #[test]
+fn moving_average_none_branch_excludes_stale_latency_from_min_selection() {
+    let mut group = DialerGroup::new(
+        "moving",
+        vec![Dialer::new("a", ""), Dialer::new("b", "")],
+        vec![Annotation::default(), Annotation::default()],
+        SelectionPolicy::MinMovingAverage,
+        false,
+        0,
+    );
+    group.set_moving_average(0, NetworkType::TCP4, 100);
+    group.notify_alive(0, NetworkType::TCP4, true);
+    group.set_moving_average(1, NetworkType::TCP4, 50);
+    group.notify_alive(1, NetworkType::TCP4, true);
+    assert_eq!(group.select(NetworkType::TCP4, false).unwrap().index, 1);
+
+    // a 的 moving average 归零 → raw_latency=None 分支。修复前 latencies_ms[0]
+    // 保留陈旧 100ms 并重入 latency_order；修复后先清空，不再参与排序。
+    group.set_moving_average(0, NetworkType::TCP4, 0);
+    group.notify_alive(0, NetworkType::TCP4, true);
+
+    // 当前 min（b）死亡触发 recalc_min。修复前会从陈旧 (100, 0) 复活 a 的陈旧延迟；
+    // 修复后无有效延迟样本，但 a 仍存活——min 策略契约要求始终保留一个存活候选，
+    // 因此兜底为 a（延迟未知，min_latency_ms 为默认值）。
+    group.notify_alive(1, NetworkType::TCP4, false);
+    let got = group
+        .alive_set(NetworkType::TCP4)
+        .unwrap()
+        .get_min_latency();
+    assert_eq!(got.map(|(index, _)| index), Some(0));
+    assert_eq!(got.map(|(_, latency)| latency), Some(i64::MAX / 4));
+}
+
+#[test]
 fn direct_link_parser_group_override_and_connectivity_match_golden_fixtures() {
     let direct = fixture("outbound/direct/injected_resolver.json");
     for case in direct["cases"].as_array().unwrap() {

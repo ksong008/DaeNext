@@ -16,11 +16,15 @@ pub(super) fn read_http_message<S: Read>(
     let body_start = index + 4;
     let head = head_with_leftover[..body_start].to_vec();
     let mut body = head_with_leftover[body_start..].to_vec();
-    let content_length = http_content_length(&head)?;
+    let content_length = crate::shared_transport::bounded_http_message_body_length(
+        http_content_length(&head)?,
+        context,
+    )?;
     while body.len() < content_length {
-        let mut buf = vec![0_u8; content_length - body.len()];
+        let mut buf = [0_u8; 8192];
+        let wanted = (content_length - body.len()).min(buf.len());
         let n = stream
-            .read(&mut buf)
+            .read(&mut buf[..wanted])
             .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
         if n == 0 {
             break;

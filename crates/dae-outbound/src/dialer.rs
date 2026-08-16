@@ -4,6 +4,14 @@ use crate::types::{NETWORK_TYPE_COLLECTION_COUNT, NetworkType};
 
 pub const TIMEOUT_MS: i64 = 10_000;
 
+fn update_moving_average(current: i64, sample: i64) -> i64 {
+    if current <= 0 {
+        return sample;
+    }
+    ((i128::from(current) + i128::from(sample)) / 2)
+        .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum HealthState {
     Alive,
@@ -155,7 +163,8 @@ impl Dialer {
         let collection = self.must_get_collection(typ);
         if let Some(latency_ms) = snapshot.latency_ms {
             collection.latencies10.append(latency_ms);
-            collection.moving_average_ms = latency_ms;
+            collection.moving_average_ms =
+                update_moving_average(collection.moving_average_ms, latency_ms);
         }
         collection.alive = match snapshot.health_state {
             HealthState::Alive => true,
@@ -180,9 +189,15 @@ impl Dialer {
         checked_at_unix: i64,
     ) {
         let collection = self.must_get_collection(typ);
-        let latency = latency_ms.unwrap_or(TIMEOUT_MS);
-        collection.latencies10.append(latency);
-        collection.moving_average_ms = (collection.moving_average_ms + latency) / 2;
+        // 口径：latency ring 与 moving average 只记录真实测量样本。失败
+        // （latency_ms=None）不写入合成超时样本——与
+        // record_check_failure_without_latency 的“不污染延迟历史”语义一致，
+        // 节点复活后 avg10 / moving average 不受陈旧超时影响。
+        if let Some(latency) = latency_ms {
+            collection.latencies10.append(latency);
+            collection.moving_average_ms =
+                update_moving_average(collection.moving_average_ms, latency);
+        }
         collection.alive = latency_ms.is_some();
         collection.checked_at_unix = checked_at_unix;
         if latency_ms.is_some() {
@@ -195,6 +210,8 @@ impl Dialer {
     }
 
     pub fn record_check_failure_without_latency(&mut self, typ: NetworkType, checked_at_unix: i64) {
+        // 与 record_check_result 的失败分支同口径：无延迟样本时不写 latency ring、
+        // 不更新 moving average（失败不污染延迟历史）。
         let collection = self.must_get_collection(typ);
         collection.alive = false;
         collection.checked_at_unix = checked_at_unix;
@@ -268,5 +285,40 @@ impl Dialer {
 
     pub fn probe_http_transport_created(&self) -> bool {
         self.probe_http_transport_created
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moving_average_uses_the_first_sample_then_applies_ema() {
+        assert_eq!(update_moving_average(0, 80), 80);
+        assert_eq!(update_moving_average(80, 40), 60);
+        assert_eq!(update_moving_average(i64::MAX, i64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn restored_and_live_health_samples_share_moving_average_semantics() {
+        let network = NetworkType::TCP4;
+        let mut restored = Dialer::new("restored", "fixture");
+        restored.restore_health_snapshot(
+            network,
+            DialerHealthSnapshot {
+                latency_ms: Some(80),
+                alive: true,
+                checked_at_unix: 1,
+                health_state: HealthState::Alive,
+                last_success_at_unix: 1,
+                last_failure_at_unix: 0,
+                last_unknown_at_unix: 0,
+            },
+        );
+        let mut live = Dialer::new("live", "fixture");
+        live.record_check_result(network, Some(80), 1);
+
+        assert_eq!(restored.collection(network).unwrap().moving_average_ms, 80);
+        assert_eq!(live.collection(network).unwrap().moving_average_ms, 80);
     }
 }

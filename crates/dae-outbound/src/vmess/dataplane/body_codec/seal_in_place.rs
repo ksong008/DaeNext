@@ -126,7 +126,7 @@ impl BodyCodec {
         match &self.cipher {
             BodyCipher::Aes128Gcm(cipher) => {
                 cipher
-                    .seal_in_place(&self.nonce.next(), payload, authentication, &[])
+                    .seal_in_place(&self.nonce.next()?, payload, authentication, &[])
                     .map_err(|_| {
                         OutboundError::BadVmess("VMess AES-GCM body encryption failed".to_owned())
                     })?;
@@ -135,7 +135,7 @@ impl BodyCodec {
             BodyCipher::Chacha20Poly1305(cipher) => {
                 let tag = cipher
                     .encrypt_in_place_detached(
-                        ChaChaNonce::from_slice(&self.nonce.next()),
+                        ChaChaNonce::from_slice(&self.nonce.next()?),
                         &[],
                         payload,
                     )

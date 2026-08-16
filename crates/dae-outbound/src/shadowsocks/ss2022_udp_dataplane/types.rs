@@ -49,6 +49,7 @@ pub struct Ss2022UdpCodec {
     pub(super) server_replay: Ss2022UdpReplayTable,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Ss2022AesBlockCipher {
     Aes128(Aes128),
     Aes256(Aes256),

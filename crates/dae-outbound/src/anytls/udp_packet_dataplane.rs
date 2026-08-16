@@ -79,24 +79,24 @@ where
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
     let settings = link::settings_bytes();
-    let settings_frame = link::frame(contract::CMD_SETTINGS, 1, &settings);
+    let settings_frame = link::frame(contract::CMD_SETTINGS, 1, &settings)?;
     tls.write_all(&settings_frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
-    let syn_frame = link::frame(contract::CMD_SYN, 1, &[]);
+    let syn_frame = link::frame(contract::CMD_SYN, 1, &[])?;
     tls.write_all(&syn_frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
     let session_stream_target = link::udp_stream_target(original_udp_target)?;
     let stream_target_addr = link::socks_addr(&session_stream_target)?;
-    let psh_addr_frame = link::frame(contract::CMD_PSH, 1, &stream_target_addr);
+    let psh_addr_frame = link::frame(contract::CMD_PSH, 1, &stream_target_addr)?;
     tls.write_all(&psh_addr_frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
 
     let first_write = link::packet_first_write(original_udp_target, first_payload)?;
-    let next_write = link::packet_next_write(next_payload);
-    let first_packet_frame = link::frame(contract::CMD_PSH, 1, &first_write);
-    let next_packet_frame = link::frame(contract::CMD_PSH, 1, &next_write);
+    let next_write = link::packet_next_write(next_payload)?;
+    let first_packet_frame = link::frame(contract::CMD_PSH, 1, &first_write)?;
+    let next_packet_frame = link::frame(contract::CMD_PSH, 1, &next_write)?;
     tls.write_all(&first_packet_frame)
         .map_err(|err| OutboundError::BadAnyTLS(err.to_string()))?;
     tls.write_all(&next_packet_frame)

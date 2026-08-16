@@ -105,13 +105,19 @@ pub fn settings_bytes() -> Vec<u8> {
     .into_bytes()
 }
 
-pub fn frame(cmd: u8, sid: u32, data: &[u8]) -> Vec<u8> {
+pub fn frame(cmd: u8, sid: u32, data: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    if data.len() > u16::MAX as usize {
+        return Err(OutboundError::BadAnyTLS(format!(
+            "anytls frame payload too large: {} bytes",
+            data.len()
+        )));
+    }
     let mut out = vec![0_u8; contract::HEADER_OVERHEAD_SIZE + data.len()];
     out[0] = cmd;
     out[1..5].copy_from_slice(&sid.to_be_bytes());
     out[5..7].copy_from_slice(&(data.len() as u16).to_be_bytes());
     out[7..].copy_from_slice(data);
-    out
+    Ok(out)
 }
 
 pub fn socks_addr(target: &str) -> Result<Vec<u8>, OutboundError> {
@@ -119,6 +125,12 @@ pub fn socks_addr(target: &str) -> Result<Vec<u8>, OutboundError> {
 }
 
 pub fn packet_first_write(target: &str, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    if payload.len() > u16::MAX as usize {
+        return Err(OutboundError::BadAnyTLS(format!(
+            "anytls udp payload too large: {} bytes",
+            payload.len()
+        )));
+    }
     let addr = socks_addr(target)?;
     let mut out = Vec::with_capacity(1 + addr.len() + 2 + payload.len());
     out.push(1);
@@ -128,11 +140,17 @@ pub fn packet_first_write(target: &str, payload: &[u8]) -> Result<Vec<u8>, Outbo
     Ok(out)
 }
 
-pub fn packet_next_write(payload: &[u8]) -> Vec<u8> {
+pub fn packet_next_write(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    if payload.len() > u16::MAX as usize {
+        return Err(OutboundError::BadAnyTLS(format!(
+            "anytls udp payload too large: {} bytes",
+            payload.len()
+        )));
+    }
     let mut out = Vec::with_capacity(2 + payload.len());
     out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
     out.extend_from_slice(payload);
-    out
+    Ok(out)
 }
 
 pub fn udp_stream_target(input: &str) -> Result<String, OutboundError> {
