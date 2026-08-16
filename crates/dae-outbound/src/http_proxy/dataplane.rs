@@ -43,7 +43,7 @@ pub fn connect_exchange_over_stream<S>(
 where
     S: Read + Write,
 {
-    let connect_request = request::connect_request(options);
+    let connect_request = request::connect_request(options)?;
     stream
         .write_all(&connect_request)
         .map_err(|err| OutboundError::BadHttpProxy(err.to_string()))?;

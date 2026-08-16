@@ -175,7 +175,60 @@ fn configure_old_alps_h2(ssl: &mut SslRef) -> Result<(), String> {
     }
 }
 
+/// Bounded writer used while decompressing a peer certificate chain.
+///
+/// `std::io::Take` is only constructible through `Read::take`, which would
+/// drag an unnecessary `Read` bound into the compressor; this writer
+/// implements the same budget directly on `Write`.
+struct BoundedCertWriter<'a, W> {
+    inner: &'a mut W,
+    remaining: usize,
+}
+
+impl<'a, W> BoundedCertWriter<'a, W> {
+    fn new(inner: &'a mut W, limit: usize) -> Self {
+        Self {
+            inner,
+            remaining: limit,
+        }
+    }
+
+    /// True when the writer accepted exactly `limit` bytes (the budget is
+    /// exhausted); any attempt to write further would have errored.
+    fn exhausted(&self) -> bool {
+        self.remaining == 0
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for BoundedCertWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::other(
+                "bounded certificate writer exhausted",
+            ));
+        }
+        let n = buf.len().min(self.remaining);
+        let written = self.inner.write(&buf[..n])?;
+        self.remaining -= written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 struct ResidentBrotliCertCompressor;
+
+/// Application-layer bound for the decompressed certificate chain.
+///
+/// The TLS wire format caps `uncompressed_length` at 24 bits (~16 MiB,
+/// RFC 8879), so 16 MiB is a strict superset of any valid certificate. The
+/// bound is defence-in-depth on top of the BoringSSL `CRYPTO_BUFFER` budget:
+/// a malicious peer may declare a large length, and this cap keeps the
+/// Rust-side decompression work (and the memory it touches) bounded even
+/// before the buffer contract is enforced.
+const RESIDENT_MAX_DECOMPRESSED_CERTIFICATE_BYTES: usize = 16 * 1024 * 1024;
 
 impl CertificateCompressor for ResidentBrotliCertCompressor {
     const ALGORITHM: CertificateCompressionAlgorithm = CertificateCompressionAlgorithm::BROTLI;
@@ -186,8 +239,50 @@ impl CertificateCompressor for ResidentBrotliCertCompressor {
     where
         W: std::io::Write,
     {
-        brotli::BrotliDecompress(&mut std::io::Cursor::new(input), output)?;
+        // The bounded writer rejects writes past the cap; the brotli
+        // writer then fails, surfacing as a decompression error and
+        // failing the handshake (fail-closed).
+        let mut bounded =
+            BoundedCertWriter::new(&mut *output, RESIDENT_MAX_DECOMPRESSED_CERTIFICATE_BYTES);
+        brotli::BrotliDecompress(&mut std::io::Cursor::new(input), &mut bounded)?;
+        if bounded.exhausted() {
+            return Err(std::io::Error::other(
+                "brotli certificate decompression exceeded the bounded output",
+            ));
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_cert_writer_accepts_writes_within_the_budget() {
+        let mut sink = Vec::new();
+        let mut bounded = BoundedCertWriter::new(&mut sink, 5);
+        std::io::Write::write_all(&mut bounded, b"abcd").unwrap();
+        assert!(!bounded.exhausted());
+        assert_eq!(sink, b"abcd");
+    }
+
+    #[test]
+    fn bounded_cert_writer_rejects_writes_beyond_the_budget() {
+        let mut sink = Vec::new();
+        let mut bounded = BoundedCertWriter::new(&mut sink, 4);
+        std::io::Write::write_all(&mut bounded, b"abcd").unwrap();
+        assert!(bounded.exhausted());
+        assert!(std::io::Write::write_all(&mut bounded, b"e").is_err());
+        assert_eq!(sink, b"abcd");
+    }
+
+    #[test]
+    fn bounded_cert_writer_marks_exhausted_when_budget_is_filled_exactly() {
+        let mut sink = Vec::new();
+        let mut bounded = BoundedCertWriter::new(&mut sink, 2);
+        std::io::Write::write_all(&mut bounded, b"xy").unwrap();
+        assert!(bounded.exhausted());
     }
 }
 

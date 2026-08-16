@@ -401,7 +401,8 @@ pub(crate) async fn http_proxy_connect_plain_async(
         options.transport.enabled = transport;
         options.host_override = transport_host.to_owned();
         options.transport.path = transport_path.to_owned();
-        let request = http_request::connect_request(&options);
+        let request = http_request::connect_request(&options)
+            .map_err(|err| format!("build HTTP CONNECT request: {err}"))?;
         stream
             .write_all(&request)
             .await

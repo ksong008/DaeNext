@@ -283,7 +283,7 @@ where
             "VMess HTTP transport requires HttpConnectOptions.transport.enabled=true".to_owned(),
         ));
     }
-    let transport_request = http_proxy_request::connect_request(http_options);
+    let transport_request = http_proxy_request::connect_request(http_options)?;
     stream
         .write_all(&transport_request)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;

@@ -62,12 +62,16 @@ pub(super) fn run_http_connect(args: &[String]) -> RunnerOutput {
         return RunnerOutput::usage("missing outbound http connect --target");
     };
     let options = http_options_from_args(target, args);
+    let request_hex = match http_request::connect_request(&options) {
+        Ok(request) => hex_encode(&request),
+        Err(err) => return RunnerOutput::stdout_error(err.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
             "target": options.target,
             "transport": options.transport.enabled,
-            "request_hex": hex_encode(&http_request::connect_request(&options)),
+            "request_hex": request_hex,
             "basic_auth_header": http_request::basic_auth_header(&options.username, &options.password),
         })
     ))
@@ -133,7 +137,7 @@ pub(super) fn http_smoke(
     stream
         .set_write_timeout(Some(timeout))
         .map_err(|err| err.to_string())?;
-    let request = http_request::connect_request(options);
+    let request = http_request::connect_request(options).map_err(|err| err.to_string())?;
     stream.write_all(&request).map_err(|err| err.to_string())?;
     let mut response = Vec::new();
     let mut buf = [0_u8; 512];

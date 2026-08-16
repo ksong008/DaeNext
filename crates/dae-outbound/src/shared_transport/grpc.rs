@@ -14,6 +14,14 @@ pub const GRPC_ENCODING_HEADER: &str = "grpc-encoding";
 pub const GRPC_ACCEPT_ENCODING_HEADER: &str = "grpc-accept-encoding";
 pub const GRPC_IDENTITY_ENCODING: &str = "identity";
 
+/// Maximum accepted gRPC hunk message size on the read path.
+///
+/// Mirrors the resident dataplane bound
+/// (`RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES`, 16 MiB) so this public helper
+/// cannot be driven into a multi-gigabyte allocation by a peer-declared
+/// `u32` length prefix.
+pub const GRPC_MAX_HUNK_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum GrpcMode {
     #[default]
@@ -374,6 +382,11 @@ pub fn read_grpc_hunk_frame(stream: &mut impl Read) -> Result<Vec<u8>, OutboundE
         ));
     }
     let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
+    if len > GRPC_MAX_HUNK_MESSAGE_BYTES {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "grpc hunk message too large: {len} bytes"
+        )));
+    }
     let mut message = vec![0_u8; len];
     stream
         .read_exact(&mut message)
@@ -466,6 +479,36 @@ fn grpc_len_as_usize(value: u64) -> Result<usize, OutboundError> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    #[test]
+    fn read_grpc_hunk_frame_rejects_oversized_length_before_allocation() {
+        let mut head = Vec::new();
+        head.push(0); // uncompressed flag
+        head.extend_from_slice(&u32::MAX.to_be_bytes());
+        let mut reader = Cursor::new(head);
+        let err = read_grpc_hunk_frame(&mut reader).unwrap_err();
+        assert!(err.to_string().contains("too large"));
+    }
+
+    #[test]
+    fn read_grpc_hunk_frame_accepts_bounded_message() {
+        let payload = b"hello grpc";
+        // message = protobuf field 1 (wire type 2, length-delimited) with the
+        // Hunk data as its value
+        let mut message = Vec::new();
+        message.push(0x0a);
+        message.push(payload.len() as u8);
+        message.extend_from_slice(payload);
+        let mut frame = Vec::new();
+        frame.push(0);
+        frame.extend_from_slice(&(message.len() as u32).to_be_bytes());
+        frame.extend_from_slice(&message);
+        let mut reader = Cursor::new(frame);
+        let decoded = read_grpc_hunk_frame(&mut reader).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
     use super::*;
 
     #[test]

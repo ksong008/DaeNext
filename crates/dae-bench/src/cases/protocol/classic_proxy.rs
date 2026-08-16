@@ -150,7 +150,8 @@ pub(super) fn bench_http_connect_request(iters: u64, warmup: u64) -> Result<Meas
     options.host_override = "front.example".to_owned();
     Ok(measure(
         || {
-            let request = dae_outbound::http_proxy::request::connect_request(black_box(&options));
+            let request = dae_outbound::http_proxy::request::connect_request(black_box(&options))
+                .expect("bench fixture proxy authority is valid");
             black_box(request.len() as u64)
         },
         iters,
