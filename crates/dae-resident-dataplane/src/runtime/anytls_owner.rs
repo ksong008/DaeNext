@@ -25,6 +25,61 @@ use crate::plan::{ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocol
 use crate::tcp::{ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, AnyTlsFrameReader};
 
 const ANYTLS_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/anytls-owner/v1";
+/// Base delay for the AnyTLS acquisition retry backoff.
+///
+/// Retries are caused by transient conditions (idle session commands,
+/// active physical-session conflicts, idle heartbeat failures). Without a
+/// backoff the acquire loop hammers the TLS endpoint with connection
+/// attempts; the deadline only bounds the total window, not the churn rate.
+const ANYTLS_ACQUIRE_RETRY_BACKOFF_BASE_MS: u64 = 50;
+/// Exponential cap: 50ms * 2^6 = 3.2s before jitter.
+const ANYTLS_ACQUIRE_RETRY_BACKOFF_MAX_EXPONENT: u32 = 6;
+
+/// Exponential backoff with uniform jitter for AnyTLS acquire retries.
+///
+/// Returns a duration in `[base, 2*base)` where `base = 50ms * 2^min(n, 6)`,
+/// i.e. 50-100ms on the first retry up to 3.2-6.4s once capped. The jitter
+/// avoids thundering-herd synchronisation across sessions retrying together.
+fn anytls_acquire_retry_backoff(retry_count: u32) -> std::time::Duration {
+    let exponent = retry_count.min(ANYTLS_ACQUIRE_RETRY_BACKOFF_MAX_EXPONENT);
+    let base_ms = ANYTLS_ACQUIRE_RETRY_BACKOFF_BASE_MS.saturating_mul(1_u64 << exponent);
+    let jitter_ms = fastrand::u64(..base_ms);
+    std::time::Duration::from_millis(base_ms.saturating_add(jitter_ms))
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn backoff_grows_exponentially_within_jitter_bounds() {
+        // retry n -> exponent min(n, 6) -> base 50ms * 2^n, backoff in
+        // [base, 2*base)
+        let cases = [(1, 100, 200), (2, 200, 400), (3, 400, 800), (6, 3200, 6400)];
+        for (count, lo, hi) in cases {
+            for _ in 0..64 {
+                let ms = anytls_acquire_retry_backoff(count).as_millis() as u64;
+                assert!(
+                    (lo..hi).contains(&ms),
+                    "retry {count} backoff {ms}ms outside [{lo},{hi})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backoff_caps_at_max_exponent() {
+        let capped = (6..=20)
+            .flat_map(|count| {
+                (0..16).map(move |_| anytls_acquire_retry_backoff(count).as_millis() as u64)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            capped.iter().all(|ms| *ms < 6400),
+            "backoff must cap below 6.4s"
+        );
+    }
+}
 const ANYTLS_DATA_FLUSH_BYTES: usize = 128 * 1024;
 const ANYTLS_DATA_FLUSH_DELAY: std::time::Duration = std::time::Duration::from_millis(1);
 
@@ -463,6 +518,7 @@ impl AnyTlsOwnerRegistryHandle {
             ));
         }
         let mut last_retry_error = None::<String>;
+        let mut retry_count = 0_u32;
         loop {
             let remaining = deadline.remaining_at(Instant::now()).ok_or_else(|| {
                 last_retry_error.map_or_else(
@@ -494,8 +550,15 @@ impl AnyTlsOwnerRegistryHandle {
             {
                 Ok(lease) => return Ok(lease),
                 Err(AnyTlsAcquireFailure::Retry(error)) => {
-                    last_retry_error = Some(error);
-                    tokio::task::yield_now().await;
+                    last_retry_error = Some(error.clone());
+                    retry_count = retry_count.saturating_add(1);
+                    let backoff = anytls_acquire_retry_backoff(retry_count);
+                    let Some(remaining) = deadline.remaining_at(Instant::now()) else {
+                        return Err(format!(
+                            "AnyTLS owner acquisition deadline elapsed after retry: {error}"
+                        ));
+                    };
+                    tokio::time::sleep(backoff.min(remaining)).await;
                 }
                 Err(AnyTlsAcquireFailure::Terminal(error)) => return Err(error),
             }
