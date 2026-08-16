@@ -33,7 +33,7 @@ impl ResidentProxyUdpBridge {
         self.last_error.lock().ok().and_then(|error| error.clone())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) async fn shutdown(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());

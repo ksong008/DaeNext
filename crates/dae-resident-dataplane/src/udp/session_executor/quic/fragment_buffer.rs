@@ -11,7 +11,7 @@ pub(super) enum QuicUdpFragmentOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(super) struct QuicUdpFragmentBufferSnapshot {
     pub(super) pending_packets: usize,
     pub(super) pending_bytes: usize,
@@ -356,7 +356,7 @@ impl QuicUdpFragmentBuffer {
         self.rejected_bytes = self.rejected_bytes.saturating_add(bytes as u64);
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn snapshot(&self) -> QuicUdpFragmentBufferSnapshot {
         QuicUdpFragmentBufferSnapshot {
             pending_packets: self.pending.len(),

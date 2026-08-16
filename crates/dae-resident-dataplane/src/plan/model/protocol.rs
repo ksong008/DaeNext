@@ -108,7 +108,6 @@ pub(crate) enum ResidentProxyProtocolPlan {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct ResidentProtocolExecutorContract {
     pub(crate) tcp_executor: &'static str,
     pub(crate) udp_executor: &'static str,
@@ -151,7 +150,7 @@ impl ResidentHysteria2ObfsPlan {
 }
 
 impl ResidentProxyProtocolPlan {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn executor_contract(&self) -> ResidentProtocolExecutorContract {
         match self {
             Self::VlessVisionTcpTls { .. } => ResidentProtocolExecutorContract {

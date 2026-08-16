@@ -40,7 +40,6 @@ impl UdpResponseIdentityToken {
     /// Callers should cache the expected token with the logical session and construct the
     /// observed token once while decoding a response. The forwarding path compares the fixed-size
     /// tokens and never re-hashes either identity.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::udp) fn from_protocol_identity(domain: &[u8], identity: &[u8]) -> Option<Self> {
         if domain.is_empty() || identity.is_empty() {
             return None;
@@ -82,7 +81,6 @@ impl UdpFixedTargetExpectation {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::udp) const fn decoded_source(source: SocketAddr) -> Self {
         Self {
             source,
@@ -92,7 +90,7 @@ impl UdpFixedTargetExpectation {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(in crate::udp) const fn with_protocol_identity(
         source: SocketAddr,
         protocol_identity: UdpResponseIdentityToken,
@@ -106,7 +104,6 @@ impl UdpFixedTargetExpectation {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::udp) enum UdpResponseDropReason {
     MissingWireSource,
@@ -134,7 +131,6 @@ impl UdpResponseDropReason {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::udp) enum UdpResponseIdentityEvidence {
     CompatibilityUnverified,

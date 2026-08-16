@@ -7,7 +7,6 @@ use aes::Aes256;
 use aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
 use aes_gcm::aead::{Aead, AeadInPlace};
 use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
-use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaChaNonce};
 use getrandom::fill as random_fill;
 use std::io::{self, Error, ErrorKind, Result};
 use std::ops::{Deref, DerefMut};
@@ -114,10 +113,8 @@ impl<const N: usize> Drop for SecretArray<N> {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 enum AeadState {
     Aes(Aes256Gcm, [u8; 12]),
-    ChaCha(ChaCha20Poly1305, [u8; 12]),
 }
 
 impl AeadState {
@@ -155,20 +152,6 @@ impl AeadState {
                 .map_err(|_| {
                     Error::new(ErrorKind::InvalidData, "VLESS Encryption AES seal failed")
                 }),
-            Self::ChaCha(cipher, nonce) => cipher
-                .encrypt(
-                    ChaChaNonce::from_slice(&Self::nonce_next(nonce)),
-                    chacha20poly1305::aead::Payload {
-                        msg: plaintext,
-                        aad,
-                    },
-                )
-                .map_err(|_| {
-                    Error::new(
-                        ErrorKind::InvalidData,
-                        "VLESS Encryption ChaCha seal failed",
-                    )
-                }),
         }
     }
 
@@ -184,20 +167,6 @@ impl AeadState {
                 )
                 .map_err(|_| {
                     Error::new(ErrorKind::InvalidData, "VLESS Encryption AES open failed")
-                }),
-            Self::ChaCha(cipher, nonce) => cipher
-                .decrypt(
-                    ChaChaNonce::from_slice(&Self::nonce_next(nonce)),
-                    chacha20poly1305::aead::Payload {
-                        msg: ciphertext,
-                        aad,
-                    },
-                )
-                .map_err(|_| {
-                    Error::new(
-                        ErrorKind::InvalidData,
-                        "VLESS Encryption ChaCha open failed",
-                    )
                 }),
         }
     }
@@ -217,18 +186,6 @@ impl AeadState {
                 )
                 .map_err(|_| {
                     Error::new(ErrorKind::InvalidData, "VLESS Encryption AES seal failed")
-                })?,
-            Self::ChaCha(cipher, nonce) => cipher
-                .encrypt_in_place_detached(
-                    ChaChaNonce::from_slice(&Self::nonce_next(nonce)),
-                    aad,
-                    &mut buffer[payload_offset..],
-                )
-                .map_err(|_| {
-                    Error::new(
-                        ErrorKind::InvalidData,
-                        "VLESS Encryption ChaCha seal failed",
-                    )
                 })?,
         };
         buffer.extend_from_slice(&tag);
@@ -253,19 +210,6 @@ impl AeadState {
                 .map_err(|_| {
                     Error::new(ErrorKind::InvalidData, "VLESS Encryption AES open failed")
                 })?,
-            Self::ChaCha(cipher, nonce) => cipher
-                .decrypt_in_place_detached(
-                    ChaChaNonce::from_slice(&Self::nonce_next(nonce)),
-                    aad,
-                    plaintext,
-                    &tag,
-                )
-                .map_err(|_| {
-                    Error::new(
-                        ErrorKind::InvalidData,
-                        "VLESS Encryption ChaCha open failed",
-                    )
-                })?,
         }
         ciphertext.truncate(payload_len);
         Ok(())
@@ -283,20 +227,6 @@ impl AeadState {
                 )
                 .map_err(|_| {
                     Error::new(ErrorKind::InvalidData, "VLESS Encryption AES open failed")
-                }),
-            Self::ChaCha(cipher, _) => cipher
-                .decrypt(
-                    ChaChaNonce::from_slice(nonce),
-                    chacha20poly1305::aead::Payload {
-                        msg: ciphertext,
-                        aad,
-                    },
-                )
-                .map_err(|_| {
-                    Error::new(
-                        ErrorKind::InvalidData,
-                        "VLESS Encryption ChaCha open failed",
-                    )
                 }),
         }
     }

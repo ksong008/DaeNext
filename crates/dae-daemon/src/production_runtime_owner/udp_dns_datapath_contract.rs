@@ -1,20 +1,23 @@
-use std::time::Duration;
-
 use dae_datapath::{
     ANYFROM_TIMEOUT_MS, DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
     DNS_NAT_TIMEOUT_MS, MAX_RETRY,
 };
-use dae_dns::{DNS_DEFAULT_PORT, DnsPacketView};
 use serde_json::{Value, json};
 
+#[cfg(test)]
+use dae_dns::{DNS_DEFAULT_PORT, DnsPacketView};
+
+#[cfg(test)]
+use std::time::Duration;
+
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct UdpDnsPacketClass {
     pub(super) is_dns: bool,
     pub(super) nat_timeout: Duration,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(super) fn classify_udp_packet_for_contract(
     original_dst_port: u16,
     payload: &[u8],

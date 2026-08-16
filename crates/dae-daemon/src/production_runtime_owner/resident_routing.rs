@@ -106,7 +106,6 @@ pub(super) fn update_new_resident_routing_map(
     )
 }
 
-#[allow(dead_code)]
 pub(super) fn update_existing_resident_routing_map(
     routing_map_id: u32,
     lpm_array_map_id: Option<u32>,

@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+use crate::plan::{ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition};
+
 pub(super) enum UdpSessionExecutor {
     Dns,
     ShadowsocksAead(ShadowsocksAeadDatagramSession),
@@ -56,7 +59,7 @@ impl UdpSessionExecutor {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(in crate::udp) fn runtime_disposition(&self) -> Option<ResidentUdpExecutionDisposition> {
         match self {
             Self::Dns => None,
@@ -77,7 +80,7 @@ impl UdpSessionExecutor {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(in crate::udp) fn agrees_with(&self, agreement: ResidentUdpExecutionAgreement) -> bool {
         self.runtime_disposition() == Some(agreement.disposition())
             && match self {

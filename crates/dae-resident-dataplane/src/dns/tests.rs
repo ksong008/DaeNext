@@ -442,7 +442,6 @@ fn dns_upstream_candidates_select_lower_latency_tcp_path_for_tcp_udp() {
 
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(targets[0].target, test_dns_upstream_target_v4());
-    assert_eq!(targets[0].l4proto, L4Proto::Tcp);
     let ResidentDnsUpstreamSelection::Proxy { binding } = &targets[0].selection else {
         panic!("expected proxied DNS upstream target");
     };
@@ -484,7 +483,6 @@ fn dns_upstream_candidates_keep_multiple_resolved_targets_generic() {
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(targets.len(), 4);
     assert_eq!(targets[0].target, test_dns_upstream_target_v6());
-    assert_eq!(targets[0].l4proto, L4Proto::Tcp);
     let ResidentDnsUpstreamSelection::Proxy { binding } = &targets[0].selection else {
         panic!("expected proxied DNS upstream target");
     };

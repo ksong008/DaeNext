@@ -111,7 +111,7 @@ impl ResidentDnsForwarderCache {
         })
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(in crate::dns) fn quic_forwarder(
         &self,
         upstream: &ResidentDnsUpstream,

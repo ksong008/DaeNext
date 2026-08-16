@@ -136,8 +136,3 @@ pub fn unix_timestamp_now() -> u64 {
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
 }
-
-#[allow(dead_code)]
-pub(super) fn _identity_context_marker() -> &'static str {
-    IDENTITY_SUBKEY_CONTEXT
-}

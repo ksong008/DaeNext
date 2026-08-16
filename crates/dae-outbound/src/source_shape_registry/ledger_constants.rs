@@ -100,7 +100,6 @@ pub(super) const ADMITTED_STATE: ShapeStateLedger = ShapeStateLedger {
     production_state: "not-ready",
 };
 
-#[allow(dead_code)]
 pub(super) const BLOCKED_STATE: ShapeStateLedger = ShapeStateLedger {
     source_shape: "source-supported",
     parser: "covered",
@@ -339,7 +338,6 @@ pub(super) const NOT_SUPPORTED_CAPABILITY: CapabilityLedger = CapabilityLedger {
     secure_endpoint: "rejected",
 };
 
-#[allow(dead_code)]
 pub(super) const DEFERRED_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-blocked",
     security_underlay: "pending-or-policy-blocked",
@@ -375,7 +373,6 @@ pub(super) const REJECTED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMa
     blocked_rows_reduce_pass_threshold: false,
 };
 
-#[allow(dead_code)]
 pub(super) const BLOCKED_LIVE_LEDGER: ExpandedLiveMatrixLedger = ExpandedLiveMatrixLedger {
     ledger_state: "explicit-fail-closed",
     live_host_required: true,

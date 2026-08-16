@@ -47,11 +47,6 @@ pub(in crate::dns) struct ResidentDnsUpstreamCandidate {
 #[derive(Clone, Debug)]
 pub(in crate::dns) struct ResidentDnsUpstreamRoutedTarget {
     pub(in crate::dns) target: SocketAddr,
-    // Retained in the routed value so mixed TCP/UDP candidate plans preserve
-    // the exact transport chosen during selection, even though current
-    // single-transport executors already know it from their call site.
-    #[allow(dead_code)]
-    pub(in crate::dns) l4proto: L4Proto,
     pub(in crate::dns) selection: ResidentDnsUpstreamSelection,
 }
 
@@ -81,7 +76,6 @@ impl ResidentDnsUpstreamRouteCandidate {
     fn into_routed_target(self) -> ResidentDnsUpstreamRoutedTarget {
         ResidentDnsUpstreamRoutedTarget {
             target: self.target,
-            l4proto: self.requested_network_type.l4proto,
             selection: self.selection,
         }
     }
@@ -547,12 +541,10 @@ mod tests {
         let targets = vec![
             ResidentDnsUpstreamRoutedTarget {
                 target: blackhole,
-                l4proto: L4Proto::Udp,
                 selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
             },
             ResidentDnsUpstreamRoutedTarget {
                 target: healthy,
-                l4proto: L4Proto::Udp,
                 selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
             },
         ];
@@ -609,7 +601,6 @@ mod tests {
             "stale retry fixture",
             vec![ResidentDnsUpstreamRoutedTarget {
                 target: stale_target,
-                l4proto: L4Proto::Udp,
                 selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
             }],
             Vec::new(),
@@ -625,7 +616,6 @@ mod tests {
                             fresh,
                             vec![ResidentDnsUpstreamRoutedTarget {
                                 target: fresh_target,
-                                l4proto: L4Proto::Udp,
                                 selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
                             }],
                             Vec::new(),
@@ -669,7 +659,6 @@ mod tests {
             "stale deadline fixture",
             vec![ResidentDnsUpstreamRoutedTarget {
                 target: stale_target,
-                l4proto: L4Proto::Udp,
                 selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
             }],
             Vec::new(),
@@ -712,7 +701,6 @@ mod tests {
             "stale refresh failure fixture",
             vec![ResidentDnsUpstreamRoutedTarget {
                 target: stale_target,
-                l4proto: L4Proto::Udp,
                 selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
             }],
             Vec::new(),
@@ -755,7 +743,6 @@ mod tests {
             "response-timeout fixture",
             vec![ResidentDnsUpstreamRoutedTarget {
                 target,
-                l4proto: L4Proto::Udp,
                 selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
             }],
             Vec::new(),
@@ -794,12 +781,10 @@ mod tests {
             vec![
                 ResidentDnsUpstreamRoutedTarget {
                     target: connect_target,
-                    l4proto: L4Proto::Udp,
                     selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
                 },
                 ResidentDnsUpstreamRoutedTarget {
                     target: timeout_target,
-                    l4proto: L4Proto::Udp,
                     selection: ResidentDnsUpstreamSelection::Direct { mark: 0 },
                 },
             ],

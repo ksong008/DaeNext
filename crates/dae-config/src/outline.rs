@@ -11,7 +11,7 @@ struct OutlineJsonTemplate {
     suffix: String,
 }
 
-pub fn export_outline(version: &str) -> Value {
+pub(crate) fn export_outline(version: &str) -> Value {
     json!({
         "version": version,
         "leaves": [
@@ -63,13 +63,15 @@ pub fn export_outline_json(version: &str) -> String {
     out
 }
 
-pub fn export_flat_desc(version: &str) -> Value {
+#[cfg(test)]
+pub(crate) fn export_flat_desc(version: &str) -> Value {
     let outline = export_outline(version);
     let mut rows = Vec::new();
     flatten_outline("", outline["structure"].as_array().unwrap(), &mut rows);
     Value::Array(rows)
 }
 
+#[cfg(test)]
 fn flatten_outline(prefix: &str, structure: &[Value], rows: &mut Vec<Value>) {
     for elem in structure {
         let mapping = elem["mapping"].as_str().unwrap_or_default();
