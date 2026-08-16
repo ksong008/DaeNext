@@ -60,6 +60,12 @@ fn bench_config_schema_example(iters: u64, warmup: u64) -> Result<Measurement, S
 
 fn bench_config_include_merger(iters: u64, warmup: u64) -> Result<Measurement, String> {
     let include_tree = IncludeTree::new();
+    // Assessment (kept as-is): this case measures the include-merge pipeline
+    // end to end, and merge_config_file reads its include tree from disk
+    // internally. There is no in-memory merge API in dae-config to split the
+    // file reads into a warmup phase; the warmup loop pre-heats the page cache
+    // so the measured reads are page-cache hits, but the open/read syscalls
+    // remain part of the measurement by design.
     Ok(measure(
         || {
             let merged =

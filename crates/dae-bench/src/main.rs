@@ -20,6 +20,10 @@ static ALLOC_BYTES: AtomicU64 = AtomicU64::new(0);
 
 struct CountingAllocator;
 
+// The counters are updated with Relaxed ordering: the benchmark is
+// single-threaded and the numbers are best-effort instrumentation, not a
+// synchronization mechanism, so SeqCst would only add fence overhead to every
+// allocation without any correctness benefit.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = unsafe { System.alloc(layout) };
@@ -290,15 +294,25 @@ pub(crate) fn measure(mut f: impl FnMut() -> u64, iters: u64, warmup: u64) -> Me
     for _ in 0..warmup {
         checksum ^= f();
     }
-    ALLOC_COUNT.store(0, Ordering::Relaxed);
-    ALLOC_BYTES.store(0, Ordering::Relaxed);
-    ALLOC_ENABLED.store(true, Ordering::SeqCst);
+    // Time the workload with allocator instrumentation disabled. Counting
+    // requires atomic operations in every allocation hook and would otherwise
+    // inflate ns/op for allocation-heavy cases.
     let started = Instant::now();
     for _ in 0..iters {
         checksum ^= f();
     }
     let elapsed_ns = started.elapsed().as_nanos();
-    ALLOC_ENABLED.store(false, Ordering::SeqCst);
+
+    // Collect allocations in a separate untimed steady-state pass.
+    ALLOC_COUNT.store(0, Ordering::Relaxed);
+    ALLOC_BYTES.store(0, Ordering::Relaxed);
+    ALLOC_ENABLED.store(true, Ordering::Relaxed);
+    let mut allocation_checksum = 0_u64;
+    for _ in 0..iters {
+        allocation_checksum ^= f();
+    }
+    ALLOC_ENABLED.store(false, Ordering::Relaxed);
+    checksum ^= std::hint::black_box(allocation_checksum);
     Measurement {
         checksum,
         elapsed_ns,
