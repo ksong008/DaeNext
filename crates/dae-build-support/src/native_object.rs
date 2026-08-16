@@ -15,16 +15,17 @@ struct NativeObjectShape {
     relocations: BTreeMap<String, usize>,
 }
 
-pub(crate) fn strip_debug_and_validate(path: &Path) {
+pub(crate) fn strip_debug_and_validate(path: &Path) -> Result<(), String> {
     let before = parse_shape(path, false);
-    run_strip_tool(path);
+    run_strip_tool(path)?;
     let after = parse_shape(path, true);
     if before != after {
-        panic!(
+        return Err(format!(
             "native eBPF object functional shape changed while stripping debug data: {}\nbefore: {before:?}\nafter: {after:?}",
             path.display()
-        );
+        ));
     }
+    Ok(())
 }
 
 fn parse_shape(path: &Path, require_stripped: bool) -> NativeObjectShape {
@@ -152,7 +153,12 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
             .any(|window| window == needle)
 }
 
-fn run_strip_tool(path: &Path) {
+/// Run every configured strip candidate and fail only after all of them have
+/// been tried. Previously a candidate that exists but failed (non-zero exit,
+/// corrupt input, version mismatch) panicked immediately without falling back
+/// to the remaining candidates; now each failure is collected with its stderr
+/// and reported together in the returned error.
+fn run_strip_tool(path: &Path) -> Result<(), String> {
     let candidates = std::env::var_os(STRIP_TOOL_ENV)
         .map(|tool| vec![tool])
         .unwrap_or_else(|| {
@@ -161,34 +167,27 @@ fn run_strip_tool(path: &Path) {
                 OsString::from("rust-llvm-strip"),
             ]
         });
-    let mut missing = Vec::new();
+    let mut failures = Vec::new();
     for tool in candidates {
         match Command::new(&tool).arg("--strip-debug").arg(path).output() {
-            Ok(output) if output.status.success() => return,
-            Ok(output) => {
-                panic!(
-                    "native eBPF debug stripping failed for {} with {:?}: status={} stdout={} stderr={}",
-                    path.display(),
-                    tool,
-                    output.status,
-                    bounded_output(&output.stdout),
-                    bounded_output(&output.stderr),
-                );
+            Ok(output) if output.status.success() => return Ok(()),
+            Ok(output) => failures.push(format!(
+                "{tool:?}: status={} stdout={} stderr={}",
+                output.status,
+                bounded_output(&output.stdout),
+                bounded_output(&output.stderr),
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                failures.push(format!("{tool:?}: not found"));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing.push(tool),
-            Err(error) => {
-                panic!(
-                    "failed to execute native eBPF strip tool {:?} for {}: {error}",
-                    tool,
-                    path.display()
-                );
-            }
+            Err(error) => failures.push(format!("{tool:?}: {error}")),
         }
     }
-    panic!(
-        "no native eBPF strip tool is available for {} (tried {missing:?}); set {STRIP_TOOL_ENV}",
-        path.display()
-    );
+    Err(format!(
+        "native eBPF debug stripping failed for {}; every candidate failed:\n{}\nset {STRIP_TOOL_ENV} to point at a working strip tool",
+        path.display(),
+        failures.join("\n"),
+    ))
 }
 
 fn bounded_output(bytes: &[u8]) -> String {
@@ -201,7 +200,7 @@ fn is_program_section(name: &str) -> bool {
 }
 
 fn is_debug_section(name: &str) -> bool {
-    name.starts_with(".debug_") || name.starts_with(".rel.debug_")
+    name.starts_with(".debug_") || name.starts_with(".rel.debug_") || name.starts_with(".zdebug_")
 }
 
 #[cfg(test)]
@@ -215,6 +214,8 @@ mod tests {
         assert!(!is_program_section(".text"));
         assert!(is_debug_section(".debug_info"));
         assert!(is_debug_section(".rel.debug_line"));
+        assert!(is_debug_section(".zdebug_info"));
+        assert!(is_debug_section(".zdebug_line"));
         assert!(!is_debug_section(".BTF"));
         assert!(!is_debug_section(".BTF.ext"));
     }

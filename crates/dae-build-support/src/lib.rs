@@ -15,7 +15,14 @@ pub mod native_ebpf_build {
     pub fn build_for_crate(crate_name: &str) {
         println!("cargo:rerun-if-changed=../dae-ebpf-program/Cargo.toml");
         println!("cargo:rerun-if-changed=../dae-ebpf-program/src");
+        println!("cargo:rerun-if-changed=../dae-ebpf-abi/Cargo.toml");
+        println!("cargo:rerun-if-changed=../dae-ebpf-abi/src");
         println!("cargo:rerun-if-changed=../../Cargo.toml");
+        // Conservative dependency watch: the workspace lockfile pins every
+        // dependency version (including build-std) used to produce the native
+        // eBPF object, so a lockfile change must trigger a rebuild even when
+        // no manifest or source file changed.
+        println!("cargo:rerun-if-changed=../../Cargo.lock");
         println!("cargo:rerun-if-changed=../../.cargo/config.toml");
         println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_CARGO");
         println!("cargo:rerun-if-env-changed=DAE_RUST_NATIVE_BPF_TOOLCHAIN");
@@ -36,7 +43,8 @@ pub mod native_ebpf_build {
         } else {
             build_rust_native_aya_object(repo_root, &out_dir, &output, &[]);
         }
-        crate::native_object::strip_debug_and_validate(&output);
+        crate::native_object::strip_debug_and_validate(&output)
+            .unwrap_or_else(|err| panic!("{err}"));
 
         let pname_core_output = out_dir.join(PNAME_CORE_NATIVE_BPF_OBJECT);
         if let Some(source) = rust_native_bpf_pname_core_object_override() {
@@ -44,7 +52,8 @@ pub mod native_ebpf_build {
         } else {
             build_rust_native_aya_object(repo_root, &out_dir, &pname_core_output, &["pname-core"]);
         }
-        crate::native_object::strip_debug_and_validate(&pname_core_output);
+        crate::native_object::strip_debug_and_validate(&pname_core_output)
+            .unwrap_or_else(|err| panic!("{err}"));
     }
 
     fn repo_root_from_manifest<'a>(manifest_dir: &'a Path, crate_name: &str) -> &'a Path {

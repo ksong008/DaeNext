@@ -193,7 +193,10 @@ pub(super) fn routing_map_owner_replays_on_map_change_and_skips_same_snapshot() 
     assert!(!first.skipped);
     assert_eq!(first.routing_entries_updated, plan.routing_entries.len());
     assert_eq!(first.lpm_maps_created, plan.lpm_maps.len());
-    assert_eq!(first.checksum, checksum);
+    assert_eq!(
+        first.checksum,
+        u64::from_le_bytes(checksum.as_bytes()[..8].try_into().unwrap())
+    );
     assert_eq!(owner.routing_map_id(), Some(11));
     assert_eq!(owner.lpm_array_map_id(), Some(12));
     assert_eq!(owner.checksum(), Some(checksum));

@@ -113,6 +113,10 @@ impl NativeEbpfRuntimeState {
                     .loaded
                     .as_ref()
                     .and_then(|_| self.loaded_map_id("udp_state_metrics")),
+                tproxy_metrics_map_id: self
+                    .loaded
+                    .as_ref()
+                    .and_then(|_| self.loaded_map_id("tproxy_metrics")),
                 redirect_generation,
             }
         }

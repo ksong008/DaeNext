@@ -125,6 +125,8 @@ pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeReadHandle {
     #[cfg(feature = "native-ebpf")]
     pub(super) udp_state_metrics_map_id: Option<u32>,
     #[cfg(feature = "native-ebpf")]
+    pub(super) tproxy_metrics_map_id: Option<u32>,
+    #[cfg(feature = "native-ebpf")]
     pub(super) redirect_generation: Option<u64>,
 }
 

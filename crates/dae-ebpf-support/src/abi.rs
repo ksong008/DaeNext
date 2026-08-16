@@ -1,9 +1,9 @@
 pub use dae_ebpf_abi::{
     BPF_DAE_PARAM_ABI_VERSION, BpfDaeParam, BpfDomainRouting, BpfIpBytes, BpfLpmKey, BpfMatchSet,
     BpfOutboundConnectivityQuery, BpfPidPname, BpfRedirectEntry, BpfRedirectKey, BpfRoutingResult,
-    BpfTimerOpaque, BpfTuplesKey, BpfUdpConnState, BpfUdpStateMetrics, LINK_HDR_LEN_ETHERNET,
-    LINK_HDR_LEN_NONE, REDIRECT_TRACK_ABI_VERSION, TASK_COMM_LEN, TPROXY_MARK,
-    UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT, UDP_STATE_SATURATION_POLICY_FAIL_CLOSED,
+    BpfTimerOpaque, BpfTproxyMetrics, BpfTuplesKey, BpfUdpConnState, BpfUdpStateMetrics,
+    LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE, REDIRECT_TRACK_ABI_VERSION, TASK_COMM_LEN,
+    TPROXY_MARK, UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT, UDP_STATE_SATURATION_POLICY_FAIL_CLOSED,
 };
 
 pub const MAX_MATCH_SET_LEN: usize = dae_ebpf_abi::MAX_MATCH_SET_LEN as usize;

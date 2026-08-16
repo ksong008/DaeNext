@@ -182,33 +182,49 @@ impl RoutingNativeBuildPlan {
         Ok(())
     }
 
-    pub fn checksum(&self) -> u64 {
-        let mut out = self.routing_entries.len() as u64 ^ ((self.lpm_maps.len() as u64) << 32);
+    /// Deterministic change-detection digest over the whole plan (BLAKE3).
+    ///
+    /// Replaces the previous rotate-XOR weak hash: rotate-XOR has poor
+    /// information diffusion and can collide across different plans, which
+    /// would make `RoutingMapOwner` skip rewriting the kernel maps while the
+    /// caller believes the new rules are live (security-relevant change
+    /// detection, H13).  BLAKE3 is a collision-resistant cryptographic hash
+    /// (already a workspace dependency), byte-wise and order-sensitive, and
+    /// deterministic across processes.  Every field is mixed in: length
+    /// prefixes, routing entry index/kind/outbound/not/must/mark plus the
+    /// full `value` bytes, and each LPM spec's index/flags/max_entries plus
+    /// its entries' prefix_len/value/data bytes.
+    ///
+    /// Note: this digest drives *change detection* for kernel map rewrites;
+    /// it is not an authenticity mechanism (the plan is trusted input).
+    pub fn checksum(&self) -> blake3::Hash {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&(self.routing_entries.len() as u64).to_le_bytes());
+        hasher.update(&(self.lpm_maps.len() as u64).to_le_bytes());
         for entry in &self.routing_entries {
-            out ^= entry.index as u64;
-            out = out.rotate_left(5) ^ u64::from(entry.value.kind);
-            out = out.rotate_left(5) ^ u64::from(entry.value.outbound);
-            out = out.rotate_left(5) ^ u64::from(entry.value.not);
-            out = out.rotate_left(5) ^ u64::from(entry.value.must);
-            out = out.rotate_left(5) ^ u64::from(entry.value.mark);
-            for chunk in entry.value.value.chunks_exact(4) {
-                out = out.rotate_left(5)
-                    ^ u64::from(u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
-            }
+            hasher.update(&entry.index.to_le_bytes());
+            hasher.update(&[entry.value.kind]);
+            hasher.update(&[entry.value.outbound]);
+            hasher.update(&[entry.value.not]);
+            hasher.update(&[entry.value.must]);
+            hasher.update(&entry.value.mark.to_le_bytes());
+            hasher.update(&entry.value.value);
         }
         for spec in &self.lpm_maps {
-            out = out.rotate_left(7) ^ u64::from(spec.index);
-            out = out.rotate_left(7) ^ u64::from(spec.flags);
-            out = out.rotate_left(7) ^ u64::from(spec.max_entries);
+            hasher.update(&spec.index.to_le_bytes());
+            hasher.update(&spec.flags.to_le_bytes());
+            hasher.update(&spec.max_entries.to_le_bytes());
+            hasher.update(&spec.key_size.to_le_bytes());
+            hasher.update(&spec.value_size.to_le_bytes());
             for entry in &spec.entries {
-                out = out.rotate_left(7) ^ u64::from(entry.key.prefix_len);
-                out = out.rotate_left(7) ^ u64::from(entry.value);
+                hasher.update(&entry.key.prefix_len.to_le_bytes());
+                hasher.update(&entry.value.to_le_bytes());
                 for word in entry.key.data {
-                    out = out.rotate_left(7) ^ u64::from(word);
+                    hasher.update(&word.to_le_bytes());
                 }
             }
         }
-        out
+        hasher.finalize()
     }
 }
 
@@ -522,4 +538,168 @@ fn ipv6_to_native_words(addr: Ipv6Addr) -> [u32; 4] {
         u32::from_ne_bytes([octets[8], octets[9], octets[10], octets[11]]),
         u32::from_ne_bytes([octets[12], octets[13], octets[14], octets[15]]),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn routing_entry(
+        index: u32,
+        kind: u8,
+        outbound: u8,
+        not: u8,
+        must: u8,
+        mark: u32,
+        value: [u8; 16],
+    ) -> RoutingMapEntry {
+        RoutingMapEntry {
+            index,
+            value: BpfMatchSet {
+                kind,
+                outbound,
+                not,
+                must,
+                mark,
+                value,
+            },
+        }
+    }
+
+    fn lpm_entry(prefix_len: u32, value: u32, data: [u32; 4]) -> LpmMapEntry {
+        LpmMapEntry {
+            key: BpfLpmKey { prefix_len, data },
+            value,
+        }
+    }
+
+    #[test]
+    fn blake3_checksum_matches_known_vector() {
+        // BLAKE3 of the empty input — the standard test vector, verified
+        // independently (af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262).
+        assert_eq!(
+            blake3::hash(b"").to_hex().as_str(),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        );
+        // And the checksum of an empty plan must be deterministic.
+        let empty = RoutingNativeBuildPlan {
+            routing_entries: vec![routing_entry(0, 3, 1, 0, 0, 0, [0; 16])],
+            lpm_maps: vec![],
+        };
+        assert_eq!(empty.checksum(), empty.checksum());
+    }
+
+    #[test]
+    fn checksum_differs_when_rule_order_swapped() {
+        let plan_a = RoutingNativeBuildPlan {
+            routing_entries: vec![
+                routing_entry(0, 3, 1, 0, 0, 0, [1; 16]),
+                routing_entry(1, 5, 2, 0, 0, 0, [2; 16]),
+                routing_entry(2, 10, 3, 0, 0, 0, [3; 16]),
+            ],
+            lpm_maps: vec![],
+        };
+        let plan_b = RoutingNativeBuildPlan {
+            routing_entries: vec![
+                routing_entry(0, 5, 2, 0, 0, 0, [2; 16]),
+                routing_entry(1, 3, 1, 0, 0, 0, [1; 16]),
+                routing_entry(2, 10, 3, 0, 0, 0, [3; 16]),
+            ],
+            lpm_maps: vec![],
+        };
+        assert_ne!(plan_a.checksum(), plan_b.checksum());
+    }
+
+    #[test]
+    fn checksum_differs_on_single_byte_change() {
+        let base = RoutingNativeBuildPlan {
+            routing_entries: vec![routing_entry(0, 3, 1, 0, 0, 0, [1; 16])],
+            lpm_maps: vec![],
+        };
+        let mut changed_value = [1_u8; 16];
+        changed_value[7] = 2;
+        let changed = RoutingNativeBuildPlan {
+            routing_entries: vec![routing_entry(0, 3, 1, 0, 0, 0, changed_value)],
+            lpm_maps: vec![],
+        };
+        assert_ne!(base.checksum(), changed.checksum());
+
+        // A single byte changed inside an LPM entry's key data word.
+        let lpm_base = RoutingNativeBuildPlan {
+            routing_entries: vec![routing_entry(0, 1, 1, 0, 0, 0, [0; 16])],
+            lpm_maps: vec![LpmMapBuildSpec {
+                index: 0,
+                flags: 1,
+                max_entries: 1024,
+                key_size: 20,
+                value_size: 4,
+                entries: vec![lpm_entry(128, 1, [0x01020304, 0, 0, 0])],
+            }],
+        };
+        let mut lpm_changed = lpm_base.clone();
+        lpm_changed.lpm_maps[0].entries[0].key.data[0] = 0x01020305;
+        assert_ne!(lpm_base.checksum(), lpm_changed.checksum());
+    }
+
+    #[test]
+    fn checksum_changes_when_value_bytes_reordered() {
+        // BLAKE3 is byte-order sensitive: swapping two 4-byte chunks inside
+        // `value` must change the checksum (a collision class the old
+        // rotate-XOR hash's commutative XOR steps could not reliably catch).
+        let mut value_a = [0_u8; 16];
+        value_a[..4].copy_from_slice(&1_u32.to_le_bytes());
+        value_a[4..8].copy_from_slice(&2_u32.to_le_bytes());
+        let mut value_b = [0_u8; 16];
+        value_b[..4].copy_from_slice(&2_u32.to_le_bytes());
+        value_b[4..8].copy_from_slice(&1_u32.to_le_bytes());
+        let plan_a = RoutingNativeBuildPlan {
+            routing_entries: vec![routing_entry(0, 3, 1, 0, 0, 0, value_a)],
+            lpm_maps: vec![],
+        };
+        let plan_b = RoutingNativeBuildPlan {
+            routing_entries: vec![routing_entry(0, 3, 1, 0, 0, 0, value_b)],
+            lpm_maps: vec![],
+        };
+        assert_ne!(plan_a.checksum(), plan_b.checksum());
+    }
+
+    #[test]
+    fn map_owner_rewrites_when_checksum_differs() {
+        // H13 regression: a plan whose rules differ (here: swapped rule order)
+        // must not be skipped by RoutingMapOwner even though the kernel map ids
+        // are unchanged, otherwise the new rules never reach the kernel map
+        // while the caller believes they are active.
+        use crate::routing_owned::RoutingMapOwner;
+
+        let plan_a = RoutingNativeBuildPlan {
+            routing_entries: vec![
+                routing_entry(0, 3, 1, 0, 0, 0, [1; 16]),
+                routing_entry(1, 5, 2, 0, 0, 0, [2; 16]),
+                routing_entry(2, 10, 3, 0, 0, 0, [3; 16]),
+            ],
+            lpm_maps: vec![],
+        };
+        let plan_b = RoutingNativeBuildPlan {
+            routing_entries: vec![
+                routing_entry(0, 5, 2, 0, 0, 0, [2; 16]),
+                routing_entry(1, 3, 1, 0, 0, 0, [1; 16]),
+                routing_entry(2, 10, 3, 0, 0, 0, [3; 16]),
+            ],
+            lpm_maps: vec![],
+        };
+
+        let mut owner = RoutingMapOwner::default();
+        let first = owner
+            .apply_snapshot_with(11, 22, plan_a, |_r, _l, _p| Ok(()))
+            .unwrap();
+        assert!(!first.skipped);
+        let second = owner
+            .apply_snapshot_with(11, 22, plan_b, |_r, _l, _p| Ok(()))
+            .unwrap();
+        assert!(
+            !second.skipped,
+            "plan with different rules must be applied, not skipped"
+        );
+        assert_ne!(first.checksum, second.checksum);
+    }
 }

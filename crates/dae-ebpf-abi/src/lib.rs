@@ -223,6 +223,27 @@ pub struct BpfUdpStateMetrics {
     pub timer_start_failure_total: u64,
 }
 
+/// Per-CPU counters for transparent-proxy datapath failures that were
+/// previously unobservable (their helper return values were discarded).
+/// Kept as its own map (not folded into `BpfUdpStateMetrics`) because the
+/// two metric families measure unrelated subsystems: this one is the tproxy
+/// redirect path, the other is the UDP connection-state lifecycle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BpfTproxyMetrics {
+    /// `bpf_sk_assign` failed in `assign_listener`: the packet keeps the
+    /// tproxy mark but no listener socket is assigned, so it is not
+    /// redirected into the dae listener (a redirect hole).
+    pub sk_assign_failure_total: u64,
+    /// `bpf_skb_store_bytes` failed while preparing the packet for
+    /// redirect-to-control-plane (l3proto ethertype on L3 devices, or the
+    /// dae0peer MAC rewrite). The packet is dropped fail-closed.
+    pub redirect_prep_store_failure_total: u64,
+    /// `bpf_skb_store_bytes` failed while restoring the original MACs on the
+    /// dae0 ingress return path. The packet is dropped fail-closed.
+    pub redirect_restore_store_failure_total: u64,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BpfLpmKey {
@@ -245,6 +266,9 @@ unsafe impl aya::Pod for BpfDaeParam {}
 
 #[cfg(feature = "aya-pod")]
 unsafe impl aya::Pod for BpfUdpStateMetrics {}
+
+#[cfg(feature = "aya-pod")]
+unsafe impl aya::Pod for BpfTproxyMetrics {}
 
 #[cfg(test)]
 mod tests {
@@ -270,5 +294,7 @@ mod tests {
         assert_eq!(align_of::<BpfTimerOpaque>(), 8);
         assert_eq!(size_of::<BpfUdpConnState>(), 24);
         assert_eq!(offset_of!(BpfUdpConnState, timer), 8);
+        assert_eq!(size_of::<BpfTproxyMetrics>(), 24);
+        assert_eq!(align_of::<BpfTproxyMetrics>(), 8);
     }
 }

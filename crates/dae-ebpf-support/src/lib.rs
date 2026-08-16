@@ -45,11 +45,11 @@ pub use abi::{
     BASIC_FEATURE_VERSION, BPF_DAE_PARAM_ABI_VERSION, BPF_LOOP_FEATURE_VERSION,
     BPF_TIMER_FEATURE_VERSION, BpfAbiContract, BpfDaeParam, BpfDomainRouting, BpfIpBytes,
     BpfLpmKey, BpfMatchSet, BpfOutboundConnectivityQuery, BpfPidPname, BpfRedirectEntry,
-    BpfRedirectKey, BpfRoutingResult, BpfTuplesKey, BpfUdpConnState, BpfUdpStateMetrics,
-    CHECKSUM_FEATURE_VERSION, LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE, MAX_MATCH_SET_LEN,
-    REDIRECT_TRACK_ABI_VERSION, SK_ASSIGN_FEATURE_VERSION, TASK_COMM_LEN, TPROXY_MARK,
-    UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT, UDP_STATE_SATURATION_POLICY_FAIL_CLOSED, bpf_abi_contract,
-    redirect_runtime_generation,
+    BpfRedirectKey, BpfRoutingResult, BpfTproxyMetrics, BpfTuplesKey, BpfUdpConnState,
+    BpfUdpStateMetrics, CHECKSUM_FEATURE_VERSION, LINK_HDR_LEN_ETHERNET, LINK_HDR_LEN_NONE,
+    MAX_MATCH_SET_LEN, REDIRECT_TRACK_ABI_VERSION, SK_ASSIGN_FEATURE_VERSION, TASK_COMM_LEN,
+    TPROXY_MARK, UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT, UDP_STATE_SATURATION_POLICY_FAIL_CLOSED,
+    bpf_abi_contract, redirect_runtime_generation,
 };
 pub use admission::{
     NativeBackendAdmissionCheck, NativeBackendAdmissionEvidence, NativeBackendAdmissionReport,
@@ -79,9 +79,9 @@ pub use aya_loader::{
     load_attach_detach_aya_sched_classifier, load_aya_cgroup_program_for_admission,
     load_aya_userspace_object, load_aya_userspace_object_bytes, load_pin_aya_trace_object,
     pin_aya_loaded_object_for_native_runtime, preflight_aya_cgroup_programs,
-    query_aya_interface_index, query_aya_tcx_binding, read_aya_udp_state_metrics,
-    read_aya_udp_state_metrics_by_id, resolve_pname_btf_offsets,
-    resolve_pname_btf_offsets_from_path,
+    query_aya_interface_index, query_aya_tcx_binding, read_aya_tproxy_metrics,
+    read_aya_tproxy_metrics_by_id, read_aya_udp_state_metrics, read_aya_udp_state_metrics_by_id,
+    resolve_pname_btf_offsets, resolve_pname_btf_offsets_from_path,
 };
 pub use bpf_error::{BpfErrorClass, classify_bpf_io_error, format_bpf_io_error};
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};

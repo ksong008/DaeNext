@@ -11,7 +11,7 @@ use crate::routing_native::{
 pub struct RoutingMapOwner {
     routing_map_id: Option<u32>,
     lpm_array_map_id: Option<u32>,
-    checksum: Option<u64>,
+    checksum: Option<blake3::Hash>,
     plan: RoutingNativeBuildPlan,
 }
 
@@ -36,7 +36,7 @@ impl RoutingMapOwner {
         self.lpm_array_map_id
     }
 
-    pub fn checksum(&self) -> Option<u64> {
+    pub fn checksum(&self) -> Option<blake3::Hash> {
         self.checksum
     }
 
@@ -87,7 +87,7 @@ impl RoutingMapOwner {
                 map_changed: false,
                 plan_changed: false,
                 skipped: true,
-                checksum,
+                checksum: checksum_digest_u64(&checksum),
                 routing_entries_updated: 0,
                 lpm_maps_created: 0,
             });
@@ -106,7 +106,7 @@ impl RoutingMapOwner {
             map_changed,
             plan_changed,
             skipped: false,
-            checksum,
+            checksum: checksum_digest_u64(&checksum),
             routing_entries_updated,
             lpm_maps_created,
         })
@@ -203,4 +203,12 @@ impl RoutingRuleOwner {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+}
+
+/// Truncated digest for reports: the first 8 bytes (little-endian) of the
+/// full BLAKE3 digest.  Reports are diagnostic only; change detection uses
+/// the full `blake3::Hash`.
+fn checksum_digest_u64(hash: &blake3::Hash) -> u64 {
+    let bytes: [u8; 8] = hash.as_bytes()[..8].try_into().expect("8-byte slice");
+    u64::from_le_bytes(bytes)
 }

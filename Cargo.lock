@@ -996,6 +996,7 @@ dependencies = [
 name = "dae-runtime-control"
 version = "3.1.0"
 dependencies = [
+ "blake3",
  "dae-core-types",
  "dae-ebpf-support",
  "dae-golden",

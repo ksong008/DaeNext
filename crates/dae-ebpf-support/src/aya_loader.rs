@@ -17,9 +17,9 @@ use aya::programs::{
 use aya::util::KernelVersion;
 
 use crate::{
-    AttachBackend, BpfDaeParam, BpfUdpStateMetrics, DaeCgroupAttachLine, DaeCgroupProgramKind,
-    LoaderBackend, RuntimeMapRole, TcAttachDirection, TcNativeAttachSpec, TcxAttachOrder,
-    map_catalog, pinned_reuse_maps, trace_core_sideload_gate_report,
+    AttachBackend, BpfDaeParam, BpfTproxyMetrics, BpfUdpStateMetrics, DaeCgroupAttachLine,
+    DaeCgroupProgramKind, LoaderBackend, RuntimeMapRole, TcAttachDirection, TcNativeAttachSpec,
+    TcxAttachOrder, map_catalog, pinned_reuse_maps, trace_core_sideload_gate_report,
 };
 
 mod types;

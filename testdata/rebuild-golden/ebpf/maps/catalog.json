@@ -8,7 +8,7 @@
       "name": ".rodata",
       "pinning": "PinNone",
       "type": "Array",
-      "value_size": 32
+      "value_size": 48
     },
     {
       "flags": 0,
@@ -81,6 +81,15 @@
       "pinning": "PinByName",
       "type": "LRUHash",
       "value_size": 36
+    },
+    {
+      "flags": 0,
+      "key_size": 4,
+      "max_entries": 1,
+      "name": "tproxy_metrics",
+      "pinning": "PinNone",
+      "type": "PerCpuArray",
+      "value_size": 24
     },
     {
       "flags": 0,
