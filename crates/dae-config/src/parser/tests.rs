@@ -1,5 +1,6 @@
 use super::*;
 use crate::ItemKind;
+use crate::ast::quote_string;
 use crate::fixtures::PARSER_AST_BASIC;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -220,6 +221,68 @@ fn parses_example_and_marshal_golden_text() {
     let sections = parse_config(text).unwrap();
     assert_eq!(sections[0].name, "global");
     assert_eq!(sections.last().unwrap().name, "dns");
+}
+
+#[test]
+fn double_quoted_escapes_roundtrip_symmetrically_with_quote_string() {
+    let values = [
+        "a\"b",
+        "back\\slash",
+        "line1\nline2",
+        "tab\there",
+        "cr\rcr",
+        "quote\"and\\back\nnewline\tall",
+        "trailing backslash\\",
+        "only\n",
+        "",
+    ];
+    for value in values {
+        let quoted = quote_string(value);
+        let input = format!("global {{\n    test: {quoted}\n}}\n");
+        let sections = parse_config(&input).unwrap();
+        let Item::Param(param) = &sections[0].items[0] else {
+            panic!("expected a param for {quoted:?}");
+        };
+        assert_eq!(
+            param.val, value,
+            "round-trip failed for {value:?} -> {quoted:?}"
+        );
+    }
+}
+
+#[test]
+fn parses_escaped_quote_without_terminating_and_keeps_unknown_and_single_quote_verbatim() {
+    // A backslash-escaped double quote must not terminate the literal.
+    let sections = parse_config("global {\n    test: \"a\\\"b\"\n}\n").unwrap();
+    let Item::Param(param) = &sections[0].items[0] else {
+        panic!("expected a param");
+    };
+    assert_eq!(param.val, "a\"b");
+
+    // Unknown escape sequences keep the backslash verbatim.
+    let sections = parse_config("global {\n    test: \"a\\qb\"\n}\n").unwrap();
+    let Item::Param(param) = &sections[0].items[0] else {
+        panic!("expected a param");
+    };
+    assert_eq!(param.val, "a\\qb");
+
+    // Unknown escapes beginning with a multi-byte UTF-8 character must keep
+    // the whole character and never leave the lexer on a non-char boundary.
+    let sections = parse_config("global {\n    test: \"a\\中b\"\n}\n").unwrap();
+    let Item::Param(param) = &sections[0].items[0] else {
+        panic!("expected a param");
+    };
+    assert_eq!(param.val, "a\\中b");
+
+    // Single-quoted literals do not process escapes (unchanged behavior).
+    let sections = parse_config("global {\n    test: 'a\\nb'\n}\n").unwrap();
+    let Item::Param(param) = &sections[0].items[0] else {
+        panic!("expected a param");
+    };
+    assert_eq!(param.val, "a\\nb");
+
+    // An unterminated literal where the final quote is escaped is still an error.
+    assert!(parse_config("global {\n    test: \"a\\\"\n}\n").is_err());
 }
 
 fn project_sections(sections: &[Section]) -> Value {

@@ -2,6 +2,8 @@ use std::{io::Read, ops::Range};
 
 use crate::GeoDataError;
 
+const MAX_STREAMED_GEODATA_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
 pub fn decode_entry_bytes(data: &[u8], code: &str) -> Result<Vec<u8>, GeoDataError> {
     decode_entry_view_bytes(data, code).map(<[u8]>::to_vec)
 }
@@ -33,8 +35,11 @@ pub fn decode_entry_reader(mut reader: impl Read, code: &str) -> Result<Vec<u8>,
         if tag != 10 {
             return Err(GeoDataError::InvalidGeodataFile);
         }
-        let length =
-            read_varint_reader(&mut reader)?.ok_or(GeoDataError::FailedToReadBytes)? as usize;
+        let length = read_varint_reader(&mut reader)?.ok_or(GeoDataError::FailedToReadBytes)?;
+        if length > MAX_STREAMED_GEODATA_ENTRY_BYTES {
+            return Err(GeoDataError::EntryTooLarge(length));
+        }
+        let length = usize::try_from(length).map_err(|_| GeoDataError::EntryTooLarge(length))?;
         let mut entry = vec![0; length];
         reader
             .read_exact(&mut entry)
@@ -160,4 +165,26 @@ fn read_varint_reader(reader: &mut impl Read) -> Result<Option<u64>, GeoDataErro
         }
     }
     Err(GeoDataError::InvalidGeodataVarintLength)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn streamed_entry_rejects_oversized_length_before_allocation() {
+        let length = MAX_STREAMED_GEODATA_ENTRY_BYTES + 1;
+        let mut encoded = vec![10];
+        let mut value = length;
+        while value >= 0x80 {
+            encoded.push((value as u8 & 0x7f) | 0x80);
+            value >>= 7;
+        }
+        encoded.push(value as u8);
+        assert_eq!(
+            decode_entry_reader(Cursor::new(encoded), "US"),
+            Err(GeoDataError::EntryTooLarge(length))
+        );
+    }
 }

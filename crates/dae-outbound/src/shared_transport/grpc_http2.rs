@@ -413,10 +413,38 @@ fn push_hpack_literal_new_name(out: &mut Vec<u8>, name: &[u8], value: &[u8]) {
 }
 
 fn push_hpack_string(out: &mut Vec<u8>, value: &[u8]) {
-    assert!(
-        value.len() < 128,
-        "grpc hpack helper only supports short literals"
-    );
-    out.push(value.len() as u8);
+    push_hpack_integer(out, value.len(), 7, 0);
     out.extend_from_slice(value);
+}
+
+fn push_hpack_integer(out: &mut Vec<u8>, mut value: usize, prefix_bits: u8, first_mask: u8) {
+    let prefix_max = (1_usize << prefix_bits) - 1;
+    if value < prefix_max {
+        out.push(first_mask | value as u8);
+        return;
+    }
+    out.push(first_mask | prefix_max as u8);
+    value -= prefix_max;
+    while value >= 128 {
+        out.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+#[cfg(test)]
+mod hpack_tests {
+    use super::*;
+
+    #[test]
+    fn hpack_string_supports_long_configured_values() {
+        let value = vec![b'a'; 255];
+        let mut encoded = Vec::new();
+        push_hpack_string(&mut encoded, &value);
+        assert_eq!(&encoded[..3], &[0x7f, 0x80, 0x01]);
+        assert_eq!(&encoded[3..], value);
+
+        let headers = grpc_request_headers_payload(&"s".repeat(200), &"a".repeat(200));
+        assert!(!headers.is_empty());
+    }
 }

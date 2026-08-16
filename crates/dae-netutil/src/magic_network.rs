@@ -41,7 +41,7 @@ pub fn encode_magic_network(
     mptcp: bool,
 ) -> Result<Vec<u8>, MagicNetworkError> {
     let network_bytes = network.as_ref();
-    if mark == 0 && !mptcp {
+    if mark == 0 && !mptcp && is_plaintext_eligible(network_bytes) {
         return Ok(network_bytes.to_vec());
     }
 
@@ -69,7 +69,7 @@ pub fn parse_magic_network(input: &[u8]) -> Result<MagicNetwork, MagicNetworkErr
         });
     }
 
-    if starts_with_printable_rune(input) {
+    if is_plaintext_eligible(input) {
         return Ok(MagicNetwork {
             network: input.to_vec(),
             mark: 0,
@@ -108,6 +108,30 @@ pub fn parse_magic_network(input: &[u8]) -> Result<MagicNetwork, MagicNetworkErr
         mark,
         mptcp: input[mark_end] == 1,
     })
+}
+
+/// Decide whether a network is carried in the plaintext (unencoded) form.
+///
+/// Both `encode_magic_network` and `parse_magic_network` use this same
+/// predicate so the plaintext/encoded decision is symmetric and round-trips
+/// are exact: a network is plaintext only when its first UTF-8 char is
+/// printable AND it contains no control byte anywhere. A network whose first
+/// char is not printable (e.g. `b"\x01tcp"`) must not be emitted as plaintext
+/// because the parser would not classify it as plaintext either and would fail
+/// to decode it; it always takes the encoded form (which starts with the
+/// control byte MAGIC_NETWORK_TYPE, forcing the parser into the encoded path).
+/// Requiring "no control bytes anywhere" additionally guarantees the plaintext
+/// form can never be confused with the encoded layout. Control bytes are
+/// ASCII controls (0x00-0x1F), DEL (0x7F) and C1 controls (0x80-0x9F);
+/// printable multi-byte UTF-8 and non-UTF-8 payloads without control bytes
+/// (e.g. `b"tcp\xff"`) keep the historical plaintext behavior.
+fn is_plaintext_eligible(network: &[u8]) -> bool {
+    if !starts_with_printable_rune(network) {
+        return false;
+    }
+    !network
+        .iter()
+        .any(|byte| *byte < 0x20 || (0x7F..=0x9F).contains(byte))
 }
 
 fn starts_with_printable_rune(input: &[u8]) -> bool {
@@ -194,6 +218,68 @@ mod tests {
 
         let plain = parse_magic_network(b"tcp\xff").unwrap();
         assert_eq!(plain.network, b"tcp\xff");
+    }
+
+    #[test]
+    fn control_char_networks_roundtrip_through_the_encoded_form() {
+        // Networks that are not plaintext-eligible (leading control char,
+        // embedded control byte) must be encoded and must decode back to the
+        // exact original bytes. Before the fix, a leading control char was
+        // emitted as plaintext but the parser refused to treat it as
+        // plaintext, breaking the round-trip.
+        let cases: &[&[u8]] = &[
+            b"\x01tcp",
+            b"\x00udp",
+            b"\x1b",
+            b"tcp\x00",
+            b"a\x01b",
+            b"\xc2\x80tcp", // U+0080 (C1 control) as first char
+        ];
+        for network in cases {
+            let encoded = encode_magic_network(*network, 0, false).unwrap();
+            assert_ne!(&encoded, network, "non-plaintext network must be encoded");
+            let parsed = parse_magic_network(&encoded).unwrap();
+            assert_eq!(parsed.network, *network, "round-trip for {network:?}");
+            assert_eq!(parsed.mark, 0);
+            assert!(!parsed.mptcp);
+        }
+
+        // mark/mptcp ride along the encoded form for these networks too.
+        let encoded = encode_magic_network(b"\x01tcp", 7, true).unwrap();
+        let parsed = parse_magic_network(&encoded).unwrap();
+        assert_eq!(parsed.network, b"\x01tcp");
+        assert_eq!(parsed.mark, 7);
+        assert!(parsed.mptcp);
+    }
+
+    #[test]
+    fn plaintext_with_control_chars_is_no_longer_parsed_as_plaintext() {
+        // The plaintext form is only produced for control-free networks, so a
+        // plaintext-looking input that contains a control byte must not be
+        // accepted as plaintext (it would otherwise be ambiguous); it must be
+        // decoded from the encoded layout instead.
+        assert_eq!(
+            parse_magic_network(b"tcp\x00"),
+            Err(MagicNetworkError::UnknownEncoding)
+        );
+        assert_eq!(
+            parse_magic_network(b"\xff\xfe"),
+            Err(MagicNetworkError::UnknownEncoding)
+        );
+
+        // Printable, control-free plaintext still round-trips as before,
+        // including non-UTF-8 payloads without control bytes.
+        let plain = parse_magic_network(b"tcp").unwrap();
+        assert_eq!(plain.network, b"tcp");
+        assert_eq!(encode_magic_network("tcp", 0, false).unwrap(), b"tcp");
+        let raw = parse_magic_network(b"tcp\xff").unwrap();
+        assert_eq!(raw.network, b"tcp\xff");
+        let raw = parse_magic_network(b"tcp\xff\xfe").unwrap();
+        assert_eq!(raw.network, b"tcp\xff\xfe");
+        assert_eq!(
+            encode_magic_network(b"tcp\xff\xfe", 0, false).unwrap(),
+            b"tcp\xff\xfe"
+        );
     }
 
     fn hex_encode(bytes: &[u8]) -> String {

@@ -122,10 +122,10 @@ impl BoringQuicClientPolicy {
 
 /// Reads the negotiated ALPN from a live BoringSSL-backed Quinn connection.
 pub fn selected_connection_alpn(connection: &quinn::Connection) -> Option<Vec<u8>> {
-    if let Some(data) = connection.handshake_data() {
-        if let Some(boring) = data.downcast_ref::<quinn_boring::HandshakeData>() {
-            return boring.protocol.clone();
-        }
+    if let Some(data) = connection.handshake_data()
+        && let Some(boring) = data.downcast_ref::<quinn_boring::HandshakeData>()
+    {
+        return boring.protocol.clone();
     }
     None
 }

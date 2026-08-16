@@ -105,21 +105,17 @@ impl Function {
 
         let sep = if compact { "," } else { ", " };
         out.push('(');
+        // All parameters are serialized: this string is used by the marshal
+        // (config export) path, and truncating would silently drop rule
+        // parameters on round-trip.
         out.push_str(
             &self
                 .params
                 .iter()
-                .take(5)
                 .map(|param| param.to_config_string(compact, quote_val))
                 .collect::<Vec<_>>()
                 .join(sep),
         );
-        if self.params.len() > 5 {
-            if !self.params[..5].is_empty() {
-                out.push_str(sep);
-            }
-            out.push_str("...");
-        }
         out.push(')');
         out
     }

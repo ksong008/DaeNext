@@ -6,6 +6,7 @@ pub enum GeoDataError {
     FailedToReadExpectedLenBytes,
     InvalidGeodataFile,
     InvalidGeodataVarintLength,
+    EntryTooLarge(u64),
     CodeNotFound,
     InvalidHex(String),
     InvalidUtf8,
@@ -36,6 +37,7 @@ impl fmt::Display for GeoDataError {
             }
             Self::InvalidGeodataFile => f.write_str("invalid geodata file"),
             Self::InvalidGeodataVarintLength => f.write_str("invalid geodata varint length"),
+            Self::EntryTooLarge(length) => write!(f, "geodata entry too large: {length} bytes"),
             Self::CodeNotFound => f.write_str("code not found"),
             Self::InvalidHex(input) => write!(f, "invalid hex: {input}"),
             Self::InvalidUtf8 => f.write_str("invalid utf-8"),

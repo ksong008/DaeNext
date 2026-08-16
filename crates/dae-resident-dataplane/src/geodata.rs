@@ -6,7 +6,10 @@ use std::{
     path::{Path, PathBuf},
     ptr::NonNull,
     slice,
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{
+        Arc, Mutex, OnceLock, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use dae_config::{Function, Param, RoutingRule};
@@ -20,6 +23,20 @@ use sha2::{Digest, Sha256};
 
 const DAE_PRODUCT_DIR_NAME: &str = "dae";
 const PRODUCT_BINARY_NAME: &str = "daed";
+
+/// Upper bounds for the per-resolver geodata caches.
+///
+/// Reloads can otherwise accumulate memory monotonically: the asset cache pins
+/// full `.dat` file mappings, the decoded-entry cache pins one entry per
+/// (file, code) pair (each sharing the asset bytes through an `Arc`), and the
+/// shared-set maps pin process-interner entries alive for as long as the
+/// resolver lives. Capping each map and evicting the least-recently-used
+/// entry bounds that memory; evicted shared sets stay reachable through the
+/// routing plan/matcher Arcs, and their now-dead interner entries are
+/// reclaimed on the next interner insert.
+const GEODATA_ASSET_CACHE_MAX_ENTRIES: usize = 32; // each entry is a full .dat mapping
+const GEODATA_DECODED_ENTRY_CACHE_MAX_ENTRIES: usize = 4096; // one per (file, code) decode
+const GEODATA_SHARED_SET_CACHE_MAX_ENTRIES: usize = 4096; // one per distinct domain/prefix set
 
 pub type SharedResidentIpPrefixSet = Arc<[IpPrefix]>;
 
@@ -51,14 +68,16 @@ pub struct GeodataResolver {
     asset_dirs: Vec<PathBuf>,
     asset_cache: Mutex<BTreeMap<String, CachedGeodataAsset>>,
     decoded_entry_cache: Mutex<BTreeMap<DecodedEntryCacheKey, CachedDecodedEntry>>,
-    shared_domain_sets: Mutex<BTreeMap<SharedSetCacheKey, SharedDomainSet>>,
-    shared_prefix_sets: Mutex<BTreeMap<SharedSetCacheKey, SharedResidentIpPrefixSet>>,
+    shared_domain_sets: Mutex<BTreeMap<SharedSetCacheKey, (SharedDomainSet, u64)>>,
+    shared_prefix_sets: Mutex<BTreeMap<SharedSetCacheKey, (SharedResidentIpPrefixSet, u64)>>,
+    cache_tick: AtomicU64,
 }
 
 #[derive(Clone, Debug)]
 struct CachedGeodataAsset {
     path: PathBuf,
     data: SharedGeodataBytes,
+    last_used: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +243,7 @@ struct DecodedEntryCacheKey {
 struct CachedDecodedEntry {
     asset: SharedGeodataBytes,
     range: Range<usize>,
+    last_used: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -573,6 +593,34 @@ impl GeodataResolver {
             decoded_entry_cache: Mutex::new(BTreeMap::new()),
             shared_domain_sets: Mutex::new(BTreeMap::new()),
             shared_prefix_sets: Mutex::new(BTreeMap::new()),
+            cache_tick: AtomicU64::new(1),
+        }
+    }
+
+    /// Monotonic LRU tick shared by all resolver caches. Never returns 0 so a
+    /// fresh entry can never collide with an entry's initial `last_used`.
+    fn next_cache_tick(&self) -> u64 {
+        self.cache_tick.fetch_add(1, Ordering::Relaxed).max(1)
+    }
+
+    /// Evict the least-recently-used entry while `map` holds more than `cap`
+    /// entries. O(n) per eviction, which is fine: these caches are only
+    /// touched during config/geodata resolution, never on the packet path.
+    fn evict_lru_entries<K: Ord + Clone, V>(
+        &self,
+        map: &mut BTreeMap<K, V>,
+        cap: usize,
+        last_used_of: impl Fn(&V) -> u64,
+    ) {
+        while map.len() > cap {
+            let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, value)| last_used_of(value))
+                .map(|(key, _)| (*key).clone())
+            else {
+                break;
+            };
+            map.remove(&oldest);
         }
     }
 
@@ -584,14 +632,14 @@ impl GeodataResolver {
         let key = DomainKey::try_from(key)
             .map_err(|err| format!("resident shared domain set key: {err}"))?;
         let cache_key = shared_string_set_key("domain", domain_key_name(key), &values);
-        if let Some(cached) = self
+        if let Some((cached, last_used)) = self
             .shared_domain_sets
             .lock()
             .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
-            .get(&cache_key)
-            .cloned()
+            .get_mut(&cache_key)
         {
-            return Ok(cached);
+            *last_used = self.next_cache_tick();
+            return Ok(cached.clone());
         }
         if key == DomainKey::Regex {
             // `regex::Regex` and `RegexSet` own lazy hybrid-DFA cache pools. Those pools retain
@@ -602,10 +650,7 @@ impl GeodataResolver {
             // fresh cache owner so dropping the generation also drops its retired-thread caches.
             let built = SharedDomainSet::from_vec(values, key)
                 .map_err(|err| format!("build shared resident domain set: {err}"))?;
-            self.shared_domain_sets
-                .lock()
-                .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
-                .insert(cache_key, built.clone());
+            self.cache_shared_domain_set(cache_key, built.clone())?;
             return Ok(built);
         }
         if let Some(shared) = shared_domain_set_interner()
@@ -614,10 +659,7 @@ impl GeodataResolver {
             .get(&cache_key)
             .and_then(WeakSharedDomainSet::upgrade)
         {
-            self.shared_domain_sets
-                .lock()
-                .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
-                .insert(cache_key, shared.clone());
+            self.cache_shared_domain_set(cache_key, shared.clone())?;
             return Ok(shared);
         }
         let built = SharedDomainSet::from_vec(values, key)
@@ -637,11 +679,30 @@ impl GeodataResolver {
                 built
             }
         };
-        self.shared_domain_sets
-            .lock()
-            .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?
-            .insert(cache_key, shared.clone());
+        self.cache_shared_domain_set(cache_key, shared.clone())?;
         Ok(shared)
+    }
+
+    /// Insert a shared domain set into the resolver's strong cache, evicting
+    /// the least-recently-used entry when the cache is at its cap. Evicting the
+    /// resolver's strong reference lets the process interner reclaim its weak
+    /// entry (the set stays alive through routing-plan/matcher Arcs).
+    fn cache_shared_domain_set(
+        &self,
+        cache_key: SharedSetCacheKey,
+        set: SharedDomainSet,
+    ) -> Result<(), String> {
+        let mut cache = self
+            .shared_domain_sets
+            .lock()
+            .map_err(|_| "geodata shared domain set cache lock poisoned".to_owned())?;
+        cache.insert(cache_key, (set, self.next_cache_tick()));
+        self.evict_lru_entries(
+            &mut cache,
+            GEODATA_SHARED_SET_CACHE_MAX_ENTRIES,
+            |(_, last_used)| *last_used,
+        );
+        Ok(())
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -658,14 +719,14 @@ impl GeodataResolver {
         prefixes: Vec<IpPrefix>,
     ) -> Result<SharedResidentIpPrefixSet, String> {
         let cache_key = shared_prefix_set_key(&prefixes);
-        if let Some(cached) = self
+        if let Some((cached, last_used)) = self
             .shared_prefix_sets
             .lock()
             .map_err(|_| "geodata shared prefix set cache lock poisoned".to_owned())?
-            .get(&cache_key)
-            .cloned()
+            .get_mut(&cache_key)
         {
-            return Ok(cached);
+            *last_used = self.next_cache_tick();
+            return Ok(Arc::clone(cached));
         }
         if let Some(shared) = shared_prefix_set_interner()
             .lock()
@@ -673,10 +734,7 @@ impl GeodataResolver {
             .get(&cache_key)
             .and_then(Weak::upgrade)
         {
-            self.shared_prefix_sets
-                .lock()
-                .map_err(|_| "geodata shared prefix set cache lock poisoned".to_owned())?
-                .insert(cache_key, Arc::clone(&shared));
+            self.cache_shared_prefix_set(cache_key, Arc::clone(&shared))?;
             return Ok(shared);
         }
         let built: SharedResidentIpPrefixSet = Arc::from(prefixes);
@@ -692,11 +750,28 @@ impl GeodataResolver {
                 built
             }
         };
-        self.shared_prefix_sets
-            .lock()
-            .map_err(|_| "geodata shared prefix set cache lock poisoned".to_owned())?
-            .insert(cache_key, Arc::clone(&shared));
+        self.cache_shared_prefix_set(cache_key, Arc::clone(&shared))?;
         Ok(shared)
+    }
+
+    /// Insert a shared prefix set into the resolver's strong cache with the
+    /// same cap/eviction as `cache_shared_domain_set`.
+    fn cache_shared_prefix_set(
+        &self,
+        cache_key: SharedSetCacheKey,
+        set: SharedResidentIpPrefixSet,
+    ) -> Result<(), String> {
+        let mut cache = self
+            .shared_prefix_sets
+            .lock()
+            .map_err(|_| "geodata shared prefix set cache lock poisoned".to_owned())?;
+        cache.insert(cache_key, (set, self.next_cache_tick()));
+        self.evict_lru_entries(
+            &mut cache,
+            GEODATA_SHARED_SET_CACHE_MAX_ENTRIES,
+            |(_, last_used)| *last_used,
+        );
+        Ok(())
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -720,12 +795,12 @@ impl GeodataResolver {
             .asset_cache
             .lock()
             .map_err(|_| "geodata asset cache lock poisoned".to_owned())?
-            .get(filename)
-            .cloned()
+            .get_mut(filename)
         {
+            cached.last_used = self.next_cache_tick();
             return Ok(GeodataAsset {
-                path: cached.path,
-                data: cached.data,
+                path: cached.path.clone(),
+                data: cached.data.clone(),
                 cache_hit: true,
             });
         }
@@ -756,11 +831,16 @@ impl GeodataResolver {
         let cached = CachedGeodataAsset {
             path: path.to_path_buf(),
             data,
+            last_used: self.next_cache_tick(),
         };
-        self.asset_cache
+        let mut cache = self
+            .asset_cache
             .lock()
-            .map_err(|_| "geodata asset cache lock poisoned".to_owned())?
-            .insert(cache_key.to_owned(), cached.clone());
+            .map_err(|_| "geodata asset cache lock poisoned".to_owned())?;
+        cache.insert(cache_key.to_owned(), cached.clone());
+        self.evict_lru_entries(&mut cache, GEODATA_ASSET_CACHE_MAX_ENTRIES, |entry| {
+            entry.last_used
+        });
         Ok(GeodataAsset {
             path: cached.path,
             data: cached.data,
@@ -784,12 +864,12 @@ impl GeodataResolver {
             .decoded_entry_cache
             .lock()
             .map_err(|_| "geodata decoded-entry cache lock poisoned".to_owned())?
-            .get(&key)
-            .cloned()
+            .get_mut(&key)
         {
+            cached.last_used = self.next_cache_tick();
             return Ok(Some(DecodedEntry {
-                asset: cached.asset,
-                range: cached.range,
+                asset: cached.asset.clone(),
+                range: cached.range.clone(),
                 cache_hit: true,
             }));
         }
@@ -800,11 +880,18 @@ impl GeodataResolver {
         let cached = CachedDecodedEntry {
             asset: asset.data.clone(),
             range,
+            last_used: self.next_cache_tick(),
         };
-        self.decoded_entry_cache
+        let mut cache = self
+            .decoded_entry_cache
             .lock()
-            .map_err(|_| "geodata decoded-entry cache lock poisoned".to_owned())?
-            .insert(key, cached.clone());
+            .map_err(|_| "geodata decoded-entry cache lock poisoned".to_owned())?;
+        cache.insert(key, cached.clone());
+        self.evict_lru_entries(
+            &mut cache,
+            GEODATA_DECODED_ENTRY_CACHE_MAX_ENTRIES,
+            |entry| entry.last_used,
+        );
         Ok(Some(DecodedEntry {
             asset: cached.asset,
             range: cached.range,
@@ -942,5 +1029,101 @@ mod tests {
                 PathBuf::from("/usr/share/dae"),
             ]
         );
+    }
+
+    #[test]
+    fn lru_eviction_bounds_a_cache_and_drops_the_oldest_entry() {
+        let resolver = GeodataResolver::new(Vec::<PathBuf>::new());
+        let mut map = BTreeMap::new();
+        for index in 0..8_u64 {
+            map.insert(format!("k{index}"), (format!("v{index}"), index));
+        }
+        resolver.evict_lru_entries(&mut map, 4, |(_, last_used)| *last_used);
+        assert_eq!(map.len(), 4);
+        assert!(!map.contains_key("k0"), "oldest entry evicted");
+        assert!(map.contains_key("k7"), "newest entry retained");
+    }
+
+    #[test]
+    fn lru_eviction_spares_recently_touched_entries() {
+        let resolver = GeodataResolver::new(Vec::<PathBuf>::new());
+        let mut map = BTreeMap::new();
+        for index in 0..8_u64 {
+            map.insert(format!("k{index}"), (format!("v{index}"), index));
+        }
+        // Touch k0 with a tick strictly newer than every entry so it becomes
+        // the most recently used (entry ticks start at 0..7).
+        map.get_mut("k0").unwrap().1 = resolver.next_cache_tick() + 64;
+        resolver.evict_lru_entries(&mut map, 4, |(_, last_used)| *last_used);
+        assert_eq!(map.len(), 4);
+        assert!(map.contains_key("k0"), "touched entry survives");
+        for evicted in ["k1", "k2", "k3", "k4"] {
+            assert!(!map.contains_key(evicted), "{evicted} is the oldest");
+        }
+        for retained in ["k5", "k6", "k7"] {
+            assert!(map.contains_key(retained), "{retained} must survive");
+        }
+    }
+
+    #[test]
+    fn asset_cache_is_capped_and_evicts_least_recently_used() {
+        let root =
+            std::env::temp_dir().join(format!("daed-geodata-asset-cap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let resolver = GeodataResolver::new([root.clone()]);
+        for index in 0..(GEODATA_ASSET_CACHE_MAX_ENTRIES + 8) {
+            let filename = format!("asset-{index}.dat");
+            fs::write(root.join(&filename), b"raw").unwrap();
+            let asset = resolver.read_asset(&filename).unwrap();
+            assert!(!asset.cache_hit, "freshly written asset must miss");
+        }
+        let first_evicted = {
+            let cached = resolver.asset_cache.lock().unwrap();
+            assert!(
+                cached.len() <= GEODATA_ASSET_CACHE_MAX_ENTRIES,
+                "asset cache must stay at its cap: {}",
+                cached.len()
+            );
+            assert!(
+                !cached.contains_key("asset-0.dat"),
+                "least-recently-used asset must be evicted"
+            );
+            !cached.contains_key("asset-0.dat")
+        };
+        assert!(first_evicted);
+        // A repeat read of a surviving asset is served from the cache.
+        assert!(
+            resolver.read_asset("asset-8.dat").unwrap().cache_hit,
+            "surviving asset must be served from cache"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shared_domain_set_strong_cache_reuses_and_evicts_lru() {
+        let resolver = GeodataResolver::new(Vec::<PathBuf>::new());
+        let first = resolver
+            .shared_domain_set_for_test("full", vec!["first.example".to_owned()])
+            .unwrap();
+        let first_again = resolver
+            .shared_domain_set_for_test("full", vec!["first.example".to_owned()])
+            .unwrap();
+        assert!(
+            first.ptr_eq(&first_again),
+            "strong cache must reuse the same set"
+        );
+        // Distinct sets beyond the cap evict the least-recently-used strong
+        // reference; the set itself stays reachable through our Arc.
+        for index in 0..(GEODATA_SHARED_SET_CACHE_MAX_ENTRIES + 8) {
+            let _ = resolver
+                .shared_domain_set_for_test("full", vec![format!("set-{index}.example")])
+                .unwrap();
+        }
+        assert!(
+            resolver.shared_domain_set_count() <= GEODATA_SHARED_SET_CACHE_MAX_ENTRIES,
+            "strong set cache must stay at its cap"
+        );
+        assert!(first.ptr_eq(&first_again));
     }
 }

@@ -9,30 +9,41 @@ pub fn scope_to_string(scope: u32) -> &'static str {
     }
 }
 
-pub fn protocol_to_string(protocol: u32) -> &'static str {
+/// Render a kernel route protocol (RTPROT_*) value the way `ip route show
+/// protocol` does.
+///
+/// The 0..=16 range follows Linux `include/uapi/linux/rtnetlink.h`: RTPROT_
+/// UNSPEC(0), REDIRECT(1), KERNEL(2), BOOT(3), STATIC(4), GATED(8), RA(9),
+/// MRT(10), ZEBRA(11), BIRD(12), DNROUTED(13), XORP(14), NTK(15), DHCP(16).
+/// 17 is the RTPROT_NRTPROT sentinel (count of kernel-defined protocols), not
+/// a protocol name; 18 and 99 are not kernel RTPROT constants. The daemon
+/// protocol values 42/186/187/188/189/192 (babel/bgp/isis/ospf/rip/eigrp) are
+/// standardized by iproute2's rt_protos table and are kept. Any other value
+/// is rendered as its decimal string instead of "unknown" so the raw kernel
+/// value survives round-trips through the sysdump.
+pub fn protocol_to_string(protocol: u32) -> String {
     match protocol {
-        0 => "unspec",
-        2 => "kernel",
-        3 => "boot",
-        4 => "static",
-        8 => "gated",
-        9 => "ra",
-        10 => "mrt",
-        11 => "zebra",
-        12 => "bird",
-        13 => "dnrouted",
-        14 => "xorp",
-        16 => "dhcp",
-        17 => "ntk",
-        18 => "dnrouter",
-        42 => "babel",
-        99 => "mroute",
-        186 => "bgp",
-        187 => "isis",
-        188 => "ospf",
-        189 => "rip",
-        192 => "eigrp",
-        _ => "unknown",
+        0 => "unspec".to_owned(),
+        1 => "redirect".to_owned(),
+        2 => "kernel".to_owned(),
+        3 => "boot".to_owned(),
+        4 => "static".to_owned(),
+        8 => "gated".to_owned(),
+        9 => "ra".to_owned(),
+        10 => "mrt".to_owned(),
+        11 => "zebra".to_owned(),
+        12 => "bird".to_owned(),
+        13 => "dnrouted".to_owned(),
+        14 => "xorp".to_owned(),
+        15 => "ntk".to_owned(),
+        16 => "dhcp".to_owned(),
+        42 => "babel".to_owned(),
+        186 => "bgp".to_owned(),
+        187 => "isis".to_owned(),
+        188 => "ospf".to_owned(),
+        189 => "rip".to_owned(),
+        192 => "eigrp".to_owned(),
+        _ => protocol.to_string(),
     }
 }
 

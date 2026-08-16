@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -7,6 +7,9 @@ use dae_config_util::ensure_file_in_sub_dir;
 use crate::ast::{Item, Section};
 use crate::error::ConfigError;
 use crate::parser::parse_config;
+
+const MAX_MERGE_DEPTH: usize = 128;
+const MAX_MERGE_FILES: usize = 4096;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MergeOutput {
@@ -21,8 +24,10 @@ pub fn merge_config_file(entry: impl Into<PathBuf>) -> Result<MergeOutput, Confi
         entry: entry.clone(),
         entry_dir,
         entry_to_section_map: BTreeMap::new(),
+        visited: BTreeSet::new(),
+        files_read: 0,
     };
-    merger.dfs_merge(&entry, None)?;
+    merger.dfs_merge(&entry, None, 0)?;
     let entries = merger.entry_to_section_map.keys().cloned().collect();
     let section_map = merger
         .entry_to_section_map
@@ -36,11 +41,17 @@ struct Merger {
     entry: PathBuf,
     entry_dir: PathBuf,
     entry_to_section_map: BTreeMap<PathBuf, BTreeMap<String, Vec<Item>>>,
+    // Canonicalized paths of every file already merged, used for cycle
+    // detection so that spellings like ./x.dae, x.dae or x/../x.dae that
+    // refer to the same file cannot bypass the check.
+    visited: BTreeSet<PathBuf>,
+    files_read: usize,
 }
 
 impl Merger {
     fn read_entry(&mut self, entry: &Path) -> Result<(), ConfigError> {
-        if self.entry_to_section_map.contains_key(entry) {
+        let canonical = canonical_or_normalized(entry);
+        if self.visited.contains(&canonical) {
             return Err(ConfigError::Merge(
                 "circular include is not allowed".to_owned(),
             ));
@@ -98,12 +109,30 @@ impl Merger {
             ))
         })?;
         let section_map = self.convert_sections_to_map(sections);
+        self.files_read += 1;
+        if self.files_read > MAX_MERGE_FILES {
+            return Err(ConfigError::Merge(format!(
+                "merge exceeds file count limit {MAX_MERGE_FILES}"
+            )));
+        }
+        self.visited.insert(canonical);
         self.entry_to_section_map
             .insert(entry.to_path_buf(), section_map);
         Ok(())
     }
 
-    fn dfs_merge(&mut self, entry: &Path, father_entry: Option<&Path>) -> Result<(), ConfigError> {
+    fn dfs_merge(
+        &mut self,
+        entry: &Path,
+        father_entry: Option<&Path>,
+        depth: usize,
+    ) -> Result<(), ConfigError> {
+        if depth >= MAX_MERGE_DEPTH {
+            return Err(ConfigError::Merge(format!(
+                "merge depth exceeds limit {MAX_MERGE_DEPTH} while including {}",
+                entry.display()
+            )));
+        }
         self.read_entry(entry).map_err(|err| {
             if matches!(err, ConfigError::Merge(ref message) if message == "circular include is not allowed")
             {
@@ -149,7 +178,7 @@ impl Merger {
 
         let child_entries = unsqueeze_entries(patterns)?;
         for child in child_entries {
-            self.dfs_merge(&child, Some(entry))?;
+            self.dfs_merge(&child, Some(entry), depth + 1)?;
         }
 
         if let Some(father) = father_entry {
@@ -294,20 +323,72 @@ fn wildcard_match(pattern: &str, name: &str) -> bool {
     wildcard_match_bytes(pattern.as_bytes(), name.as_bytes())
 }
 
+/// Iterative dynamic programming wildcard matcher (O(pattern x name)).
+///
+/// Semantics are identical to the previous recursive matcher:
+/// `*` matches any (possibly empty) sequence of bytes, `?` matches exactly
+/// one byte, and any other byte matches literally (including `[`, which is
+/// only treated as a meta character during directory expansion, not here).
 fn wildcard_match_bytes(pattern: &[u8], name: &[u8]) -> bool {
-    if pattern.is_empty() {
-        return name.is_empty();
-    }
-    match pattern[0] {
-        b'*' => {
-            wildcard_match_bytes(&pattern[1..], name)
-                || (!name.is_empty() && wildcard_match_bytes(pattern, &name[1..]))
+    let name_len = name.len();
+    // dp[j] == pattern[..i] matches name[..j] for the current pattern row i.
+    let mut dp = vec![false; name_len + 1];
+    dp[0] = true;
+    for &pc in pattern {
+        let mut next = vec![false; name_len + 1];
+        match pc {
+            b'*' => {
+                for j in 0..=name_len {
+                    next[j] = dp[j] || (j > 0 && next[j - 1]);
+                }
+            }
+            b'?' => {
+                next[1..].copy_from_slice(&dp[..name_len]);
+            }
+            byte => {
+                for j in 1..=name_len {
+                    next[j] = dp[j - 1] && name[j - 1] == byte;
+                }
+            }
         }
-        b'?' => !name.is_empty() && wildcard_match_bytes(&pattern[1..], &name[1..]),
-        byte => {
-            !name.is_empty() && byte == name[0] && wildcard_match_bytes(&pattern[1..], &name[1..])
+        dp = next;
+    }
+    dp[name_len]
+}
+
+/// Key used for cycle detection: the canonicalized path when the file exists,
+/// otherwise an absolute lexically-normalized path. This makes `./x.dae`,
+/// `x.dae` and `x/../x.dae` spellings of the same file compare equal.
+fn canonical_or_normalized(path: &Path) -> PathBuf {
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => canonical,
+        Err(_) => {
+            let absolute = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .map(|dir| dir.join(path))
+                    .unwrap_or_else(|_| path.to_path_buf())
+            };
+            normalize_path(&absolute)
         }
     }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push(Path::new("/")),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -429,6 +510,179 @@ routing {
             .unwrap_err()
             .to_string();
         assert!(err.contains("permissions 0644"));
+    }
+
+    #[test]
+    fn detects_cycle_across_dot_and_parent_dir_path_spellings() {
+        let dot = TempTree::new();
+        dot.write_mode(
+            "entry.dae",
+            "include { ./child.dae }\nglobal {}\nrouting {}\n",
+            0o640,
+        );
+        dot.write_mode(
+            "child.dae",
+            "include { child.dae }\nglobal {}\nrouting {}\n",
+            0o640,
+        );
+        let err = merge_config_file(dot.path("entry.dae"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("circular include is not allowed"),
+            "got: {err}"
+        );
+
+        let dotdot = TempTree::new();
+        dotdot.mkdir("config.d");
+        dotdot.write_mode(
+            "entry.dae",
+            "include { config.d/child.dae }\nglobal {}\nrouting {}\n",
+            0o640,
+        );
+        dotdot.write_mode(
+            "config.d/child.dae",
+            "include { config.d/../config.d/child.dae }\nglobal {}\nrouting {}\n",
+            0o640,
+        );
+        let err = merge_config_file(dotdot.path("entry.dae"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("circular include is not allowed"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_include_depth_beyond_limit() {
+        let tree = TempTree::new();
+        tree.mkdir("config.d");
+        // Chain entry -> f0 -> f1 -> ... -> f_{MAX-1}; the file at depth
+        // MAX_MERGE_DEPTH must produce an error instead of overflowing.
+        for i in 0..MAX_MERGE_DEPTH {
+            let text = if i + 1 < MAX_MERGE_DEPTH {
+                format!(
+                    "include {{ config.d/f{}.dae }}\nglobal {{}}\nrouting {{}}\n",
+                    i + 1
+                )
+            } else {
+                "global {}\nrouting {}\n".to_owned()
+            };
+            tree.write_mode(&format!("config.d/f{i}.dae"), &text, 0o640);
+        }
+        tree.write_mode(
+            "entry.dae",
+            "include { config.d/f0.dae }\nglobal {}\nrouting {}\n",
+            0o640,
+        );
+        let err = merge_config_file(tree.path("entry.dae"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("depth exceeds limit"), "got: {err}");
+    }
+
+    #[test]
+    fn wildcard_match_boundary_cases() {
+        assert!(wildcard_match("*", ""));
+        assert!(wildcard_match("*", "anything"));
+        assert!(!wildcard_match("", "a"));
+        assert!(wildcard_match("", ""));
+        assert!(!wildcard_match("?", ""));
+        assert!(wildcard_match("?", "a"));
+        assert!(!wildcard_match("a?b", "ab"));
+        assert!(wildcard_match("a?b", "aXb"));
+        assert!(wildcard_match("a*b", "ab"));
+        assert!(wildcard_match("a*b", "a123b"));
+        assert!(!wildcard_match("a*b", "ac"));
+        // '*' matches any byte sequence, including '/'.
+        assert!(wildcard_match("*.dae", "config.d/child.dae"));
+        // '[' is a literal here (only the directory walk treats it as meta).
+        assert!(wildcard_match("a[b]", "a[b]"));
+        assert!(!wildcard_match("a[b]", "ab"));
+        assert!(wildcard_match("***", ""));
+        assert!(wildcard_match("a**b", "ab"));
+        assert!(wildcard_match("*?*", "x"));
+        assert!(!wildcard_match("*?*", ""));
+    }
+
+    #[test]
+    fn wildcard_match_matches_native_recursive_semantics() {
+        let patterns = [
+            "",
+            "*",
+            "?",
+            "a",
+            "a*",
+            "*a",
+            "a*b",
+            "*a*b*",
+            "a?b",
+            "?a?b",
+            "*.dae",
+            "config.d/*",
+            "a[b]c",
+            "*[x]*",
+            "**a**",
+            "*a*a*a*",
+            "????",
+            "a*b*c",
+            "x*y*z*w",
+            "*?*",
+            "?*?",
+            "*?a",
+        ];
+        let names = [
+            "",
+            "a",
+            "b",
+            "ab",
+            "abc",
+            "aXb",
+            "axby",
+            "acb",
+            "config.d/child.dae",
+            "a[b]c",
+            "[x]",
+            "x",
+            "zzz",
+            "aaaa",
+            "aabb",
+            "wxyz",
+            "child.dae",
+            "aa",
+            "abcabc",
+            "bca",
+            "q",
+            "qq",
+            "a.a",
+            "a.b.dae",
+        ];
+        for pattern in patterns {
+            for name in names {
+                let got = wildcard_match_bytes(pattern.as_bytes(), name.as_bytes());
+                let want = wildcard_match_bytes_recursive(pattern.as_bytes(), name.as_bytes());
+                assert_eq!(got, want, "pattern {pattern:?} vs name {name:?}");
+            }
+        }
+    }
+
+    fn wildcard_match_bytes_recursive(pattern: &[u8], name: &[u8]) -> bool {
+        if pattern.is_empty() {
+            return name.is_empty();
+        }
+        match pattern[0] {
+            b'*' => {
+                wildcard_match_bytes_recursive(&pattern[1..], name)
+                    || (!name.is_empty() && wildcard_match_bytes_recursive(pattern, &name[1..]))
+            }
+            b'?' => !name.is_empty() && wildcard_match_bytes_recursive(&pattern[1..], &name[1..]),
+            byte => {
+                !name.is_empty()
+                    && byte == name[0]
+                    && wildcard_match_bytes_recursive(&pattern[1..], &name[1..])
+            }
+        }
     }
 
     struct TempTree {
