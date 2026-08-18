@@ -12,13 +12,13 @@ use tokio::task::JoinSet;
 use tokio::time;
 
 use super::plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
-use super::resource_profile::JuicityOwnerResourceProfile;
 use super::tcp::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointDrainReport,
     ResidentConnectedQuicEndpoint, open_juicity_quic_connection_candidates_async,
     wait_quic_endpoint_idle_after_close, wait_quic_endpoints_idle_until,
 };
 use super::{RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal};
+use dae_resident_core::JuicityOwnerResourceProfile;
 
 #[derive(Clone, Debug, Eq)]
 struct JuicityOwnerKey {

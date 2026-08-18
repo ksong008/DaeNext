@@ -64,3 +64,4 @@ url.workspace = true
 [dev-dependencies]
 dae-datapath = { workspace = true, features = ["test-support"] }
 dae-outbound = { workspace = true, features = ["test-support"] }
+dae-resident-core = { workspace = true, features = ["test-support"] }

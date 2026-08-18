@@ -843,6 +843,7 @@ name = "dae-resident-core"
 version = "3.1.0"
 dependencies = [
  "dae-datapath",
+ "h2",
  "libc",
  "serde_json",
  "tokio",

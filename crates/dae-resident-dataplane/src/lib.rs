@@ -115,10 +115,7 @@ pub(crate) use self::udp::{
     ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
     probe_resident_proxy_dns_udp_with_forwarder_async,
 };
-pub(crate) use dae_resident_core::{
-    ResidentOwnedTaskShutdownCompletion, ResidentUdpPayloadAdmission,
-    ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit, admit_udp_payload, set_socket_mark,
-};
+pub(crate) use dae_resident_core::*;
 
 #[path = "runtime/defaults.rs"]
 mod defaults;
@@ -187,10 +184,6 @@ use self::resources::*;
 #[path = "runtime/udp_resources.rs"]
 mod udp_resources;
 use self::udp_resources::*;
-#[path = "runtime/resource_profile.rs"]
-mod resource_profile;
-use self::resource_profile::*;
-
 pub const RESIDENT_MANUAL_PROBE_TASK_NAME: &str = "daed-latency";
 #[path = "runtime/hysteria2_owner.rs"]
 mod hysteria2_owner;
