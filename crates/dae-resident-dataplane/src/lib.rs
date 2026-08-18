@@ -197,6 +197,7 @@ pub(crate) use dae_resident_transport::AnyTlsLogicalStreamLease;
 #[path = "runtime/h2_carrier_owner.rs"]
 mod h2_carrier_owner;
 #[path = "runtime/transport_identity.rs"]
+#[cfg(any(test, feature = "benchmark-support"))]
 mod transport_identity;
 #[cfg(test)]
 pub(crate) use self::h2_carrier_owner::acquire_h2_carrier;
