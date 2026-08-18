@@ -1,4 +1,4 @@
-pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
+pub fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
     let mark = mark as libc::c_int;
     let status = unsafe {
         libc::setsockopt(

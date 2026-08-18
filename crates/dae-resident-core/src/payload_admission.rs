@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use dae_datapath::udp_io::UdpPayload;
 
 #[derive(Clone)]
-pub(crate) struct ResidentUdpPayloadAdmission {
+pub struct ResidentUdpPayloadAdmission {
     generation: u64,
     state: Arc<ResidentUdpPayloadAdmissionState>,
 }
@@ -21,20 +21,20 @@ struct ResidentUdpPayloadAdmissionState {
 }
 
 #[derive(Debug)]
-pub(crate) struct ResidentUdpPayloadPermit {
+pub struct ResidentUdpPayloadPermit {
     admission: ResidentUdpPayloadAdmission,
     bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentUdpPayloadAdmissionError {
-    pub(crate) requested: usize,
-    pub(crate) current: usize,
-    pub(crate) limit: usize,
+pub struct ResidentUdpPayloadAdmissionError {
+    pub requested: usize,
+    pub current: usize,
+    pub limit: usize,
 }
 
 impl ResidentUdpPayloadAdmission {
-    pub(crate) fn new(generation: u64, limit: usize) -> Self {
+    pub fn new(generation: u64, limit: usize) -> Self {
         Self {
             generation,
             state: Arc::new(ResidentUdpPayloadAdmissionState {
@@ -47,7 +47,7 @@ impl ResidentUdpPayloadAdmission {
         }
     }
 
-    pub(crate) fn try_acquire(
+    pub fn try_acquire(
         &self,
         bytes: usize,
     ) -> Result<ResidentUdpPayloadPermit, ResidentUdpPayloadAdmissionError> {
@@ -89,15 +89,15 @@ impl ResidentUdpPayloadAdmission {
         }
     }
 
-    pub(crate) fn limit(&self) -> usize {
+    pub fn limit(&self) -> usize {
         self.state.limit
     }
 
-    pub(crate) fn current(&self) -> usize {
+    pub fn current(&self) -> usize {
         self.state.current.load(Ordering::Acquire)
     }
 
-    pub(crate) fn snapshot(&self) -> Value {
+    pub fn snapshot(&self) -> Value {
         json!({
             "generation": self.generation,
             "limitBytes": self.state.limit,
@@ -109,7 +109,7 @@ impl ResidentUdpPayloadAdmission {
     }
 }
 
-pub(crate) fn admit_udp_payload(
+pub fn admit_udp_payload(
     payload: &mut UdpPayload,
     admission: &ResidentUdpPayloadAdmission,
 ) -> Result<(), ResidentUdpPayloadAdmissionError> {

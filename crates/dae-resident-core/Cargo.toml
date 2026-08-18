@@ -1,0 +1,17 @@
+[package]
+name = "dae-resident-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+dae-datapath.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

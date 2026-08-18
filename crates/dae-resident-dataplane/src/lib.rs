@@ -40,7 +40,6 @@ mod adapter_matrix;
 mod allocator_hooks;
 mod client;
 mod control_transport_owners;
-mod core;
 mod direct;
 mod display;
 mod dns;
@@ -69,10 +68,6 @@ pub(crate) use self::allocator_hooks::{
     ResidentAllocatorBusyKind, ResidentAllocatorReclaimReason, ResidentAllocatorRuntimeHooks,
     ResidentAllocatorWorkerKind, resident_allocator_enter_busy, resident_allocator_request_reclaim,
     resident_allocator_runtime_hooks,
-};
-pub(crate) use self::core::{
-    ResidentOwnedTaskShutdownCompletion, ResidentUdpPayloadAdmission,
-    ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit, admit_udp_payload, set_socket_mark,
 };
 pub(crate) use self::dns::ResidentDnsReloadSnapshot;
 pub(crate) use self::dns::{
@@ -118,6 +113,10 @@ pub(crate) use self::transport::quic_endpoint::{
 pub(crate) use self::udp::{
     ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
     probe_resident_proxy_dns_udp_with_forwarder_async,
+};
+pub(crate) use dae_resident_core::{
+    ResidentOwnedTaskShutdownCompletion, ResidentUdpPayloadAdmission,
+    ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit, admit_udp_payload, set_socket_mark,
 };
 
 #[path = "runtime/defaults.rs"]
