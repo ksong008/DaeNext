@@ -1,10 +1,11 @@
-use super::*;
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpStream;
 
 const HTTP_CONNECT_HEAD_LIMIT: usize = 8 * 1024;
 const HTTP_CONNECT_PEEK_CHUNK: usize = 512;
 
-pub(super) async fn read_plain_http_connect_head_without_overread(
-    stream: &mut TokioTcpStream,
+pub(crate) async fn read_plain_http_connect_head_without_overread(
+    stream: &mut TcpStream,
 ) -> Result<Vec<u8>, String> {
     let mut head = Vec::with_capacity(HTTP_CONNECT_PEEK_CHUNK);
     let mut delimiter_match = 0_u8;

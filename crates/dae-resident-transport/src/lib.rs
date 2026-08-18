@@ -2,6 +2,8 @@ mod direct_dial;
 mod dns_name;
 mod dns_request;
 mod dns_tcp_wire;
+mod http_connect_head;
+mod proxy_handshake;
 mod quic_endpoint;
 mod resolver;
 
@@ -15,6 +17,7 @@ pub use dns_request::{
 pub use dns_tcp_wire::{
     DnsTcpFrameReader, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
+pub use proxy_handshake::{http_proxy_connect_plain_async, socks5_connect_async};
 pub use quic_endpoint::{
     ObservedQuicEndpoint, QuicEndpointAdmissionContext, QuicEndpointCallerClass,
     QuicEndpointDrainReport, QuicEndpointIdentityRole, QuicEndpointOpenContext,

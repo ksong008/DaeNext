@@ -63,7 +63,6 @@ use dae_outbound::{
         meek_http_request, mux_data_frame, mux_data_frame_header, mux_end_frame, mux_new_frame,
         validate_http_status,
     },
-    socks5::{Socks5Address, handshake},
     trojan::packet as trojan_packet,
     tuic::{
         TuicCongestionController, build_tuic_runtime_client_config_with_session_cache,
@@ -219,13 +218,10 @@ pub(crate) use self::transport_helpers::{
     stop_xhttp_xmux_generation_owner,
 };
 mod stream_helpers;
+pub(crate) use self::stream_helpers::open_plain_proxy_tcp_stream_async;
 use self::stream_helpers::*;
-mod http_connect_head;
-use self::http_connect_head::*;
-pub(crate) use self::stream_helpers::{
-    http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async, socks5_connect_async,
-};
 pub(crate) use super::AsyncPrefixedStream;
+pub(crate) use dae_resident_transport::{http_proxy_connect_plain_async, socks5_connect_async};
 mod shadowsocks_relay;
 pub(crate) use self::shadowsocks_relay::{
     relay_tcp_over_shadowsocks_2022_async, relay_tcp_over_shadowsocks_2022_simple_obfs_http_async,

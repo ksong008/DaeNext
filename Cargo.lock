@@ -955,6 +955,7 @@ dependencies = [
  "bytes",
  "dae-datapath",
  "dae-dns",
+ "dae-outbound",
  "dae-resident-core",
  "dae-runtime-control",
  "fastrand",
