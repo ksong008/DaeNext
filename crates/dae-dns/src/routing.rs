@@ -190,7 +190,7 @@ impl RequestMatchSet {
     fn from_fixture_value(value: &Value) -> Result<Self, DnsError> {
         Ok(Self {
             match_type: dns_match_type(required_str(value, "type")?)?,
-            value: value.get("value").and_then(Value::as_u64).unwrap_or(0) as u16,
+            value: optional_fixture_u16(value, "value")?.unwrap_or(0),
             not: value.get("not").and_then(Value::as_bool).unwrap_or(false),
             upstream: request_outbound_from_fixture(required_str(value, "upstream")?)?,
         })
@@ -337,7 +337,8 @@ impl ResponseMatchSet {
             .and_then(Value::as_u64)
             .or_else(|| value.get("lpm_index").and_then(Value::as_u64))
             .or_else(|| value.get("qtype").and_then(Value::as_u64))
-            .map(|value| value as u16)
+            .map(|value| checked_fixture_integer(value, "match value"))
+            .transpose()?
             .unwrap_or(0);
         Ok(Self {
             match_type,
@@ -381,7 +382,8 @@ fn build_domain_matcher(value: &Value, match_count: usize) -> Result<DomainMatch
         .into_iter()
         .flatten()
     {
-        let bit = required_u64(set, "bit")? as usize;
+        let bit = usize::try_from(required_u64(set, "bit")?)
+            .map_err(|_| DnsError::Resolve("domain bit is out of range".to_owned()))?;
         let key = DomainKey::try_from(required_str(set, "key")?)
             .map_err(|err| DnsError::Resolve(err.to_string()))?;
         let patterns = required_array(set, "patterns")?
@@ -487,6 +489,22 @@ fn required_u64(value: &Value, key: &str) -> Result<u64, DnsError> {
         .get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| DnsError::Resolve(format!("{key} must be number")))
+}
+
+fn optional_fixture_u16(value: &Value, key: &str) -> Result<Option<u16>, DnsError> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|raw| checked_fixture_integer(raw, key))
+        .transpose()
+}
+
+fn checked_fixture_integer<T>(value: u64, key: &str) -> Result<T, DnsError>
+where
+    T: TryFrom<u64>,
+{
+    T::try_from(value)
+        .map_err(|_| DnsError::Resolve(format!("{key} value {value} is out of range")))
 }
 
 fn required_array<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>, DnsError> {

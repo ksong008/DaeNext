@@ -196,12 +196,18 @@ mod tests {
         for case in cases {
             let key = DnsCacheKey::new(
                 case["qname"].as_str().unwrap(),
-                case["qtype"].as_u64().unwrap() as u16,
-                case["qclass"].as_u64().unwrap() as u16,
+                u16::try_from(case["qtype"].as_u64().unwrap()).unwrap(),
+                u16::try_from(case["qclass"].as_u64().unwrap()).unwrap(),
             );
             assert_eq!(key.qname, case["key"]["qname"].as_str().unwrap());
-            assert_eq!(key.qtype, case["key"]["qtype"].as_u64().unwrap() as u16);
-            assert_eq!(key.qclass, case["key"]["qclass"].as_u64().unwrap() as u16);
+            assert_eq!(
+                key.qtype,
+                u16::try_from(case["key"]["qtype"].as_u64().unwrap()).unwrap()
+            );
+            assert_eq!(
+                key.qclass,
+                u16::try_from(case["key"]["qclass"].as_u64().unwrap()).unwrap()
+            );
             assert_eq!(key.to_string(), case["key"]["string"].as_str().unwrap());
         }
 

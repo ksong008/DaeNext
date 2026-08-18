@@ -7,6 +7,7 @@ pub struct ResidentDataplaneRuntime {
     pub(super) workload_shutdown: Option<ResidentRuntimeWorkloadShutdown>,
     pub(super) routing_tuple_map_id: Option<u32>,
     pub(super) domain_routing_map_id: Option<u32>,
+    pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingGenerationFence>,
 }
 
 impl std::fmt::Debug for ResidentDataplaneRuntime {
@@ -206,6 +207,7 @@ impl ResidentDataplaneRuntime {
             prepared,
             routing_tuple_map_id: self.routing_tuple_map_id,
             domain_routing_map_id: self.domain_routing_map_id,
+            domain_routing_fence: Arc::clone(&self.domain_routing_fence),
             latency_seed,
             dns_reload_snapshot,
         })?;
@@ -243,6 +245,7 @@ impl ResidentDataplaneRuntime {
         if active.reload_generation != generation.reload_generation {
             return Err("resident generation belongs to a different physical runtime".to_owned());
         }
+        generation.dns.activate_domain_routing_generation()?;
         self.generation_drain.reactivate(generation.id)?;
         let restored_id = generation.id;
         let displaced = self.active_generation.publish(generation);

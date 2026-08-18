@@ -144,9 +144,10 @@ impl ResidentDnsResolvedTargetCache {
         {
             return Ok(Self::snapshot(entry, false));
         }
-        if self.cached_entry().is_some_and(|entry| entry.invalidated)
-            && !self.prepare_invalidated_refresh(now, None)
-        {
+        if self.cached_entry().is_some_and(|entry| entry.invalidated) {
+            if let Ok(attempt_guard) = self.prepare_invalidated_refresh(now, None) {
+                attempt_guard.commit();
+            }
             return Err(
                 "DNS upstream target refresh is deferred after a failed stale-address refresh"
                     .to_owned(),
@@ -249,22 +250,32 @@ impl ResidentDnsResolvedTargetCache {
             .is_ok()
     }
 
-    fn prepare_invalidated_refresh(&self, now: time::Instant, expected_epoch: Option<u64>) -> bool {
+    /// F-17c: 置位 attempted 并返回 RAII guard；future 被取消/panic 时
+    /// guard 的 Drop 会复位 attempted，避免 stale refresh 永久 deferred。
+    fn prepare_invalidated_refresh(
+        &self,
+        now: time::Instant,
+        expected_epoch: Option<u64>,
+    ) -> Result<RefreshAttemptGuard<'_>, ()> {
         let mut state = self
             .state
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(entry) = state.as_mut() else {
-            return true;
+            return Err(());
         };
         if expected_epoch.is_some_and(|epoch| epoch != entry.epoch) || !entry.invalidated {
-            return false;
+            return Err(());
         }
         if entry.invalidated_refresh_attempted && now < entry.refresh_at {
-            return false;
+            return Err(());
         }
         entry.invalidated_refresh_attempted = true;
-        true
+        Ok(RefreshAttemptGuard {
+            cache: self,
+            epoch: entry.epoch,
+            armed: true,
+        })
     }
 
     #[cfg(test)]
@@ -335,24 +346,32 @@ impl ResidentDnsResolvedTargetCache {
                 return Err(ResidentDnsTargetRefreshError::Deadline);
             }
         };
-        if !self.prepare_invalidated_refresh(time::Instant::now(), Some(snapshot.epoch)) {
+        let Ok(attempt_guard) =
+            self.prepare_invalidated_refresh(time::Instant::now(), Some(snapshot.epoch))
+        else {
             return Ok(self
                 .cached_entry()
                 .filter(|entry| !entry.invalidated)
                 .map(|entry| Self::snapshot(entry, false)));
-        }
+        };
         if time::Instant::now() >= deadline {
             self.defer_invalidated_retry(Some(snapshot.epoch));
+            attempt_guard.commit();
             return Err(ResidentDnsTargetRefreshError::Deadline);
         }
         match tokio::time::timeout_at(deadline, resolver(self.refresh_interval)).await {
-            Ok(Ok(resolved)) => Ok(Some(self.store_resolved(resolved))),
+            Ok(Ok(resolved)) => {
+                attempt_guard.commit();
+                Ok(Some(self.store_resolved(resolved)))
+            }
             Ok(Err(error)) => {
                 self.defer_invalidated_retry(Some(snapshot.epoch));
+                attempt_guard.commit();
                 Err(ResidentDnsTargetRefreshError::Resolver(error))
             }
             Err(_) => {
                 self.defer_invalidated_retry(Some(snapshot.epoch));
+                attempt_guard.commit();
                 Err(ResidentDnsTargetRefreshError::Deadline)
             }
         }
@@ -437,6 +456,7 @@ impl Default for ResidentDnsResolvedTargetCache {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -694,5 +714,39 @@ mod tests {
             cache.cached_addrs_for_test().unwrap()[0],
             "192.0.2.13:53".parse().unwrap()
         );
+    }
+}
+
+/// F-17c: 强制 refresh 尝试的 RAII 完成 guard。future 被取消（外层
+/// abort/timeout 竞态）或 panic 时 Drop 复位 attempted 状态，保证
+/// stale refresh 可重试；显式成功/失败路径调用 `commit()` 解除。
+struct RefreshAttemptGuard<'a> {
+    cache: &'a ResidentDnsResolvedTargetCache,
+    epoch: u64,
+    armed: bool,
+}
+
+impl RefreshAttemptGuard<'_> {
+    fn commit(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RefreshAttemptGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(entry) = self
+            .cache
+            .state
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_mut()
+            && entry.epoch == self.epoch
+            && entry.invalidated_refresh_attempted
+        {
+            entry.invalidated_refresh_attempted = false;
+        }
     }
 }

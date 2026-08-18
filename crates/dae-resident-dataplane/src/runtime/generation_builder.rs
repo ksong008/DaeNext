@@ -7,6 +7,7 @@ pub(super) struct ResidentGenerationBuildContext<'a> {
     pub(super) prepared: ResidentPreparedDataplane,
     pub(super) routing_tuple_map_id: Option<u32>,
     pub(super) domain_routing_map_id: Option<u32>,
+    pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingGenerationFence>,
     pub(super) latency_seed: &'a [Value],
     pub(super) dns_reload_snapshot: Option<&'a ResidentDnsReloadSnapshot>,
 }
@@ -34,6 +35,7 @@ pub(super) fn build_resident_dataplane_generation(
         prepared,
         routing_tuple_map_id,
         domain_routing_map_id,
+        domain_routing_fence,
         latency_seed,
         dns_reload_snapshot,
     } = context;
@@ -129,10 +131,13 @@ pub(super) fn build_resident_dataplane_generation(
     let (health_resuscitation, health_resuscitation_rx) =
         resident_health_resuscitation_channel(Arc::clone(&metrics));
     let udp_proxy_groups = Arc::clone(&proxy_groups);
+    let generation_id = next_resident_dataplane_generation_id();
     let dns_domain_routing = domain_routing_map_id.map(|map_id| {
-        Arc::new(dns::ResidentDnsDomainRouting::new(
+        Arc::new(dns::ResidentDnsDomainRouting::new_for_generation(
             map_id,
+            generation_id,
             routing_matcher.clone(),
+            Arc::clone(&domain_routing_fence),
         ))
     });
     let dns_upstream_router = Arc::new(dns::ResidentDnsUpstreamRouter::new(
@@ -206,7 +211,6 @@ pub(super) fn build_resident_dataplane_generation(
         resource_config.tcp_connection_limit.value(),
         tcp_flow_stack_bytes,
     );
-    let generation_id = next_resident_dataplane_generation_id();
     let generation_stop = ResidentStopSignal::shared();
     let generation_drain_control =
         ResidentGenerationDrainControl::new(generation_id, Arc::clone(&generation_stop));
@@ -288,6 +292,8 @@ pub(super) fn build_resident_dataplane_generation(
     } else {
         drop(health_resuscitation_rx);
     }
+
+    dns.activate_domain_routing_generation()?;
 
     Ok(BuiltResidentDataplaneGeneration {
         generation,

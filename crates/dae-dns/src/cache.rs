@@ -366,7 +366,7 @@ mod tests {
                         .map(|ttl| DnsAnswer::Other {
                             name: "example.com.".to_owned(),
                             qtype: 1,
-                            ttl: ttl.as_u64().unwrap() as u32,
+                            ttl: u32::try_from(ttl.as_u64().unwrap()).unwrap(),
                         })
                         .collect();
                     let ttl = min_answer_ttl(&ttls).unwrap() as i64;
