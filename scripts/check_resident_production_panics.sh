@@ -4,18 +4,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 audit_file="${TMPDIR:-/tmp}/daenext-resident-production-panics.json"
-trap ': > "$audit_file"' EXIT
+metadata_file="${TMPDIR:-/tmp}/daenext-resident-metadata.json"
+trap ': > "$audit_file"; : > "$metadata_file"' EXIT
 
-packages=(
-  dae-resident-core
-  dae-resident-model
-  dae-resident-plan
-  dae-resident-transport
-  dae-resident-dns
-  dae-resident-tcp
-  dae-resident-udp
-  dae-resident-dataplane
+cargo metadata --no-deps --format-version 1 >"$metadata_file"
+mapfile -t packages < <(
+  python3 - "$metadata_file" <<'PY'
+import json
+import pathlib
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+for package in sorted(metadata["packages"], key=lambda package: package["name"]):
+    if package["name"].startswith("dae-resident-"):
+        print(package["name"])
+PY
 )
+if ((${#packages[@]} == 0)); then
+  echo "resident production panic gate found no resident workspace packages" >&2
+  exit 1
+fi
 
 cargo_args=()
 for package in "${packages[@]}"; do
@@ -28,7 +36,7 @@ if ! cargo clippy "${cargo_args[@]}" --lib --bins --examples --message-format=js
   exit 1
 fi
 
-python3 - "$audit_file" scripts/resident_production_panic_baseline.tsv <<'PY'
+python3 - "$audit_file" scripts/resident_production_panic_baseline.tsv "${packages[@]}" <<'PY'
 from __future__ import annotations
 
 import collections
@@ -39,16 +47,7 @@ import sys
 
 audit_path = pathlib.Path(sys.argv[1])
 baseline_path = pathlib.Path(sys.argv[2])
-resident_crates = {
-    "dae-resident-core",
-    "dae-resident-dataplane",
-    "dae-resident-dns",
-    "dae-resident-model",
-    "dae-resident-plan",
-    "dae-resident-tcp",
-    "dae-resident-transport",
-    "dae-resident-udp",
-}
+resident_crates = set(sys.argv[3:])
 allowed_categories = {"InternalInvariant"}
 
 actual: collections.Counter[str] = collections.Counter()
