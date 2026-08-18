@@ -15,6 +15,12 @@ pub struct VisionInnerTlsState {
     pub client_tls13_advertised: Option<bool>,
 }
 
+impl Default for VisionInnerTlsState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VisionInnerTlsState {
     pub fn new() -> Self {
         Self {
