@@ -13,7 +13,8 @@ pub const LIVE_SMOKE_REQUIRED: &[&str] = &[
     "local parser smoke for legacy VMess",
     "local VMess metadata/header contract smoke",
 ];
-pub const SHARED_TRANSPORT_DEFERRED_TO_ITEM: u16 = 113;
+pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
+pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";
 pub const VMESS_REALITY_MUST_ERROR: bool = true;
 pub const WS_TLS_USES_WSS: bool = true;
 pub const GRPC_DEFAULT_SERVICE_NAME: &str = "GunService";

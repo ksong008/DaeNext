@@ -49,7 +49,8 @@ pub(super) fn run_tuic_contract() -> RunnerOutput {
                 "tcp_underlay_preserves_mark": tuic::contract::TCP_UNDERLAY_PRESERVES_MARK,
                 "tcp_underlay_drops_mptcp": tuic::contract::TCP_UNDERLAY_DROPS_MPTCP,
                 "udp_underlay_uses_original": tuic::contract::UDP_UNDERLAY_USES_ORIGINAL,
-                "true_quic_data_plane_deferred": tuic::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
+                "production_data_plane_owner": tuic::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": tuic::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -159,7 +160,8 @@ pub(super) fn run_tuic_smoke(args: &[String]) -> RunnerOutput {
                 "underlay_mark": tcp_underlay.underlay_mark,
                 "underlay_mptcp": tcp_underlay.underlay_mptcp,
             },
-            "transport_data_plane_deferred_to_item": tuic::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
+            "production_data_plane_owner": tuic::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": tuic::contract::STANDALONE_SMOKE_SURFACE,
         })
     ))
 }

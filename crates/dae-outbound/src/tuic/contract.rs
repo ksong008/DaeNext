@@ -30,4 +30,5 @@ pub const TCP_UNDERLAY_USES_UDP: bool = true;
 pub const TCP_UNDERLAY_PRESERVES_MARK: bool = true;
 pub const TCP_UNDERLAY_DROPS_MPTCP: bool = true;
 pub const UDP_UNDERLAY_USES_ORIGINAL: bool = true;
-pub const TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM: u16 = 113;
+pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
+pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";

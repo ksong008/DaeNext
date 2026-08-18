@@ -68,6 +68,60 @@ fn production_quinn_endpoint_constructors_are_centralized() {
 }
 
 #[test]
+fn quic_fixture_modules_stay_behind_test_support() {
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let modules = [
+        ("crates/dae-outbound/src/hysteria2/mod.rs", "dataplane"),
+        ("crates/dae-outbound/src/hysteria2/mod.rs", "quic_loopback"),
+        ("crates/dae-outbound/src/tuic/mod.rs", "dataplane"),
+        ("crates/dae-outbound/src/tuic/mod.rs", "quic_loopback"),
+        ("crates/dae-outbound/src/juicity/mod.rs", "auth_lifecycle"),
+        ("crates/dae-outbound/src/juicity/mod.rs", "auth_stream_ekm"),
+        ("crates/dae-outbound/src/juicity/mod.rs", "auth_stream_live"),
+        (
+            "crates/dae-outbound/src/juicity/mod.rs",
+            "client_integration",
+        ),
+        ("crates/dae-outbound/src/juicity/mod.rs", "h3_loopback"),
+        (
+            "crates/dae-outbound/src/juicity/mod.rs",
+            "outbound_dataplane",
+        ),
+        (
+            "crates/dae-outbound/src/juicity/mod.rs",
+            "stream_packet_congestion",
+        ),
+        (
+            "crates/dae-outbound/src/juicity/mod.rs",
+            "stream_packet_conn",
+        ),
+        (
+            "crates/dae-outbound/src/shared_transport/mod.rs",
+            "test_support",
+        ),
+        ("crates/dae-outbound/src/shared_transport/mod.rs", "tls"),
+        (
+            "crates/dae-outbound/src/shared_transport/mod.rs",
+            "xhttp_h3",
+        ),
+    ];
+
+    for (relative, module) in modules {
+        let source = std::fs::read_to_string(repo.join(relative))
+            .unwrap_or_else(|err| panic!("read {relative}: {err}"));
+        let private = format!("#[cfg(any(test, feature = \"test-support\"))]\nmod {module};");
+        let public = format!("#[cfg(any(test, feature = \"test-support\"))]\npub mod {module};");
+        assert!(
+            source.contains(&private) || source.contains(&public),
+            "{relative} must compile-gate module {module} behind test-support"
+        );
+    }
+}
+
+#[test]
 fn production_hysteria2_transport_construction_is_registry_owned() {
     const CONNECTION_CONSTRUCTOR: &str = "crates/dae-resident-transport/src/quic_connections.rs";
     const TRANSPORT_OWNER: &str = "crates/dae-resident-transport/src/hysteria2_owner.rs";

@@ -26,9 +26,11 @@ pub use super::host_routing_plan::{
     MatchSetBytes, ResidentRoutingPlan, build_resident_userspace_routing_matcher_with_geodata,
     build_routing_plan_with_geodata_resolver, domain_set_json,
 };
+#[cfg(feature = "benchmark-support")]
 pub use super::memory_bench::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
 };
+#[cfg(feature = "benchmark-support")]
 pub use super::ownership_bench::{
     ResidentProxyOwnershipBenchmarkFixture, resident_proxy_ownership_benchmark_fixture,
 };

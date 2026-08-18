@@ -184,9 +184,11 @@ pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
         underlay["udp_request"]["underlay_mptcp"].as_bool().unwrap()
     );
     assert_eq!(
-        crate::anytls::contract::TRUE_SESSION_DATA_PLANE_DEFERRED_ITEM,
-        underlay["true_session_data_plane_deferred"]
-            .as_u64()
-            .unwrap() as u16
+        crate::anytls::contract::PRODUCTION_DATA_PLANE_OWNER,
+        underlay["production_data_plane_owner"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::anytls::contract::STANDALONE_SMOKE_SURFACE,
+        underlay["standalone_smoke_surface"].as_str().unwrap()
     );
 }

@@ -35,4 +35,5 @@ pub const SESSION_COUNTER: bool = true;
 pub const UNDERLAY_ALWAYS_TCP: bool = true;
 pub const UNDERLAY_PRESERVES_MARK: bool = true;
 pub const UNDERLAY_PRESERVES_MPTCP: bool = true;
-pub const TRUE_SESSION_DATA_PLANE_DEFERRED_ITEM: u16 = 113;
+pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
+pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";

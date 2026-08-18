@@ -48,7 +48,9 @@ mod execution;
 pub mod facade;
 pub(crate) mod geodata;
 pub(crate) mod host_routing_plan;
+#[cfg(feature = "benchmark-support")]
 mod memory_bench;
+#[cfg(feature = "benchmark-support")]
 mod ownership_bench;
 mod plan;
 mod probe;
@@ -71,9 +73,11 @@ pub(crate) use self::dns::{
 };
 #[cfg(test)]
 pub(crate) use self::geodata::GeodataResolver as ResidentGeodataStore;
+#[cfg(feature = "benchmark-support")]
 pub use self::memory_bench::{
     ResidentTcpSelectionBenchmarkFixture, resident_tcp_selection_benchmark_fixture,
 };
+#[cfg(feature = "benchmark-support")]
 pub use self::ownership_bench::{
     ResidentProxyOwnershipBenchmarkFixture, resident_proxy_ownership_benchmark_fixture,
 };

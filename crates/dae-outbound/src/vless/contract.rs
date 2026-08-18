@@ -9,7 +9,8 @@ pub const LIVE_SMOKE_REQUIRED: &[&str] = &[
 ];
 pub const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 pub const XTLS_RPRX_VISION_UDP443: &str = "xtls-rprx-vision-udp443";
-pub const SHARED_TRANSPORT_DEFERRED_TO_ITEM: u16 = 113;
+pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
+pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";
 pub const REALITY_ALLOWED_FOR_VLESS: bool = true;
 pub const VISION_REQUIRES_TLS_OR_REALITY_HOOK: bool = true;
 pub const FLOW_NONE_CANONICAL_EMPTY: bool = true;

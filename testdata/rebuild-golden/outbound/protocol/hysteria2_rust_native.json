@@ -158,7 +158,8 @@
     "preserve_mptcp_field_even_for_udp": true,
     "route_cache_key_is_underlay_network": true,
     "tcp_target_uses_hysteria2_client": true,
-    "true_quic_data_plane_deferred_item": 113,
+    "production_data_plane_owner": "dae-resident-dataplane",
+    "standalone_smoke_surface": "test-support-only",
     "udp_hop_interval_from_extra_option": true,
     "udp_target_uses_hysteria2_client": true
   }
