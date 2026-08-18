@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use super::{ProxyDnsRequestContext, ProxyDnsRequestStage};
-use crate::{ResidentDataplaneMetrics, ResidentUdpPayloadPermit};
+use dae_resident_core::{ResidentDataplaneMetrics, ResidentUdpPayloadPermit};
 
-pub(crate) struct ProxyDnsQueuedRequestBytes {
+pub struct ProxyDnsQueuedRequestBytes {
     permit: Option<ResidentUdpPayloadPermit>,
     metrics: Arc<ResidentDataplaneMetrics>,
     bytes: usize,
@@ -19,7 +19,7 @@ enum ProxyDnsQueuedDropReason {
 }
 
 impl ProxyDnsQueuedRequestBytes {
-    pub(crate) fn new(
+    pub fn new(
         permit: ResidentUdpPayloadPermit,
         metrics: Arc<ResidentDataplaneMetrics>,
         bytes: usize,
@@ -35,15 +35,15 @@ impl ProxyDnsQueuedRequestBytes {
         }
     }
 
-    pub(crate) fn mark_expired(&mut self) {
+    pub fn mark_expired(&mut self) {
         self.drop_reason = ProxyDnsQueuedDropReason::Expired;
     }
 
-    pub(crate) fn mark_rejected(&mut self) {
+    pub fn mark_rejected(&mut self) {
         self.drop_reason = ProxyDnsQueuedDropReason::Rejected;
     }
 
-    pub(crate) fn into_pending(
+    pub fn into_pending(
         mut self,
         metadata_permit: ResidentUdpPayloadPermit,
         metadata_bytes: usize,
@@ -93,7 +93,7 @@ impl Drop for ProxyDnsQueuedRequestBytes {
     }
 }
 
-pub(crate) struct ProxyDnsPendingRequestBytes {
+pub struct ProxyDnsPendingRequestBytes {
     _permit: ResidentUdpPayloadPermit,
     _metadata_permit: ResidentUdpPayloadPermit,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -115,11 +115,11 @@ impl ProxyDnsPendingRequestBytes {
         self.bytes
     }
 
-    pub(crate) fn mark_abandoned(&mut self) {
+    pub fn mark_abandoned(&mut self) {
         self.drop_reason = ProxyDnsPendingDropReason::Abandoned;
     }
 
-    pub(crate) fn mark_expired(&mut self) {
+    pub fn mark_expired(&mut self) {
         self.drop_reason = ProxyDnsPendingDropReason::Expired;
     }
 }
@@ -141,7 +141,7 @@ impl Drop for ProxyDnsPendingRequestBytes {
     }
 }
 
-pub(crate) struct ProxyDnsResponseBytes {
+pub struct ProxyDnsResponseBytes {
     payload: Option<Vec<u8>>,
     _permit: ResidentUdpPayloadPermit,
     metrics: Arc<ResidentDataplaneMetrics>,
@@ -149,7 +149,7 @@ pub(crate) struct ProxyDnsResponseBytes {
 }
 
 impl ProxyDnsResponseBytes {
-    pub(crate) fn new(
+    pub fn new(
         payload: Vec<u8>,
         permit: ResidentUdpPayloadPermit,
         metrics: Arc<ResidentDataplaneMetrics>,
@@ -164,7 +164,7 @@ impl ProxyDnsResponseBytes {
         }
     }
 
-    pub(crate) fn into_payload(mut self) -> Vec<u8> {
+    pub fn into_payload(mut self) -> Vec<u8> {
         self.payload
             .take()
             .expect("proxy DNS response byte owner must hold its payload")

@@ -87,11 +87,6 @@ pub(crate) use self::tcp::{
     exchange_resident_proxy_dns_tcp_stream_async, open_marked_quic_endpoint_for_remote,
     run_resident_proxy_dns_tcp_connection_async,
 };
-pub(crate) use self::transport::dns_request::{
-    ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
-    ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
-    ProxyDnsResponseBytes,
-};
 #[cfg(test)]
 pub(crate) use self::transport::dns_tcp_wire::read_dns_tcp_payload_async;
 pub(crate) use self::transport::dns_tcp_wire::{DnsTcpFrameReader, write_dns_tcp_payload_async};
@@ -111,6 +106,11 @@ pub(crate) use dae_resident_core::*;
 pub(crate) use dae_resident_plan::{
     display_name_from_link, execution_link_hash, graph_id_from_link_hash, link_hash,
     redacted_link_source,
+};
+pub(crate) use dae_resident_transport::{
+    ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
+    ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
+    ProxyDnsResponseBytes,
 };
 pub(crate) use dae_resident_transport::{
     ResolvedHostAddrs, TcpCandidateRacePolicy, authority_from_host_port,

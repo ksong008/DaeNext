@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::ResidentDataplaneMetrics;
-use crate::ResidentUdpPayloadAdmission;
+use dae_resident_core::{ResidentDataplaneMetrics, ResidentUdpPayloadAdmission};
 
 #[tokio::test]
 async fn request_context_keeps_one_absolute_deadline_across_stages() {

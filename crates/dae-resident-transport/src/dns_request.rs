@@ -5,13 +5,13 @@ use tokio::time;
 mod bytes;
 mod io;
 
-pub(crate) use self::bytes::{
+pub use self::bytes::{
     ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsResponseBytes,
 };
-pub(crate) use self::io::exchange_proxy_dns_framed_stream;
+pub use self::io::exchange_proxy_dns_framed_stream;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProxyDnsRequestStage {
+pub enum ProxyDnsRequestStage {
     Enqueue,
     Queued,
     Parse,
@@ -46,7 +46,7 @@ impl ProxyDnsRequestStage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProxyDnsRequestFailure {
+pub enum ProxyDnsRequestFailure {
     Cancelled,
     Deadline,
     Network,
@@ -67,7 +67,7 @@ impl ProxyDnsRequestFailure {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProxyDnsRequestError {
+pub struct ProxyDnsRequestError {
     stage: ProxyDnsRequestStage,
     failure: ProxyDnsRequestFailure,
     detail: String,
@@ -76,7 +76,7 @@ pub(crate) struct ProxyDnsRequestError {
 impl ProxyDnsRequestError {
     #[cold]
     #[inline(never)]
-    pub(crate) fn new(
+    pub fn new(
         stage: ProxyDnsRequestStage,
         failure: ProxyDnsRequestFailure,
         detail: impl Into<String>,
@@ -90,7 +90,7 @@ impl ProxyDnsRequestError {
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn cancelled(stage: ProxyDnsRequestStage) -> Self {
+    pub fn cancelled(stage: ProxyDnsRequestStage) -> Self {
         Self::new(
             stage,
             ProxyDnsRequestFailure::Cancelled,
@@ -100,7 +100,7 @@ impl ProxyDnsRequestError {
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn deadline(stage: ProxyDnsRequestStage) -> Self {
+    pub fn deadline(stage: ProxyDnsRequestStage) -> Self {
         Self::new(
             stage,
             ProxyDnsRequestFailure::Deadline,
@@ -108,17 +108,17 @@ impl ProxyDnsRequestError {
         )
     }
 
-    pub(crate) fn stage(&self) -> ProxyDnsRequestStage {
+    pub fn stage(&self) -> ProxyDnsRequestStage {
         self.stage
     }
 
-    pub(crate) fn failure(&self) -> ProxyDnsRequestFailure {
+    pub fn failure(&self) -> ProxyDnsRequestFailure {
         self.failure
     }
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn with_context(self, context: impl fmt::Display) -> Self {
+    pub fn with_context(self, context: impl fmt::Display) -> Self {
         Self::new(self.stage, self.failure, format!("{context}: {self}"))
     }
 }
@@ -138,26 +138,26 @@ impl fmt::Display for ProxyDnsRequestError {
 impl std::error::Error for ProxyDnsRequestError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProxyDnsRequestContext {
+pub struct ProxyDnsRequestContext {
     deadline: time::Instant,
 }
 
 impl ProxyDnsRequestContext {
-    pub(crate) fn from_timeout(timeout: std::time::Duration) -> Self {
+    pub fn from_timeout(timeout: std::time::Duration) -> Self {
         Self {
             deadline: time::Instant::now() + timeout,
         }
     }
 
-    pub(crate) fn from_deadline(deadline: time::Instant) -> Self {
+    pub fn from_deadline(deadline: time::Instant) -> Self {
         Self { deadline }
     }
 
-    pub(crate) fn deadline(self) -> time::Instant {
+    pub fn deadline(self) -> time::Instant {
         self.deadline
     }
 
-    pub(crate) fn ensure(self, stage: ProxyDnsRequestStage) -> Result<(), ProxyDnsRequestError> {
+    pub fn ensure(self, stage: ProxyDnsRequestStage) -> Result<(), ProxyDnsRequestError> {
         if time::Instant::now() >= self.deadline {
             Err(ProxyDnsRequestError::deadline(stage))
         } else {
@@ -165,7 +165,7 @@ impl ProxyDnsRequestContext {
         }
     }
 
-    pub(crate) async fn run<T, E, F>(
+    pub async fn run<T, E, F>(
         self,
         stage: ProxyDnsRequestStage,
         failure: ProxyDnsRequestFailure,
@@ -187,7 +187,7 @@ impl ProxyDnsRequestContext {
         }
     }
 
-    pub(crate) async fn run_typed<T, F>(
+    pub async fn run_typed<T, F>(
         self,
         stage: ProxyDnsRequestStage,
         future: F,
@@ -214,7 +214,7 @@ fn proxy_dns_request_stage_error(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProxyDnsRequestOutcome {
+pub enum ProxyDnsRequestOutcome {
     Pending,
     ResponseForwarded,
 }

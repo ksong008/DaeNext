@@ -1,5 +1,3 @@
-pub(crate) mod dns_request;
-
 pub(crate) mod dns_tcp_wire {
     #[cfg(test)]
     pub(crate) use dae_resident_transport::read_dns_tcp_payload_async;
