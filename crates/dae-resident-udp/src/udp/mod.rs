@@ -99,10 +99,10 @@ mod stream_helpers;
 use self::stream_helpers::*;
 mod stream_read;
 use self::stream_read::*;
-mod quic_helpers;
+mod juicity_stream;
 #[cfg(any(test, feature = "test-support"))]
-pub use self::quic_helpers::build_juicity_stream_packet_request;
-use self::quic_helpers::*;
+pub use self::juicity_stream::build_juicity_stream_packet_request;
+use self::juicity_stream::*;
 mod vless_xudp;
 pub use self::vless_xudp::*;
 mod reply;

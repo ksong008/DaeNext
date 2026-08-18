@@ -14,5 +14,5 @@ pub use dae_resident_transport::{
     inherit_quic_endpoint_observation, quic_endpoint_metrics_snapshot,
     scope_quic_endpoint_observation,
 };
-mod quic_helpers;
-pub use self::quic_helpers::*;
+mod stream_relay;
+pub use self::stream_relay::*;
