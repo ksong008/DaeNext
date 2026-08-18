@@ -32,7 +32,7 @@ async fn routed_doh3_reuses_one_outer_relay_and_inner_client_for_large_responses
     let selection = ResidentDnsUpstreamSelection::Proxy {
         binding: binding.clone(),
     };
-    let cache = ResidentDnsForwarderCache::default();
+    let cache = test_resident_dns_forwarder_cache();
     let forwarder = cache
         .proxy_h3_forwarder(&upstream, server.address(), binding, &selection)
         .unwrap();
@@ -199,7 +199,7 @@ async fn routed_doh3_owner_survives_the_first_caller_runtime() {
     let selection = ResidentDnsUpstreamSelection::Proxy {
         binding: binding.clone(),
     };
-    let cache = Arc::new(ResidentDnsForwarderCache::default());
+    let cache = Arc::new(test_resident_dns_forwarder_cache());
     let forwarder = cache
         .proxy_h3_forwarder(&upstream, server.address(), binding, &selection)
         .unwrap();
@@ -318,7 +318,7 @@ async fn routed_doh3_five_generation_cycles_release_every_owner_resource() {
         let selection = ResidentDnsUpstreamSelection::Proxy {
             binding: binding.clone(),
         };
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let forwarder = cache
             .proxy_h3_forwarder(&upstream, server.address(), binding, &selection)
             .unwrap();
@@ -382,7 +382,7 @@ async fn generation_shutdown_closes_an_evicted_inflight_doh3_owner() {
     let selection = ResidentDnsUpstreamSelection::Proxy {
         binding: binding.clone(),
     };
-    let cache = ResidentDnsForwarderCache::default();
+    let cache = test_resident_dns_forwarder_cache();
     let retained = cache
         .proxy_h3_forwarder(&upstream, server.address(), binding, &selection)
         .unwrap();

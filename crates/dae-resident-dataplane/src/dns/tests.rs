@@ -583,7 +583,7 @@ async fn tcp_udp_fast_udp_response_does_not_admit_a_tcp_request() {
         &upstream,
         QUERY,
         &ResidentDnsPlan::asis(0),
-        &Arc::new(ResidentDnsForwarderCache::default()),
+        &Arc::new(test_resident_dns_forwarder_cache()),
         ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
     )
     .await
@@ -640,7 +640,7 @@ async fn tcp_udp_preserves_the_complete_udp_target_set_during_the_udp_lead() {
         &upstream,
         QUERY,
         &ResidentDnsPlan::asis(0),
-        &Arc::new(ResidentDnsForwarderCache::default()),
+        &Arc::new(test_resident_dns_forwarder_cache()),
         ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
     )
     .await
@@ -680,7 +680,7 @@ async fn tcp_udp_tcp_response_does_not_wait_for_blackholed_udp() {
         &upstream,
         QUERY,
         &ResidentDnsPlan::asis(0),
-        &Arc::new(ResidentDnsForwarderCache::default()),
+        &Arc::new(test_resident_dns_forwarder_cache()),
         ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
     )
     .await
@@ -753,7 +753,7 @@ async fn tcp_udp_uses_fresh_tcp_phase_after_truncated_udp_response() {
             &upstream,
             QUERY,
             &ResidentDnsPlan::asis(0),
-            &Arc::new(ResidentDnsForwarderCache::default()),
+            &Arc::new(test_resident_dns_forwarder_cache()),
             ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
         ),
     )
@@ -2757,7 +2757,7 @@ fn resident_dns_upstream_parser_applies_default_ports_and_paths() {
 
 #[test]
 fn resident_dns_forwarder_cache_reuses_doq_by_upstream_and_mark() {
-    let cache = ResidentDnsForwarderCache::default();
+    let cache = test_resident_dns_forwarder_cache();
     let upstream = parse_dns_upstream(
         0,
         "quic",
@@ -2792,7 +2792,7 @@ fn resident_dns_forwarder_cache_reuses_proxy_udp_by_selection() {
     let ResidentDnsUpstreamSelection::Proxy { binding } = &selection else {
         panic!("expected proxied DNS upstream selection");
     };
-    let cache = ResidentDnsForwarderCache::default();
+    let cache = test_resident_dns_forwarder_cache();
     let first = cache
         .proxy_udp_forwarder(&upstream, target, binding.clone(), &selection)
         .unwrap();
@@ -2815,7 +2815,7 @@ fn resident_dns_forwarder_cache_reuses_proxy_udp_by_selection() {
 
 #[test]
 fn resident_dns_forwarder_cache_evicts_oldest_entry() {
-    let cache = ResidentDnsForwarderCache::default();
+    let cache = test_resident_dns_forwarder_cache();
     let first = parse_dns_upstream(
         0,
         "first",

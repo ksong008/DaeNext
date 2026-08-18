@@ -189,7 +189,7 @@ impl Default for ResidentDnsForwarderCache {
             udp_runtime.clone(),
             Arc::clone(&metrics),
         ));
-        let owners = ResidentTransportOwnerRegistries::default();
+        let ports = ResidentDnsTransportPorts::unavailable();
         Self {
             state: Mutex::new(ResidentDnsForwarderCacheState::default()),
             health_state: Mutex::new(ResidentDnsForwarderCacheState::default()),
@@ -198,14 +198,9 @@ impl Default for ResidentDnsForwarderCache {
             resources: ResidentDnsResourceProfile::selected(),
             tcp_udp_hedges: ResidentDnsTcpUdpHedgeRegistry::default(),
             metrics: Arc::clone(&metrics),
-            proxy_tcp_transport: Some(resident_dns_proxy_tcp_transport(owners.clone())),
-            proxy_udp_transport: resident_dns_proxy_udp_transport(
-                udp_runtime.clone(),
-                Arc::clone(&metrics),
-                udp_executor,
-                owners,
-            ),
-            quic_endpoint_transport: Arc::new(ResidentDnsQuicEndpointPolicy),
+            proxy_tcp_transport: Some(ports.proxy_tcp()),
+            proxy_udp_transport: ports.proxy_udp(),
+            quic_endpoint_transport: ports.quic_endpoint(),
             health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
@@ -213,53 +208,50 @@ impl Default for ResidentDnsForwarderCache {
 }
 
 impl ResidentDnsForwarderCache {
-    pub(in crate::dns) fn new(
-        udp_runtime: ResidentDnsUdpRuntimeConfig,
-        metrics: Arc<ResidentDataplaneMetrics>,
-    ) -> Self {
-        let udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
-            udp_runtime.clone(),
-            Arc::clone(&metrics),
-        ));
-        let owners = ResidentTransportOwnerRegistries::default();
-        Self {
-            state: Mutex::new(ResidentDnsForwarderCacheState::default()),
-            health_state: Mutex::new(ResidentDnsForwarderCacheState::default()),
-            udp_executor: Arc::clone(&udp_executor),
-            udp_runtime: udp_runtime.clone(),
-            resources: ResidentDnsResourceProfile::selected(),
-            tcp_udp_hedges: ResidentDnsTcpUdpHedgeRegistry::default(),
-            metrics: Arc::clone(&metrics),
-            proxy_tcp_transport: Some(resident_dns_proxy_tcp_transport(owners.clone())),
-            proxy_udp_transport: resident_dns_proxy_udp_transport(
-                udp_runtime.clone(),
-                Arc::clone(&metrics),
-                udp_executor,
-                owners,
-            ),
-            quic_endpoint_transport: Arc::new(ResidentDnsQuicEndpointPolicy),
-            health_runtime: tokio::runtime::Handle::try_current().ok(),
-            closing: std::sync::atomic::AtomicBool::new(false),
-        }
-    }
-
     pub(in crate::dns) fn new_with_proxy_transports(
         udp_runtime: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
-        runtime: tokio::runtime::Handle,
+        health_runtime: Option<tokio::runtime::Handle>,
         udp_executor: Arc<ResidentDnsUdpActorExecutor>,
         proxy_tcp_transport: Arc<dyn ResidentDnsProxyTcpTransport>,
         proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
         quic_endpoint_transport: Arc<dyn ResidentDnsQuicEndpointTransport>,
     ) -> Self {
-        let mut cache = Self::new(udp_runtime, metrics);
-        cache.udp_executor = udp_executor;
-        cache.proxy_tcp_transport = Some(proxy_tcp_transport);
-        cache.proxy_udp_transport = proxy_udp_transport;
-        cache.quic_endpoint_transport = quic_endpoint_transport;
-        cache.health_runtime = Some(runtime);
-        cache
+        Self {
+            state: Mutex::new(ResidentDnsForwarderCacheState::default()),
+            health_state: Mutex::new(ResidentDnsForwarderCacheState::default()),
+            udp_executor,
+            udp_runtime,
+            resources: ResidentDnsResourceProfile::selected(),
+            tcp_udp_hedges: ResidentDnsTcpUdpHedgeRegistry::default(),
+            metrics,
+            proxy_tcp_transport: Some(proxy_tcp_transport),
+            proxy_udp_transport,
+            quic_endpoint_transport,
+            health_runtime,
+            closing: std::sync::atomic::AtomicBool::new(false),
+        }
     }
+}
+
+#[cfg(test)]
+pub(in crate::dns) fn test_resident_dns_forwarder_cache() -> ResidentDnsForwarderCache {
+    let udp_runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+        udp_runtime.clone(),
+        Arc::clone(&metrics),
+    ));
+    let owners = ResidentTransportOwnerRegistries::default();
+    ResidentDnsForwarderCache::new_with_proxy_transports(
+        udp_runtime.clone(),
+        Arc::clone(&metrics),
+        tokio::runtime::Handle::try_current().ok(),
+        Arc::clone(&udp_executor),
+        resident_dns_proxy_tcp_transport(owners.clone()),
+        resident_dns_proxy_udp_transport(udp_runtime, metrics, udp_executor, owners),
+        Arc::new(ResidentDnsQuicEndpointPolicy),
+    )
 }
 
 impl std::fmt::Debug for ResidentDnsForwarderCache {

@@ -1028,7 +1028,7 @@ mod tests {
 
     #[test]
     fn tcp_udp_upstream_caches_udp_and_tcp_forwarders_separately() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let upstream = parse_dns_upstream(
             0,
             "mixed",
@@ -1051,7 +1051,7 @@ mod tests {
 
     #[test]
     fn asis_udp_forwarder_is_reused_by_target_and_mark() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let target = "127.0.0.1:53".parse().unwrap();
 
         let first = cache.asis_udp_forwarder(target, 0x1234).unwrap();
@@ -1065,7 +1065,7 @@ mod tests {
 
     #[test]
     fn cache_hit_reuses_key_strings_without_rewriting_lru_tree() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let upstream = parse_dns_upstream(
             0,
             "shared-key",
@@ -1105,7 +1105,7 @@ mod tests {
 
     #[test]
     fn policy_closed_proxy_dns_udp_is_rejected_before_cache_or_actor_creation() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DNS_DEFAULT_PORT);
         let upstream =
             parse_dns_upstream(0, "closed", &format!("udp://{target}"), target, 0).unwrap();
@@ -1128,7 +1128,7 @@ mod tests {
 
     #[test]
     fn cache_hit_does_not_construct_a_discarded_forwarder() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let upstream = parse_dns_upstream(
             0,
             "lazy",
@@ -1195,7 +1195,7 @@ mod tests {
 
     #[test]
     fn concurrent_misses_share_one_inserted_forwarder() {
-        let cache = Arc::new(ResidentDnsForwarderCache::default());
+        let cache = Arc::new(test_resident_dns_forwarder_cache());
         let upstream = parse_dns_upstream(
             0,
             "concurrent",
@@ -1246,7 +1246,7 @@ mod tests {
 
     #[test]
     fn evicted_inflight_quic_owner_remains_charged_until_the_last_arc_drops() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let metrics = Arc::clone(&cache.metrics);
         let quic = parse_dns_upstream(
             0,
@@ -1297,7 +1297,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn proxied_quic_and_h3_forwarders_reuse_separate_complete_keys() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 853);
         let doq = parse_dns_upstream(
             0,
@@ -1366,7 +1366,7 @@ mod tests {
         let socks = Socks5UdpRelay::start().await;
         let proxy = socks5_dns_proxy(socks.address());
         let binding = dns_proxy_binding(Arc::clone(&proxy), 7_370);
-        let cache = Arc::new(ResidentDnsForwarderCache::default());
+        let cache = Arc::new(test_resident_dns_forwarder_cache());
         let first = cache
             .acquire_health_proxy_udp_forwarder(target, binding.clone())
             .await
@@ -1445,7 +1445,7 @@ mod tests {
         let socks = Socks5UdpRelay::start().await;
         let proxy = socks5_dns_proxy(socks.address());
         let binding = dns_proxy_binding(proxy, 7_371);
-        let cache = Arc::new(ResidentDnsForwarderCache::default());
+        let cache = Arc::new(test_resident_dns_forwarder_cache());
         let lease = cache
             .acquire_health_proxy_udp_forwarder(target, binding)
             .await
@@ -1492,7 +1492,7 @@ mod tests {
             .await
             .unwrap();
         let target = upstream.local_addr().unwrap();
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let handle = cache.udp_executor.open_handle(target, 0).await.unwrap();
         let query = build_dns_query_packet(0x5151, "cache-shutdown.example", DNS_QTYPE_A).unwrap();
         let request_handle = handle.clone();
@@ -1524,7 +1524,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn https_shutdown_does_not_report_an_h2_lock_timeout_as_joined() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 443);
         let upstream = parse_dns_upstream(
             0,
@@ -1551,7 +1551,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn cache_shutdown_uses_one_deadline_for_every_forwarder() {
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let upstream = parse_dns_upstream(
             0,
             "tcp-deadline",

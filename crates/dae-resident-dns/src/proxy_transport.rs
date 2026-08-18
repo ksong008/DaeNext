@@ -154,6 +154,101 @@ pub trait ResidentDnsProxyUdpTransport: Send + Sync {
     ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyUdpBridge>, String>>;
 }
 
+#[derive(Clone)]
+pub struct ResidentDnsTransportPorts {
+    proxy_tcp: Arc<dyn ResidentDnsProxyTcpTransport>,
+    proxy_udp: Arc<dyn ResidentDnsProxyUdpTransport>,
+    quic_endpoint: Arc<dyn ResidentDnsQuicEndpointTransport>,
+}
+
+impl ResidentDnsTransportPorts {
+    pub fn new(
+        proxy_tcp: Arc<dyn ResidentDnsProxyTcpTransport>,
+        proxy_udp: Arc<dyn ResidentDnsProxyUdpTransport>,
+        quic_endpoint: Arc<dyn ResidentDnsQuicEndpointTransport>,
+    ) -> Self {
+        Self {
+            proxy_tcp,
+            proxy_udp,
+            quic_endpoint,
+        }
+    }
+
+    pub fn unavailable() -> Self {
+        Self::new(
+            Arc::new(UnavailableDnsProxyTcpTransport),
+            Arc::new(UnavailableDnsProxyUdpTransport),
+            Arc::new(UnavailableDnsQuicEndpointTransport),
+        )
+    }
+
+    pub fn proxy_tcp(&self) -> Arc<dyn ResidentDnsProxyTcpTransport> {
+        Arc::clone(&self.proxy_tcp)
+    }
+
+    pub fn proxy_udp(&self) -> Arc<dyn ResidentDnsProxyUdpTransport> {
+        Arc::clone(&self.proxy_udp)
+    }
+
+    pub fn quic_endpoint(&self) -> Arc<dyn ResidentDnsQuicEndpointTransport> {
+        Arc::clone(&self.quic_endpoint)
+    }
+}
+
+struct UnavailableDnsProxyTcpTransport;
+
+impl ResidentDnsProxyTcpTransport for UnavailableDnsProxyTcpTransport {
+    fn open(
+        &self,
+        _request: ResidentDnsProxyTcpOpenRequest,
+    ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyTcpSession>, ProxyDnsRequestError>>
+    {
+        Box::pin(async {
+            Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::OwnerAcquire,
+                ProxyDnsRequestFailure::Network,
+                "resident DNS proxy TCP transport is not configured",
+            ))
+        })
+    }
+}
+
+struct UnavailableDnsProxyUdpTransport;
+
+impl ResidentDnsProxyUdpTransport for UnavailableDnsProxyUdpTransport {
+    fn open_forwarder(
+        &self,
+        _binding: ResidentProxyBinding,
+        _original_dst: SocketAddr,
+    ) -> Result<Arc<dyn ResidentDnsProxyUdpForwarder>, String> {
+        Err("resident DNS proxy UDP transport is not configured".to_owned())
+    }
+
+    fn open_bridge(
+        &self,
+        _binding: ResidentProxyBinding,
+        _original_dst: SocketAddr,
+        _owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
+    ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyUdpBridge>, String>> {
+        Box::pin(async { Err("resident DNS proxy UDP transport is not configured".to_owned()) })
+    }
+}
+
+struct UnavailableDnsQuicEndpointTransport;
+
+impl ResidentDnsQuicEndpointTransport for UnavailableDnsQuicEndpointTransport {
+    fn open_marked_endpoint(
+        &self,
+        _mark: u32,
+        _remote: SocketAddr,
+        _context: QuicEndpointOpenContext,
+        _deadline: dae_runtime_control::AbsoluteDeadline,
+        _cancellation: &dae_runtime_control::OwnerCancellationSignal,
+    ) -> Result<ObservedQuicEndpoint, String> {
+        Err("resident DNS QUIC endpoint transport is not configured".to_owned())
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn exchange_resident_proxy_dns_tcp_stream<F, Fut>(
     transport: &dyn ResidentDnsProxyTcpTransport,
