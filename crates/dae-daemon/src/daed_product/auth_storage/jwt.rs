@@ -1,4 +1,8 @@
 use super::*;
+
+const MAX_JWT_TOKEN_BYTES: usize = 8 * 1024;
+const MAX_JWT_PART_BYTES: usize = 4 * 1024;
+const MAX_JWT_SUBJECT_BYTES: usize = 256;
 pub(crate) fn signed_token(user: &UserRecord) -> io::Result<String> {
     let exp = unix_now()
         .checked_add(TOKEN_TTL_SECONDS)
@@ -21,6 +25,9 @@ pub(crate) fn signed_token(user: &UserRecord) -> io::Result<String> {
 }
 
 pub(crate) fn verify_token(state: &Path, token: &str) -> io::Result<Option<UserRecord>> {
+    if token.len() > MAX_JWT_TOKEN_BYTES {
+        return Ok(None);
+    }
     let mut parts = token.split('.');
     let Some(header) = parts.next() else {
         return Ok(None);
@@ -31,6 +38,12 @@ pub(crate) fn verify_token(state: &Path, token: &str) -> io::Result<Option<UserR
     let Some(signature) = parts.next() else {
         return Ok(None);
     };
+    if header.len() > MAX_JWT_PART_BYTES
+        || payload.len() > MAX_JWT_PART_BYTES
+        || signature.len() > MAX_JWT_PART_BYTES
+    {
+        return Ok(None);
+    }
     if parts.next().is_some() {
         return Ok(None);
     }
@@ -50,7 +63,11 @@ pub(crate) fn verify_token(state: &Path, token: &str) -> io::Result<Option<UserR
     let Some(username) = payload_value.get("sub").and_then(Value::as_str) else {
         return Ok(None);
     };
-    let Some(user) = load_user_by_username(state, username)? else {
+    if username.is_empty() || username.len() > MAX_JWT_SUBJECT_BYTES {
+        return Ok(None);
+    }
+    // F-05: 认证热路径跳过重复 schema 校验（启动时已执行）。
+    let Some(user) = load_user_by_username_without_schema_check(state, username)? else {
         return Ok(None);
     };
     let signing_input = format!("{header}.{payload}");
