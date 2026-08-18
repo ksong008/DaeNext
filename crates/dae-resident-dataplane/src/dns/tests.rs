@@ -1306,7 +1306,7 @@ fn resident_dns_response_cache_is_scoped_by_upstream_identity() {
         &request,
         ResidentDnsResponseCacheScope::Upstream {
             index: 1,
-            scheme: ResidentDnsUpstreamScheme::TcpUdp,
+            scheme: ResidentDnsUpstreamScheme::TcpUdp.as_str().to_owned(),
             authority: "resolver-a.fixture.invalid:53".to_owned(),
             path: String::new(),
         },
@@ -1315,7 +1315,7 @@ fn resident_dns_response_cache_is_scoped_by_upstream_identity() {
         &request,
         ResidentDnsResponseCacheScope::Upstream {
             index: 2,
-            scheme: ResidentDnsUpstreamScheme::TcpUdp,
+            scheme: ResidentDnsUpstreamScheme::TcpUdp.as_str().to_owned(),
             authority: "resolver-b.fixture.invalid:53".to_owned(),
             path: String::new(),
         },
@@ -1519,7 +1519,7 @@ async fn resident_dns_request_reject_removes_scoped_cached_responses() {
         &request,
         ResidentDnsResponseCacheScope::Upstream {
             index: 0,
-            scheme: ResidentDnsUpstreamScheme::Udp,
+            scheme: ResidentDnsUpstreamScheme::Udp.as_str().to_owned(),
             authority: "127.0.0.1:53".to_owned(),
             path: String::new(),
         },

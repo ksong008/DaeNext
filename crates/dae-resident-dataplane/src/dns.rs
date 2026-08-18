@@ -123,20 +123,13 @@ impl ResidentDnsTlsStream {
     }
 }
 
-mod cache;
 mod domain_routing;
-mod error_response;
 mod reload;
 mod routing;
 mod trace_summary;
 mod transport;
-mod udp_response;
 mod upstream_model;
 mod upstream_router;
-use self::cache::{
-    ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache,
-    ResidentDnsRuntimeCacheSnapshot,
-};
 pub(super) use self::domain_routing::{
     ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
     ResidentDomainRoutingGenerationFence,
@@ -149,8 +142,6 @@ use self::domain_routing::{
     build_resident_dns_domain_routing_update_plan,
     build_resident_dns_domain_routing_update_plan_from_entry,
 };
-pub(super) use self::error_response::build_dns_server_failure_response;
-use self::error_response::build_reject_response;
 pub(crate) use self::reload::ResidentDnsReloadHandle;
 use self::reload::ResidentDnsReloadRestoreReport;
 pub use self::reload::ResidentDnsReloadSnapshot;
@@ -174,7 +165,6 @@ pub(crate) use self::transport::udp_multiplex::{
 use self::transport::{
     ResidentDnsTcpMultiplexHandle, forward_dns_tcp_asis_async, forward_dns_to_upstream_async,
 };
-pub(super) use self::udp_response::fit_dns_response_to_udp_request;
 pub(crate) use self::upstream_model::ResidentDnsTransportOwnerObservation;
 pub(in crate::dns) use self::upstream_model::{
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
@@ -191,6 +181,13 @@ pub(in crate::dns) use self::upstream_model::{
 };
 pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
 pub(in crate::dns) use self::upstream_router::ResidentDnsUpstreamSelection;
+pub(super) use dae_resident_dns::{
+    DNS_MAX_UDP_MESSAGE_SIZE, build_dns_server_failure_response, fit_dns_response_to_udp_request,
+};
+use dae_resident_dns::{
+    ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache,
+    ResidentDnsRuntimeCacheSnapshot, build_reject_response,
+};
 pub(crate) use dae_resident_transport::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
     exchange_proxy_dns_framed_stream,
@@ -198,7 +195,6 @@ pub(crate) use dae_resident_transport::{
 
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
-pub(super) const DNS_MAX_UDP_MESSAGE_SIZE: usize = u16::MAX as usize;
 const DNS_RESPONSE_READ_LIMIT: usize = DNS_MAX_UDP_MESSAGE_SIZE;
 const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
 const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
@@ -1010,9 +1006,12 @@ fn dns_response_cache_key_for_request_action(
     let scope = match action {
         ResidentDnsRequestAction::AsIs => ResidentDnsResponseCacheScope::AsIs { original_dst },
         ResidentDnsRequestAction::Reject => ResidentDnsResponseCacheScope::Reject,
-        ResidentDnsRequestAction::Upstream(upstream) => {
-            ResidentDnsResponseCacheScope::upstream(upstream)
-        }
+        ResidentDnsRequestAction::Upstream(upstream) => ResidentDnsResponseCacheScope::upstream(
+            upstream.index,
+            upstream.scheme.as_str(),
+            &upstream.target.authority,
+            &upstream.path,
+        ),
     };
     Ok(ResidentDnsResponseCacheKey::new(base, scope))
 }

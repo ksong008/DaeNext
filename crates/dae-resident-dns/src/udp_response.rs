@@ -1,4 +1,6 @@
-use super::{DNS_MAX_UDP_MESSAGE_SIZE, DnsPacketView};
+use dae_dns::DnsPacketView;
+
+use crate::DNS_MAX_UDP_MESSAGE_SIZE;
 
 const DNS_HEADER_LEN: usize = 12;
 const DNS_CLASSIC_UDP_PAYLOAD_SIZE: usize = 512;
@@ -9,7 +11,7 @@ const DNS_TYPE_OPT: u16 = 41;
 const DNS_FLAG_RESPONSE: u16 = 0x8000;
 const DNS_FLAG_TRUNCATED: u16 = 0x0200;
 
-pub(crate) fn fit_dns_response_to_udp_request(
+pub fn fit_dns_response_to_udp_request(
     request: &[u8],
     response: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
