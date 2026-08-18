@@ -184,6 +184,7 @@ pub(crate) struct AnyTlsFrameReader {
     buffered: BytesMut,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for AnyTlsFrameReader {
     fn default() -> Self {
         Self {
