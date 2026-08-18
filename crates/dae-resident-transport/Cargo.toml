@@ -7,19 +7,33 @@ repository.workspace = true
 
 [features]
 default = []
+test-boringssl-tls-profile = []
+test-boringssl-unbuffered-bio = []
 
 [dependencies]
 dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-outbound.workspace = true
 dae-resident-core.workspace = true
+dae-resident-plan.workspace = true
 dae-runtime-control.workspace = true
+boring.workspace = true
+boring-sys.workspace = true
+brotli.workspace = true
 bytes.workspace = true
+foreign-types.workspace = true
 futures-util.workspace = true
 fastrand.workspace = true
 getrandom.workspace = true
+libc.workspace = true
 quinn.workspace = true
 quinn-boring.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio-boring.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+dae-outbound = { workspace = true, features = ["test-support"] }

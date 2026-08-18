@@ -9,7 +9,7 @@ const SIZE_BUCKET_UPPER_BOUNDS: [usize; 7] = [64, 256, 1024, 4096, 16_384, 65_53
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ResidentBoringTlsIoProfileSnapshot {
+pub struct ResidentBoringTlsIoProfileSnapshot {
     enabled: bool,
     ssl_read_calls: u64,
     ssl_read_bytes: u64,
@@ -203,7 +203,7 @@ unsafe extern "C" fn record_tls_message(
     }
 }
 
-pub(crate) fn take_boring_tls_io_profile_snapshot() -> ResidentBoringTlsIoProfileSnapshot {
+pub fn take_boring_tls_io_profile_snapshot() -> ResidentBoringTlsIoProfileSnapshot {
     #[cfg(feature = "test-boringssl-tls-profile")]
     {
         PROFILE.take()

@@ -11,8 +11,14 @@ dns-runtime-tests = []
 test-scalar-udp-recv = ["dae-datapath/test-scalar-udp-recv"]
 test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send", "dae-resident-dns/test-scalar-udp-send"]
 test-boringssl-tcp-tls = []
-test-boringssl-tls-profile = ["test-boringssl-tcp-tls"]
-test-boringssl-unbuffered-bio = ["test-boringssl-tcp-tls"]
+test-boringssl-tls-profile = [
+    "test-boringssl-tcp-tls",
+    "dae-resident-transport/test-boringssl-tls-profile",
+]
+test-boringssl-unbuffered-bio = [
+    "test-boringssl-tcp-tls",
+    "dae-resident-transport/test-boringssl-unbuffered-bio",
+]
 test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
 test-anytls-legacy-frame-reader = []
 test-support = ["dae-resident-dns/test-support", "dae-resident-plan/test-support"]

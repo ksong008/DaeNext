@@ -1,9 +1,9 @@
 use super::*;
-pub(crate) struct AsyncVlessTlsClient {
+pub struct AsyncVlessTlsClient {
     pub(super) engine: AsyncVlessTlsEngine,
 }
 
-pub(crate) type AsyncResidentTlsClient = AsyncVlessTlsClient;
+pub type AsyncResidentTlsClient = AsyncVlessTlsClient;
 
 pub(crate) enum AsyncVlessTlsEngine {
     RealityBoring {
@@ -54,13 +54,13 @@ pub(super) static BORING_CONNECTOR_CACHE: OnceLock<
 const RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ResidentTlsConfigCacheClearReport {
-    pub(crate) boring: usize,
-    pub(crate) boring_sessions: usize,
-    pub(crate) boring_session_attempts: u64,
-    pub(crate) boring_session_reused: u64,
-    pub(crate) boring_session_rejected: u64,
-    pub(crate) boring_session_stored: u64,
+pub struct ResidentTlsConfigCacheClearReport {
+    pub boring: usize,
+    pub boring_sessions: usize,
+    pub boring_session_attempts: u64,
+    pub boring_session_reused: u64,
+    pub boring_session_rejected: u64,
+    pub boring_session_stored: u64,
 }
 
 #[derive(Debug)]
@@ -157,7 +157,7 @@ impl ResidentTlsConfigCache<ResidentBoringTlsContextEntry> {
     }
 }
 
-pub(crate) fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearReport {
+pub fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearReport {
     let (boring, boring_sessions) = BORING_CONNECTOR_CACHE
         .get()
         .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear_boring()))

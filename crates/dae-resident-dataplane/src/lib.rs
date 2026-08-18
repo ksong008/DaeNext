@@ -124,9 +124,8 @@ pub(crate) use dae_resident_transport::{
     ProxyDnsResponseBytes,
 };
 pub(crate) use dae_resident_transport::{
-    TcpCandidateRacePolicy, authority_from_host_port,
-    resolve_host_addrs_with_configured_fallback_dns_ttl, resolve_socket_addr_candidates,
-    try_socket_addr_candidates, try_tcp_socket_addr_candidates,
+    authority_from_host_port, resolve_host_addrs_with_configured_fallback_dns_ttl,
+    resolve_socket_addr_candidates, try_socket_addr_candidates,
 };
 
 #[path = "runtime/defaults.rs"]

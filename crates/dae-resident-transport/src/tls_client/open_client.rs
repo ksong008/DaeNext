@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) async fn open_async_resident_tls_client_with_binding(
+pub async fn open_async_resident_tls_client_with_binding(
     binding: &ResidentProxyBinding,
     mptcp: bool,
 ) -> Result<AsyncResidentTlsClient, String> {
@@ -11,7 +11,7 @@ pub(crate) async fn open_async_resident_tls_client_with_binding(
     open_async_resident_tls_client_over_stream(binding.plan(), tcp).await
 }
 
-pub(crate) async fn open_async_vless_tls_client_with_flow_at_candidates(
+pub async fn open_async_vless_tls_client_with_flow_at_candidates(
     proxy: &ResidentProxyPlan,
     candidates: &[SocketAddr],
     mark: u32,
@@ -61,7 +61,7 @@ pub(super) fn async_boring_resident_tcp_stream_for_proxy(
     }
 }
 
-pub(crate) async fn open_async_xhttp_endpoint_tls_client(
+pub async fn open_async_xhttp_endpoint_tls_client(
     endpoint: &ResidentXhttpEndpointPlan,
     mark: u32,
     mptcp: bool,
@@ -73,7 +73,7 @@ pub(crate) async fn open_async_xhttp_endpoint_tls_client(
     open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp).await
 }
 
-pub(crate) async fn open_async_xhttp_endpoint_tls_client_at_candidates(
+pub async fn open_async_xhttp_endpoint_tls_client_at_candidates(
     endpoint: &ResidentXhttpEndpointPlan,
     candidates: &[SocketAddr],
     mark: u32,
@@ -181,7 +181,7 @@ pub(crate) async fn open_proxy_tcp_stream_async_with_flow(
         .map_err(|err| format!("adopt async proxy TCP stream: {err}"))
 }
 
-pub(crate) async fn open_proxy_tcp_stream_with_binding(
+pub async fn open_proxy_tcp_stream_with_binding(
     binding: &ResidentProxyBinding,
     mptcp: bool,
 ) -> Result<TokioTcpStream, String> {
