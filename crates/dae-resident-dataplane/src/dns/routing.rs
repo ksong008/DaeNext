@@ -70,17 +70,15 @@ pub(super) fn parse_request_default_action(
 pub(super) fn build_request_matcher(
     config: &Config,
     upstreams: &ResidentDnsUpstreams,
-    geodata: &ResidentGeodataStore,
+    geodata: &dyn ResidentDnsGeodata,
 ) -> Result<Option<RequestMatcher>, String> {
     if config.dns.routing.request.rules.is_empty() {
         return Ok(None);
     }
 
-    let rules = expand_resident_dns_request_qname_rules_with_resolver(
-        &config.dns.routing.request.rules,
-        geodata,
-    )
-    .map_err(|err| format!("expand dns.routing.request geodata: {err}"))?;
+    let rules = geodata
+        .expand_request_qname_rules(&config.dns.routing.request.rules)
+        .map_err(|err| format!("expand dns.routing.request geodata: {err}"))?;
     let mut domain_sets = Vec::new();
     let mut matches = Vec::new();
     for (index, rule) in rules.iter().enumerate() {
@@ -122,17 +120,15 @@ pub(super) fn parse_response_default_action(
 pub(super) fn build_response_matcher(
     config: &Config,
     upstreams: &ResidentDnsUpstreams,
-    geodata: &ResidentGeodataStore,
+    geodata: &dyn ResidentDnsGeodata,
 ) -> Result<Option<ResponseMatcher>, String> {
     if config.dns.routing.response.rules.is_empty() {
         return Ok(None);
     }
 
-    let rules = expand_resident_dns_response_qname_rules_with_resolver(
-        &config.dns.routing.response.rules,
-        geodata,
-    )
-    .map_err(|err| format!("expand dns.routing.response geodata: {err}"))?;
+    let rules = geodata
+        .expand_response_qname_rules(&config.dns.routing.response.rules)
+        .map_err(|err| format!("expand dns.routing.response geodata: {err}"))?;
     let mut domain_sets = Vec::new();
     let mut lpm_sets = Vec::new();
     let mut matches = Vec::new();
@@ -173,7 +169,7 @@ fn compile_request_rule(
     matches: &mut Vec<DnsRequestMatchSpec>,
     rule: &RoutingRule,
     upstreams: &ResidentDnsUpstreams,
-    geodata: &ResidentGeodataStore,
+    geodata: &dyn ResidentDnsGeodata,
 ) -> Result<(), String> {
     if rule.and_functions.is_empty() {
         return Err("request rule has no functions".to_owned());
@@ -227,7 +223,7 @@ fn compile_response_rule(
     matches: &mut Vec<DnsResponseMatchSpec>,
     rule: &RoutingRule,
     upstreams: &ResidentDnsUpstreams,
-    geodata: &ResidentGeodataStore,
+    geodata: &dyn ResidentDnsGeodata,
 ) -> Result<(), String> {
     if rule.and_functions.is_empty() {
         return Err("response rule has no functions".to_owned());
@@ -287,7 +283,7 @@ fn compile_response_rule(
 fn add_request_qname_match(
     domain_sets: &mut Vec<DnsDomainSet>,
     matches: &mut Vec<DnsRequestMatchSpec>,
-    geodata: &ResidentGeodataStore,
+    geodata: &dyn ResidentDnsGeodata,
     function: &Function,
     key: &str,
     mut values: Vec<String>,
@@ -335,7 +331,7 @@ fn add_request_qtype_matches(
 fn add_response_qname_match(
     domain_sets: &mut Vec<DnsDomainSet>,
     matches: &mut Vec<DnsResponseMatchSpec>,
-    geodata: &ResidentGeodataStore,
+    geodata: &dyn ResidentDnsGeodata,
     function: &Function,
     key: &str,
     mut values: Vec<String>,
@@ -417,7 +413,7 @@ fn add_response_upstream_matches(
 fn add_response_ip_match(
     lpm_sets: &mut Vec<Vec<IpPrefix>>,
     matches: &mut Vec<DnsResponseMatchSpec>,
-    geodata: &ResidentGeodataStore,
+    geodata: &dyn ResidentDnsGeodata,
     function: &Function,
     key: &str,
     values: Vec<String>,
@@ -434,7 +430,7 @@ fn add_response_ip_match(
             ..Param::default()
         })
         .collect::<Vec<_>>();
-    let expanded = expand_resident_dns_response_ip_params_with_resolver(&params, geodata)?;
+    let expanded = geodata.expand_response_ip_params(&params)?;
     let mut prefixes = Vec::with_capacity(expanded.len());
     for param in expanded {
         prefixes.push(parse_response_ip_prefix(&param.val)?);
