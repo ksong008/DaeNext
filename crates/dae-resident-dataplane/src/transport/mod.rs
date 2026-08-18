@@ -81,24 +81,20 @@ pub(crate) mod quic_endpoint {
         )
     }
 
-    pub(crate) fn open_observed_quic_endpoint(
+    pub(crate) fn open_marked_quic_endpoint_for_remote(
         mark: u32,
-        runtime: Option<Arc<dyn quinn::Runtime>>,
         remote: std::net::SocketAddr,
-        bind: std::net::SocketAddr,
-        underlay: QuicEndpointUnderlay,
         context: QuicEndpointOpenContext,
-        admission_context: QuicEndpointAdmissionContext<'_>,
+        deadline: dae_runtime_control::AbsoluteDeadline,
+        cancellation: &dae_runtime_control::OwnerCancellationSignal,
     ) -> Result<ObservedQuicEndpoint, String> {
         configure_admission()?;
-        dae_resident_transport::open_observed_quic_endpoint(
+        dae_resident_transport::open_marked_quic_endpoint_for_remote(
             mark,
-            runtime,
             remote,
-            bind,
-            underlay,
             context,
-            admission_context,
+            deadline,
+            cancellation,
         )
     }
 

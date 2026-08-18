@@ -1,7 +1,7 @@
 use super::transport::tcp_udp::ResidentDnsTcpUdpHedgeRegistry;
 use super::transport::udp_multiplex::{ResidentDnsUdpActorExecutor, ResidentDnsUdpMultiplexHandle};
 use super::*;
-use crate::resolve_host_addrs_with_bootstrap_dns_ttl;
+use dae_resident_transport::resolve_host_addrs_with_bootstrap_dns_ttl;
 use std::sync::{
     Weak,
     atomic::{AtomicBool, Ordering},

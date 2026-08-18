@@ -83,9 +83,7 @@ pub(crate) use self::stream_io::{
     AsyncPrefixedStream, CursorBytes, HttpHeadRead, HttpHeadReadError, HttpHeadReadOptions,
     read_http_head,
 };
-pub(crate) use self::tcp::{
-    open_marked_quic_endpoint_for_remote, resident_dns_proxy_tcp_transport,
-};
+pub(crate) use self::tcp::resident_dns_proxy_tcp_transport;
 #[cfg(test)]
 pub(crate) use self::transport::dns_tcp_wire::read_dns_tcp_payload_async;
 pub(crate) use self::transport::dns_tcp_wire::{DnsTcpFrameReader, write_dns_tcp_payload_async};
@@ -94,8 +92,8 @@ pub(crate) use self::transport::quic_endpoint::quic_endpoint_metrics_snapshot;
 pub(crate) use self::transport::quic_endpoint::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
     QuicEndpointOpenContext, QuicEndpointProtocol, inherit_quic_endpoint_observation,
-    quic_endpoint_context_for_proxy, scope_quic_endpoint_observation,
-    wait_quic_endpoint_idle_after_close,
+    open_marked_quic_endpoint_for_remote, quic_endpoint_context_for_proxy,
+    scope_quic_endpoint_observation, wait_quic_endpoint_idle_after_close,
 };
 pub(crate) use self::udp::{
     probe_resident_proxy_dns_udp_with_forwarder_async, resident_dns_proxy_udp_transport,
@@ -111,9 +109,9 @@ pub(crate) use dae_resident_transport::{
     ProxyDnsResponseBytes,
 };
 pub(crate) use dae_resident_transport::{
-    ResolvedHostAddrs, TcpCandidateRacePolicy, authority_from_host_port,
-    resolve_host_addrs_with_bootstrap_dns_ttl, resolve_host_addrs_with_configured_fallback_dns_ttl,
-    resolve_socket_addr_candidates, try_socket_addr_candidates, try_tcp_socket_addr_candidates,
+    TcpCandidateRacePolicy, authority_from_host_port,
+    resolve_host_addrs_with_configured_fallback_dns_ttl, resolve_socket_addr_candidates,
+    try_socket_addr_candidates, try_tcp_socket_addr_candidates,
 };
 
 #[path = "runtime/defaults.rs"]

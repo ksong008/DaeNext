@@ -183,6 +183,7 @@ mod executor;
 pub(super) use self::executor::*;
 mod vless_handlers;
 use self::vless_handlers::*;
+use crate::transport::quic_endpoint::open_marked_quic_endpoint_for_remote;
 mod proxy_dispatch;
 pub(super) use self::proxy_dispatch::*;
 pub(crate) use self::proxy_dispatch::{
@@ -190,9 +191,8 @@ pub(crate) use self::proxy_dispatch::{
     QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointProtocol,
     ResidentConnectedQuicEndpoint, connect_quic_endpoint_candidates_async,
     inherit_quic_endpoint_observation, open_hysteria2_quic_connection_candidates_async,
-    open_juicity_quic_connection_candidates_async, open_marked_quic_endpoint_for_remote,
-    open_tuic_quic_connection_candidates_async, quic_endpoint_metrics_snapshot,
-    scope_quic_endpoint_observation,
+    open_juicity_quic_connection_candidates_async, open_tuic_quic_connection_candidates_async,
+    quic_endpoint_metrics_snapshot, scope_quic_endpoint_observation,
 };
 mod plain_handlers;
 pub(crate) use self::plain_handlers::http_proxy_connect_async;

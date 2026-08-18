@@ -20,9 +20,9 @@ pub use quic_endpoint::{
     QuicEndpointDrainReport, QuicEndpointIdentityRole, QuicEndpointOpenContext,
     QuicEndpointOpenError, QuicEndpointProtocol, QuicEndpointUnderlay,
     configure_quic_endpoint_admission, configure_quic_endpoint_observability_retention,
-    inherit_quic_endpoint_observation, open_observed_quic_endpoint,
-    open_observed_quic_endpoint_waiting, quic_endpoint_drain_deadlines,
-    quic_endpoint_metrics_snapshot, scope_quic_endpoint_observation,
+    inherit_quic_endpoint_observation, open_marked_quic_endpoint_for_remote,
+    open_observed_quic_endpoint, open_observed_quic_endpoint_waiting,
+    quic_endpoint_drain_deadlines, quic_endpoint_metrics_snapshot, scope_quic_endpoint_observation,
     wait_quic_endpoint_idle_after_close_for, wait_quic_endpoints_idle_or_released_until,
     wait_quic_endpoints_idle_until,
 };
