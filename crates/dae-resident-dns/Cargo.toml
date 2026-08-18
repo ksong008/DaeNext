@@ -12,6 +12,7 @@ test-support = []
 [dependencies]
 dae-dns.workspace = true
 dae-resident-core.workspace = true
+dae-resident-plan.workspace = true
 dae-resident-transport.workspace = true
 dae-routing.workspace = true
 dae-runtime-control.workspace = true

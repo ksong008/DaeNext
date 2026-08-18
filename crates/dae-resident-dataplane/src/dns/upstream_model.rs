@@ -178,6 +178,7 @@ pub(in crate::dns) struct ResidentDnsForwarderCache {
     pub(in crate::dns) tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     pub(in crate::dns) juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     pub(in crate::dns) anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+    pub(in crate::dns) proxy_tcp_transport: Option<Arc<dyn ResidentDnsProxyTcpTransport>>,
     pub(in crate::dns) health_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::dns) closing: std::sync::atomic::AtomicBool,
 }
@@ -201,6 +202,9 @@ impl Default for ResidentDnsForwarderCache {
             tuic_owner_registry: None,
             juicity_owner_registry: None,
             anytls_owner_registry: None,
+            proxy_tcp_transport: Some(resident_dns_proxy_tcp_transport(
+                ResidentTransportOwnerRegistries::default(),
+            )),
             health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
@@ -227,6 +231,9 @@ impl ResidentDnsForwarderCache {
             tuic_owner_registry: None,
             juicity_owner_registry: None,
             anytls_owner_registry: None,
+            proxy_tcp_transport: Some(resident_dns_proxy_tcp_transport(
+                ResidentTransportOwnerRegistries::default(),
+            )),
             health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
@@ -237,6 +244,7 @@ impl ResidentDnsForwarderCache {
         metrics: Arc<ResidentDataplaneMetrics>,
         runtime: tokio::runtime::Handle,
         transport_owners: ResidentTransportOwnerRegistries,
+        proxy_tcp_transport: Arc<dyn ResidentDnsProxyTcpTransport>,
     ) -> Self {
         let mut cache = Self::new(udp_runtime.clone(), Arc::clone(&metrics));
         cache.udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new_on(
@@ -248,6 +256,7 @@ impl ResidentDnsForwarderCache {
         cache.tuic_owner_registry = transport_owners.tuic();
         cache.juicity_owner_registry = transport_owners.juicity();
         cache.anytls_owner_registry = transport_owners.anytls();
+        cache.proxy_tcp_transport = Some(proxy_tcp_transport);
         cache.health_runtime = Some(runtime);
         cache
     }
@@ -710,7 +719,7 @@ pub(in crate::dns) enum ResidentDnsTcpConnectionKind {
     Direct,
     Proxy {
         binding: ResidentProxyBinding,
-        owners: ResidentTransportOwnerRegistries,
+        transport: Arc<dyn ResidentDnsProxyTcpTransport>,
     },
 }
 

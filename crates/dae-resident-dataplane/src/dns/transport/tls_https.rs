@@ -84,12 +84,11 @@ async fn forward_dns_tls_to_routed_target_async(
             remote,
             payload,
             binding.clone(),
-            ResidentTransportOwnerRegistries::new(
-                forwarders.hysteria2_owner_registry.clone(),
-                forwarders.tuic_owner_registry.clone(),
-                forwarders.juicity_owner_registry.clone(),
-            )
-            .with_anytls(forwarders.anytls_owner_registry.clone()),
+            forwarders.proxy_tcp_transport.clone().ok_or_else(|| {
+                ResidentDnsTransportError::message(
+                    "resident DNS proxy TCP transport is unavailable",
+                )
+            })?,
             context,
         )
         .await
@@ -338,12 +337,11 @@ async fn forward_dns_https_to_routed_target_async(
             remote,
             payload,
             binding.clone(),
-            ResidentTransportOwnerRegistries::new(
-                forwarders.hysteria2_owner_registry.clone(),
-                forwarders.tuic_owner_registry.clone(),
-                forwarders.juicity_owner_registry.clone(),
-            )
-            .with_anytls(forwarders.anytls_owner_registry.clone()),
+            forwarders.proxy_tcp_transport.clone().ok_or_else(|| {
+                ResidentDnsTransportError::message(
+                    "resident DNS proxy TCP transport is unavailable",
+                )
+            })?,
             context,
         )
         .await

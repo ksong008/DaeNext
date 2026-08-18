@@ -459,14 +459,12 @@ impl ResidentDnsForwarderCache {
                         ResidentDnsTcpConnectionKind::Direct
                     }
                     ResidentDnsUpstreamSelection::Proxy { binding } => {
+                        let transport = self.proxy_tcp_transport.clone().ok_or_else(|| {
+                            "resident DNS proxy TCP transport is unavailable".to_owned()
+                        })?;
                         ResidentDnsTcpConnectionKind::Proxy {
                             binding: binding.clone(),
-                            owners: ResidentTransportOwnerRegistries::new(
-                                self.hysteria2_owner_registry.clone(),
-                                self.tuic_owner_registry.clone(),
-                                self.juicity_owner_registry.clone(),
-                            )
-                            .with_anytls(self.anytls_owner_registry.clone()),
+                            transport,
                         }
                     }
                 };
