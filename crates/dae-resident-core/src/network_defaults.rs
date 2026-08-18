@@ -6,7 +6,9 @@ pub const RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE: Duration = Duration::from_milli
 pub const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
 pub const RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 pub const RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT: usize = 2;
+pub const RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 pub const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
+pub const VLESS_RESPONSE_VERSION: u8 = 0;
 
 pub fn resident_udp_runtime_topology(
     requested_shards: usize,
