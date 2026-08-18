@@ -126,7 +126,7 @@ async fn open_cached_proxy_dns_quic_connection(
             return Ok(connection.clone());
         }
     }
-    let (upstream, remote, proxy, proxy_udp_transport, client_config) = {
+    let (upstream, remote, proxy, proxy_udp_transport, quic_endpoint_transport, client_config) = {
         let forwarder =
             lock_proxy_dns_quic_forwarder(forwarder, context, "read endpoint plan").await?;
         (
@@ -134,6 +134,7 @@ async fn open_cached_proxy_dns_quic_connection(
             forwarder.remote,
             forwarder.binding.clone(),
             Arc::clone(&forwarder.proxy_udp_transport),
+            Arc::clone(&forwarder.quic_endpoint_transport),
             proxy_dns_quic_client_config(&forwarder)?,
         )
     };
@@ -155,6 +156,7 @@ async fn open_cached_proxy_dns_quic_connection(
         remote,
         bridge.local_addr(),
         &proxy,
+        quic_endpoint_transport.as_ref(),
         client_config,
         context,
     ) {
@@ -291,6 +293,7 @@ fn open_proxy_dns_quic_endpoint(
     upstream_remote: SocketAddr,
     bridge_remote: SocketAddr,
     binding: &ResidentProxyBinding,
+    quic_endpoint_transport: &dyn ResidentDnsQuicEndpointTransport,
     client_config: quinn::ClientConfig,
     context: ProxyDnsRequestContext,
 ) -> Result<ObservedQuicEndpoint, ProxyDnsRequestError> {
@@ -303,20 +306,21 @@ fn open_proxy_dns_quic_endpoint(
     );
     let deadline = dae_runtime_control::AbsoluteDeadline::at(context.deadline().into_std());
     let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
-    let mut endpoint = open_marked_quic_endpoint_for_remote(
-        binding.effective_socket_mark(),
-        bridge_remote,
-        open_context,
-        deadline,
-        &cancellation,
-    )
-    .map_err(|error| {
-        ProxyDnsRequestError::new(
-            ProxyDnsRequestStage::OwnerAcquire,
-            ProxyDnsRequestFailure::Network,
-            format!("open proxied DoQ endpoint: {error}"),
+    let mut endpoint = quic_endpoint_transport
+        .open_marked_endpoint(
+            binding.effective_socket_mark(),
+            bridge_remote,
+            open_context,
+            deadline,
+            &cancellation,
         )
-    })?;
+        .map_err(|error| {
+            ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::OwnerAcquire,
+                ProxyDnsRequestFailure::Network,
+                format!("open proxied DoQ endpoint: {error}"),
+            )
+        })?;
     endpoint.set_default_client_config(client_config);
     Ok(endpoint)
 }

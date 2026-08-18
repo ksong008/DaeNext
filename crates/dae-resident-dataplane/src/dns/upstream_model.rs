@@ -176,6 +176,7 @@ pub(in crate::dns) struct ResidentDnsForwarderCache {
     pub(in crate::dns) metrics: Arc<ResidentDataplaneMetrics>,
     pub(in crate::dns) proxy_tcp_transport: Option<Arc<dyn ResidentDnsProxyTcpTransport>>,
     pub(in crate::dns) proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
+    pub(in crate::dns) quic_endpoint_transport: Arc<dyn ResidentDnsQuicEndpointTransport>,
     pub(in crate::dns) health_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::dns) closing: std::sync::atomic::AtomicBool,
 }
@@ -204,6 +205,7 @@ impl Default for ResidentDnsForwarderCache {
                 udp_executor,
                 owners,
             ),
+            quic_endpoint_transport: Arc::new(ResidentDnsQuicEndpointPolicy),
             health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
@@ -235,6 +237,7 @@ impl ResidentDnsForwarderCache {
                 udp_executor,
                 owners,
             ),
+            quic_endpoint_transport: Arc::new(ResidentDnsQuicEndpointPolicy),
             health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
@@ -247,11 +250,13 @@ impl ResidentDnsForwarderCache {
         udp_executor: Arc<ResidentDnsUdpActorExecutor>,
         proxy_tcp_transport: Arc<dyn ResidentDnsProxyTcpTransport>,
         proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
+        quic_endpoint_transport: Arc<dyn ResidentDnsQuicEndpointTransport>,
     ) -> Self {
         let mut cache = Self::new(udp_runtime, metrics);
         cache.udp_executor = udp_executor;
         cache.proxy_tcp_transport = Some(proxy_tcp_transport);
         cache.proxy_udp_transport = proxy_udp_transport;
+        cache.quic_endpoint_transport = quic_endpoint_transport;
         cache.health_runtime = Some(runtime);
         cache
     }
@@ -587,6 +592,7 @@ pub(in crate::dns) struct ResidentDnsQuicForwarder {
     pub(in crate::dns) generation: u64,
     pub(in crate::dns) mark: u32,
     pub(in crate::dns) fixed_remote: Option<SocketAddr>,
+    pub(in crate::dns) quic_endpoint_transport: Arc<dyn ResidentDnsQuicEndpointTransport>,
     pub(in crate::dns) endpoint: Option<ObservedQuicEndpoint>,
     pub(in crate::dns) connection: Option<quinn::Connection>,
     pub(in crate::dns) session_cache:
@@ -603,6 +609,7 @@ pub(in crate::dns) struct ResidentDnsProxyQuicForwarder {
     pub(in crate::dns) remote: SocketAddr,
     pub(in crate::dns) binding: ResidentProxyBinding,
     pub(in crate::dns) proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
+    pub(in crate::dns) quic_endpoint_transport: Arc<dyn ResidentDnsQuicEndpointTransport>,
     pub(in crate::dns) bridge: Option<Box<dyn ResidentDnsProxyUdpBridge>>,
     pub(in crate::dns) endpoint: Option<ObservedQuicEndpoint>,
     pub(in crate::dns) connection: Option<quinn::Connection>,
@@ -622,6 +629,7 @@ pub(in crate::dns) struct ResidentDnsProxyH3Forwarder {
     pub(in crate::dns) remote: SocketAddr,
     pub(in crate::dns) binding: ResidentProxyBinding,
     pub(in crate::dns) proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
+    pub(in crate::dns) quic_endpoint_transport: Arc<dyn ResidentDnsQuicEndpointTransport>,
     pub(in crate::dns) metrics: Arc<ResidentDataplaneMetrics>,
     pub(in crate::dns) bridge: Option<Box<dyn ResidentDnsProxyUdpBridge>>,
     pub(in crate::dns) endpoint: Option<ObservedQuicEndpoint>,
@@ -717,6 +725,7 @@ pub(in crate::dns) struct ResidentDnsH3Forwarder {
     pub(in crate::dns) generation: u64,
     pub(in crate::dns) target: SocketAddr,
     pub(in crate::dns) mark: u32,
+    pub(in crate::dns) quic_endpoint_transport: Arc<dyn ResidentDnsQuicEndpointTransport>,
     pub(in crate::dns) endpoint: Option<ObservedQuicEndpoint>,
     pub(in crate::dns) connection: Option<quinn::Connection>,
     pub(in crate::dns) session_cache:

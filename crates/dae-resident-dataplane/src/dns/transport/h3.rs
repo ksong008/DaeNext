@@ -230,7 +230,7 @@ async fn open_cached_dns_h3_client(
             return Ok((client.clone(), connection.stable_id()));
         }
     }
-    let (upstream, generation, target, mark, session_cache) = {
+    let (upstream, generation, target, mark, session_cache, quic_endpoint_transport) = {
         let forwarder = lock_dns_h3_forwarder(forwarder, context, "read endpoint plan").await?;
         (
             forwarder.upstream.clone(),
@@ -238,6 +238,7 @@ async fn open_cached_dns_h3_client(
             forwarder.target,
             forwarder.mark,
             forwarder.session_cache.clone(),
+            Arc::clone(&forwarder.quic_endpoint_transport),
         )
     };
     let open_context = configured_dns_quic_endpoint_context(
@@ -257,6 +258,7 @@ async fn open_cached_dns_h3_client(
             ProxyDnsRequestStage::Connect,
             ProxyDnsRequestFailure::Network,
             connect_dns_quic_endpoint_async(
+                quic_endpoint_transport.as_ref(),
                 &upstream,
                 target,
                 mark,

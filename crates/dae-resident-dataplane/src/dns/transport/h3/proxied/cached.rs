@@ -105,7 +105,15 @@ async fn open_cached_proxy_dns_h3_client(
             return Ok((client.clone(), connection.stable_id()));
         }
     }
-    let (upstream, remote, proxy, proxy_udp_transport, metrics, client_config) = {
+    let (
+        upstream,
+        remote,
+        proxy,
+        proxy_udp_transport,
+        quic_endpoint_transport,
+        metrics,
+        client_config,
+    ) = {
         let forwarder =
             lock_proxy_dns_h3_forwarder(forwarder, context, "read endpoint plan").await?;
         (
@@ -113,6 +121,7 @@ async fn open_cached_proxy_dns_h3_client(
             forwarder.remote,
             forwarder.binding.clone(),
             Arc::clone(&forwarder.proxy_udp_transport),
+            Arc::clone(&forwarder.quic_endpoint_transport),
             Arc::clone(&forwarder.metrics),
             proxy_dns_h3_client_config(&forwarder)?,
         )
@@ -140,7 +149,7 @@ async fn open_cached_proxy_dns_h3_client(
     );
     let deadline = dae_runtime_control::AbsoluteDeadline::at(context.deadline().into_std());
     let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
-    let mut endpoint = match open_marked_quic_endpoint_for_remote(
+    let mut endpoint = match quic_endpoint_transport.open_marked_endpoint(
         proxy.effective_socket_mark(),
         bridge_addr,
         open_context,
