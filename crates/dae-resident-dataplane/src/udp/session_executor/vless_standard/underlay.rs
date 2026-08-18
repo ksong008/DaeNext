@@ -3,7 +3,7 @@ use dae_outbound::vless::VlessEncryptedStream;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 #[derive(Clone, Copy)]
 pub(super) enum VlessStandardUdpWrapperKind {
@@ -167,16 +167,15 @@ impl VlessStandardUdpUnderlay {
                     .await?;
                     Ok(Self::EncryptedWebSocketPlain { stream: encrypted })
                 } else {
+                    let mut state = AsyncWebSocketPayloadState::default();
+                    state.inject_leftover(ws_leftover)?;
                     write_vless_websocket_frame(
                         &mut stream,
                         initial_packet,
                         "write VLESS WebSocket UDP first packet",
                     )
                     .await?;
-                    Ok(Self::WebSocketPlain {
-                        stream,
-                        state: AsyncWebSocketPayloadState::default(),
-                    })
+                    Ok(Self::WebSocketPlain { stream, state })
                 }
             }
             VlessStandardUdpWrapperKind::WebSocketTls => {
@@ -208,6 +207,8 @@ impl VlessStandardUdpUnderlay {
                         tls_underlay,
                     })
                 } else {
+                    let mut state = AsyncWebSocketPayloadState::default();
+                    state.inject_leftover(ws_leftover)?;
                     write_vless_websocket_frame(
                         &mut client,
                         initial_packet,
@@ -216,7 +217,7 @@ impl VlessStandardUdpUnderlay {
                     .await?;
                     Ok(Self::WebSocketTls {
                         client,
-                        state: AsyncWebSocketPayloadState::default(),
+                        state,
                         tls_underlay,
                     })
                 }
@@ -230,7 +231,7 @@ impl VlessStandardUdpUnderlay {
                     "VLESS HTTPUpgrade UDP",
                 )
                 .await?;
-                let mut stream = PrefixedStream::new(stream, leftover);
+                let mut stream = AsyncPrefixedStream::new(leftover, stream);
                 if let Some(encryption) = proxy.vless_encryption()? {
                     let mut encrypted = VlessEncryptedStream::handshake(
                         Box::new(stream) as Box<dyn AsyncReadWrite + Unpin + Send>,
@@ -268,7 +269,7 @@ impl VlessStandardUdpUnderlay {
                     "VLESS TLS HTTPUpgrade UDP",
                 )
                 .await?;
-                let mut client = PrefixedStream::new(client, leftover);
+                let mut client = AsyncPrefixedStream::new(leftover, client);
                 if let Some(encryption) = proxy.vless_encryption()? {
                     let mut encrypted = VlessEncryptedStream::handshake(
                         Box::new(client) as Box<dyn AsyncReadWrite + Unpin + Send>,
@@ -769,63 +770,6 @@ where
 pub(super) trait AsyncReadWrite: AsyncRead + AsyncWrite {}
 impl<T: AsyncRead + AsyncWrite> AsyncReadWrite for T {}
 
-struct PrefixedStream<S> {
-    prefix: Vec<u8>,
-    consumed: usize,
-    inner: S,
-}
-
-impl<S> PrefixedStream<S> {
-    fn new(inner: S, prefix: Vec<u8>) -> Self {
-        Self {
-            prefix,
-            consumed: 0,
-            inner,
-        }
-    }
-}
-
-impl<S: AsyncRead + Unpin> AsyncRead for PrefixedStream<S> {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        if self.consumed < self.prefix.len() {
-            let remaining = &self.prefix[self.consumed..];
-            let n = remaining.len().min(buf.remaining());
-            buf.put_slice(&remaining[..n]);
-            self.consumed += n;
-            return std::task::Poll::Ready(Ok(()));
-        }
-        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
-    }
-}
-
-impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedStream<S> {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
-    }
-}
-
 async fn read_http_head_from_async<S>(
     stream: &mut S,
     label: &str,
@@ -833,26 +777,16 @@ async fn read_http_head_from_async<S>(
 where
     S: AsyncRead + Unpin,
 {
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 512];
-    loop {
-        let read = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, stream.read(&mut buf))
-            .await
-            .map_err(|_| format!("{label}: timeout"))?
-            .map_err(|err| format!("{label}: {err}"))?;
-        if read == 0 {
-            return Err(format!("{label}: early eof"));
-        }
-        response.extend_from_slice(&buf[..read]);
-        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
-            let leftover = response[index + 4..].to_vec();
-            response.truncate(index + 4);
-            return Ok((response, leftover));
-        }
-        if response.len() > 16 * 1024 {
-            return Err(format!("{label}: response head too large"));
-        }
-    }
+    let response = read_http_head(
+        stream,
+        HttpHeadReadOptions {
+            max_bytes: 16 * 1024,
+            read_timeout: Some(RESIDENT_UDP_RESPONSE_TIMEOUT),
+        },
+    )
+    .await
+    .map_err(|error| format!("{label}: {error}"))?;
+    Ok((response.head, response.leftover))
 }
 
 async fn write_vless_websocket_frame<S>(
@@ -888,4 +822,91 @@ where
     })
     .await
     .map_err(|_| format!("{label} timeout"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use dae_outbound::shared_transport::websocket_accept_for_key;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn websocket_handshake_preserves_first_frame_from_response_read() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            let request = read_http_head(
+                &mut server,
+                HttpHeadReadOptions {
+                    max_bytes: 4096,
+                    read_timeout: None,
+                },
+            )
+            .await
+            .unwrap();
+            let request = std::str::from_utf8(&request.head).unwrap();
+            let key = request
+                .lines()
+                .find_map(|line| line.strip_prefix("Sec-WebSocket-Key: "))
+                .unwrap();
+            let accept = websocket_accept_for_key(key);
+            let mut response = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+            )
+            .into_bytes();
+            response.extend_from_slice(&[0x82, 5]);
+            response.extend_from_slice(b"first");
+            server.write_all(&response).await.unwrap();
+        });
+
+        let leftover = websocket_handshake_async(
+            &mut client,
+            "fixture.example",
+            "/ws",
+            "VLESS fixture WebSocket UDP",
+        )
+        .await
+        .unwrap();
+        server_task.await.unwrap();
+        let mut state = AsyncWebSocketPayloadState::default();
+        state.inject_leftover(leftover).unwrap();
+        let mut reader = AsyncWebSocketPayloadReader::new(&mut client, &mut state);
+        let mut payload = [0_u8; 5];
+        reader.read_exact(&mut payload).await.unwrap();
+        assert_eq!(&payload, b"first");
+    }
+
+    #[tokio::test]
+    async fn httpupgrade_handshake_preserves_first_tunnel_payload() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            let _request = read_http_head(
+                &mut server,
+                HttpHeadReadOptions {
+                    max_bytes: 4096,
+                    read_timeout: None,
+                },
+            )
+            .await
+            .unwrap();
+            server
+                .write_all(b"HTTP/1.1 101 Switching Protocols\r\n\r\nfirst")
+                .await
+                .unwrap();
+        });
+
+        let leftover = httpupgrade_handshake_async(
+            &mut client,
+            "fixture.example",
+            "/upgrade",
+            "VLESS fixture HTTPUpgrade UDP",
+        )
+        .await
+        .unwrap();
+        server_task.await.unwrap();
+        let mut stream = AsyncPrefixedStream::new(leftover, client);
+        let mut payload = [0_u8; 5];
+        stream.read_exact(&mut payload).await.unwrap();
+        assert_eq!(&payload, b"first");
+    }
 }

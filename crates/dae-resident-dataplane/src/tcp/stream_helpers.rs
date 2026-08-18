@@ -12,27 +12,21 @@ pub(crate) async fn read_http_head_and_leftover_from_async_stream<S>(
 where
     S: AsyncRead + Unpin,
 {
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 256];
-    loop {
-        let n = stream
-            .read(&mut buf)
-            .await
-            .map_err(|err| format!("read http head: {err}"))?;
-        if n == 0 {
-            break;
-        }
-        response.extend_from_slice(&buf[..n]);
-        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
-            let leftover = response[index + 4..].to_vec();
-            response.truncate(index + 4);
-            return Ok((response, leftover));
-        }
-        if response.len() > 8192 {
-            return Err("http response header too large".to_owned());
-        }
-    }
-    Err("incomplete http response header".to_owned())
+    let result = read_http_head(
+        stream,
+        HttpHeadReadOptions {
+            max_bytes: 8192,
+            read_timeout: None,
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        HttpHeadReadError::Io(error) => format!("read http head: {error}"),
+        HttpHeadReadError::EarlyEof => "incomplete http response header".to_owned(),
+        HttpHeadReadError::TooLarge => "http response header too large".to_owned(),
+        HttpHeadReadError::Timeout => "http response header timeout".to_owned(),
+    })?;
+    Ok((result.head, result.leftover))
 }
 
 pub(crate) fn validate_simple_obfs_http_response_status(
@@ -144,70 +138,6 @@ pub(super) async fn write_all_vectored_header_payload(
 pub(super) struct AsyncPrefixTcpReader<'a, S> {
     pub(super) prefix: CursorBytes,
     pub(super) stream: &'a mut S,
-}
-
-pub(crate) struct AsyncPrefixedStream<S> {
-    prefix: CursorBytes,
-    inner: S,
-}
-
-impl<S> AsyncPrefixedStream<S> {
-    pub(crate) fn new(prefix: Vec<u8>, inner: S) -> Self {
-        Self {
-            prefix: CursorBytes::new(prefix),
-            inner,
-        }
-    }
-}
-
-impl<S> AsyncRead for AsyncPrefixedStream<S>
-where
-    S: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        self.prefix.drain_to_read_buf(buf);
-        if buf.remaining() == 0 || !self.prefix.is_empty() {
-            return Poll::Ready(Ok(()));
-        }
-        Pin::new(&mut self.inner).poll_read(cx, buf)
-    }
-}
-
-impl<S> AsyncWrite for AsyncPrefixedStream<S>
-where
-    S: AsyncWrite + Unpin,
-{
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
-    }
-
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[IoSlice<'_>],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
-    }
 }
 
 impl<'a, S> AsyncPrefixTcpReader<'a, S> {
@@ -367,37 +297,6 @@ where
                 }
             }
         }
-    }
-}
-
-#[derive(Debug, Default)]
-pub(super) struct CursorBytes {
-    bytes: Vec<u8>,
-    offset: usize,
-}
-
-impl CursorBytes {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes, offset: 0 }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.offset >= self.bytes.len()
-    }
-
-    fn drain_to_read_buf(&mut self, out: &mut ReadBuf<'_>) -> bool {
-        if self.is_empty() || out.remaining() == 0 {
-            return false;
-        }
-        let available = &self.bytes[self.offset..];
-        let len = available.len().min(out.remaining());
-        out.put_slice(&available[..len]);
-        self.offset += len;
-        if self.offset >= self.bytes.len() {
-            self.bytes.clear();
-            self.offset = 0;
-        }
-        true
     }
 }
 

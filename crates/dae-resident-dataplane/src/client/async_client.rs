@@ -135,10 +135,6 @@ impl AsyncVlessTlsClient {
             .map_err(|err| format!("flush {label}: {err}"))
     }
 
-    pub(crate) async fn read_plain(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.tls_mut().read(buf).await
-    }
-
     pub(crate) async fn shutdown(&mut self) {
         let _ = self.tls_mut().shutdown().await;
     }
