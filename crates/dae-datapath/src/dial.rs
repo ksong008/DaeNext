@@ -1,3 +1,5 @@
+use dae_netutil::{MagicNetworkEncoding, magic_network_encoded_len, write_magic_network_to_vec};
+
 pub fn magic_network(network: &str, mark: u32, mptcp: bool) -> String {
     String::from_utf8(magic_network_bytes(network, mark, mptcp)).expect("magic network is UTF-8")
 }
@@ -9,22 +11,22 @@ pub fn magic_network_bytes(network: &str, mark: u32, mptcp: bool) -> Vec<u8> {
 }
 
 pub fn write_magic_network_bytes(network: &str, mark: u32, mptcp: bool, out: &mut Vec<u8>) {
-    if mark == 0 && !mptcp {
-        out.extend_from_slice(network.as_bytes());
-        return;
-    }
-    assert!(network.len() <= u8::MAX as usize, "network too long");
-    out.push(0);
-    out.push(network.len() as u8);
-    out.extend_from_slice(network.as_bytes());
-    out.extend_from_slice(&mark.to_be_bytes());
-    out.push(u8::from(mptcp));
+    write_magic_network_to_vec(
+        network,
+        mark,
+        mptcp,
+        MagicNetworkEncoding::PlainWhenEligible,
+        out,
+    )
+    .expect("network too long");
 }
 
 pub fn magic_network_len(network: &str, mark: u32, mptcp: bool) -> usize {
-    if mark == 0 && !mptcp {
-        network.len()
-    } else {
-        2 + network.len() + 4 + 1
-    }
+    magic_network_encoded_len(
+        network,
+        mark,
+        mptcp,
+        MagicNetworkEncoding::PlainWhenEligible,
+    )
+    .expect("network too long")
 }

@@ -134,7 +134,10 @@ pub(super) fn run_juicity_underlay(args: &[String]) -> RunnerOutput {
         Err(err) => return RunnerOutput::stdout_error(err),
     };
     let mptcp = bool_arg(args, "--mptcp").unwrap_or(false);
-    let contract = juicity::link::underlay_contract(network, mark, mptcp);
+    let contract = match juicity::link::underlay_contract(network, mark, mptcp) {
+        Ok(contract) => contract,
+        Err(error) => return RunnerOutput::stdout_error(error.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
@@ -166,7 +169,8 @@ pub(super) fn run_juicity_smoke(args: &[String]) -> RunnerOutput {
         Ok(pin) => pin,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
     };
-    let tcp_underlay = juicity::link::underlay_contract("tcp", 1234, true);
+    let tcp_underlay = juicity::link::underlay_contract("tcp", 1234, true)
+        .expect("fixed Juicity TCP network fits MagicNetwork framing");
     RunnerOutput::ok(format!(
         "{}\n",
         json!({

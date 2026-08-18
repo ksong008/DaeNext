@@ -170,7 +170,10 @@ pub(super) fn run_anytls_underlay(args: &[String]) -> RunnerOutput {
         Err(err) => return RunnerOutput::stdout_error(err),
     };
     let mptcp = bool_arg(args, "--mptcp").unwrap_or(false);
-    let contract = anytls::link::underlay_contract(network, mark, mptcp);
+    let contract = match anytls::link::underlay_contract(network, mark, mptcp) {
+        Ok(contract) => contract,
+        Err(error) => return RunnerOutput::stdout_error(error.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
@@ -200,7 +203,8 @@ pub(super) fn run_anytls_smoke(args: &[String]) -> RunnerOutput {
         Ok(target) => target,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
     };
-    let udp_underlay = anytls::link::underlay_contract("udp", 1234, true);
+    let udp_underlay = anytls::link::underlay_contract("udp", 1234, true)
+        .expect("fixed AnyTLS UDP network fits MagicNetwork framing");
     RunnerOutput::ok(format!(
         "{}\n",
         json!({

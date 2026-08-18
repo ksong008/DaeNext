@@ -1,4 +1,14 @@
 use super::*;
+
+#[test]
+fn anytls_underlay_rejects_oversized_magic_network() {
+    let network = "x".repeat(u8::MAX as usize + 1);
+    assert!(matches!(
+        crate::anytls::link::underlay_contract(&network, 0, false),
+        Err(crate::error::OutboundError::BadAnyTLS(message)) if message.contains("network too long")
+    ));
+}
+
 #[test]
 pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
     let fixture = fixture("outbound/protocol/anytls_rust_native.json");
@@ -151,7 +161,7 @@ pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
     );
 
     let underlay = &fixture["underlay_contract"];
-    let tcp = crate::anytls::link::underlay_contract("tcp", 1234, true);
+    let tcp = crate::anytls::link::underlay_contract("tcp", 1234, true).unwrap();
     assert_eq!(
         STANDARD.encode(&tcp.underlay_encoded),
         underlay["tcp_request"]["underlay_b64"].as_str().unwrap()
@@ -162,7 +172,7 @@ pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
             .as_bool()
             .unwrap()
     );
-    let udp = crate::anytls::link::underlay_contract("udp", 1234, true);
+    let udp = crate::anytls::link::underlay_contract("udp", 1234, true).unwrap();
     assert_eq!(
         udp.underlay_network,
         underlay["udp_request"]["underlay_network"]

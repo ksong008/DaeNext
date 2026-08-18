@@ -13,6 +13,7 @@ test-support = []
 
 [dependencies]
 dae-ebpf-support.workspace = true
+dae-netutil.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
