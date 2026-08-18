@@ -1,8 +1,4 @@
 use super::*;
-/// F-09: **无状态**解码——本函数不做 replay 检查（不维护 replay
-/// state）。生产使用方必须配合 `Ss2022UdpReplayTracker`（见
-/// `decode_client_packet_with_replay`）执行防重放；直接使用本函数会
-/// 重复接受时间窗内的同一认证 packet。
 pub fn decode_client_packet(
     cipher: &str,
     password: &str,
@@ -12,7 +8,6 @@ pub fn decode_client_packet(
     decode_client_packet_impl(cipher, password, input, now)
 }
 
-/// F-09: 带 replay state 的解码——认证解密后经 tracker 判重。
 pub fn decode_client_packet_with_replay(
     cipher: &str,
     password: &str,
@@ -21,7 +16,6 @@ pub fn decode_client_packet_with_replay(
     replay: &mut Ss2022UdpReplayTracker,
 ) -> Result<Ss2022UdpDecodedPacket, OutboundError> {
     let decoded = decode_client_packet_impl(cipher, password, input, now)?;
-    // F-09: 显式调用 tracker 的防重放检查（3 参版本在 replay.rs）。
     replay
         .check_at(decoded.session_id, decoded.packet_id, now)
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
@@ -116,7 +110,6 @@ mod replay_api_tests {
 
     #[test]
     fn replay_aware_decode_rejects_replayed_packet() {
-        // F-09 契约：同一 packet 第二次经 replay-aware 解码必须被拒。
         let cipher = "2022-blake3-aes-128-gcm";
         let password = "AQIDBAUGBwgJCgsMDQ4PEA==";
         let mut codec = Ss2022UdpCodec::new(cipher, password, [0x41; 8]).unwrap();
@@ -151,7 +144,6 @@ mod replay_api_tests {
             )
             .is_err()
         );
-        // 无状态 API 仍然接受（文档化行为）
         assert!(decode_client_packet(cipher, password, &packet, unix_timestamp_now()).is_ok());
     }
 }

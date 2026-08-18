@@ -30,9 +30,6 @@ impl AlpnProtocols {
             while i < offered.len() {
                 let len = offered[i] as usize;
                 i += 1;
-                // A-15: length-prefixed entry 必须完整落在 offered 内；
-                // 畸形远端 ClientHello 不得触发 slice 越界 panic
-                // （该函数从 extern "C" 回调进入，panic 会穿越 C ABI）。
                 if i + len > offered.len() {
                     return Err(Error::other(
                         "ALPN offered entry exceeds buffer length".into(),
@@ -92,7 +89,6 @@ mod tests {
 
     #[test]
     fn select_rejects_truncated_entry_without_panic() {
-        // A-15 回归：长度字段声明超出剩余字节时必须返回 Err，不得越界切片。
         let protos = AlpnProtocols::from(&[b"h3".to_vec()][..]);
         assert!(protos.select(&[5, b'h']).is_err());
         assert!(protos.select(&[0x7f]).is_err());

@@ -907,10 +907,6 @@ pub(crate) async fn acquire_vless_mux_logical_stream(
             })?;
             return open_vless_mux_logical(physical, permit, target, deadline).await;
         }
-        // F-17a: 先注册 notified、再释放 gate。避免"释放 gate 后才注册
-        // notified"的 lost wakeup：注册前释放的容量由下一轮 loop 复查
-        // 捕获，注册后的释放由 notify_waiters 唤醒（tokio Notify 保证
-        // notify_waiters 唤醒所有已注册 waiter）。
         let mut notified = Box::pin(owner.changed.notified());
         notified.as_mut().enable();
         let remaining = deadline

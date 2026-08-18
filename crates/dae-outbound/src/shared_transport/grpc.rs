@@ -205,7 +205,6 @@ pub fn grpc_stream_preface(service_name: &str) -> Result<Vec<u8>, OutboundError>
     } else {
         service_name
     };
-    // F-12: gRPC service name 进入请求行，拒绝 CTL 注入。
     super::dataplane::validate_http_field(service_name, "gRPC service name")?;
     Ok(format!(
         "POST /{service_name}/Tun HTTP/2\r\n\

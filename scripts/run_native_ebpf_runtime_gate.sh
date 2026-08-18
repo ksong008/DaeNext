@@ -180,7 +180,7 @@ if ! run_with_resource_sample "$resource_log" timeout "$runtime_timeout" \
   --execute-production-runtime-reload-parity \
   --ack-root-gate \
   --production-runtime-native-ebpf \
-  --production-runtime-native-ebpf-completed-a3-local \
+  --production-runtime-native-ebpf-local-admission \
   --production-runtime-native-ebpf-backend "$backend" \
   --production-runtime-netns-link "$netns_link" \
   --exit-after-ready >>"$cargo_log" 2>&1; then

@@ -1,6 +1,4 @@
 use super::*;
-/// F-01/F-02: run root 必须是固定父目录（/tmp）下的直接子目录，
-/// 且词法上不得含 `..` 逃逸。
 pub(super) fn ensure_safe_run_root(root: &Path) -> Result<(), String> {
     if !root.is_absolute() {
         return Err(format!("run root must be absolute: {}", path_string(root)));
@@ -12,8 +10,6 @@ pub(super) fn ensure_safe_run_root(root: &Path) -> Result<(), String> {
             path_string(root)
         ));
     };
-    // 第一级必须是 /tmp（固定父目录），第二级是自动生成的 leaf，
-    // 且整体不得出现 ParentDir（`..`）逃逸。
     match components.next() {
         Some(std::path::Component::Normal(segment)) if segment == "tmp" => {}
         _ => {
@@ -45,8 +41,6 @@ pub(super) fn ensure_safe_run_root(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// F-02: 输出/服务路径必须位于 run root（或其已知派生目录）内；
-/// 不再允许"绝对路径在 root 外但以 /tmp 开头"的宽松分支。
 pub(super) fn ensure_safe_output_path(path: &Path, root: &Path, label: &str) -> Result<(), String> {
     if !path.is_absolute() {
         return Err(format!("{label} must be absolute: {}", path_string(path)));

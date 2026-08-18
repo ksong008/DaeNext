@@ -26,10 +26,6 @@ members = [
     "crates/dae-tls",
     "crates/dae-trace",
 ]
-# Phase 0 / N-01: 三个 vendor crate 仅作为 [patch.crates-io] path 依赖被
-# 隐式纳入 workspace；显式排除，避免 `--workspace --all-targets` 构建其
-# dev-only 密码学依赖（rcgen/rustls-pemfile）。workspace 成员保持 25 个
-# 产品 crate。
 exclude = [
     "vendor/boring-v4-compat",
     "vendor/boring-sys-v4-compat",

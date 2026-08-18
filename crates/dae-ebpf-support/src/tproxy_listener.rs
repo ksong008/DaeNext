@@ -120,8 +120,6 @@ impl NetnsGuard {
     }
 
     fn restore(mut self) -> io::Result<()> {
-        // N-06: 只有在 setns 成功后标记 restored；失败时保持未恢复，
-        // Drop 会再次尝试回到当前 netns。
         set_netns(self.current.as_raw_fd())?;
         self.restored = true;
         Ok(())

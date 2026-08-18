@@ -188,7 +188,6 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
         let mut inbound_write = inbound_write;
         let mut client_read = client_read;
         let mut decoder = WebSocketBinaryFrameDecoder::default();
-        // A-14: 握手同批 leftover 是服务端首帧，先喂解码器。
         if !leftover.is_empty() {
             decoder
                 .extend(&leftover)

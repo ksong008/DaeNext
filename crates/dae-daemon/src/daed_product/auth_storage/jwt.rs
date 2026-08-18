@@ -66,7 +66,6 @@ pub(crate) fn verify_token(state: &Path, token: &str) -> io::Result<Option<UserR
     if username.is_empty() || username.len() > MAX_JWT_SUBJECT_BYTES {
         return Ok(None);
     }
-    // F-05: 认证热路径跳过重复 schema 校验（启动时已执行）。
     let Some(user) = load_user_by_username_without_schema_check(state, username)? else {
         return Ok(None);
     };

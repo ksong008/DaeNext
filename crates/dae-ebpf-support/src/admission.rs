@@ -86,7 +86,7 @@ impl NativeBackendAdmissionEvidence {
         }
     }
 
-    pub const fn completed_a3_local() -> Self {
+    pub const fn verified_local() -> Self {
         Self {
             aya_userspace_load_smoke_passed: true,
             map_in_map_prepin_smoke_passed: true,

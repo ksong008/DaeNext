@@ -109,7 +109,7 @@ pub(super) fn resident_runtime_options(
         host_section: DEFAULT_HOST_SECTION.to_owned(),
         native_ebpf_requested,
         native_ebpf_backend,
-        native_ebpf_completed_a3_admission: native_ebpf_requested,
+        native_ebpf_local_admission: native_ebpf_requested,
         native_ebpf_embedded_object,
         ..ProductionRuntimeOwnerOptions::default()
     })

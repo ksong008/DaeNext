@@ -1,7 +1,5 @@
 use crate::{SniffingError, sniff_tcp};
 
-/// F-25: 嗅探缓冲的内部字节上限（与生产 direct_sniffing 的 64 KiB
-/// 预算一致），防止 bench/test 误用导致无界内存增长。
 pub const TCP_SNIFF_BUFFER_MAX_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

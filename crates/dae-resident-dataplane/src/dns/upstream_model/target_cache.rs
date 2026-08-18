@@ -250,8 +250,6 @@ impl ResidentDnsResolvedTargetCache {
             .is_ok()
     }
 
-    /// F-17c: 置位 attempted 并返回 RAII guard；future 被取消/panic 时
-    /// guard 的 Drop 会复位 attempted，避免 stale refresh 永久 deferred。
     fn prepare_invalidated_refresh(
         &self,
         now: time::Instant,
@@ -717,9 +715,6 @@ mod tests {
     }
 }
 
-/// F-17c: 强制 refresh 尝试的 RAII 完成 guard。future 被取消（外层
-/// abort/timeout 竞态）或 panic 时 Drop 复位 attempted 状态，保证
-/// stale refresh 可重试；显式成功/失败路径调用 `commit()` 解除。
 struct RefreshAttemptGuard<'a> {
     cache: &'a ResidentDnsResolvedTargetCache,
     epoch: u64,

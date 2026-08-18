@@ -27,7 +27,6 @@ pub(crate) async fn websocket_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
 ) -> Result<Vec<u8>, String> {
-    // A-14: 返回握手响应之后同批预读的 leftover 字节（可能为空）。
     let handshake = websocket_client_handshake(options)
         .map_err(|err| format!("build websocket handshake: {err}"))?;
     client
@@ -44,7 +43,6 @@ pub(crate) async fn httpupgrade_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
 ) -> Result<Vec<u8>, String> {
-    // A-14: 同上，返回 leftover。
     let request = http_upgrade_request(options)
         .map_err(|err| format!("build HTTP Upgrade handshake: {err}"))?;
     client
@@ -63,7 +61,6 @@ pub(crate) async fn websocket_handshake_over_async_stream<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    // A-14: 同上，返回 leftover。
     let handshake = websocket_client_handshake(options)
         .map_err(|err| format!("build websocket handshake: {err}"))?;
     stream
@@ -84,7 +81,6 @@ pub(crate) async fn httpupgrade_handshake_over_async_stream<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    // A-14: 同上，返回 leftover。
     let request = http_upgrade_request(options)
         .map_err(|err| format!("build HTTP Upgrade handshake: {err}"))?;
     stream
@@ -165,8 +161,6 @@ async fn read_http_head_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     label: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    // A-14: 返回 (head, leftover)——101 同批预读的服务端首帧数据必须
-    // 保留并交给后续流消费，否则合法同段数据被吞掉导致失帧。
     let mut response = Vec::new();
     let mut buf = [0_u8; 512];
     loop {
@@ -196,7 +190,6 @@ async fn read_http_head_from_async_stream<S>(
 where
     S: AsyncRead + Unpin,
 {
-    // A-14: 同上，保留 delimiter 后同批字节。
     let mut response = Vec::new();
     let mut buf = [0_u8; 512];
     loop {
@@ -229,10 +222,6 @@ pub(crate) async fn write_websocket_binary_frame_over_resident_tls_async(
     client.write_plain_all(&frame, label).await
 }
 
-/// Exposes decoded WebSocket binary payload bytes as a bounded logical stream.
-/// VLESS Encryption wraps this stream, so HTTP/WebSocket framing stays outside
-/// the encrypted VLESS record layer exactly as it does in Xray.
-/// `leftover`（可能为空）是握手响应同批预读的首帧字节，必须最先消费。
 pub(crate) fn spawn_websocket_payload_stream<S>(
     client: S,
     leftover: Vec<u8>,
@@ -289,7 +278,6 @@ where
     };
     let download = async {
         let mut decoder = WebSocketBinaryFrameDecoder::default();
-        // A-14: 先消费握手同批 leftover，再读流。
         if !leftover.is_empty() {
             decoder
                 .extend(&leftover)

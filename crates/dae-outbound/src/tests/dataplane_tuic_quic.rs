@@ -22,7 +22,6 @@ fn case_tuic_true_quic_dataplane_smoke_admits_tuic_only() {
     assert!(outcome.allow_insecure);
     assert!(!outcome.disable_sni);
     assert!(outcome.disable_sni_probe_sni.is_empty());
-    // F-11: disable_sni 不再隐式关闭证书验证。
     assert!(!outcome.disable_sni_probe_allow_insecure);
     assert_eq!(outcome.udp_relay_mode, "native");
     assert!(outcome.underlay.tcp_underlay_uses_udp);

@@ -95,7 +95,6 @@ fn build_boring_tls_context_with_alpn_and_snapshot(
         | SslOptions::SINGLE_ECDH_USE;
     options &= !SslOptions::DONT_INSERT_EMPTY_FRAGMENTS;
     builder.set_options(options);
-    // F-13b: 显式拒绝 TLS 1.0/1.1（BoringSSL 默认允许旧版本协商）。
     builder
         .set_min_proto_version(Some(boring::ssl::SslVersion::TLS1_2))
         .map_err(|error| tls_configuration_error("set minimum TLS version", error))?;

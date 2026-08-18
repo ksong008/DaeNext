@@ -104,8 +104,8 @@ pub(crate) fn parse_runtime_owner_arg<'a>(
                     }
                 };
         }
-        "--production-runtime-native-ebpf-completed-a3-local" => {
-            state.production_runtime_native_ebpf_completed_a3_admission = true;
+        "--production-runtime-native-ebpf-local-admission" => {
+            state.production_runtime_native_ebpf_local_admission = true;
         }
         _ => return Ok(false),
     }

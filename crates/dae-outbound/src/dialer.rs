@@ -189,10 +189,6 @@ impl Dialer {
         checked_at_unix: i64,
     ) {
         let collection = self.must_get_collection(typ);
-        // 口径：latency ring 与 moving average 只记录真实测量样本。失败
-        // （latency_ms=None）不写入合成超时样本——与
-        // record_check_failure_without_latency 的“不污染延迟历史”语义一致，
-        // 节点复活后 avg10 / moving average 不受陈旧超时影响。
         if let Some(latency) = latency_ms {
             collection.latencies10.append(latency);
             collection.moving_average_ms =
@@ -210,8 +206,6 @@ impl Dialer {
     }
 
     pub fn record_check_failure_without_latency(&mut self, typ: NetworkType, checked_at_unix: i64) {
-        // 与 record_check_result 的失败分支同口径：无延迟样本时不写 latency ring、
-        // 不更新 moving average（失败不污染延迟历史）。
         let collection = self.must_get_collection(typ);
         collection.alive = false;
         collection.checked_at_unix = checked_at_unix;

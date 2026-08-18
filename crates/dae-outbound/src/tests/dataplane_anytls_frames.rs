@@ -70,7 +70,6 @@ fn case_anytls_frame_rejects_oversized_payload_instead_of_truncating() {
         .to_string();
     assert!(err.contains("frame payload too large"));
 
-    // 边界值 u16::MAX 恰好填满长度字段，仍可正常编码。
     let max = vec![0_u8; u16::MAX as usize];
     assert!(anytls::link::frame(anytls::contract::CMD_PSH, 1, &max).is_ok());
 }

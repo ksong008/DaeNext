@@ -550,7 +550,7 @@ mod tests {
         let options = ProductionRuntimeOwnerOptions {
             native_ebpf_requested: true,
             native_ebpf_backend: AttachBackend::Auto,
-            native_ebpf_completed_a3_admission: true,
+            native_ebpf_local_admission: true,
             ..ProductionRuntimeOwnerOptions::default()
         };
         let report = attach_continuity_value(&options, false);

@@ -85,9 +85,6 @@ impl UpstreamResolver {
             break state.upstream.clone();
         };
 
-        // F-22: 用户提供的 resolve/finish 回调可能 panic——panic 会留下
-        // refreshing=true 且不 notify，导致所有等待者永久冻结。用
-        // catch_unwind 隔离并走统一失败路径（复位 + notify）。
         let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut resolve = self.resolve.lock().unwrap();
             resolve()
@@ -136,8 +133,6 @@ impl UpstreamResolver {
                     self.cond.notify_all();
                     Ok(old)
                 } else {
-                    // F-23: 首次失败也写 retry 截止，避免 N 个并发请求
-                    // 全部串行重试同一慢解析。
                     state.next_refresh_unix = now_unix + self.retry_interval_secs;
                     self.cond.notify_all();
                     Err(DnsError::Resolve(format!(

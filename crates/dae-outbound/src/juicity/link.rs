@@ -355,7 +355,7 @@ mod tests {
         };
         let exported = link.export_url();
         assert!(exported.contains("p%40ss%3Aw%25rd"));
-        assert!(exported.contains("%23")); // name 中的 '#' 必须百分号编码
+        assert!(exported.contains("%23"));
         let parsed = JuicityLink::parse(&exported).unwrap();
         assert_eq!(parsed, link);
     }

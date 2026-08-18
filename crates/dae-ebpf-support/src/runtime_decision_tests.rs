@@ -61,7 +61,7 @@ fn native_backend_runtime_blocks_when_loader_is_unavailable() {
         native_backend_requested: true,
         requested_backend: AttachBackend::Auto,
         admission_report: native_backend_admission_report(
-            NativeBackendAdmissionEvidence::completed_a3_local(),
+            NativeBackendAdmissionEvidence::verified_local(),
             false,
         ),
         native_loader_available: false,
@@ -83,7 +83,7 @@ fn native_backend_runtime_auto_uses_admitted_tcx_candidate() {
     let decision = native_backend_runtime_decision(runtime_request(
         true,
         AttachBackend::Auto,
-        NativeBackendAdmissionEvidence::completed_a3_local(),
+        NativeBackendAdmissionEvidence::verified_local(),
     ));
     assert!(decision.admission_admitted);
     assert!(decision.attempt_native_backend);
@@ -104,7 +104,7 @@ fn native_backend_runtime_explicit_tc_netlink_is_allowed_after_a3() {
     let decision = native_backend_runtime_decision(runtime_request(
         true,
         AttachBackend::TcNetlink,
-        NativeBackendAdmissionEvidence::completed_a3_local(),
+        NativeBackendAdmissionEvidence::verified_local(),
     ));
     assert!(decision.attempt_native_backend);
     assert_eq!(decision.selected_backend, Some(AttachBackend::TcNetlink));
@@ -116,7 +116,7 @@ fn native_backend_runtime_explicit_tc_netlink_is_allowed_after_a3() {
 
 #[test]
 fn native_backend_runtime_explicit_tcx_fails_closed_without_tcx_evidence() {
-    let mut evidence = NativeBackendAdmissionEvidence::completed_a3_local();
+    let mut evidence = NativeBackendAdmissionEvidence::verified_local();
     evidence.tcx_optional_smoke = OptionalAdmissionEvidence::NotRequired;
     let decision =
         native_backend_runtime_decision(runtime_request(true, AttachBackend::Tcx, evidence));
@@ -136,7 +136,7 @@ fn native_backend_runtime_fails_closed_when_command_backend_is_missing() {
         native_backend_requested: true,
         requested_backend: AttachBackend::Auto,
         admission_report: native_backend_admission_report(
-            NativeBackendAdmissionEvidence::completed_a3_local(),
+            NativeBackendAdmissionEvidence::verified_local(),
             false,
         ),
         native_loader_available: true,

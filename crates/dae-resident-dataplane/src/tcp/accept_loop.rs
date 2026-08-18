@@ -125,9 +125,6 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                     (reserved_generation, permit)
                 } else {
                     drop(permit);
-                    // A-02: publication-aware retry——等待准入期间持续监听
-                    // publication 变化；连续 A→B→C reload 时把等待目标切到
-                    // 最新代，绝不给已退役代发放连接。
                     let mut accepted_publication = accepted_publication;
                     let mut accepted_generation = accepted_generation;
                     let (generation, permit) = loop {

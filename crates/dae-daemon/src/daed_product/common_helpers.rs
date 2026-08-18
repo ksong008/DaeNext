@@ -46,8 +46,6 @@ pub(super) fn civil_from_days(days: i64) -> (i64, i64, i64) {
 
 pub(super) fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
     ensure_state_schema(state)?;
-    // F-15: 先生成全部材料，再单 transaction 更新；中途失败不留
-    // "部分用户已重置"的中间状态。
     let mut conn = open_state_connection(state)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)

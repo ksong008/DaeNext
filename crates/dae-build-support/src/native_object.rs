@@ -5,8 +5,6 @@ use std::path::Path;
 use std::process::Command;
 
 const STRIP_TOOL_ENV: &str = "DAE_RUST_NATIVE_BPF_STRIP";
-/// N-04: 基础 sections 全部必需；map 段命名（maps/.maps）随工具链而异，
-/// 按 OR 契约校验（见下方 parse_shape）。
 const REQUIRED_SECTIONS: [&str; 5] = [".BTF", ".BTF.ext", ".symtab", ".strtab", ".text"];
 const REQUIRED_BTF_IDENTIFIERS: [&[u8]; 2] = [b"bpf_timer\0", b"__opaque\0"];
 
@@ -59,7 +57,6 @@ fn parse_shape(path: &Path, require_stripped: bool) -> NativeObjectShape {
             path.display()
         );
     }
-    // N-04: map 段命名契约按 OR 校验（maps 或 .maps 至少一个）。
     if !sections.contains("maps") && !sections.contains(".maps") {
         panic!(
             "native eBPF object has neither maps nor .maps section: {}",

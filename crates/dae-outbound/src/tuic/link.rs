@@ -91,8 +91,6 @@ impl TuicLink {
             .and_then(|value| parse_bool(&value))
             .unwrap_or(false);
         if disable_sni {
-            // F-11: disable_sni 只控制 SNI 发送，绝不隐式关闭证书验证。
-            // 需要跳过验证必须显式 allow_insecure=1 或证书 pin。
             sni.clear();
         }
         let alpn = if query_has(&query, "alpn") {
@@ -404,7 +402,7 @@ mod tests {
         };
         let exported = link.export_url();
         assert!(exported.contains("p%40ss%3Aw%25rd"));
-        assert!(exported.contains("%23")); // name 中的 '#' 必须百分号编码
+        assert!(exported.contains("%23"));
         let parsed = TuicLink::parse(&exported).unwrap();
         assert_eq!(parsed, link);
     }

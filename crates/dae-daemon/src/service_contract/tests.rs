@@ -53,10 +53,10 @@ mod tests {
     #[test]
     fn resident_reload_preflight_rejects_missing_lan_device_before_swap() {
         let mut config = minimal_config();
-        config.global.lan_interface = Some(vec!["dae-missing-a4-interface".to_owned()]);
+        config.global.lan_interface = Some(vec!["dae-missing-test-interface".to_owned()]);
         let err = validate_resident_runtime_reload_config(&config).unwrap_err();
         assert!(err.contains("rejected before current runtime swap"));
-        assert!(err.contains("dae-missing-a4-interface"));
+        assert!(err.contains("dae-missing-test-interface"));
     }
 
     #[test]

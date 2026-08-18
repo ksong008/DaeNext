@@ -7,9 +7,6 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     if options.disable_sudo && unsafe { libc::geteuid() } != 0 {
         return Err("auto-sudo is disabled and current user is not root".to_owned());
     }
-    // A-04: 在任何派生线程（网络探测 resolver 等）创建之前屏蔽服务信号，
-    // 保证所有线程继承已屏蔽的掩码；否则 kill(SIGUSR1) 会被未屏蔽线程
-    // 以默认动作（终止进程）接收。
     block_service_signals()?;
     let runtime_config = load_config_file(&options.config)
         .map_err(|err| format!("resident run config validation failed: {err}"))?;
@@ -73,7 +70,6 @@ pub(super) struct ResidentServiceState {
 
 pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String> {
     let pid = match options.pid {
-        // A-05: kill(0/-1) 会群发信号到进程组/所有进程——拒绝非正 PID。
         Some(pid) if pid > 0 => pid,
         Some(pid) => {
             return Err(format!("refusing to signal non-positive pid {pid}"));
@@ -121,7 +117,6 @@ fn wait_for_reload_progress(
                     return Ok(format!("{content}\n"));
                 }
                 if code == RELOAD_ERROR {
-                    // A-06: reload 失败必须以 Err 返回（CLI 非零退出）。
                     return Err(format!("reload failed on the daemon side: {content}"));
                 }
             }
@@ -288,7 +283,6 @@ pub(super) fn read_pid_file(path: &Path) -> Result<i32, String> {
         .trim()
         .parse::<i32>()
         .map_err(|err| format!("failed to parse pid file {}: {err}", path.display()))?;
-    // A-05: 拒绝非正 PID（kill 0/-1 群发）。
     if pid <= 0 {
         return Err(format!(
             "pid file {} contains non-positive pid {pid}",
@@ -538,7 +532,6 @@ mod tests {
         let mut error_bytes = vec![RELOAD_ERROR, b'\n'];
         error_bytes.extend_from_slice(b"boom");
         fs::write(&error_file, error_bytes).unwrap();
-        // A-06: RELOAD_ERROR 必须以 Err 返回（CLI 非零退出）。
         let error =
             wait_for_reload_progress(&error_file, Some(Duration::from_secs(2))).unwrap_err();
         assert!(error.contains("boom"), "error = {error}");
