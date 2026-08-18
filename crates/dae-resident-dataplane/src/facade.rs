@@ -41,10 +41,6 @@ pub use super::read_view::ResidentDataplaneReadHandle;
 pub use super::remote_strategy_live_tests::{
     resident_live_adapter_config_assessment, resident_live_adapter_udp_probe,
 };
-pub use super::resource_profile::{
-    effective_process_memory_capacity, resident_datapath_postflight_interval_seconds_default,
-    selected_resident_runtime_profile_name,
-};
 pub use super::runtime::ResidentDataplaneRuntime;
 pub use super::runtime_owner::{
     ResidentManualProbeHandle, run_resident_manual_latency_probe_helper,
@@ -52,6 +48,10 @@ pub use super::runtime_owner::{
 };
 pub use super::subscription_fetch::fetch_http_url_via_default_proxy_async;
 pub use super::workers::{ResidentDataplaneStartContext, start_resident_dataplane_workers};
+pub use dae_resident_core::{
+    effective_process_memory_capacity, resident_datapath_postflight_interval_seconds_default,
+    selected_resident_runtime_profile_name,
+};
 
 #[cfg(any(test, feature = "test-support"))]
 pub use super::host_routing_plan::{

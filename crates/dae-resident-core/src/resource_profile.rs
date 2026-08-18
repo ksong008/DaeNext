@@ -4,7 +4,7 @@ use super::*;
 mod auto;
 use self::auto::*;
 
-pub(crate) const RESIDENT_RUNTIME_PROFILE_ENV: &str = "RESIDENT_RUNTIME_PROFILE";
+pub const RESIDENT_RUNTIME_PROFILE_ENV: &str = "RESIDENT_RUNTIME_PROFILE";
 const RESIDENT_RUNTIME_PROFILE_LOW_MEMORY: &str = "low-memory";
 const RESIDENT_RUNTIME_PROFILE_BALANCED: &str = "balanced";
 const RESIDENT_RUNTIME_PROFILE_HIGH_PERFORMANCE: &str = "high-performance";
@@ -34,7 +34,7 @@ const LOW_MEMORY_UDP_SESSION_IDLE_SECONDS: u64 = 60;
 const BALANCED_UDP_SESSION_IDLE_SECONDS: u64 = 120;
 const HIGH_PERFORMANCE_UDP_SESSION_IDLE_SECONDS: u64 = 300;
 const PROXY_UDP_SESSION_IDLE_SECONDS_MIN: u64 = 120;
-pub(crate) const RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX: Duration =
+pub const RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX: Duration =
     Duration::from_secs(HIGH_PERFORMANCE_UDP_SESSION_IDLE_SECONDS);
 const LOW_MEMORY_UDP_REPLY_SOCKET_IDLE_SECONDS: u64 = 60;
 const BALANCED_UDP_REPLY_SOCKET_IDLE_SECONDS: u64 = 180;
@@ -298,15 +298,15 @@ const BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 30;
 const HIGH_PERFORMANCE_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS: u64 = 15;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentRuntimeProfile {
+pub enum ResidentRuntimeProfile {
     LowMemory,
     Balanced,
     HighPerformance,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentRuntimeProfileSelection {
-    pub(crate) profile: ResidentRuntimeProfile,
+pub struct ResidentRuntimeProfileSelection {
+    pub profile: ResidentRuntimeProfile,
     source: &'static str,
     capacity_source: Option<&'static str>,
     effective_memory_bytes: Option<u64>,
@@ -316,22 +316,22 @@ pub(crate) struct ResidentRuntimeProfileSelection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct QuicCandidateRaceResourceProfile {
+pub struct QuicCandidateRaceResourceProfile {
     max_in_flight: usize,
     stagger: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TcpRelayResourceProfile {
+pub struct TcpRelayResourceProfile {
     websocket_control_queue_depth: usize,
 }
 
 impl TcpRelayResourceProfile {
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
     }
 
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         Self {
             websocket_control_queue_depth: match profile {
                 ResidentRuntimeProfile::LowMemory => LOW_MEMORY_WEBSOCKET_CONTROL_QUEUE_DEPTH,
@@ -343,17 +343,17 @@ impl TcpRelayResourceProfile {
         }
     }
 
-    pub(crate) const fn websocket_control_queue_depth(self) -> usize {
+    pub const fn websocket_control_queue_depth(self) -> usize {
         self.websocket_control_queue_depth
     }
 }
 
 impl QuicCandidateRaceResourceProfile {
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
     }
 
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         let stagger_milliseconds = match profile {
             ResidentRuntimeProfile::LowMemory => LOW_MEMORY_QUIC_CANDIDATE_STAGGER_MILLISECONDS,
             ResidentRuntimeProfile::Balanced => BALANCED_QUIC_CANDIDATE_STAGGER_MILLISECONDS,
@@ -367,16 +367,16 @@ impl QuicCandidateRaceResourceProfile {
         }
     }
 
-    pub(crate) const fn max_in_flight(self) -> usize {
+    pub const fn max_in_flight(self) -> usize {
         self.max_in_flight
     }
 
-    pub(crate) const fn stagger(self) -> Duration {
+    pub const fn stagger(self) -> Duration {
         self.stagger
     }
 
-    #[cfg(test)]
-    pub(crate) const fn for_test(max_in_flight: usize, stagger: Duration) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn for_test(max_in_flight: usize, stagger: Duration) -> Self {
         Self {
             max_in_flight,
             stagger,
@@ -385,7 +385,7 @@ impl QuicCandidateRaceResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentDnsResourceProfile {
+pub struct ResidentDnsResourceProfile {
     flight_entry_limit: usize,
     flight_followers_per_entry: usize,
     flight_retained_bytes: usize,
@@ -402,7 +402,7 @@ pub(crate) struct ResidentDnsResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentDnsTcpUdpHedgeProfile {
+pub struct ResidentDnsTcpUdpHedgeProfile {
     initial_delay: Duration,
     minimum_delay: Duration,
     maximum_delay: Duration,
@@ -436,19 +436,19 @@ impl ResidentDnsTcpUdpHedgeProfile {
         }
     }
 
-    pub(crate) const fn initial_delay(self) -> Duration {
+    pub const fn initial_delay(self) -> Duration {
         self.initial_delay
     }
 
-    pub(crate) const fn minimum_delay(self) -> Duration {
+    pub const fn minimum_delay(self) -> Duration {
         self.minimum_delay
     }
 
-    pub(crate) const fn maximum_delay(self) -> Duration {
+    pub const fn maximum_delay(self) -> Duration {
         self.maximum_delay
     }
 
-    pub(crate) const fn learning_samples(self) -> u32 {
+    pub const fn learning_samples(self) -> u32 {
         self.learning_samples
     }
 
@@ -463,11 +463,11 @@ impl ResidentDnsTcpUdpHedgeProfile {
 }
 
 impl ResidentDnsResourceProfile {
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
     }
 
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         match profile {
             ResidentRuntimeProfile::LowMemory => Self {
                 flight_entry_limit: LOW_MEMORY_DNS_FLIGHT_ENTRY_LIMIT,
@@ -518,51 +518,51 @@ impl ResidentDnsResourceProfile {
         }
     }
 
-    pub(crate) const fn flight_entry_limit(self) -> usize {
+    pub const fn flight_entry_limit(self) -> usize {
         self.flight_entry_limit
     }
 
-    pub(crate) const fn flight_followers_per_entry(self) -> usize {
+    pub const fn flight_followers_per_entry(self) -> usize {
         self.flight_followers_per_entry
     }
 
-    pub(crate) const fn flight_retained_bytes(self) -> usize {
+    pub const fn flight_retained_bytes(self) -> usize {
         self.flight_retained_bytes
     }
 
-    pub(crate) const fn upstream_candidate_race_width(self) -> usize {
+    pub const fn upstream_candidate_race_width(self) -> usize {
         self.upstream_candidate_race_width
     }
 
-    pub(crate) const fn tcp_udp_hedge(self) -> ResidentDnsTcpUdpHedgeProfile {
+    pub const fn tcp_udp_hedge(self) -> ResidentDnsTcpUdpHedgeProfile {
         self.tcp_udp_hedge
     }
 
-    pub(crate) const fn target_refresh_concurrency(self) -> usize {
+    pub const fn target_refresh_concurrency(self) -> usize {
         self.target_refresh_concurrency
     }
 
-    pub(crate) const fn target_refresh_queue_depth(self) -> usize {
+    pub const fn target_refresh_queue_depth(self) -> usize {
         self.target_refresh_queue_depth
     }
 
-    pub(crate) const fn tcp_connections_per_route(self) -> usize {
+    pub const fn tcp_connections_per_route(self) -> usize {
         self.tcp_connections_per_route
     }
 
-    pub(crate) const fn tcp_requests_per_connection(self) -> usize {
+    pub const fn tcp_requests_per_connection(self) -> usize {
         self.tcp_requests_per_connection
     }
 
-    pub(crate) const fn bind_udp_inflight(self) -> usize {
+    pub const fn bind_udp_inflight(self) -> usize {
         self.bind_udp_inflight
     }
 
-    pub(crate) const fn bind_tcp_connections(self) -> usize {
+    pub const fn bind_tcp_connections(self) -> usize {
         self.bind_tcp_connections
     }
 
-    pub(crate) const fn bind_tcp_listen_backlog(self) -> usize {
+    pub const fn bind_tcp_listen_backlog(self) -> usize {
         if self.bind_tcp_connections < DNS_BIND_TCP_LISTEN_BACKLOG_FLOOR {
             DNS_BIND_TCP_LISTEN_BACKLOG_FLOOR
         } else {
@@ -570,15 +570,15 @@ impl ResidentDnsResourceProfile {
         }
     }
 
-    pub(crate) const fn bind_tcp_queries(self) -> usize {
+    pub const fn bind_tcp_queries(self) -> usize {
         self.bind_tcp_queries
     }
 
-    pub(crate) const fn bind_tcp_queries_per_connection(self) -> usize {
+    pub const fn bind_tcp_queries_per_connection(self) -> usize {
         self.bind_tcp_queries_per_connection
     }
 
-    pub(crate) fn json(self) -> Value {
+    pub fn json(self) -> Value {
         json!({
             "flightEntryLimit": self.flight_entry_limit,
             "flightFollowersPerEntry": self.flight_followers_per_entry,
@@ -599,7 +599,7 @@ impl ResidentDnsResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct QuicUdpDatagramResourceProfile {
+pub struct QuicUdpDatagramResourceProfile {
     pending_fragment_packets: usize,
     pending_fragment_bytes: usize,
     packet_id_leases: usize,
@@ -610,7 +610,7 @@ pub(crate) struct QuicUdpDatagramResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Hysteria2OwnerResourceProfile {
+pub struct Hysteria2OwnerResourceProfile {
     owner_limit: usize,
     command_queue_depth: usize,
     logical_lease_limit: Option<usize>,
@@ -628,7 +628,7 @@ pub(crate) struct Hysteria2OwnerResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TuicOwnerResourceProfile {
+pub struct TuicOwnerResourceProfile {
     owner_limit: usize,
     command_queue_depth: usize,
     logical_lease_limit: usize,
@@ -642,7 +642,7 @@ pub(crate) struct TuicOwnerResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct JuicityOwnerResourceProfile {
+pub struct JuicityOwnerResourceProfile {
     owner_limit: usize,
     connections_per_pool: usize,
     logical_streams_per_connection: usize,
@@ -652,7 +652,7 @@ pub(crate) struct JuicityOwnerResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AnyTlsOwnerResourceProfile {
+pub struct AnyTlsOwnerResourceProfile {
     owner_limit: usize,
     physical_session_limit: usize,
     physical_sessions_per_owner: usize,
@@ -667,7 +667,7 @@ pub(crate) struct AnyTlsOwnerResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct H2CarrierOwnerResourceProfile {
+pub struct H2CarrierOwnerResourceProfile {
     owner_limit: usize,
     pending_open_limit: usize,
     stream_receive_window_bytes: u32,
@@ -675,7 +675,7 @@ pub(crate) struct H2CarrierOwnerResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MeekTransportResourceProfile {
+pub struct MeekTransportResourceProfile {
     response_header_bytes: usize,
     response_body_bytes: usize,
     owner_limit: usize,
@@ -685,7 +685,7 @@ pub(crate) struct MeekTransportResourceProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct VlessMuxOwnerResourceProfile {
+pub struct VlessMuxOwnerResourceProfile {
     owner_limit: usize,
     physical_connections_per_owner: usize,
     logical_streams_per_physical: usize,
@@ -700,7 +700,7 @@ pub(crate) struct VlessMuxOwnerResourceProfile {
 }
 
 impl VlessMuxOwnerResourceProfile {
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         match profile {
             ResidentRuntimeProfile::LowMemory => Self {
                 owner_limit: LOW_MEMORY_VLESS_MUX_OWNER_LIMIT,
@@ -747,7 +747,7 @@ impl VlessMuxOwnerResourceProfile {
         }
     }
 
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         static SELECTED: std::sync::OnceLock<VlessMuxOwnerResourceProfile> =
             std::sync::OnceLock::new();
         *SELECTED.get_or_init(|| {
@@ -755,61 +755,61 @@ impl VlessMuxOwnerResourceProfile {
         })
     }
 
-    pub(crate) const fn owner_limit(self) -> usize {
+    pub const fn owner_limit(self) -> usize {
         self.owner_limit
     }
 
-    pub(crate) const fn physical_connection_limit(self) -> usize {
+    pub const fn physical_connection_limit(self) -> usize {
         self.owner_limit
             .saturating_mul(self.physical_connections_per_owner)
     }
 
-    pub(crate) const fn physical_connections_per_owner(self) -> usize {
+    pub const fn physical_connections_per_owner(self) -> usize {
         self.physical_connections_per_owner
     }
 
-    pub(crate) const fn logical_streams_per_physical(self) -> usize {
+    pub const fn logical_streams_per_physical(self) -> usize {
         self.logical_streams_per_physical
     }
 
-    pub(crate) const fn cumulative_logical_streams_per_physical(self) -> usize {
+    pub const fn cumulative_logical_streams_per_physical(self) -> usize {
         self.cumulative_logical_streams_per_physical
     }
 
-    pub(crate) const fn command_queue_depth(self) -> usize {
+    pub const fn command_queue_depth(self) -> usize {
         self.command_queue_depth
     }
 
-    pub(crate) const fn logical_event_queue_depth(self) -> usize {
+    pub const fn logical_event_queue_depth(self) -> usize {
         self.logical_event_queue_depth
     }
 
-    pub(crate) const fn logical_buffer_bytes(self) -> usize {
+    pub const fn logical_buffer_bytes(self) -> usize {
         self.logical_buffer_bytes
     }
 
-    pub(crate) const fn frame_bytes(self) -> usize {
+    pub const fn frame_bytes(self) -> usize {
         self.frame_bytes
     }
 
-    pub(crate) const fn sid_quarantine_limit(self) -> usize {
+    pub const fn sid_quarantine_limit(self) -> usize {
         self.sid_quarantine_limit
     }
 
-    pub(crate) const fn sid_quarantine_ttl(self) -> Duration {
+    pub const fn sid_quarantine_ttl(self) -> Duration {
         self.sid_quarantine_ttl
     }
 
-    pub(crate) const fn idle_timeout(self) -> Duration {
+    pub const fn idle_timeout(self) -> Duration {
         self.idle_timeout
     }
 
-    pub(crate) fn idle_janitor_interval(self) -> Duration {
+    pub fn idle_janitor_interval(self) -> Duration {
         self.idle_timeout / 2
     }
 
-    #[cfg(test)]
-    pub(crate) const fn with_limits_for_test(
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn with_limits_for_test(
         mut self,
         owner_limit: usize,
         physical_connections_per_owner: usize,
@@ -827,7 +827,7 @@ impl VlessMuxOwnerResourceProfile {
 }
 
 impl MeekTransportResourceProfile {
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         match profile {
             ResidentRuntimeProfile::LowMemory => Self {
                 response_header_bytes: LOW_MEMORY_MEEK_RESPONSE_HEADER_BYTES,
@@ -862,7 +862,7 @@ impl MeekTransportResourceProfile {
         }
     }
 
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         static SELECTED: std::sync::OnceLock<MeekTransportResourceProfile> =
             std::sync::OnceLock::new();
         *SELECTED.get_or_init(|| {
@@ -870,45 +870,45 @@ impl MeekTransportResourceProfile {
         })
     }
 
-    pub(crate) const fn response_header_bytes(self) -> usize {
+    pub const fn response_header_bytes(self) -> usize {
         self.response_header_bytes
     }
 
-    pub(crate) const fn response_body_bytes(self) -> usize {
+    pub const fn response_body_bytes(self) -> usize {
         self.response_body_bytes
     }
 
-    pub(crate) const fn response_wire_bytes(self) -> usize {
+    pub const fn response_wire_bytes(self) -> usize {
         self.response_header_bytes
             .saturating_add(self.response_body_bytes)
     }
 
-    pub(crate) const fn owner_limit(self) -> usize {
+    pub const fn owner_limit(self) -> usize {
         self.owner_limit
     }
 
-    pub(crate) const fn physical_connection_limit(self) -> usize {
+    pub const fn physical_connection_limit(self) -> usize {
         self.physical_connection_limit
     }
 
-    pub(crate) const fn physical_connections_per_owner(self) -> usize {
+    pub const fn physical_connections_per_owner(self) -> usize {
         self.physical_connection_limit / self.owner_limit
     }
 
-    pub(crate) const fn idle_connection_limit(self) -> usize {
+    pub const fn idle_connection_limit(self) -> usize {
         self.idle_connection_limit
     }
 
-    pub(crate) const fn idle_connection_timeout(self) -> Duration {
+    pub const fn idle_connection_timeout(self) -> Duration {
         self.idle_connection_timeout
     }
 
-    pub(crate) fn idle_janitor_interval(self) -> Duration {
+    pub fn idle_janitor_interval(self) -> Duration {
         self.idle_connection_timeout / 2
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_transport_limits_for_test(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_transport_limits_for_test(
         mut self,
         owner_limit: usize,
         physical_connection_limit: usize,
@@ -924,7 +924,7 @@ impl MeekTransportResourceProfile {
 }
 
 impl H2CarrierOwnerResourceProfile {
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         let (
             owner_limit,
             pending_open_limit,
@@ -958,7 +958,7 @@ impl H2CarrierOwnerResourceProfile {
         }
     }
 
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         static SELECTED: std::sync::OnceLock<H2CarrierOwnerResourceProfile> =
             std::sync::OnceLock::new();
         *SELECTED.get_or_init(|| {
@@ -966,27 +966,27 @@ impl H2CarrierOwnerResourceProfile {
         })
     }
 
-    pub(crate) const fn owner_limit(self) -> usize {
+    pub const fn owner_limit(self) -> usize {
         self.owner_limit
     }
 
-    pub(crate) const fn physical_connection_limit(self) -> usize {
+    pub const fn physical_connection_limit(self) -> usize {
         self.owner_limit
     }
 
-    pub(crate) const fn pending_open_limit(self) -> usize {
+    pub const fn pending_open_limit(self) -> usize {
         self.pending_open_limit
     }
 
-    pub(crate) const fn stream_receive_window_bytes(self) -> u32 {
+    pub const fn stream_receive_window_bytes(self) -> u32 {
         self.stream_receive_window_bytes
     }
 
-    pub(crate) const fn connection_receive_window_bytes(self) -> u32 {
+    pub const fn connection_receive_window_bytes(self) -> u32 {
         self.connection_receive_window_bytes
     }
 
-    pub(crate) fn configure_client_builder(self, builder: &mut h2::client::Builder) {
+    pub fn configure_client_builder(self, builder: &mut h2::client::Builder) {
         builder
             .initial_window_size(self.stream_receive_window_bytes)
             .initial_connection_window_size(self.connection_receive_window_bytes);
@@ -994,7 +994,7 @@ impl H2CarrierOwnerResourceProfile {
 }
 
 impl AnyTlsOwnerResourceProfile {
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         match profile {
             ResidentRuntimeProfile::LowMemory => Self::new(
                 LOW_MEMORY_ANYTLS_OWNER_LIMIT,
@@ -1042,7 +1042,7 @@ impl AnyTlsOwnerResourceProfile {
         }
     }
 
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         static SELECTED: std::sync::OnceLock<AnyTlsOwnerResourceProfile> =
             std::sync::OnceLock::new();
         *SELECTED.get_or_init(|| {
@@ -1050,45 +1050,45 @@ impl AnyTlsOwnerResourceProfile {
         })
     }
 
-    pub(crate) const fn owner_limit(self) -> usize {
+    pub const fn owner_limit(self) -> usize {
         self.owner_limit
     }
-    pub(crate) const fn physical_session_limit(self) -> usize {
+    pub const fn physical_session_limit(self) -> usize {
         self.physical_session_limit
     }
-    pub(crate) const fn physical_sessions_per_owner(self) -> usize {
+    pub const fn physical_sessions_per_owner(self) -> usize {
         self.physical_sessions_per_owner
     }
-    pub(crate) const fn command_queue_depth(self) -> usize {
+    pub const fn command_queue_depth(self) -> usize {
         self.command_queue_depth
     }
-    pub(crate) const fn physical_control_queue_depth(self) -> usize {
+    pub const fn physical_control_queue_depth(self) -> usize {
         ANYTLS_PHYSICAL_CONTROL_QUEUE_DEPTH
     }
-    pub(crate) const fn logical_buffer_bytes(self) -> usize {
+    pub const fn logical_buffer_bytes(self) -> usize {
         self.logical_buffer_bytes
     }
-    pub(crate) const fn idle_session_limit(self) -> usize {
+    pub const fn idle_session_limit(self) -> usize {
         self.idle_session_limit
     }
-    pub(crate) const fn idle_session_timeout(self) -> Duration {
+    pub const fn idle_session_timeout(self) -> Duration {
         self.idle_session_timeout
     }
-    pub(crate) const fn idle_probe_threshold(self) -> Duration {
+    pub const fn idle_probe_threshold(self) -> Duration {
         self.idle_probe_threshold
     }
-    pub(crate) const fn idle_probe_timeout(self) -> Duration {
+    pub const fn idle_probe_timeout(self) -> Duration {
         self.idle_probe_timeout
     }
-    pub(crate) const fn sid_quarantine_limit(self) -> usize {
+    pub const fn sid_quarantine_limit(self) -> usize {
         self.sid_quarantine_limit
     }
-    pub(crate) const fn sid_quarantine_ttl(self) -> Duration {
+    pub const fn sid_quarantine_ttl(self) -> Duration {
         self.sid_quarantine_ttl
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_idle_policy_for_test(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_idle_policy_for_test(
         mut self,
         idle_session_timeout: Duration,
         idle_probe_threshold: Duration,
@@ -1102,7 +1102,7 @@ impl AnyTlsOwnerResourceProfile {
 }
 
 impl JuicityOwnerResourceProfile {
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         match profile {
             ResidentRuntimeProfile::LowMemory => Self {
                 owner_limit: LOW_MEMORY_JUICITY_OWNER_LIMIT,
@@ -1135,7 +1135,7 @@ impl JuicityOwnerResourceProfile {
         }
     }
 
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         static SELECTED: std::sync::OnceLock<JuicityOwnerResourceProfile> =
             std::sync::OnceLock::new();
         *SELECTED.get_or_init(|| {
@@ -1143,18 +1143,18 @@ impl JuicityOwnerResourceProfile {
         })
     }
 
-    pub(crate) const fn owner_limit(self) -> usize {
+    pub const fn owner_limit(self) -> usize {
         self.owner_limit
     }
 
-    #[cfg(test)]
-    pub(crate) const fn with_owner_limit(mut self, owner_limit: usize) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn with_owner_limit(mut self, owner_limit: usize) -> Self {
         self.owner_limit = owner_limit;
         self
     }
 
-    #[cfg(test)]
-    pub(crate) const fn with_pool_shape(
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn with_pool_shape(
         mut self,
         connections_per_pool: usize,
         logical_streams_per_connection: usize,
@@ -1166,34 +1166,34 @@ impl JuicityOwnerResourceProfile {
         self
     }
 
-    pub(crate) const fn connections_per_pool(self) -> usize {
+    pub const fn connections_per_pool(self) -> usize {
         self.connections_per_pool
     }
 
-    pub(crate) const fn logical_streams_per_connection(self) -> usize {
+    pub const fn logical_streams_per_connection(self) -> usize {
         self.logical_streams_per_connection
     }
 
-    pub(crate) const fn reserved_streams_per_connection(self) -> usize {
+    pub const fn reserved_streams_per_connection(self) -> usize {
         self.reserved_streams_per_connection
     }
 
-    pub(crate) const fn usable_streams_per_connection(self) -> usize {
+    pub const fn usable_streams_per_connection(self) -> usize {
         self.logical_streams_per_connection
             .saturating_sub(self.reserved_streams_per_connection)
     }
 
-    pub(crate) const fn command_queue_depth(self) -> usize {
+    pub const fn command_queue_depth(self) -> usize {
         self.command_queue_depth
     }
 
-    pub(crate) const fn retry_cooldown(self) -> Duration {
+    pub const fn retry_cooldown(self) -> Duration {
         self.retry_cooldown
     }
 }
 
 impl TuicOwnerResourceProfile {
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         match profile {
             ResidentRuntimeProfile::LowMemory => Self {
                 owner_limit: LOW_MEMORY_TUIC_OWNER_LIMIT,
@@ -1240,62 +1240,62 @@ impl TuicOwnerResourceProfile {
         }
     }
 
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         static SELECTED: std::sync::OnceLock<TuicOwnerResourceProfile> = std::sync::OnceLock::new();
         *SELECTED.get_or_init(|| {
             Self::from_runtime_profile(ResidentRuntimeProfileSelection::selected().profile)
         })
     }
 
-    pub(crate) const fn owner_limit(self) -> usize {
+    pub const fn owner_limit(self) -> usize {
         self.owner_limit
     }
 
-    #[cfg(test)]
-    pub(crate) const fn with_owner_limit(mut self, owner_limit: usize) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn with_owner_limit(mut self, owner_limit: usize) -> Self {
         self.owner_limit = owner_limit;
         self
     }
 
-    pub(crate) const fn command_queue_depth(self) -> usize {
+    pub const fn command_queue_depth(self) -> usize {
         self.command_queue_depth
     }
 
-    pub(crate) const fn logical_lease_limit(self) -> usize {
+    pub const fn logical_lease_limit(self) -> usize {
         self.logical_lease_limit
     }
 
-    pub(crate) const fn udp_association_limit(self) -> usize {
+    pub const fn udp_association_limit(self) -> usize {
         self.udp_association_limit
     }
 
-    pub(crate) const fn udp_association_queue_depth(self) -> usize {
+    pub const fn udp_association_queue_depth(self) -> usize {
         self.udp_association_queue_depth
     }
 
-    pub(crate) const fn udp_association_queue_bytes(self) -> usize {
+    pub const fn udp_association_queue_bytes(self) -> usize {
         self.udp_association_queue_bytes
     }
 
-    pub(crate) const fn udp_owner_queue_bytes(self) -> usize {
+    pub const fn udp_owner_queue_bytes(self) -> usize {
         self.udp_owner_queue_bytes
     }
 
-    pub(crate) const fn association_quarantine_limit(self) -> usize {
+    pub const fn association_quarantine_limit(self) -> usize {
         self.association_quarantine_limit
     }
 
-    pub(crate) const fn association_quarantine_ttl(self) -> Duration {
+    pub const fn association_quarantine_ttl(self) -> Duration {
         self.association_quarantine_ttl
     }
 
-    pub(crate) const fn retry_cooldown(self) -> Duration {
+    pub const fn retry_cooldown(self) -> Duration {
         self.retry_cooldown
     }
 }
 
 impl Hysteria2OwnerResourceProfile {
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         match profile {
             ResidentRuntimeProfile::LowMemory => Self {
                 owner_limit: LOW_MEMORY_HYSTERIA2_OWNER_LIMIT,
@@ -1359,7 +1359,7 @@ impl Hysteria2OwnerResourceProfile {
         }
     }
 
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         static SELECTED: std::sync::OnceLock<Hysteria2OwnerResourceProfile> =
             std::sync::OnceLock::new();
         *SELECTED.get_or_init(|| {
@@ -1367,67 +1367,64 @@ impl Hysteria2OwnerResourceProfile {
         })
     }
 
-    pub(crate) const fn owner_limit(self) -> usize {
+    pub const fn owner_limit(self) -> usize {
         self.owner_limit
     }
 
-    pub(crate) const fn command_queue_depth(self) -> usize {
+    pub const fn command_queue_depth(self) -> usize {
         self.command_queue_depth
     }
 
-    pub(crate) const fn logical_lease_limit(self) -> Option<usize> {
+    pub const fn logical_lease_limit(self) -> Option<usize> {
         self.logical_lease_limit
     }
 
-    pub(crate) const fn logical_lease_soft_watermark(self) -> usize {
+    pub const fn logical_lease_soft_watermark(self) -> usize {
         self.logical_lease_soft_watermark
     }
 
-    pub(crate) const fn udp_session_limit(self) -> Option<usize> {
+    pub const fn udp_session_limit(self) -> Option<usize> {
         self.udp_session_limit
     }
 
-    pub(crate) const fn udp_session_soft_watermark(self) -> usize {
+    pub const fn udp_session_soft_watermark(self) -> usize {
         self.udp_session_soft_watermark
     }
 
-    pub(crate) const fn udp_session_queue_depth(self) -> usize {
+    pub const fn udp_session_queue_depth(self) -> usize {
         self.udp_session_queue_depth
     }
 
-    pub(crate) const fn udp_session_queue_bytes(self) -> usize {
+    pub const fn udp_session_queue_bytes(self) -> usize {
         self.udp_session_queue_bytes
     }
 
-    pub(crate) const fn udp_owner_queue_bytes(self) -> usize {
+    pub const fn udp_owner_queue_bytes(self) -> usize {
         self.udp_owner_queue_bytes
     }
 
-    pub(crate) const fn udp_session_quarantine_limit(self) -> usize {
+    pub const fn udp_session_quarantine_limit(self) -> usize {
         self.udp_session_quarantine_limit
     }
 
-    pub(crate) const fn udp_session_quarantine_ttl(self) -> Duration {
+    pub const fn udp_session_quarantine_ttl(self) -> Duration {
         self.udp_session_quarantine_ttl
     }
 
-    pub(crate) const fn retry_cooldown(self) -> Duration {
+    pub const fn retry_cooldown(self) -> Duration {
         self.retry_cooldown
     }
 
-    pub(crate) const fn initial_connect_attempt_limit(self) -> usize {
+    pub const fn initial_connect_attempt_limit(self) -> usize {
         self.initial_connect_attempt_limit
     }
 
-    pub(crate) const fn port_hop_transition_socket_limit(self) -> usize {
+    pub const fn port_hop_transition_socket_limit(self) -> usize {
         self.port_hop_transition_socket_limit
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_udp_session_limits_for_test(
-        session_limit: usize,
-        queue_depth: usize,
-    ) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_udp_session_limits_for_test(session_limit: usize, queue_depth: usize) -> Self {
         let mut resources = Self::from_runtime_profile(ResidentRuntimeProfile::LowMemory);
         resources.udp_session_limit = Some(session_limit.max(1));
         resources.udp_session_soft_watermark = session_limit.max(1);
@@ -1441,7 +1438,7 @@ impl Hysteria2OwnerResourceProfile {
 }
 
 impl QuicUdpDatagramResourceProfile {
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         static SELECTED: std::sync::OnceLock<QuicUdpDatagramResourceProfile> =
             std::sync::OnceLock::new();
         *SELECTED.get_or_init(|| {
@@ -1449,7 +1446,7 @@ impl QuicUdpDatagramResourceProfile {
         })
     }
 
-    pub(crate) const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
+    pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         let (pending_fragment_packets, pending_fragment_bytes, packet_id_leases, pmtu_retries) =
             match profile {
                 ResidentRuntimeProfile::LowMemory => (
@@ -1482,31 +1479,31 @@ impl QuicUdpDatagramResourceProfile {
         }
     }
 
-    pub(crate) const fn pending_fragment_packets(self) -> usize {
+    pub const fn pending_fragment_packets(self) -> usize {
         self.pending_fragment_packets
     }
 
-    pub(crate) const fn pending_fragment_bytes(self) -> usize {
+    pub const fn pending_fragment_bytes(self) -> usize {
         self.pending_fragment_bytes
     }
 
-    pub(crate) const fn packet_id_leases(self) -> usize {
+    pub const fn packet_id_leases(self) -> usize {
         self.packet_id_leases
     }
 
-    pub(crate) const fn pmtu_retries(self) -> usize {
+    pub const fn pmtu_retries(self) -> usize {
         self.pmtu_retries
     }
 
-    pub(crate) const fn fragment_ttl(self) -> Duration {
+    pub const fn fragment_ttl(self) -> Duration {
         self.fragment_ttl
     }
 
-    pub(crate) const fn packet_id_lease_ttl(self) -> Duration {
+    pub const fn packet_id_lease_ttl(self) -> Duration {
         self.packet_id_lease_ttl
     }
 
-    pub(crate) const fn fragment_quarantine_ttl(self) -> Duration {
+    pub const fn fragment_quarantine_ttl(self) -> Duration {
         self.fragment_quarantine_ttl
     }
 }
@@ -1518,7 +1515,7 @@ pub struct EffectiveProcessMemoryCapacity {
 }
 
 impl EffectiveProcessMemoryCapacity {
-    pub(crate) const fn new(bytes: u64, source: &'static str) -> Self {
+    pub const fn new(bytes: u64, source: &'static str) -> Self {
         Self { bytes, source }
     }
 
@@ -1543,7 +1540,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::LowMemory => RESIDENT_RUNTIME_PROFILE_LOW_MEMORY,
             Self::Balanced => RESIDENT_RUNTIME_PROFILE_BALANCED,
@@ -1551,7 +1548,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) const fn udp_syscall_batch_limit(self) -> usize {
+    pub const fn udp_syscall_batch_limit(self) -> usize {
         match self {
             Self::LowMemory => 8,
             Self::Balanced => 16,
@@ -1559,7 +1556,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn tcp_runtime_workers_default(self, available_parallelism: usize) -> usize {
+    pub fn tcp_runtime_workers_default(self, available_parallelism: usize) -> usize {
         let profile_max = match self {
             Self::LowMemory => LOW_MEMORY_TCP_RUNTIME_WORKERS_MAX,
             Self::Balanced => BALANCED_TCP_RUNTIME_WORKERS_MAX,
@@ -1568,7 +1565,7 @@ impl ResidentRuntimeProfile {
         available_parallelism.max(1).min(profile_max)
     }
 
-    pub(crate) fn tcp_connection_limit_default(self) -> usize {
+    pub fn tcp_connection_limit_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_TCP_CONNECTION_LIMIT,
             Self::Balanced => BALANCED_TCP_CONNECTION_LIMIT,
@@ -1576,7 +1573,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn udp_session_soft_watermark_default(self) -> usize {
+    pub fn udp_session_soft_watermark_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_UDP_SESSION_SOFT_WATERMARK,
             Self::Balanced => BALANCED_UDP_SESSION_SOFT_WATERMARK,
@@ -1584,7 +1581,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn udp_session_queue_depth_default(self) -> usize {
+    pub fn udp_session_queue_depth_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_UDP_SESSION_QUEUE_DEPTH,
             Self::Balanced => BALANCED_UDP_SESSION_QUEUE_DEPTH,
@@ -1592,7 +1589,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn udp_runtime_shards_default(self, available_parallelism: usize) -> usize {
+    pub fn udp_runtime_shards_default(self, available_parallelism: usize) -> usize {
         let maximum = match self {
             Self::LowMemory => LOW_MEMORY_UDP_RUNTIME_SHARDS_MAX,
             Self::Balanced => BALANCED_UDP_RUNTIME_SHARDS_MAX,
@@ -1601,7 +1598,7 @@ impl ResidentRuntimeProfile {
         available_parallelism.max(1).min(maximum)
     }
 
-    pub(crate) fn udp_dispatch_queue_depth_default(self) -> usize {
+    pub fn udp_dispatch_queue_depth_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_UDP_DISPATCH_QUEUE_DEPTH,
             Self::Balanced => BALANCED_UDP_DISPATCH_QUEUE_DEPTH,
@@ -1609,7 +1606,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) const fn udp_session_idle_timeout(self) -> Duration {
+    pub const fn udp_session_idle_timeout(self) -> Duration {
         Duration::from_secs(match self {
             Self::LowMemory => LOW_MEMORY_UDP_SESSION_IDLE_SECONDS,
             Self::Balanced => BALANCED_UDP_SESSION_IDLE_SECONDS,
@@ -1617,12 +1614,12 @@ impl ResidentRuntimeProfile {
         })
     }
 
-    pub(crate) fn udp_proxy_session_idle_timeout(self) -> Duration {
+    pub fn udp_proxy_session_idle_timeout(self) -> Duration {
         self.udp_session_idle_timeout()
             .max(Duration::from_secs(PROXY_UDP_SESSION_IDLE_SECONDS_MIN))
     }
 
-    pub(crate) fn udp_reply_socket_idle_timeout(self) -> Duration {
+    pub fn udp_reply_socket_idle_timeout(self) -> Duration {
         Duration::from_secs(match self {
             Self::LowMemory => LOW_MEMORY_UDP_REPLY_SOCKET_IDLE_SECONDS,
             Self::Balanced => BALANCED_UDP_REPLY_SOCKET_IDLE_SECONDS,
@@ -1630,7 +1627,7 @@ impl ResidentRuntimeProfile {
         })
     }
 
-    pub(crate) fn udp_direct_response_buffer_idle_timeout(self) -> Duration {
+    pub fn udp_direct_response_buffer_idle_timeout(self) -> Duration {
         Duration::from_secs(match self {
             Self::LowMemory => LOW_MEMORY_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS,
             Self::Balanced => BALANCED_UDP_DIRECT_RESPONSE_BUFFER_IDLE_SECONDS,
@@ -1638,7 +1635,7 @@ impl ResidentRuntimeProfile {
         })
     }
 
-    pub(crate) fn udp_queued_payload_bytes_default(self) -> usize {
+    pub fn udp_queued_payload_bytes_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_UDP_QUEUED_PAYLOAD_BYTES,
             Self::Balanced => BALANCED_UDP_QUEUED_PAYLOAD_BYTES,
@@ -1646,7 +1643,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn quic_endpoint_limit_default(self) -> usize {
+    pub fn quic_endpoint_limit_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_QUIC_ENDPOINT_LIMIT,
             Self::Balanced => BALANCED_QUIC_ENDPOINT_LIMIT,
@@ -1654,7 +1651,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn quic_endpoint_charged_bytes_default(self) -> usize {
+    pub fn quic_endpoint_charged_bytes_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_QUIC_ENDPOINT_CHARGED_BYTES,
             Self::Balanced => BALANCED_QUIC_ENDPOINT_CHARGED_BYTES,
@@ -1662,7 +1659,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn dns_fast_path_concurrency_default(self) -> usize {
+    pub fn dns_fast_path_concurrency_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_FAST_PATH_CONCURRENCY,
             Self::Balanced => BALANCED_DNS_FAST_PATH_CONCURRENCY,
@@ -1670,7 +1667,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn dns_fast_path_queue_depth_default(self) -> usize {
+    pub fn dns_fast_path_queue_depth_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_FAST_PATH_QUEUE_DEPTH,
             Self::Balanced => BALANCED_DNS_FAST_PATH_QUEUE_DEPTH,
@@ -1678,7 +1675,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn dns_udp_forwarder_queue_depth_default(self) -> usize {
+    pub fn dns_udp_forwarder_queue_depth_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_UDP_FORWARDER_QUEUE_DEPTH,
             Self::Balanced => BALANCED_DNS_UDP_FORWARDER_QUEUE_DEPTH,
@@ -1686,7 +1683,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn dns_udp_forwarder_pending_limit_default(self) -> usize {
+    pub fn dns_udp_forwarder_pending_limit_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_UDP_FORWARDER_PENDING_LIMIT,
             Self::Balanced => BALANCED_DNS_UDP_FORWARDER_PENDING_LIMIT,
@@ -1694,7 +1691,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn dns_udp_forwarder_inflight_window_default(self) -> usize {
+    pub fn dns_udp_forwarder_inflight_window_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_UDP_FORWARDER_INFLIGHT_WINDOW,
             Self::Balanced => BALANCED_DNS_UDP_FORWARDER_INFLIGHT_WINDOW,
@@ -1702,7 +1699,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn dns_udp_forwarder_attempts_default(self) -> usize {
+    pub fn dns_udp_forwarder_attempts_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_UDP_FORWARDER_ATTEMPTS,
             Self::Balanced => BALANCED_DNS_UDP_FORWARDER_ATTEMPTS,
@@ -1710,7 +1707,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn dns_udp_shard_idle_timeout(self) -> Duration {
+    pub fn dns_udp_shard_idle_timeout(self) -> Duration {
         Duration::from_secs(match self {
             Self::LowMemory => LOW_MEMORY_DNS_UDP_SHARD_IDLE_SECONDS,
             Self::Balanced => BALANCED_DNS_UDP_SHARD_IDLE_SECONDS,
@@ -1718,7 +1715,7 @@ impl ResidentRuntimeProfile {
         })
     }
 
-    pub(crate) fn dns_proxy_udp_actors_default(self) -> usize {
+    pub fn dns_proxy_udp_actors_default(self) -> usize {
         match self {
             Self::LowMemory => LOW_MEMORY_DNS_PROXY_UDP_ACTORS,
             Self::Balanced => BALANCED_DNS_PROXY_UDP_ACTORS,
@@ -1726,7 +1723,7 @@ impl ResidentRuntimeProfile {
         }
     }
 
-    pub(crate) fn datapath_postflight_interval_seconds_default(self) -> u64 {
+    pub fn datapath_postflight_interval_seconds_default(self) -> u64 {
         match self {
             Self::LowMemory => LOW_MEMORY_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
             Self::Balanced => BALANCED_DATAPATH_POSTFLIGHT_INTERVAL_SECONDS,
@@ -1736,14 +1733,14 @@ impl ResidentRuntimeProfile {
 }
 
 impl ResidentRuntimeProfileSelection {
-    pub(crate) fn selected() -> Self {
+    pub fn selected() -> Self {
         if let Ok(value) = std::env::var(RESIDENT_RUNTIME_PROFILE_ENV) {
             return select_resident_runtime_profile(Some(&value));
         }
         select_resident_runtime_profile(None)
     }
 
-    pub(crate) fn json(&self) -> Value {
+    pub fn json(&self) -> Value {
         json!({
             "name": self.profile.name(),
             "source": self.source,
@@ -1766,7 +1763,7 @@ pub fn effective_process_memory_capacity() -> Option<EffectiveProcessMemoryCapac
         .map(|(bytes, source)| EffectiveProcessMemoryCapacity::new(bytes, source))
 }
 
-pub(crate) fn resident_runtime_profile_contract() -> Value {
+pub fn resident_runtime_profile_contract() -> Value {
     json!({
         "env": RESIDENT_RUNTIME_PROFILE_ENV,
         "default": RESIDENT_RUNTIME_PROFILE_AUTO,
