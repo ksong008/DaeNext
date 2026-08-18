@@ -28,7 +28,7 @@ use crate::{
     open_marked_quic_endpoint_for_remote,
 };
 
-fn quic_endpoint_context_for_proxy(
+pub fn quic_endpoint_context_for_proxy(
     protocol: QuicEndpointProtocol,
     default_caller: QuicEndpointCallerClass,
     default_generation: OwnerGeneration,

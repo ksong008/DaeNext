@@ -2,7 +2,6 @@ use super::*;
 // A half-closed upload must keep draining a response across at least one
 // ordinary Internet RTT. Download activity refreshes this idle window; it is
 // not a fixed delay added to every completed flow.
-pub(crate) const RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
     Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT: usize = 10_000;

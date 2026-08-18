@@ -199,15 +199,15 @@ pub(super) fn build_resident_dataplane_generation(
     };
     let dns_reload_handle = dns.reload_handle();
     let tcp_router = Arc::new(ResidentTcpRouter::new(
-        Arc::clone(&proxy_groups),
+        plan::ResidentTcpProxyGroupSelector::shared(Arc::clone(&proxy_groups)),
         routing_tuple_map_id,
         routing_matcher.clone(),
-        dns::ResidentDnsResolver::new(Arc::clone(&dns)),
+        tcp::ResidentTcpDnsResolverPort::shared(dns::ResidentDnsResolver::new(Arc::clone(&dns))),
         tcp_dial_mode,
         sniffing_timeout,
         so_mark_from_dae,
         config.global.mptcp,
-        health_resuscitation.clone(),
+        Arc::new(health_resuscitation.clone()),
         owner
             .hysteria2_owner_registry()
             .ok_or_else(|| "Hysteria2 owner registry was not installed".to_owned())?,

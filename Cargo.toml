@@ -23,6 +23,7 @@ members = [
     "crates/dae-resident-dns",
     "crates/dae-resident-dataplane",
     "crates/dae-resident-plan",
+    "crates/dae-resident-tcp",
     "crates/dae-resident-transport",
     "crates/dae-routing",
     "crates/dae-sysdump",
@@ -101,6 +102,7 @@ dae-resident-core = { path = "crates/dae-resident-core" }
 dae-resident-dns = { path = "crates/dae-resident-dns" }
 dae-resident-dataplane = { path = "crates/dae-resident-dataplane", default-features = false }
 dae-resident-plan = { path = "crates/dae-resident-plan" }
+dae-resident-tcp = { path = "crates/dae-resident-tcp" }
 dae-resident-transport = { path = "crates/dae-resident-transport" }
 dae-product-identity = { path = "crates/dae-product-identity" }
 dae-routing = { path = "crates/dae-routing" }
