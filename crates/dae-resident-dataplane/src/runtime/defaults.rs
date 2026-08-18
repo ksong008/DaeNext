@@ -1,5 +1,4 @@
 use super::*;
-pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 // A half-closed upload must keep draining a response across at least one
 // ordinary Internet RTT. Download activity refreshes this idle window; it is
 // not a fixed delay added to every completed flow.
@@ -93,10 +92,6 @@ pub(crate) const VISION_COMMAND_END: u8 = 1;
 pub(crate) const VISION_COMMAND_DIRECT: u8 = 2;
 pub(crate) const TLS_RECORD_HEADER_LEN: usize = 5;
 pub(crate) const TLS_RECORD_MAX_PAYLOAD_LEN: usize = 16 * 1024 + 2048;
-// AnyTLS PSH frames carry a u16-sized payload.  A 32 KiB relay chunk stays
-// within that wire bound while halving the task wakeups and bounded duplex
-// copies compared with the previous 16 KiB chunk.
-pub(crate) const RESIDENT_ANYTLS_RELAY_BUFFER_SIZE: usize = 32 * 1024;
 pub(crate) const XUDP_MUX_TARGET: &str = "v1.mux.cool:666";
 pub(crate) const XUDP_COMMAND_NEW: u8 = 1;
 pub(crate) const XUDP_COMMAND_KEEP: u8 = 2;

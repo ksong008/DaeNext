@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 pub const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+pub const RESIDENT_ANYTLS_RELAY_BUFFER_SIZE: usize = 32 * 1024;
+pub const ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 pub const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
 pub const RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE: Duration = Duration::from_millis(1_500);
 pub const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);

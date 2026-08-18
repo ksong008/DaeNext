@@ -9,7 +9,6 @@ pub(crate) const ROUTING_L4_TCP: u8 = 1;
 pub(crate) const ROUTING_IP_VERSION_4: u8 = 1;
 pub(crate) const ROUTING_IP_VERSION_6: u8 = 2;
 pub(crate) const TCP_SNIFF_BUFFER_LIMIT: usize = 64 * 1024;
-pub(crate) const ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub(crate) struct ResidentTcpRouter {
     pub(crate) proxies: SharedResidentProxyGroupMap,
