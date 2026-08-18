@@ -83,7 +83,9 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
             root = pathlib.Path(temporary)
             source_root = root / "a" / "src"
             source_root.mkdir(parents=True)
-            (source_root / "lib.rs").write_text("use b::PublicType;\n", encoding="utf-8")
+            (source_root / "lib.rs").write_text(
+                "use b;\nextern crate b;\n", encoding="utf-8"
+            )
             graph = metadata(("a", []), ("b", []))
             graph["packages"][0]["manifest_path"] = str(root / "a" / "Cargo.toml")
             errors = CHECKER.validate(
@@ -91,7 +93,8 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
                 policy(("a", [], [], []), ("b", [], [], [])),
                 scan_sources=True,
             )
-        self.assertTrue(any("source import crosses" in error for error in errors))
+        source_errors = [error for error in errors if "source import crosses" in error]
+        self.assertEqual(len(source_errors), 2)
 
 
 if __name__ == "__main__":
