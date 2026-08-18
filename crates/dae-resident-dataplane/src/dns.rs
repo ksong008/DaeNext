@@ -8,7 +8,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
-use dae_core_types::OutboundIndex;
 use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT};
 use dae_dns::{
     DNS_DEFAULT_PORT, DOH_MEDIA_TYPE, DnsCacheKey, DnsDomainSet, DnsPacketView,
@@ -42,7 +41,9 @@ use super::plan::ResidentProxyPlan;
 use super::plan::build_resident_dataplane_plan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
-use super::plan::{ResidentProxyBinding, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
+#[cfg(test)]
+use super::plan::{ResidentDnsProxyGroupSelector, SharedResidentProxyGroupMap};
+use super::plan::{ResidentProxyBinding, effective_so_mark_from_dae};
 #[cfg(test)]
 use super::udp::ResidentProxyUdpBridge;
 use super::{
@@ -172,11 +173,12 @@ pub(super) use dae_resident_dns::{
 };
 use dae_resident_dns::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
-    ResidentDnsGeodata, ResidentDnsProxyTcpTransport, ResidentDnsProxyUdpBridge,
-    ResidentDnsProxyUdpForwarder, ResidentDnsProxyUdpTransport, ResidentDnsQuicEndpointTransport,
-    ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache,
-    ResidentDnsRuntimeCacheSnapshot, ResidentDnsTransportOwnerObservation, build_reject_response,
-    exchange_resident_proxy_dns_tcp_stream, run_resident_proxy_dns_tcp_connection,
+    ResidentDnsGeodata, ResidentDnsProxySelector, ResidentDnsProxyTcpTransport,
+    ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder, ResidentDnsProxyUdpTransport,
+    ResidentDnsQuicEndpointTransport, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
+    ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot, ResidentDnsTransportOwnerObservation,
+    build_reject_response, exchange_resident_proxy_dns_tcp_stream,
+    run_resident_proxy_dns_tcp_connection,
 };
 pub(crate) use dae_resident_transport::{
     DnsTcpFrameReader, ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure,

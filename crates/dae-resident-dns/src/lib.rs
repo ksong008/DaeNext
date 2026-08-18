@@ -20,7 +20,8 @@ pub use domain_routing::{
 pub use error_response::{build_dns_server_failure_response, build_reject_response};
 pub use geodata::ResidentDnsGeodata;
 pub use proxy_transport::{
-    ResidentDnsProxyFuture, ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession,
+    ResidentDnsProxyFuture, ResidentDnsProxySelection, ResidentDnsProxySelectionError,
+    ResidentDnsProxySelector, ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession,
     ResidentDnsProxyTcpTransport, ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder,
     ResidentDnsProxyUdpTransport, ResidentDnsQuicEndpointTransport,
     ResidentDnsTransportOwnerObservation, exchange_resident_proxy_dns_tcp_stream,

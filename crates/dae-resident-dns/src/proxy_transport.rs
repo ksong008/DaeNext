@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use dae_outbound::NetworkType;
 use dae_resident_core::{ResidentDataplaneMetrics, ResidentOwnedTaskShutdownCompletion};
 use dae_resident_plan::ResidentProxyBinding;
 use dae_resident_transport::{
@@ -54,6 +55,27 @@ impl Drop for ResidentDnsTransportOwnerObservation {
 }
 
 pub type ResidentDnsProxyFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[derive(Clone, Debug)]
+pub struct ResidentDnsProxySelection {
+    pub binding: ResidentProxyBinding,
+    pub network_type: NetworkType,
+    pub latency_ms: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResidentDnsProxySelectionError {
+    pub message: String,
+    pub no_alive: bool,
+}
+
+pub trait ResidentDnsProxySelector: std::fmt::Debug + Send + Sync {
+    fn select(
+        &self,
+        outbound: u8,
+        network_type: NetworkType,
+    ) -> Result<ResidentDnsProxySelection, ResidentDnsProxySelectionError>;
+}
 
 pub trait ResidentDnsQuicEndpointTransport: Send + Sync {
     fn open_marked_endpoint(

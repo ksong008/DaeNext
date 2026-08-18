@@ -70,6 +70,49 @@ pub(crate) type ResidentProxyGroupHandle = Arc<ResidentProxyGroupPlan>;
 pub(crate) type ResidentProxyGroupHandleMap = BTreeMap<u8, ResidentProxyGroupHandle>;
 pub(crate) type SharedResidentProxyGroupMap = Arc<ResidentProxyGroupHandleMap>;
 
+#[derive(Clone, Debug)]
+pub(crate) struct ResidentDnsProxyGroupSelector {
+    proxy_groups: SharedResidentProxyGroupMap,
+}
+
+impl ResidentDnsProxyGroupSelector {
+    pub(crate) fn shared(proxy_groups: SharedResidentProxyGroupMap) -> Arc<Self> {
+        Arc::new(Self { proxy_groups })
+    }
+}
+
+impl dae_resident_dns::ResidentDnsProxySelector for ResidentDnsProxyGroupSelector {
+    fn select(
+        &self,
+        outbound: u8,
+        network_type: NetworkType,
+    ) -> Result<
+        dae_resident_dns::ResidentDnsProxySelection,
+        dae_resident_dns::ResidentDnsProxySelectionError,
+    > {
+        let proxy_group = self.proxy_groups.get(&outbound).ok_or_else(|| {
+            dae_resident_dns::ResidentDnsProxySelectionError {
+                message: format!(
+                    "DNS upstream selected outbound {} but no Rust proxy plan is available",
+                    OutboundIndex(outbound)
+                ),
+                no_alive: false,
+            }
+        })?;
+        proxy_group
+            .select_proxy_for_dns_upstream_candidate_detail(network_type)
+            .map(|selection| dae_resident_dns::ResidentDnsProxySelection {
+                binding: selection.proxy,
+                network_type: selection.network_type,
+                latency_ms: selection.latency_ms,
+            })
+            .map_err(|error| dae_resident_dns::ResidentDnsProxySelectionError {
+                message: error.message,
+                no_alive: error.no_alive,
+            })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ResidentDataUdpAvailabilityHandle {
     selector: std::sync::Weak<std::sync::RwLock<DialerGroup>>,
