@@ -57,7 +57,8 @@ impl RoutingMatcher {
             .into_iter()
             .flatten()
         {
-            let bit = required_u64(set, "bit")? as usize;
+            let bit = usize::try_from(required_u64(set, "bit")?)
+                .map_err(|_| RoutingError::InvalidFixture("bit is out of range".to_owned()))?;
             let key = DomainKey::try_from(required_str(set, "key")?)?;
             let patterns = required_array(set, "patterns")?
                 .iter()
@@ -83,7 +84,7 @@ impl RoutingMatcher {
             .into_iter()
             .flatten()
         {
-            let index = required_u64(set, "index")? as u32;
+            let index = required_u32(set, "index")?;
             let prefixes = required_array(set, "prefixes")?
                 .iter()
                 .map(|value| {

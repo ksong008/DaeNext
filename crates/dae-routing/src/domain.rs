@@ -526,7 +526,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|value| value.as_u64().unwrap() as u32)
+            .map(|value| u32::try_from(value.as_u64().unwrap()).unwrap())
             .collect()
     }
 }

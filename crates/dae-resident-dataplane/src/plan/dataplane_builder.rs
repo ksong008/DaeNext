@@ -279,7 +279,9 @@ pub(crate) fn resident_proxy_plans(
         else {
             continue;
         };
-        let outbound_index = (OutboundIndex::USER_DEFINED_MIN.value() as usize + group_index) as u8;
+        let outbound_index = OutboundIndex::try_from_user_offset(group_index)
+            .map_err(|err| format!("resident dataplane group {}: {err}", group.name))?
+            .value();
         if proxies.contains_key(&outbound_index) {
             continue;
         }

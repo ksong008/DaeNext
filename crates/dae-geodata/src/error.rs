@@ -11,6 +11,7 @@ pub enum GeoDataError {
     InvalidHex(String),
     InvalidUtf8,
     InvalidIpLength(usize),
+    InvalidCidrPrefix(u64),
     UnsupportedWireType(u64),
     CountryCodeNotFound(String),
     GeoSiteCodeNotFound(String),
@@ -42,6 +43,9 @@ impl fmt::Display for GeoDataError {
             Self::InvalidHex(input) => write!(f, "invalid hex: {input}"),
             Self::InvalidUtf8 => f.write_str("invalid utf-8"),
             Self::InvalidIpLength(length) => write!(f, "invalid IP length: {length}"),
+            Self::InvalidCidrPrefix(prefix) => {
+                write!(f, "invalid CIDR prefix: {prefix}")
+            }
             Self::UnsupportedWireType(wire_type) => {
                 write!(f, "unsupported protobuf wire type: {wire_type}")
             }

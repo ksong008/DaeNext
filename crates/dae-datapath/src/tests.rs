@@ -22,7 +22,7 @@ fn magic_network_matches_golden_fixture() {
     for case in fixture["cases"].as_array().unwrap() {
         let got = magic_network_bytes(
             case["network"].as_str().unwrap(),
-            case["mark"].as_u64().unwrap() as u32,
+            u32::try_from(case["mark"].as_u64().unwrap()).unwrap(),
             case["mptcp"].as_bool().unwrap(),
         );
         let expected = base64::engine::general_purpose::STANDARD
@@ -47,16 +47,22 @@ fn route_loop_matches_golden_fixture() {
             .iter()
             .map(|rule| RouteRule {
                 kind: rule["type"].as_str().unwrap().to_owned(),
-                outbound: rule["outbound"].as_u64().unwrap() as u8,
-                mark: rule["mark"].as_u64().unwrap() as u32,
+                outbound: u8::try_from(rule["outbound"].as_u64().unwrap()).unwrap(),
+                mark: u32::try_from(rule["mark"].as_u64().unwrap()).unwrap(),
                 must: rule["must"].as_bool().unwrap(),
                 matched: rule["matched"].as_bool().unwrap(),
             })
             .collect::<Vec<_>>();
         let got = route_loop(&rules).unwrap();
         let expected = &case["expected"];
-        assert_eq!(got.outbound, expected["outbound"].as_u64().unwrap() as u8);
-        assert_eq!(got.mark, expected["mark"].as_u64().unwrap() as u32);
+        assert_eq!(
+            got.outbound,
+            u8::try_from(expected["outbound"].as_u64().unwrap()).unwrap()
+        );
+        assert_eq!(
+            got.mark,
+            u32::try_from(expected["mark"].as_u64().unwrap()).unwrap()
+        );
         assert_eq!(got.must, expected["must"].as_bool().unwrap());
         assert_eq!(got.fallback, expected["fallback"].as_bool().unwrap());
     }
