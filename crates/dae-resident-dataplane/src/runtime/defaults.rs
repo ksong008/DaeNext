@@ -8,9 +8,6 @@ pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
     Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
-pub(crate) const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-pub(crate) const RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
-pub(crate) const RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT: usize = 2;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT: usize = 10_000;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MIN: usize = 500;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX: usize = 30_000;
@@ -18,7 +15,6 @@ pub(crate) const RESIDENT_TCP_HEALTH_PROBE_TIMEOUT_MS_DEFAULT: usize = 4_000;
 #[cfg(test)]
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT: Duration =
     Duration::from_millis(RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT as u64);
-pub(crate) const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 pub(crate) const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
 pub(crate) const RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE: Duration = Duration::from_millis(1_500);
 pub(crate) const RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE: Duration = Duration::from_millis(250);

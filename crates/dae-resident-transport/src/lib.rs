@@ -1,6 +1,9 @@
+mod dns_name;
 mod dns_tcp_wire;
 mod quic_endpoint;
+mod resolver;
 
+pub use dns_name::encode_dns_qname;
 pub use dns_tcp_wire::{
     DnsTcpFrameReader, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
@@ -14,4 +17,10 @@ pub use quic_endpoint::{
     quic_endpoint_metrics_snapshot, scope_quic_endpoint_observation,
     wait_quic_endpoint_idle_after_close_for, wait_quic_endpoints_idle_or_released_until,
     wait_quic_endpoints_idle_until,
+};
+pub use resolver::{
+    ResolvedHostAddrs, SocketAddressResolutionError, SocketCandidateAttemptError,
+    SocketCandidateFailure, TcpCandidateRacePolicy, authority_from_host_port,
+    resolve_host_addrs_with_bootstrap_dns_ttl, resolve_host_addrs_with_configured_fallback_dns_ttl,
+    resolve_socket_addr_candidates, try_socket_addr_candidates, try_tcp_socket_addr_candidates,
 };

@@ -29,13 +29,11 @@ use super::plan::{
     ResidentProtocolShape, ResidentProxyBinding, ResidentProxyPlan, ResidentRealityUnderlayPlan,
     ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
 };
-use super::resolver::{
-    TcpCandidateRacePolicy, authority_from_host_port, try_tcp_socket_addr_candidates,
-};
 use super::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY,
     RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT,
 };
+use super::{TcpCandidateRacePolicy, authority_from_host_port, try_tcp_socket_addr_candidates};
 
 mod types;
 pub(super) use self::types::*;
