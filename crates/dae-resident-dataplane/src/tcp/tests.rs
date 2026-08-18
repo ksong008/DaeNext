@@ -629,6 +629,7 @@ fn resident_vless_response_stripper_borrows_payload_after_coalesced_header() {
 }
 
 #[tokio::test]
+#[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
 async fn resident_anytls_reused_frame_buffer_keeps_back_to_back_boundaries() {
     let first =
         dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_PSH, 7, b"first")
@@ -652,6 +653,7 @@ async fn resident_anytls_reused_frame_buffer_keeps_back_to_back_boundaries() {
 }
 
 #[tokio::test]
+#[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
 async fn resident_anytls_frame_reader_keeps_idle_control_after_active_fin() {
     let fin =
         dae_outbound::anytls::link::frame(dae_outbound::anytls::contract::CMD_FIN, 7, &[]).unwrap();
