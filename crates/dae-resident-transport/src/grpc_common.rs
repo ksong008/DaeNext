@@ -12,7 +12,7 @@ pub fn grpc_authority(proxy: &ResidentProxyPlan) -> String {
 }
 
 pub fn grpc_request_path(service_name: &str, mode: GrpcMode) -> String {
-    official_grpc_request_path(service_name, mode)
+    dae_outbound::shared_transport::grpc_request_path(service_name, mode)
 }
 
 pub fn grpc_h2_request(proxy: &ResidentProxyPlan) -> Result<http::Request<()>, String> {

@@ -4,6 +4,7 @@ use dae_outbound::{
     shadowsocks::{ShadowsocksRStreamDecoder, shadowsocksr_http_simple_origin_request},
     shared_transport::HttpUpgradeOptions,
 };
+use dae_resident_transport::websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async;
 use tokio::io::AsyncWriteExt;
 
 use super::super::super::ResidentStopSignal;
@@ -13,8 +14,7 @@ use super::super::super::plan::{ResidentProxyBinding, ResidentProxyProtocolPlan}
 use super::super::super::{
     ResidentDataplaneMetrics,
     tcp::{
-        native_websocket_handshake_over_resident_tls_async, open_plain_proxy_tcp_stream_async,
-        relay_tcp_over_shadowsocks_2022_async,
+        open_plain_proxy_tcp_stream_async, relay_tcp_over_shadowsocks_2022_async,
         relay_tcp_over_shadowsocks_2022_simple_obfs_http_async,
         relay_tcp_over_shadowsocks_aead_async, relay_tcp_over_shadowsocks_simple_obfs_http_async,
         relay_tcp_over_shadowsocks_simple_obfs_tls_async,

@@ -9,6 +9,11 @@ use dae_outbound::{
     shared_transport::{HttpUpgradeOptions, MeekRoundTripOptions},
     vless::{VlessEncryptedStream, packet},
 };
+use dae_resident_transport::{
+    httpupgrade_handshake_over_resident_tls_async as native_httpupgrade_handshake_over_resident_tls_async,
+    websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async,
+    write_websocket_binary_frame_over_resident_tls_async as native_write_websocket_binary_frame_over_resident_tls_async,
+};
 
 use super::super::super::{ResidentStopSignal, SharedResidentStopSignal};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -26,12 +31,9 @@ use super::super::super::{
     tcp::{
         AsyncPrefixedStream, TcpProxySelection, XhttpPacketUpParts, XhttpStreamParts,
         close_xhttp_download_client, close_xhttp_stream_upload_client, close_xhttp_upload_client,
-        meek_round_trip_async, native_httpupgrade_handshake_over_resident_tls_async,
-        native_websocket_handshake_over_resident_tls_async,
-        native_write_websocket_binary_frame_over_resident_tls_async, open_grpc_h2_stream,
-        open_h2_body_stream_with_deferred_response, open_xhttp_packet_up_parts,
-        open_xhttp_stream_parts, relay_tcp_over_deferred_h2_body, relay_tcp_over_grpc_h2,
-        relay_tcp_over_vless_tls_async, relay_tcp_over_vless_vision_duplex,
+        meek_round_trip_async, open_grpc_h2_stream, open_h2_body_stream_with_deferred_response,
+        open_xhttp_packet_up_parts, open_xhttp_stream_parts, relay_tcp_over_deferred_h2_body,
+        relay_tcp_over_grpc_h2, relay_tcp_over_vless_tls_async, relay_tcp_over_vless_vision_duplex,
         relay_tcp_over_vless_websocket_tls_async, relay_tcp_over_xhttp_packet_up,
         relay_tcp_over_xhttp_stream, send_xhttp_packet_up_request, spawn_grpc_h2_payload_stream,
         spawn_websocket_payload_stream, spawn_xhttp_packet_up_payload_stream,

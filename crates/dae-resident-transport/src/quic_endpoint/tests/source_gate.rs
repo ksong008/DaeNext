@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 
 const CENTRAL_CONSTRUCTOR: &str = "crates/dae-resident-transport/src/quic_endpoint.rs";
 const PROXIED_DOH3_TEST_SERVER: &str =
-    "crates/dae-resident-dataplane/src/dns/transport/h3/proxied/tests/h3_server.rs";
-const DNS_QUIC_TEST_SUPPORT: &str =
-    "crates/dae-resident-dataplane/src/dns/transport/test_support.rs";
-const XHTTP_H3_OWNER_TEST: &str = "crates/dae-resident-dataplane/src/tcp/transport_helpers/xhttp_h2/h3_transport/owner_live_tests.rs";
-const XHTTP_H3_PACKET_UP_TEST: &str = "crates/dae-resident-dataplane/src/tcp/transport_helpers/xhttp_h2/h3_transport/packet_up_tests.rs";
+    "crates/dae-resident-dns/src/runtime/transport/h3/proxied/tests/h3_server.rs";
+const DNS_QUIC_TEST_SUPPORT: &str = "crates/dae-resident-dns/src/runtime/transport/test_support.rs";
+const XHTTP_H3_OWNER_TEST: &str =
+    "crates/dae-resident-transport/src/xhttp/h3_transport/owner_live_tests.rs";
+const XHTTP_H3_PACKET_UP_TEST: &str =
+    "crates/dae-resident-transport/src/xhttp/h3_transport/packet_up_tests.rs";
 const SOURCE_GATE_TEST: &str =
     "crates/dae-resident-transport/src/quic_endpoint/tests/source_gate.rs";
 const EXPLICIT_NON_PRODUCTION_CONSTRUCTORS: &[&str] = &[
@@ -15,11 +16,10 @@ const EXPLICIT_NON_PRODUCTION_CONSTRUCTORS: &[&str] = &[
     XHTTP_H3_OWNER_TEST,
     XHTTP_H3_PACKET_UP_TEST,
     SOURCE_GATE_TEST,
-    "crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_helpers_port_hopping_tests.rs",
     "crates/dae-resident-dataplane/src/runtime/hysteria2_owner_live_tests.rs",
     "crates/dae-resident-dataplane/src/runtime/tuic_owner_live_tests.rs",
     "crates/dae-resident-dataplane/src/runtime/juicity_owner_live_tests.rs",
-    "crates/dae-resident-dataplane/src/tcp/transport_helpers/xhttp_h2/h3_boring_tls_tests.rs",
+    "crates/dae-resident-transport/src/xhttp/h3_boring_tls_tests.rs",
     "crates/dae-outbound/src/hysteria2/auth/tests.rs",
     "crates/dae-outbound/src/hysteria2/quic_loopback.rs",
     "crates/dae-outbound/src/hysteria2/tls/tests.rs",
@@ -69,17 +69,14 @@ fn production_quinn_endpoint_constructors_are_centralized() {
 
 #[test]
 fn production_hysteria2_transport_construction_is_registry_owned() {
-    const CONNECTION_CONSTRUCTOR: &str =
-        "crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_connections.rs";
-    const TRANSPORT_OWNER: &str = "crates/dae-resident-dataplane/src/runtime/hysteria2_owner.rs";
+    const CONNECTION_CONSTRUCTOR: &str = "crates/dae-resident-transport/src/quic_connections.rs";
+    const TRANSPORT_OWNER: &str = "crates/dae-resident-transport/src/hysteria2_owner.rs";
     let allowed = [CONNECTION_CONSTRUCTOR, TRANSPORT_OWNER, SOURCE_GATE_TEST];
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap();
-    let root = repo.join("crates/dae-resident-dataplane/src");
-    let mut files = Vec::new();
-    collect_rust_files(&root, &mut files);
+    let files = collect_resident_production_files(&repo);
     let restricted = [
         "open_hysteria2_quic_connection_candidates_async(",
         "authenticate_hysteria2_connection(",
@@ -103,17 +100,14 @@ fn production_hysteria2_transport_construction_is_registry_owned() {
 
 #[test]
 fn production_tuic_transport_construction_is_registry_owned() {
-    const CONNECTION_CONSTRUCTOR: &str =
-        "crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_connections.rs";
-    const TRANSPORT_OWNER: &str = "crates/dae-resident-dataplane/src/runtime/tuic_owner.rs";
+    const CONNECTION_CONSTRUCTOR: &str = "crates/dae-resident-transport/src/quic_connections.rs";
+    const TRANSPORT_OWNER: &str = "crates/dae-resident-transport/src/tuic_owner.rs";
     let allowed = [CONNECTION_CONSTRUCTOR, TRANSPORT_OWNER, SOURCE_GATE_TEST];
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap();
-    let root = repo.join("crates/dae-resident-dataplane/src");
-    let mut files = Vec::new();
-    collect_rust_files(&root, &mut files);
+    let files = collect_resident_production_files(&repo);
     let restricted = [
         "open_tuic_quic_connection_candidates_async(",
         "authenticate_tuic_connection(",
@@ -137,17 +131,14 @@ fn production_tuic_transport_construction_is_registry_owned() {
 
 #[test]
 fn production_juicity_transport_construction_is_registry_owned() {
-    const CONNECTION_CONSTRUCTOR: &str =
-        "crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_connections.rs";
-    const TRANSPORT_OWNER: &str = "crates/dae-resident-dataplane/src/runtime/juicity_owner.rs";
+    const CONNECTION_CONSTRUCTOR: &str = "crates/dae-resident-transport/src/quic_connections.rs";
+    const TRANSPORT_OWNER: &str = "crates/dae-resident-transport/src/juicity_owner.rs";
     let allowed = [CONNECTION_CONSTRUCTOR, TRANSPORT_OWNER, SOURCE_GATE_TEST];
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap();
-    let root = repo.join("crates/dae-resident-dataplane/src");
-    let mut files = Vec::new();
-    collect_rust_files(&root, &mut files);
+    let files = collect_resident_production_files(&repo);
     let restricted = [
         "open_juicity_quic_connection_candidates_async(",
         "authenticate_juicity_connection(",
@@ -167,6 +158,22 @@ fn production_juicity_transport_construction_is_registry_owned() {
         "production Juicity Endpoint/auth construction must remain behind the generation-owned registry:\n{}",
         offenders.join("\n")
     );
+}
+
+fn collect_resident_production_files(repo: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for crate_name in [
+        "dae-resident-dataplane",
+        "dae-resident-dns",
+        "dae-resident-tcp",
+        "dae-resident-transport",
+    ] {
+        collect_rust_files(
+            &repo.join("crates").join(crate_name).join("src"),
+            &mut files,
+        );
+    }
+    files
 }
 
 fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {

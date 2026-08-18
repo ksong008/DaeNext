@@ -2218,7 +2218,7 @@ mod tests {
     #[test]
     fn production_anytls_callers_cannot_reopen_physical_tls_directly() {
         let owner = include_str!("anytls_owner.rs");
-        let tcp = include_str!("../../dae-resident-dataplane/src/tcp/proxy_dispatch/anytls.rs");
+        let tcp = include_str!("../../dae-resident-tcp/src/proxy_dispatch/anytls.rs");
         let udp = include_str!("../../dae-resident-dataplane/src/udp/session_executor/anytls.rs");
         let native_probe =
             include_str!("../../dae-resident-dataplane/src/probe/native_tcp/frame_tls.rs");

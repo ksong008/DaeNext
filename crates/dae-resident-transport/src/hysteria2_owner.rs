@@ -2484,8 +2484,8 @@ mod tests {
     #[test]
     fn daemon_hysteria2_consumers_receive_the_generation_owner_handle() {
         let consumers = [
-            include_str!("../../dae-resident-dataplane/src/tcp/accept_loop.rs"),
-            include_str!("../../dae-resident-dataplane/src/tcp/proxy_fetch.rs"),
+            include_str!("../../dae-resident-dataplane/src/runtime/generation_builder.rs"),
+            include_str!("../../dae-resident-tcp/src/proxy_fetch.rs"),
             include_str!("../../dae-resident-dataplane/src/udp/session_actor.rs"),
             include_str!("../../dae-resident-dataplane/src/udp/proxy_dns_forwarder.rs"),
             include_str!("../../dae-resident-dataplane/src/runtime/health_scheduler.rs"),
@@ -2512,7 +2512,7 @@ mod tests {
                 .contains("Hysteria2UdpSessionLease")
         );
         assert!(
-            include_str!("../../dae-resident-dataplane/src/tcp/proxy_dispatch/quic_handlers.rs")
+            include_str!("../../dae-resident-tcp/src/proxy_dispatch/quic_handlers.rs")
                 .contains("Hysteria2OwnerRegistryHandle")
         );
     }

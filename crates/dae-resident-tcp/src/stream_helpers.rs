@@ -1,5 +1,4 @@
 use super::*;
-use std::io::IoSlice;
 pub async fn open_plain_proxy_tcp_stream_async(
     selection: &TcpProxySelection,
 ) -> Result<TokioTcpStream, String> {
@@ -94,41 +93,6 @@ pub fn simple_obfs_tls_application_data_header(payload_len: usize) -> Result<[u8
     })?;
     let [len_high, len_low] = len.to_be_bytes();
     Ok([0x17, 0x03, 0x03, len_high, len_low])
-}
-
-pub async fn write_all_vectored_header_payload(
-    stream: &mut (impl AsyncWrite + Unpin),
-    header: &[u8],
-    payload: &[u8],
-) -> std::io::Result<()> {
-    if !stream.is_write_vectored() {
-        let mut frame = Vec::with_capacity(header.len().saturating_add(payload.len()));
-        frame.extend_from_slice(header);
-        frame.extend_from_slice(payload);
-        return stream.write_all(&frame).await;
-    }
-    let mut header_offset = 0;
-    let mut payload_offset = 0;
-    while header_offset < header.len() || payload_offset < payload.len() {
-        let written = if header_offset < header.len() {
-            stream
-                .write_vectored(&[
-                    IoSlice::new(&header[header_offset..]),
-                    IoSlice::new(&payload[payload_offset..]),
-                ])
-                .await?
-        } else {
-            stream.write(&payload[payload_offset..]).await?
-        };
-        if written == 0 {
-            return Err(std::io::Error::from(ErrorKind::WriteZero));
-        }
-        let header_remaining = header.len() - header_offset;
-        let header_written = written.min(header_remaining);
-        header_offset += header_written;
-        payload_offset += written - header_written;
-    }
-    Ok(())
 }
 
 pub struct AsyncPrefixTcpReader<'a, S> {

@@ -195,7 +195,7 @@ async fn drive_grpc_h2_payload_stream(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn open_grpc_h2_stream_on_io<T>(
     client: T,
     request: http::Request<()>,
