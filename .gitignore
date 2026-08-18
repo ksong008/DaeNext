@@ -1,4 +1,5 @@
 /target/
+/build/benchmark/
 **/*.rs.bk
 /tools/utls-fixture-generator/daenext-utls-fixture-generator
 
