@@ -134,7 +134,10 @@ pub fn start_resident_dataplane_workers(
             );
         }
     };
-    let domain_routing_fence = Arc::new(dns::ResidentDomainRoutingGenerationFence::default());
+    let generation_gate = Arc::new(GenerationGate::default());
+    let domain_routing_fence = Arc::new(dns::ResidentDomainRoutingGenerationFence::with_gate(
+        Arc::clone(&generation_gate),
+    ));
     let built_generation =
         match build_resident_dataplane_generation(ResidentGenerationBuildContext {
             owner: &mut owner,
@@ -163,12 +166,12 @@ pub fn start_resident_dataplane_workers(
                 );
             }
         };
-    if let Err(error) = built_generation
-        .generation
-        .dns
-        .activate_domain_routing_generation()
-        .and_then(|()| built_generation.generation.activate())
-    {
+    if let Err(error) = built_generation.generation.activate().and_then(|()| {
+        built_generation
+            .generation
+            .dns
+            .activate_domain_routing_generation()
+    }) {
         let cleanup = owner.shutdown();
         return (
             json!({
@@ -223,6 +226,7 @@ pub fn start_resident_dataplane_workers(
             resident_tcp_accept_loop_async(
                 tcp_listener,
                 active_generation.clone(),
+                Arc::clone(&generation_gate),
                 stop,
                 event_file,
                 event_lock,
@@ -455,6 +459,7 @@ pub fn start_resident_dataplane_workers(
             routing_tuple_map_id,
             domain_routing_map_id,
             domain_routing_fence,
+            generation_gate,
         }),
     )
 }

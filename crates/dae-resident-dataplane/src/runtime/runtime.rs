@@ -8,6 +8,7 @@ pub struct ResidentDataplaneRuntime {
     pub(super) routing_tuple_map_id: Option<u32>,
     pub(super) domain_routing_map_id: Option<u32>,
     pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingGenerationFence>,
+    pub(super) generation_gate: Arc<GenerationGate>,
 }
 
 impl std::fmt::Debug for ResidentDataplaneRuntime {
@@ -213,10 +214,13 @@ impl ResidentDataplaneRuntime {
             latency_seed,
             dns_reload_snapshot,
         })?;
-        built.generation.dns.activate_domain_routing_generation()?;
         built.generation.activate()?;
+        built.generation.dns.activate_domain_routing_generation()?;
         let next_id = built.generation.token().logical();
-        let previous = self.active_generation.publish(built.generation);
+        let next_token = built.generation.token();
+        let previous = self.generation_gate.switch(next_token, || {
+            Ok::<_, String>(self.active_generation.publish(built.generation))
+        })?;
         let previous_id = previous.id;
         self.generation_drain.retire(previous);
         Ok(json!({
@@ -249,10 +253,12 @@ impl ResidentDataplaneRuntime {
         if active.token().physical() != generation.token().physical() {
             return Err("resident generation belongs to a different physical runtime".to_owned());
         }
-        generation.dns.activate_domain_routing_generation()?;
         self.generation_drain.reactivate(generation.id)?;
+        generation.dns.activate_domain_routing_generation()?;
         let restored_id = generation.id;
-        let displaced = self.active_generation.publish(generation);
+        let displaced = self.generation_gate.switch(generation.token(), || {
+            Ok::<_, String>(self.active_generation.publish(generation))
+        })?;
         let displaced_id = displaced.id;
         self.generation_drain.retire(displaced);
         self.generation_drain.finalize_retirement(displaced_id);

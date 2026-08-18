@@ -253,9 +253,47 @@ fn published_generation_fences_late_writes_from_retired_generation() {
             |_, _, _| panic!("a retired generation must not write the map"),
         )
         .unwrap();
-    let state = fence.state.lock().unwrap();
-    assert_eq!(state.active_generation, Some(generation(2)));
-    assert_eq!(state.tracker.entries(), new_owner.tracker().entries());
+    assert_eq!(fence.gate().active(), Some(generation(2)));
+    let entries = fence
+        .inner
+        .with_active(generation(2), |state| {
+            Ok::<_, io::Error>(state.tracker.entries())
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(entries, new_owner.tracker().entries());
+}
+
+#[test]
+fn domain_routing_fence_rejects_a_generation_bound_to_another_map() {
+    let fence = ResidentDomainRoutingGenerationFence::default();
+    let mut owner = DomainRoutingOwner::default();
+
+    fence
+        .activate_with(generation(1), 7, &owner, |_, _, _| Ok(()))
+        .unwrap();
+    fence
+        .apply_event_with(
+            generation(1),
+            8,
+            &mut owner,
+            DomainRoutingDnsEvent::from_keys(
+                "wrong-map",
+                &[1],
+                [ip_to_key("192.0.2.55".parse().unwrap())],
+            ),
+            |_, _, _| panic!("a generation must not write through another map identity"),
+        )
+        .unwrap();
+
+    let entries = fence
+        .inner
+        .with_active(generation(1), |state| {
+            Ok::<_, io::Error>(state.tracker.entries())
+        })
+        .unwrap()
+        .unwrap();
+    assert!(entries.is_empty());
 }
 
 #[test]
@@ -340,9 +378,15 @@ fn activation_serializes_with_an_in_flight_old_generation_write() {
             |_, _, _| panic!("a retired generation must not write after activation"),
         )
         .unwrap();
-    let state = fence.state.lock().unwrap();
-    assert_eq!(state.active_generation, Some(generation(2)));
-    assert_eq!(state.tracker.entries(), candidate_owner.tracker().entries());
+    assert_eq!(fence.gate().active(), Some(generation(2)));
+    let entries = fence
+        .inner
+        .with_active(generation(2), |state| {
+            Ok::<_, io::Error>(state.tracker.entries())
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(entries, candidate_owner.tracker().entries());
 }
 
 #[test]
@@ -364,7 +408,13 @@ fn same_logical_id_from_another_physical_runtime_cannot_write() {
         )
         .unwrap();
 
-    let state = fence.state.lock().unwrap();
-    assert_eq!(state.active_generation, Some(generation_for(9, 1)));
-    assert!(state.tracker.entries().is_empty());
+    assert_eq!(fence.gate().active(), Some(generation_for(9, 1)));
+    let entries = fence
+        .inner
+        .with_active(generation_for(9, 1), |state| {
+            Ok::<_, io::Error>(state.tracker.entries())
+        })
+        .unwrap()
+        .unwrap();
+    assert!(entries.is_empty());
 }

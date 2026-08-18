@@ -1,10 +1,13 @@
 use super::super::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-use super::super::{ActiveGenerationSlot, PublicationEpoch, ResidentDataplaneGeneration};
+use super::super::{
+    ActiveGenerationSlot, GenerationGate, PublicationEpoch, ResidentDataplaneGeneration,
+};
 use super::*;
 
 pub(crate) async fn resident_tcp_accept_loop_async(
     listener: TcpListener,
     active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
+    generation_gate: Arc<GenerationGate>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
@@ -51,7 +54,12 @@ pub(crate) async fn resident_tcp_accept_loop_async(
         if *publication_listener.borrow_and_update() != reserved_publication {
             continue;
         }
-        if !reserved_generation.admission_is_open() {
+        if !generation_gate.is_active(reserved_generation.token()) {
+            continue;
+        }
+        if !reserved_generation.admission_is_open()
+            || !generation_gate.is_active(reserved_generation.token())
+        {
             if wait_while_tcp_admission_is_closed(
                 &mut stop_listener,
                 &mut publication_listener,
@@ -94,7 +102,9 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             drop(permit);
             break;
         }
-        if !reserved_generation.admission_is_open() {
+        if !reserved_generation.admission_is_open()
+            || !generation_gate.is_active(reserved_generation.token())
+        {
             drop(permit);
             continue;
         }
@@ -120,7 +130,9 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             Ok((stream, peer)) => {
                 let (accepted_publication, accepted_generation) =
                     active_generation.load_versioned();
-                let (generation, permit) = if accepted_publication == reserved_publication {
+                let (generation, permit) = if accepted_publication == reserved_publication
+                    && generation_gate.is_active(reserved_generation.token())
+                {
                     (reserved_generation, permit)
                 } else {
                     drop(permit);
@@ -166,6 +178,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                                         active_generation.load_versioned();
                                     if latest_publication != accepted_publication
                                         || !accepted_generation.admission_is_open()
+                                        || !generation_gate.is_active(accepted_generation.token())
                                     {
                                         drop(permit);
                                         accepted_publication = latest_publication;

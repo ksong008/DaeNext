@@ -10,7 +10,7 @@ use dae_runtime_control::{
     apply_domain_routing_state_entries_by_id, ip_to_key,
 };
 
-use dae_resident_core::GenerationToken;
+use dae_resident_core::{GenerationFence, GenerationGate, GenerationToken};
 #[cfg(test)]
 use dae_resident_core::{LogicalGenerationId, PhysicalRuntimeId};
 
@@ -44,15 +44,32 @@ pub struct ResidentDnsDomainRouting {
 }
 
 #[derive(Debug, Default)]
-pub struct ResidentDomainRoutingGenerationFence {
-    state: Mutex<ResidentDomainRoutingGenerationFenceState>,
-}
-
-#[derive(Debug, Default)]
 struct ResidentDomainRoutingGenerationFenceState {
-    active_generation: Option<GenerationToken>,
     map_id: Option<u32>,
     tracker: DomainRoutingTracker,
+}
+
+#[derive(Debug)]
+pub struct ResidentDomainRoutingGenerationFence {
+    inner: GenerationFence<ResidentDomainRoutingGenerationFenceState>,
+}
+
+impl Default for ResidentDomainRoutingGenerationFence {
+    fn default() -> Self {
+        Self::with_gate(Arc::new(GenerationGate::default()))
+    }
+}
+
+impl ResidentDomainRoutingGenerationFence {
+    pub fn with_gate(gate: Arc<GenerationGate>) -> Self {
+        Self {
+            inner: GenerationFence::new(gate, ResidentDomainRoutingGenerationFenceState::default()),
+        }
+    }
+
+    pub fn gate(&self) -> &Arc<GenerationGate> {
+        self.inner.gate()
+    }
 }
 
 #[derive(Debug)]
@@ -72,22 +89,13 @@ pub(super) struct ResidentDnsDomainRoutingUpdatePlan {
 impl ResidentDnsDomainRouting {
     #[cfg(test)]
     pub(crate) fn new(map_id: u32, routing_matcher: RoutingMatcher) -> Self {
-        let fence = Arc::new(ResidentDomainRoutingGenerationFence {
-            state: Mutex::new(ResidentDomainRoutingGenerationFenceState {
-                active_generation: Some(GenerationToken::new(
-                    PhysicalRuntimeId::new(0),
-                    LogicalGenerationId::new(0),
-                )),
-                map_id: Some(map_id),
-                tracker: DomainRoutingTracker::default(),
-            }),
-        });
-        Self::new_for_generation(
+        let generation =
+            GenerationToken::new(PhysicalRuntimeId::new(0), LogicalGenerationId::new(0));
+        let fence = Arc::new(ResidentDomainRoutingGenerationFence::with_gate_and_map(
+            Arc::new(GenerationGate::new(Some(generation))),
             map_id,
-            GenerationToken::new(PhysicalRuntimeId::new(0), LogicalGenerationId::new(0)),
-            routing_matcher,
-            fence,
-        )
+        ));
+        Self::new_for_generation(map_id, generation, routing_matcher, fence)
     }
 
     pub fn new_for_generation(
@@ -296,6 +304,19 @@ impl ResidentDnsDomainRouting {
 }
 
 impl ResidentDomainRoutingGenerationFence {
+    #[cfg(test)]
+    fn with_gate_and_map(gate: Arc<GenerationGate>, map_id: u32) -> Self {
+        Self {
+            inner: GenerationFence::new(
+                gate,
+                ResidentDomainRoutingGenerationFenceState {
+                    map_id: Some(map_id),
+                    tracker: DomainRoutingTracker::default(),
+                },
+            ),
+        }
+    }
+
     fn apply_event_with(
         &self,
         generation: GenerationToken,
@@ -308,17 +329,22 @@ impl ResidentDomainRoutingGenerationFence {
             &[DomainRoutingIpKey],
         ) -> io::Result<()>,
     ) -> io::Result<()> {
-        let mut state = self.lock()?;
-        let active = state.active_generation == Some(generation) && state.map_id == Some(map_id);
-        let report = if active {
-            owner.apply_dns_event_with(map_id, event, apply)?
-        } else {
-            owner.apply_dns_event_with(map_id, event, |_, _, _| Ok(()))?
-        };
-        if active {
+        let stale_event = event.clone();
+        let mut apply = Some(apply);
+        let applied = self.inner.with_active(generation, |state| {
+            if state.map_id != Some(map_id) {
+                return Ok::<_, io::Error>(None);
+            }
+            let apply = apply
+                .take()
+                .ok_or_else(|| io::Error::other("domain routing map apply callback was reused"))?;
+            let report = owner.apply_dns_event_with(map_id, event, apply)?;
             state.tracker = owner.tracker().clone();
+            Ok(Some(report))
+        })?;
+        if applied.flatten().is_none() {
+            owner.apply_dns_event_with(map_id, stale_event, |_, _, _| Ok(()))?;
         }
-        let _ = report;
         Ok(())
     }
 
@@ -334,13 +360,22 @@ impl ResidentDomainRoutingGenerationFence {
             &[DomainRoutingIpKey],
         ) -> io::Result<()>,
     ) -> io::Result<()> {
-        let mut state = self.lock()?;
-        let active = state.active_generation == Some(generation) && state.map_id == Some(map_id);
-        if active {
+        let events = events.into_iter().collect::<Vec<_>>();
+        let stale_events = events.clone();
+        let mut apply = Some(apply);
+        let applied = self.inner.with_active(generation, |state| {
+            if state.map_id != Some(map_id) {
+                return Ok::<_, io::Error>(None);
+            }
+            let apply = apply
+                .take()
+                .ok_or_else(|| io::Error::other("domain routing map apply callback was reused"))?;
             owner.apply_dns_events_with(map_id, events, apply)?;
             state.tracker = owner.tracker().clone();
-        } else {
-            owner.apply_dns_events_with(map_id, events, |_, _, _| Ok(()))?;
+            Ok(Some(()))
+        })?;
+        if applied.flatten().is_none() {
+            owner.apply_dns_events_with(map_id, stale_events, |_, _, _| Ok(()))?;
         }
         Ok(())
     }
@@ -356,36 +391,25 @@ impl ResidentDomainRoutingGenerationFence {
             &[DomainRoutingIpKey],
         ) -> io::Result<()>,
     ) -> io::Result<()> {
-        let mut state = self.lock()?;
-        if state.active_generation == Some(generation) && state.map_id == Some(map_id) {
-            return Ok(());
-        }
-        let desired = owner.tracker();
-        let plan = if state.map_id == Some(map_id) {
-            state.tracker.plan_transition(desired)
-        } else {
-            dae_runtime_control::DomainRoutingSyncPlan {
-                updates: desired.entries(),
-                deletes: Vec::new(),
-                owner_count: desired.owner_count(),
-                ip_count: desired.ip_count(),
+        self.inner.switch(generation, |state| {
+            let desired = owner.tracker();
+            let plan = if state.map_id == Some(map_id) {
+                state.tracker.plan_transition(desired)
+            } else {
+                dae_runtime_control::DomainRoutingSyncPlan {
+                    updates: desired.entries(),
+                    deletes: Vec::new(),
+                    owner_count: desired.owner_count(),
+                    ip_count: desired.ip_count(),
+                }
+            };
+            if !plan.updates.is_empty() || !plan.deletes.is_empty() {
+                apply(map_id, &plan.updates, &plan.deletes)?;
             }
-        };
-        if !plan.updates.is_empty() || !plan.deletes.is_empty() {
-            apply(map_id, &plan.updates, &plan.deletes)?;
-        }
-        state.active_generation = Some(generation);
-        state.map_id = Some(map_id);
-        state.tracker = desired.clone();
-        Ok(())
-    }
-
-    fn lock(
-        &self,
-    ) -> io::Result<std::sync::MutexGuard<'_, ResidentDomainRoutingGenerationFenceState>> {
-        self.state
-            .lock()
-            .map_err(|_| io::Error::other("resident domain routing generation fence poisoned"))
+            state.map_id = Some(map_id);
+            state.tracker = desired.clone();
+            Ok(())
+        })
     }
 }
 
