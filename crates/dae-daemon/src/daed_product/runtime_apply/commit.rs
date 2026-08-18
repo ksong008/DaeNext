@@ -10,6 +10,9 @@ pub(super) fn commit_runtime_generation(
     candidate: &mut PreparedRuntimeGeneration,
     checkpoints: &mut dyn RuntimeApplyCheckpoints,
 ) -> Result<Value, String> {
+    if candidate.candidate_path.is_some() && candidate.output_path.is_some() {
+        super::journal::write_runtime_apply_journal(candidate)?;
+    }
     if let (Some(candidate_path), Some(output_path)) = (
         candidate.candidate_path.as_ref(),
         candidate.output_path.as_ref(),
@@ -37,6 +40,7 @@ pub(super) fn commit_runtime_generation(
         candidate,
         checkpoints,
     )?;
+    super::journal::remove_runtime_apply_journal(candidate)?;
     candidate.mark_committed();
     Ok(plan.report(config_dir, false))
 }

@@ -7,6 +7,8 @@ pub(super) struct PreparedRuntimeGeneration {
     pub(super) output_path: Option<PathBuf>,
     pub(super) previous_content: Option<Vec<u8>>,
     pub(super) database_snapshot: RuntimeDatabaseSnapshot,
+    pub(super) journal_path: Option<PathBuf>,
+    pub(super) backup_path: Option<PathBuf>,
     probe_generation: Option<u64>,
     committed: bool,
 }
@@ -77,6 +79,8 @@ pub(super) fn prepare_runtime_generation(
             output_path: None,
             previous_content: None,
             database_snapshot,
+            journal_path: None,
+            backup_path: None,
             probe_generation: None,
             committed: false,
         });
@@ -112,6 +116,8 @@ pub(super) fn prepare_runtime_generation(
         output_path: Some(output_path),
         previous_content,
         database_snapshot,
+        journal_path: None,
+        backup_path: None,
         probe_generation: None,
         committed: false,
     };
