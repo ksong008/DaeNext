@@ -60,7 +60,8 @@ pub(super) fn run_anytls_contract() -> RunnerOutput {
                 "underlay_always_tcp": anytls::contract::UNDERLAY_ALWAYS_TCP,
                 "underlay_preserves_mark": anytls::contract::UNDERLAY_PRESERVES_MARK,
                 "underlay_preserves_mptcp": anytls::contract::UNDERLAY_PRESERVES_MPTCP,
-                "true_session_data_plane_deferred": anytls::contract::TRUE_SESSION_DATA_PLANE_DEFERRED_ITEM,
+                "production_data_plane_owner": anytls::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": anytls::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -222,7 +223,8 @@ pub(super) fn run_anytls_smoke(args: &[String]) -> RunnerOutput {
                 "underlay_mark": udp_underlay.underlay_mark,
                 "underlay_mptcp": udp_underlay.underlay_mptcp,
             },
-            "transport_data_plane_deferred_to_item": anytls::contract::TRUE_SESSION_DATA_PLANE_DEFERRED_ITEM,
+            "production_data_plane_owner": anytls::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": anytls::contract::STANDALONE_SMOKE_SURFACE,
         })
     ))
 }

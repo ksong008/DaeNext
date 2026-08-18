@@ -30,7 +30,8 @@ pub(super) fn run_vless_contract() -> RunnerOutput {
                 "reality_allowed_for_vless": vless::contract::REALITY_ALLOWED_FOR_VLESS,
                 "grpc_default_service_name": vless::contract::GRPC_DEFAULT_SERVICE_NAME,
                 "xhttp_mode_auto_export_omitted": vless::contract::XHTTP_MODE_AUTO_EXPORT_OMITTED,
-                "shared_transport_deferred_to_item": vless::contract::SHARED_TRANSPORT_DEFERRED_TO_ITEM,
+                "production_data_plane_owner": vless::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": vless::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -167,7 +168,8 @@ pub(super) fn run_vless_smoke(args: &[String]) -> RunnerOutput {
             "export": parsed.export_url(),
             "key_hex": hex_encode(&key),
             "captured_hex": hex_encode(&header),
-            "transport_data_plane_deferred_to_item": vless::contract::SHARED_TRANSPORT_DEFERRED_TO_ITEM,
+            "production_data_plane_owner": vless::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": vless::contract::STANDALONE_SMOKE_SURFACE,
             "vision_requires_tls_or_reality_hook": vless::contract::VISION_REQUIRES_TLS_OR_REALITY_HOOK,
         })
     ))

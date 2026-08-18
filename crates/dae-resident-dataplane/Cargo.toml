@@ -7,6 +7,7 @@ repository.workspace = true
 
 [features]
 default = ["test-boringssl-tcp-tls", "test-boringssl-quic", "dns-runtime-tests"]
+benchmark-support = []
 dns-runtime-tests = []
 test-scalar-udp-recv = ["dae-datapath/test-scalar-udp-recv"]
 test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send", "dae-resident-dns/test-scalar-udp-send"]

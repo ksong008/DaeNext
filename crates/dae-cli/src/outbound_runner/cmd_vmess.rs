@@ -40,7 +40,8 @@ pub(super) fn run_vmess_contract() -> RunnerOutput {
                 "grpc_default_service_name": vmess::contract::GRPC_DEFAULT_SERVICE_NAME,
                 "http_h2_httpupgrade_meek_xhttp": "deferred-to-shared-transport",
                 "vmess_reality_must_error": vmess::contract::VMESS_REALITY_MUST_ERROR,
-                "shared_transport_deferred_to_item": vmess::contract::SHARED_TRANSPORT_DEFERRED_TO_ITEM,
+                "production_data_plane_owner": vmess::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": vmess::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -161,7 +162,8 @@ pub(super) fn run_vmess_smoke(args: &[String]) -> RunnerOutput {
                 "option_global_padding": vmess::contract::OPTION_GLOBAL_PADDING,
                 "security_auto_cipher": vmess::contract::SECURITY_AUTO_CIPHER,
             },
-            "transport_data_plane_deferred_to_item": vmess::contract::SHARED_TRANSPORT_DEFERRED_TO_ITEM,
+            "production_data_plane_owner": vmess::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": vmess::contract::STANDALONE_SMOKE_SURFACE,
         })
     ))
 }

@@ -34,4 +34,5 @@ pub const UDP_PORT_ZERO_PACKET_CONN: &str = "transport_packet_conn";
 pub const UDP_NONZERO_PORT_PACKET_CONN: &str = "stream_packet_conn";
 pub const TRANSPORT_PACKET_CONN_USES_AUTH: bool = true;
 pub const TRANSPORT_PACKET_CONN_CIPHER_INFO: &str = "juicity reused info";
-pub const TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM: u16 = 113;
+pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
+pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";

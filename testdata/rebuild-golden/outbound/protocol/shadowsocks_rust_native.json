@@ -249,7 +249,8 @@
       "obfs-local",
       "simpleobfs"
     ],
-    "transport_native_data_plane_deferred_to_item": 113,
+    "production_data_plane_owner": "dae-resident-dataplane",
+    "standalone_smoke_surface": "test-support-only",
     "v2ray_plugin_udp_passthrough_layers": [
       "tls when tls option is present",
       "ws",

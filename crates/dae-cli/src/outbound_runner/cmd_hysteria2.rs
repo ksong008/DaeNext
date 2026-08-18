@@ -32,7 +32,8 @@ pub(super) fn run_hysteria2_contract() -> RunnerOutput {
                 "route_cache_key_is_underlay_network": hysteria2::contract::ROUTE_CACHE_KEY_IS_UNDERLAY_NETWORK,
                 "port_hopping_detects_dash_or_comma": hysteria2::contract::PORT_HOPPING_DETECTS_DASH_OR_COMMA,
                 "udp_hop_interval_from_extra_option": hysteria2::contract::UDP_HOP_INTERVAL_FROM_EXTRA_OPTION,
-                "true_quic_data_plane_deferred_item": hysteria2::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
+                "production_data_plane_owner": hysteria2::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": hysteria2::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -117,7 +118,8 @@ pub(super) fn run_hysteria2_smoke(args: &[String]) -> RunnerOutput {
                 "port_hopping": server.port_hopping,
             },
             "underlay_network": "udp",
-            "transport_data_plane_deferred_to_item": hysteria2::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
+            "production_data_plane_owner": hysteria2::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": hysteria2::contract::STANDALONE_SMOKE_SURFACE,
         })
     ))
 }

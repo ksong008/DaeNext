@@ -172,7 +172,8 @@
   "transport_contract": {
     "grpc_default_service_name": "GunService",
     "http_h2_httpupgrade_meek_xhttp": "deferred-to-shared-transport",
-    "shared_transport_deferred_to_item": 113,
+    "production_data_plane_owner": "dae-resident-dataplane",
+    "standalone_smoke_surface": "test-support-only",
     "vmess_reality_must_error": true,
     "ws_tls_uses_wss": true
   },

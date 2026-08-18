@@ -29,7 +29,8 @@ pub(super) fn run_trojan_contract() -> RunnerOutput {
                 "trojan_grpc_contains_tls": trojan::contract::TROJAN_GRPC_CONTAINS_TLS,
                 "trojan_grpc_no_outer_tls": trojan::contract::TROJAN_GRPC_NO_OUTER_TLS,
                 "trojan_ss_inner_layer": trojan::contract::TROJAN_SS_INNER_LAYER,
-                "shared_transport_deferred_to_item": trojan::contract::SHARED_TRANSPORT_DEFERRED_TO_ITEM,
+                "production_data_plane_owner": trojan::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": trojan::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -165,7 +166,8 @@ pub(super) fn run_trojan_smoke(args: &[String]) -> RunnerOutput {
             "tcp_header_hex": hex_encode(&tcp),
             "udp_packet_hex": hex_encode(&udp),
             "udp_over_tcp_stream": true,
-            "transport_data_plane_deferred_to_item": trojan::contract::SHARED_TRANSPORT_DEFERRED_TO_ITEM,
+            "production_data_plane_owner": trojan::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": trojan::contract::STANDALONE_SMOKE_SURFACE,
         })
     ))
 }

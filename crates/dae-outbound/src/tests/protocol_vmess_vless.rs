@@ -462,9 +462,11 @@ fn vless_rust_native_matches_nativelden_fixture() {
             .unwrap()
     );
     assert_eq!(
-        crate::vless::contract::SHARED_TRANSPORT_DEFERRED_TO_ITEM,
-        transport["shared_transport_deferred_to_item"]
-            .as_u64()
-            .unwrap() as u16
+        crate::vless::contract::PRODUCTION_DATA_PLANE_OWNER,
+        transport["production_data_plane_owner"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::vless::contract::STANDALONE_SMOKE_SURFACE,
+        transport["standalone_smoke_surface"].as_str().unwrap()
     );
 }
