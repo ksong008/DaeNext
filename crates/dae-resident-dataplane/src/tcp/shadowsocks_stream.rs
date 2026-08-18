@@ -105,6 +105,26 @@ impl AsyncV2rayPluginMuxPayloadState {
             closed: false,
         }
     }
+
+    /// A-14: 注入握手同批预读的 leftover 字节（服务端首帧），
+    /// 在进入正常读循环前先解码入 mux 缓冲。
+    pub(super) fn inject_leftover(&mut self, leftover: Vec<u8>) -> Result<(), String> {
+        if leftover.is_empty() {
+            return Ok(());
+        }
+        self.ws_decoder
+            .extend(&leftover)
+            .map_err(|err| format!("decode v2ray-plugin websocket leftover frame: {err}"))?;
+        while let Some(frame) = self
+            .ws_decoder
+            .next_message()
+            .map_err(|err| format!("decode v2ray-plugin websocket leftover frame: {err}"))?
+        {
+            self.mux_bytes.extend_from_slice(frame);
+        }
+        self.control.queue_from(&mut self.ws_decoder);
+        Ok(())
+    }
 }
 
 struct AsyncV2rayPluginMuxPayloadReader<'a, 'b, R> {

@@ -49,17 +49,18 @@ pub(super) enum VlessStandardUdpUnderlay {
         tls_underlay: &'static str,
     },
     HttpUpgradePlain {
-        stream: tokio::net::TcpStream,
+        // A-14: trait object 以便注入握手 leftover（PrefixedStream 包装）。
+        stream: Box<dyn AsyncReadWrite + Unpin + Send>,
     },
     HttpUpgradeTls {
-        client: AsyncResidentTlsClient,
+        client: Box<dyn AsyncReadWrite + Unpin + Send>,
         tls_underlay: &'static str,
     },
     EncryptedHttpUpgradePlain {
-        stream: VlessEncryptedStream<tokio::net::TcpStream>,
+        stream: VlessEncryptedStream<Box<dyn AsyncReadWrite + Unpin + Send>>,
     },
     EncryptedHttpUpgradeTls {
-        client: VlessEncryptedStream<AsyncResidentTlsClient>,
+        client: VlessEncryptedStream<Box<dyn AsyncReadWrite + Unpin + Send>>,
         tls_underlay: &'static str,
     },
     GrpcTls {
@@ -145,7 +146,7 @@ impl VlessStandardUdpUnderlay {
             }
             VlessStandardUdpWrapperKind::WebSocketPlain => {
                 let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
-                websocket_handshake_async(
+                let ws_leftover = websocket_handshake_async(
                     &mut stream,
                     &proxy.stream_host,
                     &proxy.stream_path,
@@ -153,7 +154,7 @@ impl VlessStandardUdpUnderlay {
                 )
                 .await?;
                 if let Some(encryption) = proxy.vless_encryption()? {
-                    let logical = spawn_websocket_payload_stream(stream);
+                    let logical = spawn_websocket_payload_stream(stream, ws_leftover);
                     let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
                         .await
                         .map_err(|err| {
@@ -183,7 +184,7 @@ impl VlessStandardUdpUnderlay {
                 let mut client =
                     open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
-                websocket_handshake_async(
+                let ws_leftover = websocket_handshake_async(
                     &mut client,
                     &proxy.stream_host,
                     &proxy.stream_path,
@@ -191,7 +192,7 @@ impl VlessStandardUdpUnderlay {
                 )
                 .await?;
                 if let Some(encryption) = proxy.vless_encryption()? {
-                    let logical = spawn_websocket_payload_stream(client);
+                    let logical = spawn_websocket_payload_stream(client, ws_leftover);
                     let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
                         .await
                         .map_err(|err| {
@@ -223,19 +224,21 @@ impl VlessStandardUdpUnderlay {
             }
             VlessStandardUdpWrapperKind::HttpUpgradePlain => {
                 let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
-                httpupgrade_handshake_async(
+                let leftover = httpupgrade_handshake_async(
                     &mut stream,
                     &proxy.stream_host,
                     &proxy.stream_path,
                     "VLESS HTTPUpgrade UDP",
                 )
                 .await?;
+                let mut stream = PrefixedStream::new(stream, leftover);
                 if let Some(encryption) = proxy.vless_encryption()? {
-                    let mut encrypted = VlessEncryptedStream::handshake(stream, encryption)
-                        .await
-                        .map_err(|err| {
-                        format!("VLESS Encryption HTTPUpgrade UDP handshake: {err}")
-                    })?;
+                    let mut encrypted = VlessEncryptedStream::handshake(
+                        Box::new(stream) as Box<dyn AsyncReadWrite + Unpin + Send>,
+                        encryption,
+                    )
+                    .await
+                    .map_err(|err| format!("VLESS Encryption HTTPUpgrade UDP handshake: {err}"))?;
                     write_vless_stream_bytes(
                         &mut encrypted,
                         initial_packet,
@@ -250,24 +253,30 @@ impl VlessStandardUdpUnderlay {
                         "write VLESS HTTPUpgrade UDP first packet",
                     )
                     .await?;
-                    Ok(Self::HttpUpgradePlain { stream })
+                    Ok(Self::HttpUpgradePlain {
+                        stream: Box::new(stream) as Box<dyn AsyncReadWrite + Unpin + Send>,
+                    })
                 }
             }
             VlessStandardUdpWrapperKind::HttpUpgradeTls => {
                 let mut client =
                     open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
-                httpupgrade_handshake_async(
+                let leftover = httpupgrade_handshake_async(
                     &mut client,
                     &proxy.stream_host,
                     &proxy.stream_path,
                     "VLESS TLS HTTPUpgrade UDP",
                 )
                 .await?;
+                let mut client = PrefixedStream::new(client, leftover);
                 if let Some(encryption) = proxy.vless_encryption()? {
-                    let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
-                        .await
-                        .map_err(|err| {
+                    let mut encrypted = VlessEncryptedStream::handshake(
+                        Box::new(client) as Box<dyn AsyncReadWrite + Unpin + Send>,
+                        encryption,
+                    )
+                    .await
+                    .map_err(|err| {
                         format!("VLESS Encryption TLS HTTPUpgrade UDP handshake: {err}")
                     })?;
                     write_vless_stream_bytes(
@@ -288,7 +297,7 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::HttpUpgradeTls {
-                        client,
+                        client: Box::new(client) as Box<dyn AsyncReadWrite + Unpin + Send>,
                         tls_underlay,
                     })
                 }
@@ -541,15 +550,17 @@ impl VlessStandardUdpUnderlay {
 
     pub(super) async fn shutdown(&mut self) {
         match self {
-            Self::PlainTcp { stream }
-            | Self::WebSocketPlain { stream, .. }
-            | Self::HttpUpgradePlain { stream } => {
+            Self::PlainTcp { stream } | Self::WebSocketPlain { stream, .. } => {
                 let _ = stream.shutdown().await;
             }
-            Self::TlsTcp { client, .. }
-            | Self::WebSocketTls { client, .. }
-            | Self::HttpUpgradeTls { client, .. } => {
+            Self::HttpUpgradePlain { stream } => {
+                let _ = stream.shutdown().await;
+            }
+            Self::TlsTcp { client, .. } | Self::WebSocketTls { client, .. } => {
                 client.shutdown().await;
+            }
+            Self::HttpUpgradeTls { client, .. } => {
+                let _ = client.shutdown().await;
             }
             Self::EncryptedPlainTcp { stream } => {
                 let _ = stream.shutdown().await;
@@ -595,13 +606,17 @@ async fn read_vless_standard_stream_underlay(
     let mut read_buf = ReadBuf::new(&mut out);
     poll_fn(|cx| {
         let poll_result = match underlay {
-            VlessStandardUdpUnderlay::PlainTcp { stream }
-            | VlessStandardUdpUnderlay::HttpUpgradePlain { stream } => {
+            VlessStandardUdpUnderlay::PlainTcp { stream } => {
                 Pin::new(stream).poll_read(cx, &mut read_buf)
             }
-            VlessStandardUdpUnderlay::TlsTcp { client, .. }
-            | VlessStandardUdpUnderlay::HttpUpgradeTls { client, .. } => {
+            VlessStandardUdpUnderlay::HttpUpgradePlain { stream } => {
+                Pin::new(stream.as_mut()).poll_read(cx, &mut read_buf)
+            }
+            VlessStandardUdpUnderlay::TlsTcp { client, .. } => {
                 Pin::new(client).poll_read(cx, &mut read_buf)
+            }
+            VlessStandardUdpUnderlay::HttpUpgradeTls { client, .. } => {
+                Pin::new(client.as_mut()).poll_read(cx, &mut read_buf)
             }
             VlessStandardUdpUnderlay::EncryptedPlainTcp { stream } => {
                 Pin::new(stream).poll_read(cx, &mut read_buf)
@@ -712,10 +727,11 @@ async fn websocket_handshake_async<S>(
     host: &str,
     path: &str,
     label: &str,
-) -> Result<(), String>
+) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    // A-14: 返回 leftover（握手同批预读字节）。
     let options = HttpUpgradeOptions::new(host, path);
     let handshake = websocket_client_handshake(&options)
         .map_err(|err| format!("build {label} handshake: {err}"))?;
@@ -725,9 +741,11 @@ where
         &format!("write {label} handshake"),
     )
     .await?;
-    let response = read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
+    let (response, leftover) =
+        read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
     validate_websocket_handshake_response(&response, &handshake.expected_accept)
-        .map_err(|err| format!("validate {label} upgrade: {err}"))
+        .map_err(|err| format!("validate {label} upgrade: {err}"))?;
+    Ok(leftover)
 }
 
 async fn httpupgrade_handshake_async<S>(
@@ -735,21 +753,92 @@ async fn httpupgrade_handshake_async<S>(
     host: &str,
     path: &str,
     label: &str,
-) -> Result<(), String>
+) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    // A-14: 返回 leftover（握手同批预读字节），调用方注入后续读侧。
     let options = HttpUpgradeOptions::new(host, path);
-    let request = http_upgrade_request(&options);
+    let request =
+        http_upgrade_request(&options).map_err(|err| format!("build {label} handshake: {err}"))?;
     write_vless_stream_bytes(stream, &request, &format!("write {label} handshake")).await?;
-    let response = read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate {label} upgrade: {err}"))
+    let (response, leftover) =
+        read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
+    validate_http_status(&response, 101)
+        .map_err(|err| format!("validate {label} upgrade: {err}"))?;
+    Ok(leftover)
 }
 
-async fn read_http_head_from_async<S>(stream: &mut S, label: &str) -> Result<Vec<u8>, String>
+/// A-14: AsyncRead+AsyncWrite 组合 trait，用于 trait object 包装注入。
+pub(super) trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+impl<T: AsyncRead + AsyncWrite> AsyncReadWrite for T {}
+
+/// A-14: 先吐握手 leftover、再转发 inner 的读写流包装。
+struct PrefixedStream<S> {
+    prefix: Vec<u8>,
+    consumed: usize,
+    inner: S,
+}
+
+impl<S> PrefixedStream<S> {
+    fn new(inner: S, prefix: Vec<u8>) -> Self {
+        Self {
+            prefix,
+            consumed: 0,
+            inner,
+        }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for PrefixedStream<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.consumed < self.prefix.len() {
+            let remaining = &self.prefix[self.consumed..];
+            let n = remaining.len().min(buf.remaining());
+            buf.put_slice(&remaining[..n]);
+            self.consumed += n;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedStream<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+async fn read_http_head_from_async<S>(
+    stream: &mut S,
+    label: &str,
+) -> Result<(Vec<u8>, Vec<u8>), String>
 where
     S: AsyncRead + Unpin,
 {
+    // A-14: 返回 (head, leftover)，保留握手同批预读字节。
     let mut response = Vec::new();
     let mut buf = [0_u8; 512];
     loop {
@@ -761,8 +850,10 @@ where
             return Err(format!("{label}: early eof"));
         }
         response.extend_from_slice(&buf[..read]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(response);
+        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            let leftover = response[index + 4..].to_vec();
+            response.truncate(index + 4);
+            return Ok((response, leftover));
         }
         if response.len() > 16 * 1024 {
             return Err(format!("{label}: response head too large"));

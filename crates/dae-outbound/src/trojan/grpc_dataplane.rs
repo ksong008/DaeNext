@@ -68,7 +68,7 @@ where
     } else {
         grpc_options.service_name.clone()
     };
-    let preface = grpc_stream_preface(&grpc_options.service_name);
+    let preface = grpc_stream_preface(&grpc_options.service_name)?;
     stream
         .write_all(&preface)
         .map_err(|err| OutboundError::BadTrojan(err.to_string()))?;

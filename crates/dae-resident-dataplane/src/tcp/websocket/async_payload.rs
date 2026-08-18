@@ -14,6 +14,28 @@ pub(crate) struct AsyncWebSocketPayloadState {
     control: AsyncWebSocketControlWriter,
 }
 
+impl AsyncWebSocketPayloadState {
+    /// A-14: 注入握手同批预读的 leftover 字节（服务端首帧），
+    /// 在进入正常读循环前先解码入 pending。
+    pub(crate) fn inject_leftover(&mut self, leftover: Vec<u8>) -> Result<(), String> {
+        if leftover.is_empty() {
+            return Ok(());
+        }
+        self.decoder
+            .extend(&leftover)
+            .map_err(|err| format!("decode websocket leftover frame: {err}"))?;
+        while let Some(frame) = self
+            .decoder
+            .next_message()
+            .map_err(|err| format!("decode websocket leftover frame: {err}"))?
+        {
+            self.pending.extend_from_slice(frame);
+        }
+        self.control.queue_from(&mut self.decoder);
+        Ok(())
+    }
+}
+
 pub(crate) struct AsyncWebSocketPayloadReader<'a, 'b, R> {
     client: &'a mut R,
     state: &'b mut AsyncWebSocketPayloadState,
@@ -92,6 +114,26 @@ impl AsyncWebSocketPayloadChannelState {
             pending: CursorByteBuffer::default(),
             control: WebSocketControlPollSender::new(control),
         }
+    }
+
+    /// A-14: 注入握手同批预读的 leftover 字节（服务端首帧），
+    /// 在进入正常读循环前先解码入 pending。
+    pub(crate) fn inject_leftover(&mut self, leftover: Vec<u8>) -> Result<(), String> {
+        if leftover.is_empty() {
+            return Ok(());
+        }
+        self.decoder
+            .extend(&leftover)
+            .map_err(|err| format!("decode websocket leftover frame: {err}"))?;
+        while let Some(frame) = self
+            .decoder
+            .next_message()
+            .map_err(|err| format!("decode websocket leftover frame: {err}"))?
+        {
+            self.pending.extend_from_slice(frame);
+        }
+        self.control.queue_from(&mut self.decoder);
+        Ok(())
     }
 }
 

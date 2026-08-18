@@ -111,7 +111,7 @@ where
         .map_err(|err| OutboundError::BadShadowsocks(format!("v2ray-plugin tls connect: {err}")))?;
 
     let ws_options = HttpUpgradeOptions::new(&options.ws_host, &options.ws_path);
-    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
+    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY)?;
     tls.write_all(&handshake)
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     tls.flush()

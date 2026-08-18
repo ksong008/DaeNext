@@ -24,9 +24,9 @@ use super::super::super::plan::{
 use super::super::super::{
     ResidentDataplaneMetrics, VLESS_RESPONSE_VERSION, acquire_vless_mux_logical_stream,
     tcp::{
-        TcpProxySelection, XhttpPacketUpParts, XhttpStreamParts, close_xhttp_download_client,
-        close_xhttp_stream_upload_client, close_xhttp_upload_client, meek_round_trip_async,
-        native_httpupgrade_handshake_over_resident_tls_async,
+        AsyncPrefixedStream, TcpProxySelection, XhttpPacketUpParts, XhttpStreamParts,
+        close_xhttp_download_client, close_xhttp_stream_upload_client, close_xhttp_upload_client,
+        meek_round_trip_async, native_httpupgrade_handshake_over_resident_tls_async,
         native_websocket_handshake_over_resident_tls_async,
         native_write_websocket_binary_frame_over_resident_tls_async, open_grpc_h2_stream,
         open_h2_body_stream_with_deferred_response, open_xhttp_packet_up_parts,
@@ -210,7 +210,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
     if execution.wrapper == ResidentStreamWrapperPlan::WebSocket {
         let options =
             HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-        native_websocket_handshake_over_resident_tls_async(&mut client, &options)
+        let ws_leftover = native_websocket_handshake_over_resident_tls_async(&mut client, &options)
             .await
             .map_err(NativeTcpProbeError::Open)?;
         if let Some(encryption) = selection
@@ -224,7 +224,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             // Xray server interpret the first bytes as a corrupted
             // Encryption handshake, causing probe-only failures that do not
             // reflect the actual traffic executor.
-            let logical = spawn_websocket_payload_stream(client);
+            let logical = spawn_websocket_payload_stream(client, ws_leftover);
             let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
                 .await
                 .map_err(|err| {
@@ -262,6 +262,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                 &mut client,
                 relay_stop,
                 0,
+                ws_leftover,
                 &metrics,
             )
             .await;
@@ -273,19 +274,22 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             tunnel_stop,
         )));
     }
-    if execution.wrapper == ResidentStreamWrapperPlan::HttpUpgrade {
+    let response_prefix = if execution.wrapper == ResidentStreamWrapperPlan::HttpUpgrade {
         let options =
             HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
         native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
             .await
-            .map_err(NativeTcpProbeError::Open)?;
-    }
+            .map_err(NativeTcpProbeError::Open)?
+    } else {
+        Vec::new()
+    };
     if let Some(encryption) = selection
         .proxy
         .vless_encryption()
         .map_err(NativeTcpProbeError::Open)?
     {
-        let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
+        let prefixed = AsyncPrefixedStream::new(response_prefix, client);
+        let mut encrypted = VlessEncryptedStream::handshake(prefixed, encryption)
             .await
             .map_err(|err| {
                 NativeTcpProbeError::Open(format!("VLESS Encryption handshake over TLS: {err}"))
@@ -308,6 +312,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                     &mut encrypted,
                     relay_stop,
                     key,
+                    Vec::new(),
                     Vec::new(),
                     &metrics,
                 )
@@ -341,6 +346,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
                 &flow,
                 key,
                 Vec::new(),
+                response_prefix,
                 &metrics,
             )
             .await;
@@ -352,7 +358,9 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             tunnel_stop,
         )));
     }
-    Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(client)))
+    VlessNativeTunnel::new_with_response_prefix(client, response_prefix)
+        .map(boxed_native_tcp_tunnel)
+        .map_err(NativeTcpProbeError::Open)
 }
 
 async fn open_vless_meek_native_tcp_tunnel(
@@ -627,6 +635,15 @@ impl<S> VlessNativeTunnel<S> {
             stripper: VlessResponseStripper::default(),
             pending_plain: VecDeque::new(),
         }
+    }
+
+    fn new_with_response_prefix(inner: S, response_prefix: Vec<u8>) -> Result<Self, String> {
+        let mut tunnel = Self::new(inner);
+        if !response_prefix.is_empty() {
+            let plain = tunnel.stripper.consume(&response_prefix)?;
+            tunnel.pending_plain.extend(plain);
+        }
+        Ok(tunnel)
     }
 }
 

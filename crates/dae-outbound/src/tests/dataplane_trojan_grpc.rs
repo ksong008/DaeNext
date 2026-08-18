@@ -11,7 +11,7 @@ fn case_trojan_grpc_hunk_does_not_wrap_outer_tls_and_echoes_payload() {
     let server_payload = payload.clone();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let expected_preface = shared_transport::grpc_stream_preface(service_name);
+        let expected_preface = shared_transport::grpc_stream_preface(service_name).unwrap();
         let mut preface = vec![0_u8; expected_preface.len()];
         stream.read_exact(&mut preface).unwrap();
         assert_eq!(preface, expected_preface);

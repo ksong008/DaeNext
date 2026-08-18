@@ -12,7 +12,7 @@ where
     S: Read + Write,
 {
     let ws_options = HttpUpgradeOptions::new(ws_host, ws_path);
-    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
+    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY)?;
     stream
         .write_all(&handshake)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
@@ -84,7 +84,7 @@ where
     S: Read + Write,
 {
     let options = HttpUpgradeOptions::new(httpupgrade_host, httpupgrade_path);
-    let upgrade_request = http_upgrade_request(&options);
+    let upgrade_request = http_upgrade_request(&options)?;
     stream
         .write_all(&upgrade_request)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
@@ -142,7 +142,7 @@ pub fn aead_tcp_exchange_over_grpc_hunk_stream<S>(
 where
     S: Read + Write,
 {
-    let preface = grpc_stream_preface(&grpc_options.service_name);
+    let preface = grpc_stream_preface(&grpc_options.service_name)?;
     stream
         .write_all(&preface)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
@@ -218,7 +218,7 @@ where
     let mut request_payload = Vec::with_capacity(packet.header.len() + packet.chunk.len());
     request_payload.extend_from_slice(&packet.header);
     request_payload.extend_from_slice(&packet.chunk);
-    let meek_request = meek_http_request(meek_options, &request_payload);
+    let meek_request = meek_http_request(meek_options, &request_payload)?;
     stream
         .write_all(&meek_request)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;

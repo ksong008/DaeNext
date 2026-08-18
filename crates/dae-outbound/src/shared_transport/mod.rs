@@ -5,6 +5,8 @@ pub mod ech;
 pub mod grpc;
 pub mod grpc_cache;
 pub mod grpc_http2;
+pub(crate) mod hpack;
+pub(crate) mod hpack_decode;
 pub mod ir;
 pub mod meek;
 pub mod mldsa65;

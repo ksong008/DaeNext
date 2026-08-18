@@ -7,6 +7,7 @@ pub(super) struct VmessTransportRelayPolicy {
     pub(super) flush_upload: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn relay_tcp_over_vmess_stream_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     proxy: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
@@ -15,6 +16,7 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
     stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
     policy: VmessTransportRelayPolicy,
+    leftover: Vec<u8>,
 ) -> Result<DirectTcpRelayStats, String> {
     let VmessTransportRelayPolicy {
         label,
@@ -75,6 +77,13 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
         let mut inbound_write = inbound_write;
         let mut proxy_read = proxy_read;
         let mut buffer = [0_u8; 16 * 1024];
+        // A-14: 握手同批 leftover 是服务端首段数据，先转发给客户端。
+        if !leftover.is_empty() {
+            inbound_write
+                .write_all(&leftover)
+                .await
+                .map_err(|err| format!("write {label} leftover to client: {err}"))?;
+        }
         loop {
             let read = match proxy_read.read(&mut buffer).await {
                 Ok(0) if response.response_header_received() => {
@@ -120,6 +129,7 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     proxy: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
@@ -128,6 +138,7 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
     stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
     policy: VmessTransportRelayPolicy,
+    leftover: Vec<u8>,
 ) -> Result<DirectTcpRelayStats, String> {
     let VmessTransportRelayPolicy {
         label, idle_error, ..
@@ -189,6 +200,12 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
         let mut inbound_write = inbound_write;
         let mut proxy_read = proxy_read;
         let mut decoder = WebSocketBinaryFrameDecoder::default();
+        // A-14: 握手同批 leftover 是服务端首帧，先喂解码器。
+        if !leftover.is_empty() {
+            decoder
+                .extend(&leftover)
+                .map_err(|err| format!("decode {label} leftover frame: {err}"))?;
+        }
         let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
         loop {
             let read = match proxy_read.read(&mut buffer).await {
@@ -278,6 +295,7 @@ mod tests {
             session,
             DirectTcpRelayStats::default(),
             &metrics,
+            Vec::new(),
         );
         let server = async move {
             let mut header = vec![0_u8; request_header_len];
@@ -333,6 +351,7 @@ mod tests {
             session,
             DirectTcpRelayStats::default(),
             &metrics,
+            Vec::new(),
         );
         let server = async move {
             let mut header_frame = vec![0_u8; first_frame_len];
@@ -390,6 +409,7 @@ mod tests {
             session,
             DirectTcpRelayStats::default(),
             &metrics,
+            Vec::new(),
         );
         let server = async move {
             let mut header_frame = vec![0_u8; first_frame_len];
@@ -444,6 +464,7 @@ mod tests {
             session,
             DirectTcpRelayStats::default(),
             &metrics,
+            Vec::new(),
         );
         let cancel = async move {
             time::sleep(Duration::from_millis(20)).await;

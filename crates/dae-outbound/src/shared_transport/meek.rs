@@ -65,8 +65,14 @@ impl MeekRoundTripOptions {
     }
 }
 
-pub fn meek_http_request(options: &MeekRoundTripOptions, body: &[u8]) -> Vec<u8> {
-    format!(
+pub fn meek_http_request(
+    options: &MeekRoundTripOptions,
+    body: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
+    // F-12: 拒绝 CTL，防止 host/path 注入额外请求行/头。
+    super::dataplane::validate_http_field(&options.host, "meek HTTP host")?;
+    super::dataplane::validate_http_field(&options.path, "meek HTTP path")?;
+    Ok(format!(
         "POST {} HTTP/1.1\r\nHost: {}\r\nX-Session-ID: {}\r\nContent-Length: {}\r\n\r\n",
         options.path,
         options.host,
@@ -76,7 +82,7 @@ pub fn meek_http_request(options: &MeekRoundTripOptions, body: &[u8]) -> Vec<u8>
     .into_bytes()
     .into_iter()
     .chain(body.iter().copied())
-    .collect()
+    .collect())
 }
 
 pub fn meek_polling_exchange(
@@ -91,7 +97,7 @@ pub fn meek_polling_exchange(
             .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
         set_timeout(&stream, timeout)?;
         stream
-            .write_all(&meek_http_request(options, body))
+            .write_all(&meek_http_request(options, body)?)
             .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
         echoed_payloads.push(read_http_response_body(&mut stream)?);
     }

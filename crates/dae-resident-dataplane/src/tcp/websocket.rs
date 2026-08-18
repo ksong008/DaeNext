@@ -26,63 +26,75 @@ pub(crate) const RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE: usize = 16 * 1024;
 pub(crate) async fn websocket_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
+    // A-14: 返回握手响应之后同批预读的 leftover 字节（可能为空）。
     let handshake = websocket_client_handshake(options)
         .map_err(|err| format!("build websocket handshake: {err}"))?;
     client
         .write_plain_all(&handshake.request, "write websocket handshake")
         .await?;
-    let response =
+    let (response, leftover) =
         read_http_head_over_resident_tls_async(client, "read websocket handshake").await?;
     validate_websocket_handshake_response(&response, &handshake.expected_accept)
-        .map_err(|err| format!("validate websocket upgrade: {err}"))
+        .map_err(|err| format!("validate websocket upgrade: {err}"))?;
+    Ok(leftover)
 }
 
 pub(crate) async fn httpupgrade_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     options: &HttpUpgradeOptions,
-) -> Result<(), String> {
-    let request = http_upgrade_request(options);
+) -> Result<Vec<u8>, String> {
+    // A-14: 同上，返回 leftover。
+    let request = http_upgrade_request(options)
+        .map_err(|err| format!("build HTTP Upgrade handshake: {err}"))?;
     client
         .write_plain_all(&request, "write HTTP Upgrade handshake")
         .await?;
-    let response =
+    let (response, leftover) =
         read_http_head_over_resident_tls_async(client, "read HTTP Upgrade handshake").await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
+    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))?;
+    Ok(leftover)
 }
 
 pub(crate) async fn websocket_handshake_over_async_stream<S>(
     stream: &mut S,
     options: &HttpUpgradeOptions,
-) -> Result<(), String>
+) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    // A-14: 同上，返回 leftover。
     let handshake = websocket_client_handshake(options)
         .map_err(|err| format!("build websocket handshake: {err}"))?;
     stream
         .write_all(&handshake.request)
         .await
         .map_err(|err| format!("write websocket handshake: {err}"))?;
-    let response = read_http_head_from_async_stream(stream, "read websocket handshake").await?;
+    let (response, leftover) =
+        read_http_head_from_async_stream(stream, "read websocket handshake").await?;
     validate_websocket_handshake_response(&response, &handshake.expected_accept)
-        .map_err(|err| format!("validate websocket upgrade: {err}"))
+        .map_err(|err| format!("validate websocket upgrade: {err}"))?;
+    Ok(leftover)
 }
 
 pub(crate) async fn httpupgrade_handshake_over_async_stream<S>(
     stream: &mut S,
     options: &HttpUpgradeOptions,
-) -> Result<(), String>
+) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let request = http_upgrade_request(options);
+    // A-14: 同上，返回 leftover。
+    let request = http_upgrade_request(options)
+        .map_err(|err| format!("build HTTP Upgrade handshake: {err}"))?;
     stream
         .write_all(&request)
         .await
         .map_err(|err| format!("write HTTP Upgrade handshake: {err}"))?;
-    let response = read_http_head_from_async_stream(stream, "read HTTP Upgrade handshake").await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))
+    let (response, leftover) =
+        read_http_head_from_async_stream(stream, "read HTTP Upgrade handshake").await?;
+    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))?;
+    Ok(leftover)
 }
 
 pub(crate) async fn write_websocket_binary_frame_to_async_stream<S>(
@@ -152,7 +164,9 @@ fn websocket_binary_header(payload_len: usize, mask: [u8; 4]) -> Result<([u8; 8]
 async fn read_http_head_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
     label: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    // A-14: 返回 (head, leftover)——101 同批预读的服务端首帧数据必须
+    // 保留并交给后续流消费，否则合法同段数据被吞掉导致失帧。
     let mut response = Vec::new();
     let mut buf = [0_u8; 512];
     loop {
@@ -164,8 +178,10 @@ async fn read_http_head_over_resident_tls_async(
             return Err(format!("{label}: early eof"));
         }
         response.extend_from_slice(&buf[..read]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(response);
+        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            let leftover = response[index + 4..].to_vec();
+            response.truncate(index + 4);
+            return Ok((response, leftover));
         }
         if response.len() > 16 * 1024 {
             return Err(format!("{label}: response head too large"));
@@ -173,10 +189,14 @@ async fn read_http_head_over_resident_tls_async(
     }
 }
 
-async fn read_http_head_from_async_stream<S>(stream: &mut S, label: &str) -> Result<Vec<u8>, String>
+async fn read_http_head_from_async_stream<S>(
+    stream: &mut S,
+    label: &str,
+) -> Result<(Vec<u8>, Vec<u8>), String>
 where
     S: AsyncRead + Unpin,
 {
+    // A-14: 同上，保留 delimiter 后同批字节。
     let mut response = Vec::new();
     let mut buf = [0_u8; 512];
     loop {
@@ -188,8 +208,10 @@ where
             return Err(format!("{label}: early eof"));
         }
         response.extend_from_slice(&buf[..read]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(response);
+        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            let leftover = response[index + 4..].to_vec();
+            response.truncate(index + 4);
+            return Ok((response, leftover));
         }
         if response.len() > 16 * 1024 {
             return Err(format!("{label}: response head too large"));
@@ -210,16 +232,23 @@ pub(crate) async fn write_websocket_binary_frame_over_resident_tls_async(
 /// Exposes decoded WebSocket binary payload bytes as a bounded logical stream.
 /// VLESS Encryption wraps this stream, so HTTP/WebSocket framing stays outside
 /// the encrypted VLESS record layer exactly as it does in Xray.
-pub(crate) fn spawn_websocket_payload_stream<S>(client: S) -> SpawnedLogicalStream
+/// `leftover`（可能为空）是握手响应同批预读的首帧字节，必须最先消费。
+pub(crate) fn spawn_websocket_payload_stream<S>(
+    client: S,
+    leftover: Vec<u8>,
+) -> SpawnedLogicalStream
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    SpawnedLogicalStream::spawn(move |logical| drive_websocket_payload_stream(logical, client))
+    SpawnedLogicalStream::spawn(move |logical| {
+        drive_websocket_payload_stream(logical, client, leftover)
+    })
 }
 
 async fn drive_websocket_payload_stream<S>(
     logical: tokio::io::DuplexStream,
     client: S,
+    leftover: Vec<u8>,
 ) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -260,6 +289,12 @@ where
     };
     let download = async {
         let mut decoder = WebSocketBinaryFrameDecoder::default();
+        // A-14: 先消费握手同批 leftover，再读流。
+        if !leftover.is_empty() {
+            decoder
+                .extend(&leftover)
+                .map_err(|error| format!("decode websocket leftover frame: {error}"))?;
+        }
         let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
         loop {
             let read = client_read

@@ -7,6 +7,7 @@ pub(super) async fn relay_tcp_over_vless_tls_plain_duplex(
     client: &mut AsyncVlessTlsClient,
     stop: SharedResidentStopSignal,
     initial_payload: Vec<u8>,
+    response_prefix: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
     let (progress, activity) = resident_duplex_progress();
@@ -94,6 +95,18 @@ pub(super) async fn relay_tcp_over_vless_tls_plain_duplex(
         let mut client_read = client_read;
         let mut stripper = VlessResponseStripper::default();
         let mut buffer = [0_u8; 16 * 1024];
+        if !response_prefix.is_empty() {
+            let payload = stripper.consume(&response_prefix)?;
+            download_header_state.store(stripper.done, Ordering::Release);
+            if !payload.is_empty() {
+                inbound_write
+                    .write_all(&payload)
+                    .await
+                    .map_err(|err| format!("write VLESS payload to client: {err}"))?;
+                download_progress.record_download(payload.len());
+                metrics.add_download(payload.len());
+            }
+        }
         loop {
             let read = match client_read.read(&mut buffer).await {
                 Ok(0) => {

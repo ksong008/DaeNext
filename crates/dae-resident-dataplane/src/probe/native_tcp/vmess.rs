@@ -76,6 +76,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     session,
                     stats,
                     &metrics,
+                    Vec::new(),
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -103,6 +104,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     session,
                     stats,
                     &metrics,
+                    Vec::new(),
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -142,6 +144,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     session,
                     stats,
                     &metrics,
+                    Vec::new(),
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -180,6 +183,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     session,
                     stats,
                     &metrics,
+                    Vec::new(),
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -196,7 +200,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
-            native_websocket_handshake_over_async_stream(&mut stream, &options)
+            let leftover = native_websocket_handshake_over_async_stream(&mut stream, &options)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
             native_write_websocket_binary_frame_to_async_stream(
@@ -214,6 +218,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     session,
                     stats,
                     &metrics,
+                    leftover,
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -229,9 +234,10 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
                     .await
                     .map_err(NativeTcpProbeError::Open)?;
-            native_websocket_handshake_over_resident_tls_async(&mut client, &options)
-                .await
-                .map_err(NativeTcpProbeError::Open)?;
+            let leftover =
+                native_websocket_handshake_over_resident_tls_async(&mut client, &options)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
             native_write_websocket_binary_frame_over_resident_tls_async(
                 &mut client,
                 &session.first_write,
@@ -247,6 +253,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     session,
                     stats,
                     &metrics,
+                    leftover,
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -263,7 +270,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
             let mut stream = open_plain_proxy_tcp_stream_async(&selection)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
-            native_httpupgrade_handshake_over_async_stream(&mut stream, &options)
+            let leftover = native_httpupgrade_handshake_over_async_stream(&mut stream, &options)
                 .await
                 .map_err(NativeTcpProbeError::Open)?;
             stream
@@ -282,6 +289,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     session,
                     stats,
                     &metrics,
+                    leftover,
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -297,9 +305,10 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                 open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp)
                     .await
                     .map_err(NativeTcpProbeError::Open)?;
-            native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
-                .await
-                .map_err(NativeTcpProbeError::Open)?;
+            let leftover =
+                native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
             client
                 .write_plain_all(
                     &session.first_write,
@@ -315,6 +324,7 @@ pub(super) async fn open_vmess_native_tcp_tunnel(
                     session,
                     stats,
                     &metrics,
+                    leftover,
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);

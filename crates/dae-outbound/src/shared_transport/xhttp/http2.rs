@@ -112,7 +112,19 @@ pub fn read_xhttp_http2_request(
         1,
         "xhttp request headers",
     )?;
-    if headers.payload != xhttp_request_headers_payload(options) {
+    // A-13: 语义验证（HPACK 解码后比较）。
+    let decoded = crate::shared_transport::hpack_decode::decode_header_block(&headers.payload)?;
+    // 与 xhttp_request_headers_payload 实际编码一致。
+    let expected: &[(&str, &str)] = &[
+        (":method", "POST"),
+        (":scheme", "https"),
+        (":path", &xhttp_request_path(options)),
+        (":authority", &options.host),
+        ("content-type", "application/octet-stream"),
+        ("x-dae-xhttp-mode", &options.mode),
+        ("x-dae-xhttp-alpn", &options.alpn),
+    ];
+    if !crate::shared_transport::hpack_decode::semantic_headers_match(&decoded, expected) {
         return Err(OutboundError::BadSharedTransport(
             "xhttp http2 request headers mismatch".to_owned(),
         ));
@@ -184,7 +196,13 @@ pub fn read_xhttp_http2_response(
         1,
         "xhttp response headers",
     )?;
-    if headers.payload != xhttp_response_headers_payload() {
+    // A-13: 语义验证。
+    let decoded = crate::shared_transport::hpack_decode::decode_header_block(&headers.payload)?;
+    let expected: &[(&str, &str)] = &[
+        (":status", "200"),
+        ("content-type", "application/octet-stream"),
+    ];
+    if !crate::shared_transport::hpack_decode::semantic_headers_match(&decoded, expected) {
         return Err(OutboundError::BadSharedTransport(
             "xhttp http2 response headers mismatch".to_owned(),
         ));

@@ -12,7 +12,7 @@ where
     S: Read + Write,
 {
     let ws_options = HttpUpgradeOptions::new(ws_host, ws_path);
-    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
+    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY)?;
     stream
         .write_all(&handshake)
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;
@@ -70,7 +70,7 @@ where
     S: Read + Write,
 {
     let httpupgrade_options = HttpUpgradeOptions::new(httpupgrade_host, httpupgrade_path);
-    let upgrade_request = http_upgrade_request(&httpupgrade_options);
+    let upgrade_request = http_upgrade_request(&httpupgrade_options)?;
     stream
         .write_all(&upgrade_request)
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;
@@ -120,7 +120,7 @@ pub fn tcp_exchange_over_grpc_hunk_stream<S>(
 where
     S: Read + Write,
 {
-    let preface = grpc_stream_preface(&grpc_options.service_name);
+    let preface = grpc_stream_preface(&grpc_options.service_name)?;
     stream
         .write_all(&preface)
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;
@@ -180,7 +180,7 @@ where
 {
     let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
     let request_header_len = request.len().saturating_sub(payload.len());
-    let meek_request = meek_http_request(meek_options, &request);
+    let meek_request = meek_http_request(meek_options, &request)?;
     stream
         .write_all(&meek_request)
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;
@@ -299,7 +299,7 @@ where
     }
     let request = packet::first_write_bytes(key, "", "tcp", target, false, payload)?;
     let request_header_len = request.len().saturating_sub(payload.len());
-    let xhttp_request = xhttp_packet_request(xhttp_options, &request);
+    let xhttp_request = xhttp_packet_request(xhttp_options, &request)?;
     stream
         .write_all(&xhttp_request)
         .map_err(|err| OutboundError::BadVless(err.to_string()))?;

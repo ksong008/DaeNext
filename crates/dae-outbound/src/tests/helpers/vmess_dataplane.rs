@@ -198,7 +198,8 @@ pub(in crate::tests) fn spawn_vmess_aead_grpc_hunk_echo_server(
     let addr = listener.local_addr().unwrap().to_string();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let expected_preface = shared_transport::grpc_stream_preface(&expected_service_name);
+        let expected_preface =
+            shared_transport::grpc_stream_preface(&expected_service_name).unwrap();
         let mut preface = vec![0_u8; expected_preface.len()];
         stream.read_exact(&mut preface).unwrap();
         assert_eq!(preface, expected_preface);

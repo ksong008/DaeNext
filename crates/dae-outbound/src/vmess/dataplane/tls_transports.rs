@@ -90,7 +90,7 @@ where
 {
     let mut tls = tls_client_stream(stream, material, tls_options, "VMess WSS")?;
     let ws_options = HttpUpgradeOptions::new(ws_host, ws_path);
-    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
+    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY)?;
     tls.write_all(&handshake)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
     let response = read_http_head(&mut tls)?;
@@ -176,7 +176,7 @@ where
 {
     let mut tls = tls_client_stream(stream, material, tls_options, "VMess HTTPS HTTPUpgrade")?;
     let upgrade_options = HttpUpgradeOptions::new(httpupgrade_host, httpupgrade_path);
-    let upgrade_request = http_upgrade_request(&upgrade_options);
+    let upgrade_request = http_upgrade_request(&upgrade_options)?;
     tls.write_all(&upgrade_request)
         .map_err(|err| OutboundError::BadVmess(err.to_string()))?;
     let response = read_http_head(&mut tls)?;

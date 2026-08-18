@@ -144,7 +144,7 @@ pub(crate) async fn handle_https_proxy_tcp_connection_async(
         metrics.add_upload(initial_payload_len);
     }
     drop(initial_payload);
-    relay_tcp_over_resident_tls_plain_async(inbound, &mut proxy, stop, metrics)
+    relay_tcp_over_resident_tls_plain_async(inbound, &mut proxy, stop, metrics, Vec::new())
         .await
         .map(|mut stats| {
             stats.client_to_direct += initial_payload_len;

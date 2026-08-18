@@ -223,7 +223,8 @@ use self::stream_helpers::*;
 mod http_connect_head;
 use self::http_connect_head::*;
 pub(crate) use self::stream_helpers::{
-    http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async, socks5_connect_async,
+    AsyncPrefixedStream, http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async,
+    socks5_connect_async,
 };
 mod shadowsocks_relay;
 pub(crate) use self::shadowsocks_relay::{

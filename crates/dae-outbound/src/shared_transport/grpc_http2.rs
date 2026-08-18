@@ -150,9 +150,21 @@ pub fn read_grpc_http2_request(
     let data = read_http2_frame(stream)?;
     validate_frame(&data, HTTP2_FRAME_DATA, 0, 1, "request data")?;
 
+    // A-13: 语义验证（HPACK 解码后比较），拒绝"原始字节相等"造成的
+    // 合法 Huffman/索引/顺序变体误拒。
     let service_name = options.service_name_or_default();
-    let expected_headers = grpc_request_headers_payload(&service_name, &options.authority);
-    if headers.payload != expected_headers {
+    let decoded = crate::shared_transport::hpack_decode::decode_header_block(&headers.payload)?;
+    let expected: &[(&str, &str)] = &[
+        (":method", "POST"),
+        (":scheme", "https"),
+        (":path", &format!("/{service_name}/Tun")),
+        (":authority", &options.authority),
+        (GRPC_CONTENT_TYPE_HEADER, GRPC_CONTENT_TYPE_APPLICATION),
+        (GRPC_TE_HEADER, GRPC_TE_TRAILERS),
+        (GRPC_ENCODING_HEADER, GRPC_IDENTITY_ENCODING),
+        (GRPC_ACCEPT_ENCODING_HEADER, GRPC_IDENTITY_ENCODING),
+    ];
+    if !crate::shared_transport::hpack_decode::semantic_headers_match(&decoded, expected) {
         return Err(OutboundError::BadSharedTransport(
             "grpc http2 request headers mismatch".to_owned(),
         ));
@@ -250,7 +262,13 @@ pub fn read_grpc_http2_response(
         1,
         "response headers",
     )?;
-    if headers.payload != grpc_response_headers_payload() {
+    // A-13: 语义验证。
+    let decoded = crate::shared_transport::hpack_decode::decode_header_block(&headers.payload)?;
+    let expected: &[(&str, &str)] = &[
+        (":status", "200"),
+        (GRPC_CONTENT_TYPE_HEADER, GRPC_CONTENT_TYPE_APPLICATION),
+    ];
+    if !crate::shared_transport::hpack_decode::semantic_headers_match(&decoded, expected) {
         return Err(OutboundError::BadSharedTransport(
             "grpc http2 response headers mismatch".to_owned(),
         ));
@@ -412,24 +430,10 @@ fn push_hpack_literal_new_name(out: &mut Vec<u8>, name: &[u8], value: &[u8]) {
     push_hpack_string(out, value);
 }
 
+// F-10: 复用共享 HPACK encoder（shared_transport/hpack.rs），消除
+// 与 xHTTP 的重复实现漂移。
 fn push_hpack_string(out: &mut Vec<u8>, value: &[u8]) {
-    push_hpack_integer(out, value.len(), 7, 0);
-    out.extend_from_slice(value);
-}
-
-fn push_hpack_integer(out: &mut Vec<u8>, mut value: usize, prefix_bits: u8, first_mask: u8) {
-    let prefix_max = (1_usize << prefix_bits) - 1;
-    if value < prefix_max {
-        out.push(first_mask | value as u8);
-        return;
-    }
-    out.push(first_mask | prefix_max as u8);
-    value -= prefix_max;
-    while value >= 128 {
-        out.push((value as u8 & 0x7f) | 0x80);
-        value >>= 7;
-    }
-    out.push(value as u8);
+    crate::shared_transport::hpack::push_hpack_string(out, value);
 }
 
 #[cfg(test)]

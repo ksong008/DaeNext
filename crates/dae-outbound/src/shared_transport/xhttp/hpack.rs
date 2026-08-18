@@ -1,5 +1,6 @@
 use super::http1::xhttp_request_path;
 use super::options::XHttpLifecycleOptions;
+use crate::shared_transport::hpack::push_hpack_string;
 
 pub(super) fn xhttp_request_headers_payload(options: &XHttpLifecycleOptions) -> Vec<u8> {
     let mut payload = vec![0x83, 0x87];
@@ -26,13 +27,4 @@ fn push_hpack_literal_new_name(out: &mut Vec<u8>, name: &[u8], value: &[u8]) {
     out.push(0);
     push_hpack_string(out, name);
     push_hpack_string(out, value);
-}
-
-fn push_hpack_string(out: &mut Vec<u8>, value: &[u8]) {
-    assert!(
-        value.len() < 128,
-        "xhttp hpack helper only supports short literals"
-    );
-    out.push(value.len() as u8);
-    out.extend_from_slice(value);
 }

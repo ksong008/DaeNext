@@ -13,6 +13,7 @@ pub(crate) async fn relay_tcp_over_vless_vision_duplex<Proxy>(
     stop: SharedResidentStopSignal,
     user_uuid: [u8; 16],
     initial_payload: Vec<u8>,
+    response_prefix: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError>
 where
@@ -23,8 +24,9 @@ where
     // client but remains framed for the lifetime of the UDP session.
     client.enable_vision_outer_record_handoff();
     let initial_payload_len = initial_payload.len();
-    let mut driver = VisionDuplexDriver::new(user_uuid, initial_payload)
-        .map_err(|error| RelayError::new(error, &RelayStats::default()))?;
+    let mut driver =
+        VisionDuplexDriver::new_with_response_prefix(user_uuid, initial_payload, response_prefix)
+            .map_err(|error| RelayError::new(error, &RelayStats::default()))?;
     if initial_payload_len > 0 {
         metrics.add_upload(initial_payload_len);
     }
