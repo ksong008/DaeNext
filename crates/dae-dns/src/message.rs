@@ -429,7 +429,7 @@ mod tests {
         let fixture = dae_golden::load_json("dns/packed_response/basic.json").unwrap();
         let restore = &fixture["restore_request_id"];
         let packed = decode_hex(restore["packed_zero_id_hex"].as_str().unwrap()).unwrap();
-        let request_id = restore["request_id"].as_u64().unwrap() as u16;
+        let request_id = u16::try_from(restore["request_id"].as_u64().unwrap()).unwrap();
         let restored = restore_packed_response_request_id(&packed, request_id).unwrap();
         assert_eq!(
             encode_hex(&restored),
@@ -462,7 +462,7 @@ mod tests {
         let fixture = dae_golden::load_json("dns/validation/question_and_id.json").unwrap();
         let req_json = &fixture["request"];
         let req = DnsMessage::new(
-            req_json["id"].as_u64().unwrap() as u16,
+            u16::try_from(req_json["id"].as_u64().unwrap()).unwrap(),
             false,
             vec![question_from_json(req_json)],
         );
@@ -475,7 +475,7 @@ mod tests {
                 .map(question_from_json)
                 .collect();
             let resp = DnsMessage::new(
-                case["response_id"].as_u64().unwrap() as u16,
+                u16::try_from(case["response_id"].as_u64().unwrap()).unwrap(),
                 true,
                 questions,
             );
@@ -499,8 +499,8 @@ mod tests {
     fn question_from_json(value: &serde_json::Value) -> DnsQuestion {
         DnsQuestion::new(
             value["qname"].as_str().unwrap(),
-            value["qtype"].as_u64().unwrap() as u16,
-            value["qclass"].as_u64().unwrap() as u16,
+            u16::try_from(value["qtype"].as_u64().unwrap()).unwrap(),
+            u16::try_from(value["qclass"].as_u64().unwrap()).unwrap(),
         )
     }
 }

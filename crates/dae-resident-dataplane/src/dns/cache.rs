@@ -540,7 +540,12 @@ impl ResidentDnsFlightPermit<'_> {
             result,
             _retained: retained,
         });
-        self.publish_outcome(outcome)
+        let published_error = outcome.result.as_ref().err().map(ToString::to_string);
+        self.publish_outcome(outcome)?;
+        match published_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn outcome(&self) -> Result<Option<Arc<ResidentDnsFlightOutcome>>, String> {

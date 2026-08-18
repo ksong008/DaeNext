@@ -100,3 +100,67 @@ fn failed_capacity_replacement_restores_the_previous_cache_and_owner() {
     assert_eq!(state.owner.tracker().ip_count(), 1);
     assert_eq!(state.cache.stats().remove_callback_total, 0);
 }
+
+#[test]
+fn published_generation_fences_late_writes_from_retired_generation() {
+    let fence = ResidentDomainRoutingGenerationFence::default();
+    let old_ip = ip_to_key("192.0.2.10".parse().unwrap());
+    let new_ip = ip_to_key("192.0.2.20".parse().unwrap());
+    let stale_ip = ip_to_key("192.0.2.30".parse().unwrap());
+    let mut old_owner = DomainRoutingOwner::default();
+    let mut new_owner = DomainRoutingOwner::default();
+
+    fence
+        .apply_event_with(
+            1,
+            7,
+            &mut old_owner,
+            DomainRoutingDnsEvent::from_keys("old", &[1], [old_ip]),
+            |_, _, _| panic!("an unpublished generation must not write the map"),
+        )
+        .unwrap();
+    let mut activation_updates = Vec::new();
+    fence
+        .activate_with(1, 7, &old_owner, |_, updates, deletes| {
+            activation_updates.extend_from_slice(updates);
+            assert!(deletes.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(activation_updates.len(), 1);
+
+    fence
+        .apply_event_with(
+            2,
+            7,
+            &mut new_owner,
+            DomainRoutingDnsEvent::from_keys("new", &[2], [new_ip]),
+            |_, _, _| panic!("the candidate generation must remain private"),
+        )
+        .unwrap();
+    let mut transition_updates = Vec::new();
+    let mut transition_deletes = Vec::new();
+    fence
+        .activate_with(2, 7, &new_owner, |_, updates, deletes| {
+            transition_updates.extend_from_slice(updates);
+            transition_deletes.extend_from_slice(deletes);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(transition_updates.len(), 1);
+    assert_eq!(transition_updates[0].key, new_ip);
+    assert_eq!(transition_deletes, vec![old_ip]);
+
+    fence
+        .apply_event_with(
+            1,
+            7,
+            &mut old_owner,
+            DomainRoutingDnsEvent::from_keys("stale", &[4], [stale_ip]),
+            |_, _, _| panic!("a retired generation must not write the map"),
+        )
+        .unwrap();
+    let state = fence.state.lock().unwrap();
+    assert_eq!(state.active_generation, Some(2));
+    assert_eq!(state.tracker.entries(), new_owner.tracker().entries());
+}

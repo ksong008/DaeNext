@@ -146,6 +146,7 @@ use self::cache::{
 };
 pub(super) use self::domain_routing::{
     ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
+    ResidentDomainRoutingGenerationFence,
 };
 use self::domain_routing::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
@@ -387,6 +388,13 @@ impl ResidentDnsPlan {
         snapshot: &ResidentDnsReloadSnapshot,
     ) -> Result<ResidentDnsReloadRestoreReport, String> {
         ResidentDnsReloadRestoreReport::restore_into(self, snapshot)
+    }
+
+    pub(crate) fn activate_domain_routing_generation(&self) -> Result<(), String> {
+        match self.domain_routing.as_ref() {
+            Some(domain_routing) => domain_routing.activate_generation(),
+            None => Ok(()),
+        }
     }
 
     pub(super) async fn resolve_domain_has_ip_for_dial(

@@ -169,7 +169,7 @@ impl<'a> Iterator for DnsPacketAnswerIter<'a> {
         self.remaining -= 1;
 
         let name_offset = self.offset;
-        let name_end = match scan_name(self.packet, self.offset, 0) {
+        let name_end = match scan_name(self.packet, self.offset, 0, self.packet.len()) {
             Ok(offset) => offset,
             Err(err) => return Some(Err(err)),
         };
@@ -218,8 +218,11 @@ impl<'a> Iterator for DnsPacketAnswerIter<'a> {
                 }
             }
             (5, 1, _) => {
-                if let Err(err) = scan_name(self.packet, rdata_offset, 0) {
-                    return Some(Err(err));
+                // N-02: 名称编码消费必须落在本 RDATA 的 RDLENGTH 内；
+                // 压缩指针可解引用到 packet 其他位置，但消费边界受 rdata_end 约束。
+                match scan_name(self.packet, rdata_offset, 0, rdata_end) {
+                    Ok(consumed) if consumed <= rdata_end => {}
+                    Ok(_) | Err(_) => return Some(Err(DnsError::InvalidDnsName)),
                 }
                 DnsPacketAnswerView::Cname {
                     name,
@@ -286,7 +289,16 @@ impl<'a> Iterator for DnsPacketNameLabelIter<'a> {
     }
 }
 
-fn scan_name(packet: &[u8], mut offset: usize, depth: usize) -> Result<usize, DnsError> {
+/// N-02: 名称扫描。`scope_end` 是名称**编码消费**必须落在其内的上界
+/// （对 RDATA 中的名称 = rdata_end；对 question 名 = packet.len()）。
+/// 压缩指针的解引用目标可以位于 packet 其他位置，但指针/label 本身的
+/// 消费不得越过 scope_end。返回名称编码结束位置（含零标签/指针）。
+fn scan_name(
+    packet: &[u8],
+    mut offset: usize,
+    depth: usize,
+    scope_end: usize,
+) -> Result<usize, DnsError> {
     if depth > 16 {
         return Err(DnsError::CompressionLoop);
     }
@@ -299,20 +311,30 @@ fn scan_name(packet: &[u8], mut offset: usize, depth: usize) -> Result<usize, Dn
             if offset + 1 >= packet.len() {
                 return Err(DnsError::UnexpectedEof);
             }
+            let consumed = offset + 2;
+            if consumed > scope_end {
+                return Err(DnsError::InvalidDnsName);
+            }
             let ptr = (((len & 0x3f) as usize) << 8) | packet[offset + 1] as usize;
-            scan_name(packet, ptr, depth + 1)?;
-            return Ok(offset + 2);
+            scan_name(packet, ptr, depth + 1, packet.len())?;
+            return Ok(consumed);
         }
         if len & 0xc0 != 0 || len > 63 {
             return Err(DnsError::InvalidDnsName);
         }
         offset += 1;
         if len == 0 {
+            if offset > scope_end {
+                return Err(DnsError::InvalidDnsName);
+            }
             return Ok(offset);
         }
         offset += len as usize;
         if offset > packet.len() {
             return Err(DnsError::UnexpectedEof);
+        }
+        if offset > scope_end {
+            return Err(DnsError::InvalidDnsName);
         }
     }
 }
@@ -441,5 +463,43 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod n02_rdlength_tests {
+    use super::*;
+    use crate::message::packet_view::DnsPacketView;
+
+    /// N-02 回归：CNAME 的 RDATA 名称编码消费越过 RDLENGTH 时必须以
+    /// InvalidDnsName 拒绝，不得跨 RR 解析伪目标。
+    ///
+    /// 构造：question(qname=a.example, A) + answer RR：
+    ///   name=compression ptr(0xc00c), type=CNAME(5), class=IN,
+    ///   ttl=60, rdlen=1（只覆盖首字节 label 长度），rdata 实际为
+    ///   "b.example\0"（超界）。旧实现会越过 rdlen 消费后续字节。
+    #[test]
+    fn cname_name_consumption_beyond_rdlength_is_rejected() {
+        // header: id=0x1234 flags=0x8180 qd=1 an=1 ns=0 ar=0
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&[
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ]);
+        // question: a.example (1 label + 1 label + 0), qtype=1, qclass=1
+        packet.extend_from_slice(b"\x01a\x07example\x00");
+        packet.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        // answer: name ptr 0xc00c, type CNAME(5), class 1, ttl 60
+        packet.extend_from_slice(&[0xc0, 0x0c]);
+        packet.extend_from_slice(&[0x00, 0x05, 0x00, 0x01]);
+        packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x3c]);
+        // rdlen=1（仅覆盖 rdata 第一个 label 长度字节）
+        packet.extend_from_slice(&[0x00, 0x01]);
+        // rdata: label 'b' + "example" + 0 —— 消费越过 rdlen=1
+        packet.extend_from_slice(b"\x01b\x07example\x00");
+
+        let view = DnsPacketView::parse(&packet).expect("packet parses");
+        let answers: Result<Vec<_>, _> = view.answers().collect();
+        let err = answers.expect_err("over-running CNAME must be rejected");
+        assert!(matches!(err, DnsError::InvalidDnsName));
     }
 }

@@ -134,6 +134,7 @@ pub fn start_resident_dataplane_workers(
             );
         }
     };
+    let domain_routing_fence = Arc::new(dns::ResidentDomainRoutingGenerationFence::default());
     let built_generation =
         match build_resident_dataplane_generation(ResidentGenerationBuildContext {
             owner: &mut owner,
@@ -141,6 +142,7 @@ pub fn start_resident_dataplane_workers(
             prepared,
             routing_tuple_map_id,
             domain_routing_map_id,
+            domain_routing_fence: Arc::clone(&domain_routing_fence),
             latency_seed,
             dns_reload_snapshot,
         }) {
@@ -432,6 +434,7 @@ pub fn start_resident_dataplane_workers(
             workload_shutdown: None,
             routing_tuple_map_id,
             domain_routing_map_id,
+            domain_routing_fence,
         }),
     )
 }
