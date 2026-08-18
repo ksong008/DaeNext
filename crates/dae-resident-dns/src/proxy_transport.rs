@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use dae_resident_core::{ResidentDataplaneMetrics, ResidentOwnedTaskShutdownCompletion};
 use dae_resident_plan::ResidentProxyBinding;
 use dae_resident_transport::{
-    ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
+    ObservedQuicEndpoint, ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure,
+    ProxyDnsRequestStage, QuicEndpointOpenContext,
 };
 use tokio::net::TcpStream;
 use tokio::time::Instant;
@@ -53,6 +54,17 @@ impl Drop for ResidentDnsTransportOwnerObservation {
 }
 
 pub type ResidentDnsProxyFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+pub trait ResidentDnsQuicEndpointTransport: Send + Sync {
+    fn open_marked_endpoint(
+        &self,
+        mark: u32,
+        remote: SocketAddr,
+        context: QuicEndpointOpenContext,
+        deadline: dae_runtime_control::AbsoluteDeadline,
+        cancellation: &dae_runtime_control::OwnerCancellationSignal,
+    ) -> Result<ObservedQuicEndpoint, String>;
+}
 
 pub struct ResidentDnsProxyTcpOpenRequest {
     pub binding: ResidentProxyBinding,

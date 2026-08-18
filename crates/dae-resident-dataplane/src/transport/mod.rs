@@ -24,6 +24,22 @@ pub(crate) mod quic_endpoint {
         wait_quic_endpoints_idle_until,
     };
 
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(crate) struct ResidentDnsQuicEndpointPolicy;
+
+    impl dae_resident_dns::ResidentDnsQuicEndpointTransport for ResidentDnsQuicEndpointPolicy {
+        fn open_marked_endpoint(
+            &self,
+            mark: u32,
+            remote: std::net::SocketAddr,
+            context: QuicEndpointOpenContext,
+            deadline: dae_runtime_control::AbsoluteDeadline,
+            cancellation: &dae_runtime_control::OwnerCancellationSignal,
+        ) -> Result<ObservedQuicEndpoint, String> {
+            open_marked_quic_endpoint_for_remote(mark, remote, context, deadline, cancellation)
+        }
+    }
+
     fn selected_admission_budget() -> OwnerResourceBudget {
         #[cfg(test)]
         let budget = OwnerResourceBudget::new(

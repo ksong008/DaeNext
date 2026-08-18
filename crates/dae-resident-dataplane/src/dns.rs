@@ -36,6 +36,8 @@ use super::geodata::{
 #[cfg(test)]
 use super::host_routing_plan::build_resident_userspace_routing_matcher_with_geodata;
 #[cfg(test)]
+use super::open_marked_quic_endpoint_for_remote;
+#[cfg(test)]
 use super::plan::ResidentProxyPlan;
 #[cfg(test)]
 use super::plan::build_resident_dataplane_plan;
@@ -49,10 +51,11 @@ use super::{
     QuicEndpointOpenContext, QuicEndpointProtocol, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
     RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics, ResidentDnsResourceProfile,
     ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    apply_resident_udp_socket_buffer_tuning, open_marked_quic_endpoint_for_remote,
-    probe_resident_proxy_dns_udp_with_forwarder_async, resident_dns_proxy_tcp_transport,
-    resident_dns_proxy_udp_transport, scope_quic_endpoint_observation, set_socket_mark,
+    apply_resident_udp_socket_buffer_tuning, probe_resident_proxy_dns_udp_with_forwarder_async,
+    resident_dns_proxy_tcp_transport, resident_dns_proxy_udp_transport,
+    scope_quic_endpoint_observation, set_socket_mark,
 };
+use crate::transport::quic_endpoint::ResidentDnsQuicEndpointPolicy;
 
 /// One bounded DNS TLS stream type keeps framing, pooling, and HTTP/2 ownership
 /// identical across all DNS TLS transports. BoringSSL is selected at handshake
@@ -171,10 +174,10 @@ pub(super) use dae_resident_dns::{
 use dae_resident_dns::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
     ResidentDnsProxyTcpTransport, ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder,
-    ResidentDnsProxyUdpTransport, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
-    ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot, ResidentDnsTransportOwnerObservation,
-    build_reject_response, exchange_resident_proxy_dns_tcp_stream,
-    run_resident_proxy_dns_tcp_connection,
+    ResidentDnsProxyUdpTransport, ResidentDnsQuicEndpointTransport, ResidentDnsResponseCacheKey,
+    ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot,
+    ResidentDnsTransportOwnerObservation, build_reject_response,
+    exchange_resident_proxy_dns_tcp_stream, run_resident_proxy_dns_tcp_connection,
 };
 pub(crate) use dae_resident_transport::{
     DnsTcpFrameReader, ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure,
@@ -386,6 +389,7 @@ impl ResidentDnsPlan {
             udp_executor,
             proxy_tcp_transport,
             proxy_udp_transport,
+            Arc::new(ResidentDnsQuicEndpointPolicy),
         ));
         self
     }

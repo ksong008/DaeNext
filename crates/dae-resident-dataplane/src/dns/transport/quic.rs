@@ -141,7 +141,7 @@ async fn open_cached_dns_quic_connection(
             return Ok((connection.clone(), forwarder.upstream.clone()));
         }
     }
-    let (upstream, generation, mark, fixed_remote, session_cache) = {
+    let (upstream, generation, mark, fixed_remote, session_cache, quic_endpoint_transport) = {
         let forwarder = lock_dns_quic_forwarder(forwarder, context, "read endpoint plan").await?;
         (
             forwarder.upstream.clone(),
@@ -149,6 +149,7 @@ async fn open_cached_dns_quic_connection(
             forwarder.mark,
             forwarder.fixed_remote,
             forwarder.session_cache.clone(),
+            Arc::clone(&forwarder.quic_endpoint_transport),
         )
     };
     let mut failures = Vec::new();
@@ -182,6 +183,7 @@ async fn open_cached_dns_quic_connection(
                 ProxyDnsRequestStage::Connect,
                 ProxyDnsRequestFailure::Network,
                 connect_dns_quic_endpoint_async(
+                    quic_endpoint_transport.as_ref(),
                     &upstream,
                     remote,
                     mark,
@@ -432,6 +434,7 @@ impl DnsQuicEndpointConnectContract {
 }
 
 pub(super) async fn connect_dns_quic_endpoint_async(
+    quic_endpoint_transport: &dyn ResidentDnsQuicEndpointTransport,
     upstream: &ResidentDnsUpstream,
     remote: SocketAddr,
     mark: u32,
@@ -444,7 +447,7 @@ pub(super) async fn connect_dns_quic_endpoint_async(
     );
     let cancellation = dae_runtime_control::OwnerCancellationSignal::new();
     let client_config = resident_dns_quic_client_config(contract.alpn, session_cache)?;
-    let mut endpoint = open_marked_quic_endpoint_for_remote(
+    let mut endpoint = quic_endpoint_transport.open_marked_endpoint(
         mark,
         remote,
         contract.open_context,
