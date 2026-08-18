@@ -12,7 +12,7 @@ use http::{Response, StatusCode};
 use tokio::sync::{Barrier, Notify, oneshot};
 
 use crate::plan::build_resident_proxy_plan_for_node;
-use crate::tcp::quic_endpoint_metrics_snapshot;
+use crate::quic_endpoint_metrics_snapshot;
 
 const SERVER_NAME: &str = "localhost";
 const AUTH_HEADER: &str = "Hysteria-Auth";

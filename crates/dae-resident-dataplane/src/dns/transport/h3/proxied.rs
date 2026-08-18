@@ -21,7 +21,7 @@ use self::lifecycle::{
 #[cfg(test)]
 use self::resources::ProxiedDoh3Resources;
 #[cfg(test)]
-use crate::udp::ResidentProxyUdpBridgeShutdownCompletion;
+use crate::ResidentOwnedTaskShutdownCompletion;
 
 #[cfg(test)]
 mod tests;

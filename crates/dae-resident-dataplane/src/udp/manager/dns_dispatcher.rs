@@ -55,7 +55,7 @@ pub(super) struct ResidentDnsFastPathDispatcher {
 
 impl ResidentDnsFastPathDispatcher {
     pub(super) fn start(
-        dns: Arc<ResidentDnsPlan>,
+        dns: ResidentDnsDispatcher,
         udp_reply: UdpReplyHandle,
         metrics: Arc<ResidentDataplaneMetrics>,
         concurrency: usize,
@@ -148,7 +148,8 @@ impl ResidentDnsFastPathHandle {
 
     fn reject(&self, request: ResidentDnsFastPathRequest) {
         self.metrics.dns_fast_path_rejected();
-        let Ok(response) = build_dns_server_failure_response(&request.packet.payload) else {
+        let Ok(response) = ResidentDnsDispatcher::server_failure_response(&request.packet.payload)
+        else {
             return;
         };
         let _ = self.udp_reply.try_send_detached(
@@ -161,7 +162,7 @@ impl ResidentDnsFastPathHandle {
 }
 
 async fn run_resident_dns_fast_path_dispatcher(
-    dns: Arc<ResidentDnsPlan>,
+    dns: ResidentDnsDispatcher,
     udp_reply: UdpReplyHandle,
     metrics: Arc<ResidentDataplaneMetrics>,
     receiver: mpsc::Receiver<ResidentDnsFastPathRequest>,
@@ -170,7 +171,7 @@ async fn run_resident_dns_fast_path_dispatcher(
 ) -> usize {
     run_bounded_dns_futures(receiver, stop, concurrency, move |request| {
         run_resident_dns_fast_path_request(
-            Arc::clone(&dns),
+            dns.clone(),
             udp_reply.clone(),
             Arc::clone(&metrics),
             request,
@@ -219,7 +220,7 @@ where
 }
 
 async fn run_resident_dns_fast_path_request(
-    dns: Arc<ResidentDnsPlan>,
+    dns: ResidentDnsDispatcher,
     udp_reply: UdpReplyHandle,
     metrics: Arc<ResidentDataplaneMetrics>,
     request: ResidentDnsFastPathRequest,
@@ -228,14 +229,14 @@ async fn run_resident_dns_fast_path_request(
     let mut failed = false;
     let response = match time::timeout(
         RESIDENT_UDP_RESPONSE_TIMEOUT,
-        handle_resident_dns_udp_async(&dns, request.original_dst, &request.packet.payload),
+        dns.query_udp(request.original_dst, &request.packet.payload),
     )
     .await
     {
         Ok(Ok(response)) => response,
         Ok(Err(_)) | Err(_) => {
             failed = true;
-            match build_dns_server_failure_response(&request.packet.payload) {
+            match ResidentDnsDispatcher::server_failure_response(&request.packet.payload) {
                 Ok(response) => response,
                 Err(_) => {
                     active.finish(true);

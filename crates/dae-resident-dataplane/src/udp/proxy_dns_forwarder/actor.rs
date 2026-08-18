@@ -2,12 +2,12 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
 use super::*;
-use crate::dns::{
+use crate::{
     ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext, ProxyDnsRequestError,
     ProxyDnsRequestFailure, ProxyDnsRequestStage, ProxyDnsResponseBytes,
     ResidentDnsUdpActorCompletion, ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
+    ResidentUdpPayloadAdmission,
 };
-use crate::udp::ResidentUdpPayloadAdmission;
 
 mod executor_state;
 mod pending;

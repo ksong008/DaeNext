@@ -18,8 +18,6 @@ use dae_outbound::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use self::udp::ResidentUdpPayloadAdmission;
-
 pub(crate) const PRODUCTION_NETNS: &str = "daens";
 
 pub(crate) use self::adapter_matrix::{
@@ -42,6 +40,7 @@ mod adapter_matrix;
 mod allocator_hooks;
 mod client;
 mod control_transport_owners;
+mod core;
 mod direct;
 mod display;
 mod dns;
@@ -61,6 +60,7 @@ mod runtime_owner;
 mod stream_io;
 mod subscription_fetch;
 mod tcp;
+mod transport;
 mod udp;
 mod vision;
 #[cfg(test)]
@@ -70,7 +70,15 @@ pub(crate) use self::allocator_hooks::{
     ResidentAllocatorWorkerKind, resident_allocator_enter_busy, resident_allocator_request_reclaim,
     resident_allocator_runtime_hooks,
 };
+pub(crate) use self::core::{
+    ResidentOwnedTaskShutdownCompletion, ResidentUdpPayloadAdmission,
+    ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit, admit_udp_payload, set_socket_mark,
+};
 pub(crate) use self::dns::ResidentDnsReloadSnapshot;
+pub(crate) use self::dns::{
+    ResidentDnsDispatcher, ResidentDnsResolver, ResidentDnsUdpActorCompletion,
+    ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
+};
 #[cfg(test)]
 pub(crate) use self::geodata::GeodataResolver as ResidentGeodataStore;
 pub use self::memory_bench::{
@@ -87,6 +95,29 @@ pub(crate) use self::resolver::{
 pub(crate) use self::stream_io::{
     AsyncPrefixedStream, CursorBytes, HttpHeadRead, HttpHeadReadError, HttpHeadReadOptions,
     read_http_head,
+};
+pub(crate) use self::tcp::{
+    exchange_resident_proxy_dns_tcp_stream_async, open_marked_quic_endpoint_for_remote,
+    run_resident_proxy_dns_tcp_connection_async,
+};
+pub(crate) use self::transport::dns_request::{
+    ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
+    ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
+    ProxyDnsResponseBytes,
+};
+#[cfg(test)]
+pub(crate) use self::transport::dns_tcp_wire::read_dns_tcp_payload_async;
+pub(crate) use self::transport::dns_tcp_wire::{DnsTcpFrameReader, write_dns_tcp_payload_async};
+#[cfg(test)]
+pub(crate) use self::transport::quic_endpoint::quic_endpoint_metrics_snapshot;
+pub(crate) use self::transport::quic_endpoint::{
+    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
+    QuicEndpointOpenContext, QuicEndpointProtocol, inherit_quic_endpoint_observation,
+    scope_quic_endpoint_observation, wait_quic_endpoint_idle_after_close,
+};
+pub(crate) use self::udp::{
+    ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
+    probe_resident_proxy_dns_udp_with_forwarder_async,
 };
 
 #[path = "runtime/defaults.rs"]

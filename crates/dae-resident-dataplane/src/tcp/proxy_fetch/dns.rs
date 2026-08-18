@@ -1,6 +1,6 @@
 use super::*;
 use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-use crate::dns::{
+use crate::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
 

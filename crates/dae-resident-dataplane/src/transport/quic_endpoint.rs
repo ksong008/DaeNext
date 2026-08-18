@@ -25,12 +25,12 @@ pub(crate) use self::model::{
     scope_quic_endpoint_observation,
 };
 
-pub(super) use self::admission::QuicEndpointAdmissionContext;
+pub(crate) use self::admission::QuicEndpointAdmissionContext;
 use self::charge::QuicEndpointCharge;
 use self::metrics::QuicEndpointObservation;
 use self::runtime::{EndpointDriverReleaseHandle, EndpointDriverTrackingRuntime};
 use self::socket::ObservedQuicUdpSocket;
-use super::quic_helpers::set_socket_mark;
+use crate::set_socket_mark;
 
 pub(crate) struct ObservedQuicEndpoint {
     endpoint: quinn::Endpoint,
@@ -131,13 +131,22 @@ impl ObservedQuicEndpoint {
     }
 }
 
+pub(crate) async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
+    tokio::time::timeout(
+        crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+        endpoint.wait_idle(),
+    )
+    .await
+    .is_ok()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QuicEndpointOpenError {
     Admission(OwnerAdmissionRejection),
     Construction,
 }
 
-pub(super) fn open_observed_quic_endpoint(
+pub(crate) fn open_observed_quic_endpoint(
     mark: u32,
     runtime: Option<Arc<dyn quinn::Runtime>>,
     remote: SocketAddr,
@@ -166,7 +175,7 @@ pub(super) fn open_observed_quic_endpoint(
     )
 }
 
-pub(super) async fn open_observed_quic_endpoint_waiting(
+pub(crate) async fn open_observed_quic_endpoint_waiting(
     mark: u32,
     runtime: Option<Arc<dyn quinn::Runtime>>,
     remote: SocketAddr,

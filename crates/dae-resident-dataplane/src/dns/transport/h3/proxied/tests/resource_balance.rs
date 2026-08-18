@@ -4,7 +4,7 @@ use std::net::{SocketAddr, SocketAddrV4};
 
 use dae_runtime_control::OwnerGeneration;
 
-use crate::tcp::quic_endpoint_metrics_snapshot;
+use crate::quic_endpoint_metrics_snapshot;
 
 const REPEATED_RESOURCE_FAILURE_ATTEMPTS: u8 = 6;
 const PROXIED_DOH3_FAILURE_RESOURCE_TEST_GENERATION: u64 = 7_306;
@@ -47,7 +47,7 @@ impl ProxiedDoh3ExchangeTarget for ObservedEndpointFailure {
     async fn shutdown_bridge(
         &mut self,
         deadline: ProxiedDoh3CleanupDeadline,
-    ) -> Result<Option<ResidentProxyUdpBridgeShutdownCompletion>, String> {
+    ) -> Result<Option<ResidentOwnedTaskShutdownCompletion>, String> {
         self.resources.shutdown_bridge(deadline).await
     }
 

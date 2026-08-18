@@ -6,8 +6,10 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use crate::udp::{ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit};
-use crate::{ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig};
+use crate::{
+    ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig, ResidentUdpPayloadAdmission,
+    ResidentUdpPayloadPermit,
+};
 use dae_datapath::udp_io::{UdpSendMessage, try_sendmmsg};
 
 use super::super::*;

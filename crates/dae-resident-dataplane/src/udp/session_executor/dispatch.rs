@@ -3,13 +3,14 @@ use super::*;
 impl UdpSessionExecutor {
     pub(in crate::udp) async fn execute(
         &mut self,
-        dns: &ResidentDnsPlan,
+        dns: &ResidentDnsDispatcher,
         binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<(ResidentEventKind, UdpExchangeResult), String> {
         match self {
-            Self::Dns => handle_resident_dns_udp_async(dns, original_dst, payload)
+            Self::Dns => dns
+                .query_udp(original_dst, payload)
                 .await
                 .map(|response| resident_dns_udp_exchange_result(original_dst, response)),
             _ => {

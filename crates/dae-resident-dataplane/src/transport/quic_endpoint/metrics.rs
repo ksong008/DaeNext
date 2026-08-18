@@ -797,7 +797,7 @@ pub(crate) fn quic_endpoint_metrics_snapshot(generation: u64) -> Value {
 #[cfg(test)]
 mod registry_tests {
     use super::*;
-    use crate::tcp::proxy_dispatch::quic_endpoint::{
+    use crate::transport::quic_endpoint::{
         charge::QuicEndpointCharge, model::QuicEndpointOpenContext,
     };
 

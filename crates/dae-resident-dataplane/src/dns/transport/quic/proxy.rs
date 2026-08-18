@@ -1,5 +1,5 @@
 use super::*;
-use crate::udp::ResidentProxyUdpBridgeShutdownCompletion;
+use crate::ResidentOwnedTaskShutdownCompletion;
 use serde_json::{Value, json};
 
 pub(super) async fn forward_dns_quic_to_proxy_async(
@@ -461,7 +461,7 @@ async fn shutdown_proxy_dns_quic(
 #[derive(Debug)]
 struct ProxyDnsQuicCleanupOutcome {
     endpoint_idle: Option<bool>,
-    bridge: Option<ResidentProxyUdpBridgeShutdownCompletion>,
+    bridge: Option<ResidentOwnedTaskShutdownCompletion>,
     failures: Vec<String>,
 }
 
@@ -471,13 +471,13 @@ impl ProxyDnsQuicCleanupOutcome {
     }
 
     fn bridge_aborted(&self) -> bool {
-        self.bridge == Some(ResidentProxyUdpBridgeShutdownCompletion::Aborted)
+        self.bridge == Some(ResidentOwnedTaskShutdownCompletion::Aborted)
     }
 
     fn bridge_label(&self) -> &'static str {
         match self.bridge {
-            Some(ResidentProxyUdpBridgeShutdownCompletion::Joined) => "joined",
-            Some(ResidentProxyUdpBridgeShutdownCompletion::Aborted) => "aborted",
+            Some(ResidentOwnedTaskShutdownCompletion::Joined) => "joined",
+            Some(ResidentOwnedTaskShutdownCompletion::Aborted) => "aborted",
             None => "not-acquired",
         }
     }
@@ -605,7 +605,7 @@ mod tests {
         DnsQuicTestProtocol, DnsQuicTestServer, Socks5UdpRelay, dns_proxy_binding,
         dns_test_response, socks5_dns_proxy,
     };
-    use crate::tcp::quic_endpoint_metrics_snapshot;
+    use crate::quic_endpoint_metrics_snapshot;
 
     #[tokio::test]
     async fn expired_deadline_detaches_but_does_not_cancel_cleanup() {

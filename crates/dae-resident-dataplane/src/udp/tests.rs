@@ -121,7 +121,7 @@ pub(in crate::udp) mod tests {
         proxy.protocol = "http-proxy";
         let original_dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53));
         let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
-        let dns = ResidentDnsPlan::asis(proxy.mark);
+        let dns = ResidentDnsDispatcher::asis(proxy.mark);
         let binding = udp_test_binding(&proxy);
         let err = executor
             .execute(&dns, &binding, original_dst, &[0xde, 0xad])

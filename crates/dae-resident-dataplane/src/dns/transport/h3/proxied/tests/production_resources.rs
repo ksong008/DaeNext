@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use super::h3_server::H3TestServer;
 use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::plan::build_resident_proxy_plan_for_node;
-use crate::tcp::quic_endpoint_metrics_snapshot;
+use crate::quic_endpoint_metrics_snapshot;
 use crate::udp::{
     ResidentProxyUdpBridgeTestObservation,
     open_resident_proxy_udp_bridge_with_test_observation_async,
@@ -94,7 +94,7 @@ impl ProxiedDoh3ExchangeTarget for ProductionResourceTarget {
     async fn shutdown_bridge(
         &mut self,
         deadline: ProxiedDoh3CleanupDeadline,
-    ) -> Result<Option<ResidentProxyUdpBridgeShutdownCompletion>, String> {
+    ) -> Result<Option<ResidentOwnedTaskShutdownCompletion>, String> {
         self.resources.shutdown_bridge(deadline).await
     }
 
@@ -264,7 +264,7 @@ async fn production_resource_graph_closes_endpoint_h3_driver_and_stalled_bridge(
     assert!(cleanup.driver.is_some());
     assert_eq!(
         cleanup.bridge,
-        Some(ResidentProxyUdpBridgeShutdownCompletion::Aborted)
+        Some(ResidentOwnedTaskShutdownCompletion::Aborted)
     );
     assert_generation_resources_closed(&quic_endpoint_metrics_snapshot(generation.get()));
     assert_eq!(driver_observation.live(), 0);

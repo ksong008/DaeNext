@@ -2,8 +2,8 @@ use super::*;
 
 #[cfg(test)]
 use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+use crate::ResidentOwnedTaskShutdownCompletion;
 use crate::metrics::ProxiedDoh3CleanupMetricObservation;
-use crate::udp::ResidentProxyUdpBridgeShutdownCompletion;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
@@ -60,7 +60,7 @@ pub(in super::super) struct ProxiedDoh3CleanupOutcome {
     pub(in super::super) connection_closed: bool,
     pub(in super::super) endpoint: Option<ProxiedDoh3EndpointCompletion>,
     pub(in super::super) driver: Option<ProxiedDoh3DriverCompletion>,
-    pub(in super::super) bridge: Option<ResidentProxyUdpBridgeShutdownCompletion>,
+    pub(in super::super) bridge: Option<ResidentOwnedTaskShutdownCompletion>,
     pub(in super::super) failures: Vec<String>,
 }
 
@@ -68,7 +68,7 @@ impl ProxiedDoh3CleanupOutcome {
     pub(in super::super) fn has_forced_completion(&self) -> bool {
         self.endpoint == Some(ProxiedDoh3EndpointCompletion::ForcedDrop)
             || self.driver == Some(ProxiedDoh3DriverCompletion::Aborted)
-            || self.bridge == Some(ResidentProxyUdpBridgeShutdownCompletion::Aborted)
+            || self.bridge == Some(ResidentOwnedTaskShutdownCompletion::Aborted)
     }
 
     pub(in super::super) fn endpoint_forced_drop(&self) -> bool {
@@ -80,7 +80,7 @@ impl ProxiedDoh3CleanupOutcome {
     }
 
     pub(in super::super) fn bridge_aborted(&self) -> bool {
-        self.bridge == Some(ResidentProxyUdpBridgeShutdownCompletion::Aborted)
+        self.bridge == Some(ResidentOwnedTaskShutdownCompletion::Aborted)
     }
 
     pub(in super::super) fn failed(&self) -> bool {

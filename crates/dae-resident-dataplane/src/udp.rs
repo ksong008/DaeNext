@@ -14,6 +14,7 @@ use super::{
 };
 #[cfg(not(test))]
 use super::{ResidentAllocatorReclaimReason, resident_allocator_request_reclaim};
+pub(crate) use super::{ResidentOwnedTaskShutdownCompletion, admit_udp_payload, set_socket_mark};
 
 use bytes::Bytes;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
@@ -58,12 +59,10 @@ use tokio::time;
 
 #[cfg(test)]
 use super::RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX;
+use super::ResidentDnsDispatcher;
 use super::client::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name,
     open_async_resident_tls_client_with_binding, open_proxy_tcp_stream_with_binding,
-};
-use super::dns::{
-    ResidentDnsPlan, build_dns_server_failure_response, handle_resident_dns_udp_async,
 };
 use super::events::{
     ResidentEventKind, ResidentEventMetadata, admit_event, append_admitted_event, append_event,
@@ -90,10 +89,9 @@ use super::tcp::{
     inherit_quic_endpoint_observation, open_grpc_h2_stream, open_h2_body_stream,
     open_vmess_http_header_stream, open_xhttp_packet_up_parts, open_xhttp_stream_parts,
     poll_xhttp_download_data, read_xhttp_download_data, send_grpc_data, send_grpc_hunk,
-    send_h2_data_with_context, send_xhttp_stream_data, set_socket_mark,
-    spawn_grpc_h2_payload_stream, spawn_websocket_payload_stream,
-    spawn_xhttp_packet_up_payload_stream, spawn_xhttp_stream_payload_stream,
-    websocket_handshake_over_resident_tls_async,
+    send_h2_data_with_context, send_xhttp_stream_data, spawn_grpc_h2_payload_stream,
+    spawn_websocket_payload_stream, spawn_xhttp_packet_up_payload_stream,
+    spawn_xhttp_stream_payload_stream, websocket_handshake_over_resident_tls_async,
     write_websocket_binary_frame_over_resident_tls_async,
 };
 use super::vision::{VisionUnpadder, vision_padding_block};
@@ -112,13 +110,8 @@ use dae_datapath::udp_io::{
     UdpBatchReceiver, UdpOriginalDstPacket, UdpPayloadPool, UdpSendMessage, try_sendmmsg,
 };
 
-mod admission;
 mod worker;
 pub(super) use self::worker::*;
-pub(crate) use admission::{
-    ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
-    admit_udp_payload,
-};
 mod task_shutdown;
 use self::task_shutdown::*;
 mod session_key;

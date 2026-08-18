@@ -4,6 +4,12 @@ use super::charge::QuicEndpointCharge;
 use super::metrics::quic_endpoint_metrics_snapshot;
 use super::*;
 
+fn isolated_test_generation() -> OwnerGeneration {
+    static NEXT_GENERATION: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(1_000_000);
+    OwnerGeneration::new(NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
 mod source_gate;
 
 fn open_test_quic_endpoint(
@@ -291,7 +297,7 @@ async fn endpoint_driver_fd_charge_and_states_balance_after_drop() {
 
 #[tokio::test]
 async fn implicit_endpoint_drop_records_handle_and_driver_completion() {
-    let generation = OwnerGeneration::new(8_206);
+    let generation = isolated_test_generation();
     let endpoint = open_test_quic_endpoint(
         0,
         quinn::default_runtime(),
@@ -323,8 +329,8 @@ async fn implicit_endpoint_drop_records_handle_and_driver_completion() {
 
 #[tokio::test]
 async fn runtime_snapshot_keeps_unassigned_and_other_live_generations_visible() {
-    let current_generation = OwnerGeneration::new(8_201);
-    let retiring_generation = OwnerGeneration::new(8_202);
+    let current_generation = isolated_test_generation();
+    let retiring_generation = isolated_test_generation();
     let current = open_test_quic_endpoint(
         0,
         quinn::default_runtime(),
@@ -400,7 +406,7 @@ async fn runtime_snapshot_keeps_unassigned_and_other_live_generations_visible() 
 async fn bind_failure_creates_no_endpoint_driver_fd_or_charge_record() {
     let occupied = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let bind = occupied.local_addr().unwrap();
-    let generation = OwnerGeneration::new(8_203);
+    let generation = isolated_test_generation();
     let result = open_test_quic_endpoint(
         0,
         quinn::default_runtime(),
@@ -425,7 +431,7 @@ async fn bind_failure_creates_no_endpoint_driver_fd_or_charge_record() {
 
 #[tokio::test]
 async fn abstract_socket_constructor_failure_records_failure_without_leaking_resources() {
-    let generation = OwnerGeneration::new(8_205);
+    let generation = isolated_test_generation();
     let result = open_test_quic_endpoint(
         0,
         Some(std::sync::Arc::new(LocalAddressFailureRuntime)),

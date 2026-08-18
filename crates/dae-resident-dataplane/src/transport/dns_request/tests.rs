@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::ResidentDataplaneMetrics;
-use crate::udp::ResidentUdpPayloadAdmission;
+use crate::ResidentUdpPayloadAdmission;
 
 #[tokio::test]
 async fn request_context_keeps_one_absolute_deadline_across_stages() {

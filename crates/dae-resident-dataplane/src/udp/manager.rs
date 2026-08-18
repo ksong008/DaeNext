@@ -82,7 +82,7 @@ const UDP_GENERATION_PIN_MAX_ENTRIES: usize = 4096;
 #[derive(Clone)]
 pub(crate) struct ResidentUdpGenerationPlan {
     router: Arc<ResidentUdpRouter>,
-    dns: Arc<ResidentDnsPlan>,
+    dns: ResidentDnsDispatcher,
     runtime_config: ResidentUdpRuntimeConfig,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
@@ -99,7 +99,7 @@ impl ResidentUdpGenerationPlan {
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         so_mark_from_dae: u32,
-        dns: Arc<ResidentDnsPlan>,
+        dns: ResidentDnsDispatcher,
         runtime_config: ResidentUdpRuntimeConfig,
         health_resuscitation: ResidentHealthResuscitationHandle,
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
@@ -181,7 +181,7 @@ impl ResidentUdpGenerationRuntime {
         );
         let udp_reply = reply_dispatcher.handle();
         let dns_runtime = ResidentUdpDnsRuntime::start(
-            Arc::clone(&plan.dns),
+            plan.dns.clone(),
             udp_reply.clone(),
             Arc::clone(&generation.metrics),
             config.dns_fast_path_concurrency,
