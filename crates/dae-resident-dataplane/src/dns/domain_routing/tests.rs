@@ -1,5 +1,16 @@
 use super::*;
 
+fn generation(logical: u64) -> GenerationToken {
+    generation_for(9, logical)
+}
+
+fn generation_for(physical: u64, logical: u64) -> GenerationToken {
+    GenerationToken::new(
+        PhysicalRuntimeId::new(physical),
+        LogicalGenerationId::new(logical),
+    )
+}
+
 fn matching_domain_routing() -> ResidentDnsDomainRouting {
     let matcher = RoutingMatcher::from_fixture_value(&serde_json::json!({
         "domain_sets": [
@@ -112,7 +123,7 @@ fn published_generation_fences_late_writes_from_retired_generation() {
 
     fence
         .apply_event_with(
-            1,
+            generation(1),
             7,
             &mut old_owner,
             DomainRoutingDnsEvent::from_keys("old", &[1], [old_ip]),
@@ -121,7 +132,7 @@ fn published_generation_fences_late_writes_from_retired_generation() {
         .unwrap();
     let mut activation_updates = Vec::new();
     fence
-        .activate_with(1, 7, &old_owner, |_, updates, deletes| {
+        .activate_with(generation(1), 7, &old_owner, |_, updates, deletes| {
             activation_updates.extend_from_slice(updates);
             assert!(deletes.is_empty());
             Ok(())
@@ -131,7 +142,7 @@ fn published_generation_fences_late_writes_from_retired_generation() {
 
     fence
         .apply_event_with(
-            2,
+            generation(2),
             7,
             &mut new_owner,
             DomainRoutingDnsEvent::from_keys("new", &[2], [new_ip]),
@@ -141,7 +152,7 @@ fn published_generation_fences_late_writes_from_retired_generation() {
     let mut transition_updates = Vec::new();
     let mut transition_deletes = Vec::new();
     fence
-        .activate_with(2, 7, &new_owner, |_, updates, deletes| {
+        .activate_with(generation(2), 7, &new_owner, |_, updates, deletes| {
             transition_updates.extend_from_slice(updates);
             transition_deletes.extend_from_slice(deletes);
             Ok(())
@@ -153,7 +164,7 @@ fn published_generation_fences_late_writes_from_retired_generation() {
 
     fence
         .apply_event_with(
-            1,
+            generation(1),
             7,
             &mut old_owner,
             DomainRoutingDnsEvent::from_keys("stale", &[4], [stale_ip]),
@@ -161,6 +172,117 @@ fn published_generation_fences_late_writes_from_retired_generation() {
         )
         .unwrap();
     let state = fence.state.lock().unwrap();
-    assert_eq!(state.active_generation, Some(2));
+    assert_eq!(state.active_generation, Some(generation(2)));
     assert_eq!(state.tracker.entries(), new_owner.tracker().entries());
+}
+
+#[test]
+fn activation_serializes_with_an_in_flight_old_generation_write() {
+    let fence = Arc::new(ResidentDomainRoutingGenerationFence::default());
+    let old_ip = ip_to_key("192.0.2.40".parse().unwrap());
+    let in_flight_ip = ip_to_key("192.0.2.41".parse().unwrap());
+    let candidate_ip = ip_to_key("192.0.2.42".parse().unwrap());
+    let stale_ip = ip_to_key("192.0.2.43".parse().unwrap());
+    let mut old_owner = DomainRoutingOwner::default();
+    old_owner
+        .apply_dns_event_with(
+            7,
+            DomainRoutingDnsEvent::from_keys("old", &[1], [old_ip]),
+            apply_resident_domain_routing_event_in_memory,
+        )
+        .unwrap();
+    fence
+        .activate_with(generation(1), 7, &old_owner, |_, _, _| Ok(()))
+        .unwrap();
+
+    let mut candidate_owner = DomainRoutingOwner::default();
+    candidate_owner
+        .apply_dns_event_with(
+            7,
+            DomainRoutingDnsEvent::from_keys("candidate", &[2], [candidate_ip]),
+            apply_resident_domain_routing_event_in_memory,
+        )
+        .unwrap();
+
+    let entered_apply = Arc::new(std::sync::Barrier::new(2));
+    let release_apply = Arc::new(std::sync::Barrier::new(2));
+    let writer_fence = Arc::clone(&fence);
+    let writer_entered = Arc::clone(&entered_apply);
+    let writer_release = Arc::clone(&release_apply);
+    let writer = std::thread::spawn(move || {
+        writer_fence
+            .apply_event_with(
+                generation(1),
+                7,
+                &mut old_owner,
+                DomainRoutingDnsEvent::from_keys("in-flight", &[4], [in_flight_ip]),
+                |_, _, _| {
+                    writer_entered.wait();
+                    writer_release.wait();
+                    Ok(())
+                },
+            )
+            .unwrap();
+        old_owner
+    });
+
+    entered_apply.wait();
+    let (activation_started_tx, activation_started_rx) = std::sync::mpsc::channel();
+    let (activation_done_tx, activation_done_rx) = std::sync::mpsc::channel();
+    let activation_fence = Arc::clone(&fence);
+    let activation = std::thread::spawn(move || {
+        activation_started_tx.send(()).unwrap();
+        activation_fence
+            .activate_with(generation(2), 7, &candidate_owner, |_, _, _| Ok(()))
+            .unwrap();
+        activation_done_tx.send(()).unwrap();
+        candidate_owner
+    });
+    activation_started_rx.recv().unwrap();
+    assert!(matches!(
+        activation_done_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+
+    release_apply.wait();
+    let mut old_owner = writer.join().unwrap();
+    let candidate_owner = activation.join().unwrap();
+    activation_done_rx.recv().unwrap();
+
+    fence
+        .apply_event_with(
+            generation(1),
+            7,
+            &mut old_owner,
+            DomainRoutingDnsEvent::from_keys("stale", &[8], [stale_ip]),
+            |_, _, _| panic!("a retired generation must not write after activation"),
+        )
+        .unwrap();
+    let state = fence.state.lock().unwrap();
+    assert_eq!(state.active_generation, Some(generation(2)));
+    assert_eq!(state.tracker.entries(), candidate_owner.tracker().entries());
+}
+
+#[test]
+fn same_logical_id_from_another_physical_runtime_cannot_write() {
+    let fence = ResidentDomainRoutingGenerationFence::default();
+    let mut active_owner = DomainRoutingOwner::default();
+    fence
+        .activate_with(generation_for(9, 1), 7, &active_owner, |_, _, _| Ok(()))
+        .unwrap();
+
+    let foreign_ip = ip_to_key("192.0.2.50".parse().unwrap());
+    fence
+        .apply_event_with(
+            generation_for(10, 1),
+            7,
+            &mut active_owner,
+            DomainRoutingDnsEvent::from_keys("foreign", &[1], [foreign_ip]),
+            |_, _, _| panic!("another physical runtime must not write the active map"),
+        )
+        .unwrap();
+
+    let state = fence.state.lock().unwrap();
+    assert_eq!(state.active_generation, Some(generation_for(9, 1)));
+    assert!(state.tracker.entries().is_empty());
 }

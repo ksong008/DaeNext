@@ -103,6 +103,11 @@ use self::generation::{
     ActiveGenerationSlot, ResidentDataplaneGenerationLifetime, ResidentGenerationDrainControl,
     next_resident_dataplane_generation_id,
 };
+#[path = "runtime/generation_identity.rs"]
+mod generation_identity;
+pub(crate) use self::generation_identity::{
+    GenerationToken, LogicalGenerationId, PhysicalRuntimeId, PublicationEpoch,
+};
 #[path = "runtime/generation_lifecycle.rs"]
 mod generation_lifecycle;
 use self::generation_lifecycle::*;

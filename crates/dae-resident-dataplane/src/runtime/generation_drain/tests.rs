@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 #[derive(Debug)]
 struct TestDrainControl {
-    id: u64,
+    id: LogicalGenerationId,
     lifecycle: ResidentGenerationLifecycle,
     stop_requests: Arc<AtomicUsize>,
     flow_stop: AtomicBool,
@@ -11,7 +11,7 @@ struct TestDrainControl {
 }
 
 impl ResidentDrainControl for TestDrainControl {
-    fn id(&self) -> u64 {
+    fn id(&self) -> LogicalGenerationId {
         self.id
     }
 
@@ -47,6 +47,7 @@ impl ResidentDrainControl for TestDrainControl {
         self.retire_workloads();
         self.flow_stop.store(true, Ordering::Release);
         self.udp_stop.store(true, Ordering::Release);
+        self.lifecycle.stop();
     }
 }
 
@@ -66,11 +67,13 @@ struct TestGeneration {
 impl TestGeneration {
     fn new(id: u64) -> (Arc<Self>, Arc<AtomicUsize>) {
         let stop_requests = Arc::new(AtomicUsize::new(0));
+        let lifecycle = ResidentGenerationLifecycle::default();
+        lifecycle.activate().unwrap();
         (
             Arc::new(Self {
                 control: Arc::new(TestDrainControl {
-                    id,
-                    lifecycle: ResidentGenerationLifecycle::default(),
+                    id: LogicalGenerationId::new(id),
+                    lifecycle,
                     stop_requests: Arc::clone(&stop_requests),
                     flow_stop: AtomicBool::new(false),
                     udp_stop: AtomicBool::new(false),

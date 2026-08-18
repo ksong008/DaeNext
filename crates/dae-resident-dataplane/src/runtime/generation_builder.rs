@@ -51,6 +51,7 @@ pub(super) fn build_resident_dataplane_generation(
             .unwrap_or_else(|| "resident dataplane generation is disabled".to_owned()));
     }
     let reload_generation = owner.physical_generation();
+    let physical_runtime_id = PhysicalRuntimeId::new(reload_generation);
     let mut resource_config = ResidentRuntimeResourceConfig::from_config(&config);
     let process_resources = owner.resource_config();
     resource_config.tcp_flow_stack_bytes = process_resources.tcp_flow_stack_bytes.clone();
@@ -132,10 +133,11 @@ pub(super) fn build_resident_dataplane_generation(
         resident_health_resuscitation_channel(Arc::clone(&metrics));
     let udp_proxy_groups = Arc::clone(&proxy_groups);
     let generation_id = next_resident_dataplane_generation_id();
+    let generation_token = GenerationToken::new(physical_runtime_id, generation_id);
     let dns_domain_routing = domain_routing_map_id.map(|map_id| {
         Arc::new(dns::ResidentDnsDomainRouting::new_for_generation(
             map_id,
-            generation_id,
+            generation_token,
             routing_matcher.clone(),
             Arc::clone(&domain_routing_fence),
         ))
@@ -239,7 +241,7 @@ pub(super) fn build_resident_dataplane_generation(
     let generation = Arc::new(ResidentDataplaneGeneration {
         _lifetime: ResidentDataplaneGenerationLifetime::register(),
         id: generation_id,
-        reload_generation,
+        reload_generation: physical_runtime_id,
         tcp_router,
         tcp_admission: tcp::ResidentTcpAdmission::new(
             tcp_runtime_config.connection_limit(),
@@ -292,8 +294,6 @@ pub(super) fn build_resident_dataplane_generation(
     } else {
         drop(health_resuscitation_rx);
     }
-
-    dns.activate_domain_routing_generation()?;
 
     Ok(BuiltResidentDataplaneGeneration {
         generation,

@@ -6,8 +6,8 @@ static RESIDENT_DATAPLANE_GENERATIONS_LIVE: AtomicU64 = AtomicU64::new(0);
 static RESIDENT_DATAPLANE_GENERATIONS_CREATED: AtomicU64 = AtomicU64::new(0);
 static RESIDENT_DATAPLANE_GENERATIONS_DROPPED: AtomicU64 = AtomicU64::new(0);
 
-pub(super) fn next_resident_dataplane_generation_id() -> u64 {
-    RESIDENT_DATAPLANE_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+pub(super) fn next_resident_dataplane_generation_id() -> LogicalGenerationId {
+    LogicalGenerationId::new(RESIDENT_DATAPLANE_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed))
 }
 
 pub fn resident_dataplane_generation_lifetime_counts() -> (u64, u64, u64) {
@@ -44,7 +44,7 @@ impl Drop for ResidentDataplaneGenerationLifetime {
 struct ActiveGenerationSlotInner<T> {
     generation: RwLock<Option<Arc<T>>>,
     publication: AtomicU64,
-    publication_signal: tokio::sync::watch::Sender<u64>,
+    publication_signal: tokio::sync::watch::Sender<PublicationEpoch>,
 }
 
 #[derive(Debug)]
@@ -53,7 +53,7 @@ pub(crate) struct ActiveGenerationSlot<T> {
 }
 
 pub(crate) struct ResidentGenerationDrainControl {
-    id: u64,
+    id: LogicalGenerationId,
     lifecycle: ResidentGenerationLifecycle,
     workload_stop: SharedResidentStopSignal,
     flow_stop: SharedResidentStopSignal,
@@ -80,7 +80,10 @@ impl std::fmt::Debug for ResidentGenerationDrainControl {
 }
 
 impl ResidentGenerationDrainControl {
-    pub(super) fn new(id: u64, workload_stop: SharedResidentStopSignal) -> Arc<Self> {
+    pub(super) fn new(
+        id: LogicalGenerationId,
+        workload_stop: SharedResidentStopSignal,
+    ) -> Arc<Self> {
         Arc::new(Self {
             id,
             lifecycle: ResidentGenerationLifecycle::default(),
@@ -92,8 +95,12 @@ impl ResidentGenerationDrainControl {
         })
     }
 
-    pub(super) fn id(&self) -> u64 {
+    pub(super) fn id(&self) -> LogicalGenerationId {
         self.id
+    }
+
+    pub(super) fn activate(&self) -> Result<(), String> {
+        self.lifecycle.activate().map_err(str::to_owned)
     }
 
     pub(super) fn admission_is_open(&self) -> bool {
@@ -133,6 +140,7 @@ impl ResidentGenerationDrainControl {
         self.retire_workloads();
         self.flow_stop.store(true, Ordering::Release);
         self.udp_stop.store(true, Ordering::Release);
+        self.lifecycle.stop();
     }
 
     pub(super) fn register_udp_runtime(&self) {
@@ -168,11 +176,11 @@ impl<T> Clone for ActiveGenerationSlot<T> {
 
 impl<T> ActiveGenerationSlot<T> {
     pub(crate) fn new(generation: Arc<T>) -> Self {
-        let (publication_signal, _) = tokio::sync::watch::channel(1);
+        let (publication_signal, _) = tokio::sync::watch::channel(PublicationEpoch::INITIAL);
         Self {
             inner: Arc::new(ActiveGenerationSlotInner {
                 generation: RwLock::new(Some(generation)),
-                publication: AtomicU64::new(1),
+                publication: AtomicU64::new(PublicationEpoch::INITIAL.get()),
                 publication_signal,
             }),
         }
@@ -188,7 +196,7 @@ impl<T> ActiveGenerationSlot<T> {
             .expect("resident active generation slot was cleared during terminal shutdown")
     }
 
-    pub(crate) fn load_versioned(&self) -> (u64, Arc<T>) {
+    pub(crate) fn load_versioned(&self) -> (PublicationEpoch, Arc<T>) {
         let active = self
             .inner
             .generation
@@ -198,11 +206,11 @@ impl<T> ActiveGenerationSlot<T> {
             .as_ref()
             .map(Arc::clone)
             .expect("resident active generation slot was cleared during terminal shutdown");
-        let publication = self.inner.publication.load(Ordering::Acquire);
+        let publication = PublicationEpoch::new(self.inner.publication.load(Ordering::Acquire));
         (publication, generation)
     }
 
-    pub(crate) fn subscribe_publication(&self) -> tokio::sync::watch::Receiver<u64> {
+    pub(crate) fn subscribe_publication(&self) -> tokio::sync::watch::Receiver<PublicationEpoch> {
         self.inner.publication_signal.subscribe()
     }
 
@@ -216,11 +224,9 @@ impl<T> ActiveGenerationSlot<T> {
             let previous = active
                 .replace(generation)
                 .expect("resident active generation slot was cleared before publication");
-            let publication = self
-                .inner
-                .publication
-                .fetch_add(1, Ordering::Release)
-                .wrapping_add(1);
+            let publication =
+                PublicationEpoch::new(self.inner.publication.fetch_add(1, Ordering::Release))
+                    .next();
             self.inner.publication_signal.send_replace(publication);
             previous
         }
@@ -236,8 +242,8 @@ impl<T> ActiveGenerationSlot<T> {
 }
 
 pub struct ResidentDataplaneGeneration {
-    pub(crate) id: u64,
-    pub(crate) reload_generation: u64,
+    pub(crate) id: LogicalGenerationId,
+    pub(crate) reload_generation: PhysicalRuntimeId,
     pub(crate) tcp_router: Arc<ResidentTcpRouter>,
     pub(crate) tcp_admission: tcp::ResidentTcpAdmission,
     pub(crate) tcp_runtime_config: ResidentTcpRuntimeConfig,
@@ -267,6 +273,14 @@ impl std::fmt::Debug for ResidentDataplaneGeneration {
 }
 
 impl ResidentDataplaneGeneration {
+    pub(crate) const fn token(&self) -> GenerationToken {
+        GenerationToken::new(self.reload_generation, self.id)
+    }
+
+    pub(super) fn activate(&self) -> Result<(), String> {
+        self.drain_control.activate()
+    }
+
     pub(super) fn admission_is_open(&self) -> bool {
         self.drain_control.admission_is_open()
     }
@@ -310,7 +324,7 @@ mod tests {
         let first = Arc::new(String::from("first"));
         let slot = ActiveGenerationSlot::new(Arc::clone(&first));
         let mut publication = slot.subscribe_publication();
-        assert_eq!(*publication.borrow_and_update(), 1);
+        assert_eq!(*publication.borrow_and_update(), PublicationEpoch::INITIAL);
 
         let previous = slot.publish(Arc::new(String::from("second")));
 
@@ -318,7 +332,7 @@ mod tests {
             .await
             .expect("generation publication must wake waiters")
             .expect("active generation slot must retain its publication sender");
-        assert_eq!(*publication.borrow_and_update(), 2);
+        assert_eq!(*publication.borrow_and_update(), PublicationEpoch::new(2));
         assert!(Arc::ptr_eq(&previous, &first));
     }
 
@@ -337,7 +351,10 @@ mod tests {
 
     #[tokio::test]
     async fn generation_force_stop_wakes_flow_waiters() {
-        let control = ResidentGenerationDrainControl::new(1, ResidentStopSignal::shared());
+        let control = ResidentGenerationDrainControl::new(
+            LogicalGenerationId::new(1),
+            ResidentStopSignal::shared(),
+        );
         let mut flow_stop = control.flow_stop_handle().listener();
 
         control.request_force_stop();
@@ -347,5 +364,17 @@ mod tests {
             .expect("generation stop must wake active flows");
         assert!(control.flow_stop_is_requested());
         assert!(control.udp_stop_is_requested());
+    }
+
+    #[test]
+    fn active_generation_slot_publication_wrap_is_change_only() {
+        let slot = ActiveGenerationSlot::new(Arc::new(String::from("first")));
+        slot.inner.publication.store(u64::MAX, Ordering::Release);
+
+        slot.publish(Arc::new(String::from("second")));
+
+        let (publication, active) = slot.load_versioned();
+        assert_eq!(publication, PublicationEpoch::new(0));
+        assert_eq!(active.as_str(), "second");
     }
 }

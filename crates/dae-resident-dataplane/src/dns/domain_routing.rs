@@ -10,6 +10,10 @@ use dae_runtime_control::{
     apply_domain_routing_state_entries_by_id, ip_to_key,
 };
 
+use crate::GenerationToken;
+#[cfg(test)]
+use crate::{LogicalGenerationId, PhysicalRuntimeId};
+
 use super::unix_now;
 
 mod maintenance;
@@ -30,7 +34,7 @@ type ResidentDomainRoutingMapApply =
 #[derive(Debug)]
 pub(crate) struct ResidentDnsDomainRouting {
     map_id: u32,
-    generation: u64,
+    generation: GenerationToken,
     fence: Arc<ResidentDomainRoutingGenerationFence>,
     routing_matcher: RoutingMatcher,
     state: Mutex<ResidentDnsDomainRoutingState>,
@@ -46,7 +50,7 @@ pub(crate) struct ResidentDomainRoutingGenerationFence {
 
 #[derive(Debug, Default)]
 struct ResidentDomainRoutingGenerationFenceState {
-    active_generation: Option<u64>,
+    active_generation: Option<GenerationToken>,
     map_id: Option<u32>,
     tracker: DomainRoutingTracker,
 }
@@ -70,17 +74,25 @@ impl ResidentDnsDomainRouting {
     pub(crate) fn new(map_id: u32, routing_matcher: RoutingMatcher) -> Self {
         let fence = Arc::new(ResidentDomainRoutingGenerationFence {
             state: Mutex::new(ResidentDomainRoutingGenerationFenceState {
-                active_generation: Some(0),
+                active_generation: Some(GenerationToken::new(
+                    PhysicalRuntimeId::new(0),
+                    LogicalGenerationId::new(0),
+                )),
                 map_id: Some(map_id),
                 tracker: DomainRoutingTracker::default(),
             }),
         });
-        Self::new_for_generation(map_id, 0, routing_matcher, fence)
+        Self::new_for_generation(
+            map_id,
+            GenerationToken::new(PhysicalRuntimeId::new(0), LogicalGenerationId::new(0)),
+            routing_matcher,
+            fence,
+        )
     }
 
     pub(crate) fn new_for_generation(
         map_id: u32,
-        generation: u64,
+        generation: GenerationToken,
         routing_matcher: RoutingMatcher,
         fence: Arc<ResidentDomainRoutingGenerationFence>,
     ) -> Self {
@@ -286,7 +298,7 @@ impl ResidentDnsDomainRouting {
 impl ResidentDomainRoutingGenerationFence {
     fn apply_event_with(
         &self,
-        generation: u64,
+        generation: GenerationToken,
         map_id: u32,
         owner: &mut DomainRoutingOwner,
         event: DomainRoutingDnsEvent<'_>,
@@ -312,7 +324,7 @@ impl ResidentDomainRoutingGenerationFence {
 
     fn apply_events_with<'event>(
         &self,
-        generation: u64,
+        generation: GenerationToken,
         map_id: u32,
         owner: &mut DomainRoutingOwner,
         events: impl IntoIterator<Item = DomainRoutingDnsEvent<'event>>,
@@ -335,7 +347,7 @@ impl ResidentDomainRoutingGenerationFence {
 
     fn activate_with(
         &self,
-        generation: u64,
+        generation: GenerationToken,
         map_id: u32,
         owner: &DomainRoutingOwner,
         apply: impl FnOnce(
