@@ -240,7 +240,12 @@ fn parse_cidr(data: &[u8]) -> Result<String, GeoDataError> {
         let tag = read_varint(&mut input)?;
         match (tag >> 3, tag & 0x07) {
             (1, 2) => ip = read_length_delimited(&mut input)?.to_vec(),
-            (2, 0) => prefix = read_varint(&mut input)? as u32,
+            (2, 0) => {
+                // F-26: varint 经 u32::try_from 收紧，且按地址族校验 prefix 上界；
+                // 畸形数据不得静默截断为非法 CIDR。
+                let raw = read_varint(&mut input)?;
+                prefix = u32::try_from(raw).map_err(|_| GeoDataError::InvalidCidrPrefix(raw))?;
+            }
             (_, wire_type) => skip_field(wire_type, &mut input)?,
         }
     }
@@ -254,6 +259,10 @@ fn parse_cidr(data: &[u8]) -> Result<String, GeoDataError> {
         }
         length => return Err(GeoDataError::InvalidIpLength(length)),
     };
+    let max_prefix = if ip.len() == 4 { 32 } else { 128 };
+    if prefix > max_prefix {
+        return Err(GeoDataError::InvalidCidrPrefix(u64::from(prefix)));
+    }
     Ok(format!("{addr}/{prefix}"))
 }
 

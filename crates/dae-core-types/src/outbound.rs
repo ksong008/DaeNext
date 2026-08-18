@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct OutboundIndex(pub u8);
 
 impl OutboundIndex {
@@ -19,7 +19,21 @@ impl OutboundIndex {
     }
 
     pub fn is_reserved(self) -> bool {
-        !self.to_string().starts_with("<index: ")
+        // 数值判据（F-21 顺带修复）：此前用 Display 文本前缀判断语义，
+        // 显示格式改动会破坏分类。保留区 = DIRECT/BLOCK 与控制通道。
+        self.0 <= Self::BLOCK.0 || self.0 >= Self::MUST_RULES.0
+    }
+}
+
+impl OutboundIndex {
+    /// F-21: 从用户组偏移构造稳定的用户 outbound 索引；超过可寻址范围
+    /// 返回错误，杜绝调用方 `as u8` 静默截断/回绕。
+    pub const fn try_from_user_offset(offset: usize) -> Result<Self, &'static str> {
+        let value = Self::USER_DEFINED_MIN.0 as usize + offset;
+        if value > Self::USER_DEFINED_MAX.0 as usize {
+            return Err("user outbound index exceeds reserved control range");
+        }
+        Ok(Self(value as u8))
     }
 }
 
@@ -86,5 +100,42 @@ mod tests {
         assert_eq!(index.value(), fixture["value"].as_u64().unwrap() as u8);
         assert_eq!(index.to_string(), fixture["string"].as_str().unwrap());
         assert_eq!(index.is_reserved(), fixture["reserved"].as_bool().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod f21_index_tests {
+    use super::OutboundIndex;
+
+    #[test]
+    fn user_offset_within_range_succeeds() {
+        assert_eq!(
+            OutboundIndex::try_from_user_offset(0).unwrap(),
+            OutboundIndex::USER_DEFINED_MIN
+        );
+        assert_eq!(
+            OutboundIndex::try_from_user_offset(100).unwrap().value(),
+            102
+        );
+    }
+
+    #[test]
+    fn user_offset_beyond_range_fails_without_wraparound() {
+        // 0xFC 是 MUST_RULES 保留位；USER_DEFINED_MAX = 0xFB = 251。
+        let max_offset = OutboundIndex::USER_DEFINED_MAX.value() as usize
+            - OutboundIndex::USER_DEFINED_MIN.value() as usize;
+        assert!(OutboundIndex::try_from_user_offset(max_offset).is_ok());
+        assert!(OutboundIndex::try_from_user_offset(max_offset + 1).is_err());
+    }
+
+    #[test]
+    fn is_reserved_uses_numeric_criteria() {
+        assert!(OutboundIndex::DIRECT.is_reserved());
+        assert!(OutboundIndex::BLOCK.is_reserved());
+        assert!(OutboundIndex::MUST_RULES.is_reserved());
+        assert!(OutboundIndex::CONTROL_PLANE_ROUTING.is_reserved());
+        assert!(OutboundIndex::LOGICAL_OR.is_reserved());
+        assert!(!OutboundIndex::USER_DEFINED_MIN.is_reserved());
+        assert!(!OutboundIndex::USER_DEFINED_MAX.is_reserved());
     }
 }

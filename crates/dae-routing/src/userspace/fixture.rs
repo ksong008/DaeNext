@@ -48,25 +48,19 @@ pub(super) fn routing_match_kind_from_fixture(
     Ok(match match_type {
         MatchType::DomainSet => RoutingMatchKind::DomainSet,
         MatchType::IpSet => RoutingMatchKind::IpSet {
-            lpm_index: required_u64(value, "lpm_index")? as u32,
+            lpm_index: required_u32(value, "lpm_index")?,
         },
         MatchType::SourceIpSet => RoutingMatchKind::SourceIpSet {
-            lpm_index: required_u64(value, "lpm_index")? as u32,
+            lpm_index: required_u32(value, "lpm_index")?,
         },
         MatchType::Port => {
-            let start = value.get("port_start").and_then(Value::as_u64).unwrap_or(0) as u16;
-            let end = value
-                .get("port_end")
-                .and_then(Value::as_u64)
-                .unwrap_or(start as u64) as u16;
+            let start = optional_u16(value, "port_start")?.unwrap_or(0);
+            let end = optional_u16(value, "port_end")?.unwrap_or(start);
             RoutingMatchKind::Port { start, end }
         }
         MatchType::SourcePort => {
-            let start = value.get("port_start").and_then(Value::as_u64).unwrap_or(0) as u16;
-            let end = value
-                .get("port_end")
-                .and_then(Value::as_u64)
-                .unwrap_or(start as u64) as u16;
+            let start = optional_u16(value, "port_start")?.unwrap_or(0);
+            let end = optional_u16(value, "port_end")?.unwrap_or(start);
             RoutingMatchKind::SourcePort { start, end }
         }
         MatchType::L4Proto => RoutingMatchKind::L4Proto {
@@ -80,7 +74,7 @@ pub(super) fn routing_match_kind_from_fixture(
             })?,
         },
         MatchType::Mac => RoutingMatchKind::Mac {
-            lpm_index: required_u64(value, "lpm_index")? as u32,
+            lpm_index: required_u32(value, "lpm_index")?,
         },
         MatchType::ProcessName => RoutingMatchKind::ProcessName {
             value: value
@@ -102,7 +96,7 @@ pub(super) fn routing_match_kind_from_fixture(
 
 pub(super) fn optional_match_u8_value(value: &Value) -> Result<Option<u8>, RoutingError> {
     if let Some(value) = value.get("value").and_then(Value::as_u64) {
-        return Ok(Some(value as u8));
+        return checked_fixture_integer(value, "value").map(Some);
     }
     if let Some(value) = value.get("l4proto").and_then(Value::as_str) {
         return parse_l4proto(value).map(Some);
@@ -111,7 +105,7 @@ pub(super) fn optional_match_u8_value(value: &Value) -> Result<Option<u8>, Routi
         return parse_ip_version(value).map(Some);
     }
     if let Some(value) = value.get("dscp").and_then(Value::as_u64) {
-        return Ok(Some(value as u8));
+        return checked_fixture_integer(value, "dscp").map(Some);
     }
     Ok(None)
 }
@@ -175,6 +169,26 @@ pub(super) fn required_u64(value: &Value, key: &str) -> Result<u64, RoutingError
         .get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| RoutingError::InvalidFixture(format!("{key} must be number")))
+}
+
+pub(super) fn required_u32(value: &Value, key: &str) -> Result<u32, RoutingError> {
+    checked_fixture_integer(required_u64(value, key)?, key)
+}
+
+pub(super) fn optional_u16(value: &Value, key: &str) -> Result<Option<u16>, RoutingError> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|raw| checked_fixture_integer(raw, key))
+        .transpose()
+}
+
+fn checked_fixture_integer<T>(value: u64, key: &str) -> Result<T, RoutingError>
+where
+    T: TryFrom<u64>,
+{
+    T::try_from(value)
+        .map_err(|_| RoutingError::InvalidFixture(format!("{key} value {value} is out of range")))
 }
 
 pub(super) fn required_array<'a>(

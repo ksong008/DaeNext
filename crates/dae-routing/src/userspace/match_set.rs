@@ -6,7 +6,16 @@ impl RoutingMatchSet {
             kind: routing_match_kind_from_fixture(match_type, value)?,
             outbound: outbound_from_fixture(required_str(value, "outbound")?)?,
             not: value.get("not").and_then(Value::as_bool).unwrap_or(false),
-            mark: value.get("mark").and_then(Value::as_u64).unwrap_or(0) as u32,
+            mark: value
+                .get("mark")
+                .and_then(Value::as_u64)
+                .map(|mark| {
+                    u32::try_from(mark).map_err(|_| {
+                        RoutingError::InvalidFixture(format!("mark value {mark} is out of range"))
+                    })
+                })
+                .transpose()?
+                .unwrap_or(0),
             must: value.get("must").and_then(Value::as_bool).unwrap_or(false),
         })
     }

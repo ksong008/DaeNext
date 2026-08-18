@@ -12,7 +12,7 @@ mod userspace_matcher_tests {
             for query in case["queries"].as_array().unwrap() {
                 let parsed = Query {
                     dest: IpAddr::from_str(query["dest"].as_str().unwrap()).unwrap(),
-                    dest_port: query["dest_port"].as_u64().unwrap() as u16,
+                    dest_port: u16::try_from(query["dest_port"].as_u64().unwrap()).unwrap(),
                     domain: query["domain"].as_str().unwrap().to_owned(),
                     ..Query::default()
                 };
