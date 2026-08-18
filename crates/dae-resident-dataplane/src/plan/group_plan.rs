@@ -672,6 +672,7 @@ impl ResidentProxyGroupPlan {
         self.select_proxy_for_tcp_network(NetworkType::TCP4)
     }
 
+    #[cfg(any(test, feature = "benchmark-support"))]
     pub(crate) fn select_proxy_for_tcp_network(
         &self,
         network_type: NetworkType,
@@ -828,6 +829,7 @@ impl ResidentProxyGroupPlan {
         }
     }
 
+    #[cfg(any(test, feature = "benchmark-support"))]
     pub(crate) fn select_candidate(
         &self,
         network_type: NetworkType,
@@ -837,6 +839,7 @@ impl ResidentProxyGroupPlan {
             .map(|selected| selected.candidate)
     }
 
+    #[cfg(any(test, feature = "benchmark-support"))]
     fn select_candidate_with_selection(
         &self,
         network_type: NetworkType,

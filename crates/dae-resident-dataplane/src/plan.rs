@@ -64,14 +64,16 @@ use self::group_health_bootstrap::*;
 mod health_target;
 pub(super) use self::health_target::*;
 mod dataplane_builder;
+#[cfg(any(test, feature = "benchmark-support"))]
+pub(crate) use self::dataplane_builder::ResidentDataplanePlan;
 #[cfg(test)]
 pub(crate) use self::dataplane_builder::build_resident_manual_probe_plans;
-pub(crate) use self::dataplane_builder::{
-    ResidentDataplanePlan, ResidentProtocolOwnerSpecs, build_resident_dataplane_plan,
-    build_resident_manual_probe_plans_for_helper,
-};
 pub use self::dataplane_builder::{
     ResidentPreparedDataplane, build_resident_prepared_dataplane_with_geodata,
+};
+pub(crate) use self::dataplane_builder::{
+    ResidentProtocolOwnerSpecs, build_resident_dataplane_plan,
+    build_resident_manual_probe_plans_for_helper,
 };
 mod group_selector;
 use self::group_selector::*;
