@@ -60,7 +60,8 @@ pub use domain_routing::{
     DomainRoutingDnsEvent, DomainRoutingIpKey, DomainRoutingMapReplay, DomainRoutingOwner,
     DomainRoutingOwnerSnapshot, DomainRoutingOwnerUpdate, DomainRoutingReloadClearPlan,
     DomainRoutingStateEntry, DomainRoutingSyncPlan, DomainRoutingTracker, DomainRoutingView,
-    IpRoutingView, format_ip_key, ip_to_key, parse_ip_key,
+    IpRoutingView, apply_domain_routing_state_entries_by_id, format_ip_key, ip_to_key,
+    parse_ip_key,
 };
 pub use overview::{
     DnsObservabilityStats, RuntimeOverview, RuntimeStatsSnapshot, RuntimeTrafficSample,

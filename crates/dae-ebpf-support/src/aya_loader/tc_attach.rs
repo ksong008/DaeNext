@@ -380,11 +380,23 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
             .try_into()
             .map_err(|err| format!("tcx sched classifier link is not an fd link: {err:?}"))?;
         let link_path = options.link_root.join("link");
-        remove_existing_pin(&link_path)?;
+        // F-19: 先 pin 到临时名、再原子 rename 覆盖旧 pin——避免
+        // "unlink 旧 pin 后 pin 新 link 失败"导致旧 attach 的 pin 引用
+        // 与可管理路径同时丢失的窗口；失败时旧 pin 保留。
+        let tmp_path = options.link_root.join("link.tmp");
+        remove_existing_pin(&tmp_path)?;
         let pinned = fd_link
-            .pin(&link_path)
+            .pin(&tmp_path)
             .map_err(|err| format!("pin tcx sched classifier link failed: {err:?}"))?;
         drop(pinned);
+        if let Err(err) = fs::rename(&tmp_path, &link_path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(format!(
+                "atomic rename tcx sched classifier pin {} -> {} failed: {err}",
+                tmp_path.display(),
+                link_path.display()
+            ));
+        }
         Some(link_path)
     } else {
         let link = classifier
