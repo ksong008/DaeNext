@@ -1,7 +1,8 @@
 use super::*;
-use crate::plan::ResidentProxyProtocolPlan;
-use crate::plan::{ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan};
-use crate::tcp::{http_proxy_connect_plain_async, socks5_connect_async};
+use crate::{http_proxy_connect_plain_async, socks5_connect_async};
+use dae_resident_plan::{
+    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan,
+};
 
 #[cfg(test)]
 pub(super) async fn open_proxy_tcp_stream_through_configured_parent_async(

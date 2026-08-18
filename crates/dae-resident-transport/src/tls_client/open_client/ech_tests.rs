@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use super::*;
-use crate::client::config::configure_boring_certificate_verification;
+use crate::tls_client::config::configure_boring_certificate_verification;
 
 const INNER_NAME: &str = "foobar.com";
 const ECH_CONFIG_LIST: &str =

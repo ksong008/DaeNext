@@ -6,6 +6,7 @@ mod http_connect_head;
 mod proxy_handshake;
 mod quic_endpoint;
 mod resolver;
+mod tls_client;
 
 pub use direct_dial::{DirectTcpConnection, open_direct_tcp_connection_async};
 pub use dns_name::encode_dns_qname;
@@ -34,4 +35,12 @@ pub use resolver::{
     SocketCandidateFailure, TcpCandidateRacePolicy, authority_from_host_port,
     resolve_host_addrs_with_bootstrap_dns_ttl, resolve_host_addrs_with_configured_fallback_dns_ttl,
     resolve_socket_addr_candidates, try_socket_addr_candidates, try_tcp_socket_addr_candidates,
+};
+pub use tls_client::{
+    AsyncResidentTlsClient, AsyncVlessTlsClient, ResidentTlsConfigCacheClearReport,
+    async_resident_tls_underlay_name, async_tls_underlay_name, clear_resident_tls_config_caches,
+    open_async_resident_tls_client_with_binding,
+    open_async_vless_tls_client_with_flow_at_candidates, open_async_xhttp_endpoint_tls_client,
+    open_async_xhttp_endpoint_tls_client_at_candidates, open_proxy_tcp_stream_with_binding,
+    take_boring_tls_io_profile_snapshot,
 };

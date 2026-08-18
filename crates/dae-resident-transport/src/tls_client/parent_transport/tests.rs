@@ -1,5 +1,5 @@
 use super::*;
-use crate::plan::{ResidentXhttpMode, ResidentXhttpSettingsPlan};
+use dae_resident_plan::{ResidentXhttpMode, ResidentXhttpSettingsPlan};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{
     Arc,

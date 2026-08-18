@@ -1,12 +1,12 @@
 use super::*;
-use crate::plan::{
-    ResidentProxyProtocolPlan, ResidentRealityUnderlayPlan, ResidentXhttpMode,
-    ResidentXhttpSettingsPlan,
-};
 use dae_outbound::shared_transport::{
     SUPPORTED_UTLS_FINGERPRINTS, UtlsClientHelloProfile, UtlsFingerprint, UtlsRuntimeTemplate,
     parse_utls_client_hello_record, parse_utls_client_hello_record_hex,
     resolve_utls_runtime_template, utls_fingerprint_default_alpn_protocols,
+};
+use dae_resident_plan::{
+    ResidentProxyProtocolPlan, ResidentRealityUnderlayPlan, ResidentXhttpMode,
+    ResidentXhttpSettingsPlan,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Duration, timeout};
