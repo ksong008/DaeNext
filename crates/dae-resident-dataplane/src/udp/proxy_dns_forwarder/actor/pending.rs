@@ -1,6 +1,6 @@
 use super::*;
-use crate::dns::{ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage};
 use crate::udp::proxy_dns_forwarder::actor::transaction::ProxyDnsRequestRelease;
+use crate::{ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage};
 
 #[cfg(test)]
 mod tests;

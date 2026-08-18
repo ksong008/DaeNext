@@ -10,7 +10,7 @@ use super::wire::{
     read_dns_tcp_message_async, resident_dns_quic_client_config, restore_dns_response_id,
     write_dns_tcp_message_async,
 };
-use crate::tcp::{inherit_quic_endpoint_observation, wait_quic_endpoint_idle_after_close};
+use crate::{inherit_quic_endpoint_observation, wait_quic_endpoint_idle_after_close};
 use serde_json::{Value, json};
 
 mod proxy;

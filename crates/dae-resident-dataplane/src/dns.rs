@@ -29,7 +29,6 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio::time;
 
-use super::ResolvedHostAddrs;
 use super::direct::open_direct_tcp_connection_async;
 use super::geodata::{
     GeodataResolver as ResidentGeodataStore, expand_resident_dns_request_qname_rules_with_resolver,
@@ -45,23 +44,19 @@ use super::plan::build_resident_dataplane_plan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{ResidentProxyBinding, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
-use super::tcp::{
-    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
-    QuicEndpointOpenContext, QuicEndpointProtocol, open_marked_quic_endpoint_for_remote,
-    scope_quic_endpoint_observation, set_socket_mark,
-};
-use super::tcp::{
-    exchange_resident_proxy_dns_tcp_stream_async, run_resident_proxy_dns_tcp_connection_async,
-};
-use super::udp::{
-    ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
-};
 use super::{
     AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
-    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics,
-    ResidentDnsResourceProfile, ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries,
-    SharedResidentStopSignal, TuicOwnerRegistryHandle, apply_resident_udp_socket_buffer_tuning,
+    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
+    QuicEndpointOpenContext, QuicEndpointProtocol, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+    RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics, ResidentDnsResourceProfile,
+    ResidentDnsUdpRuntimeConfig, ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge,
+    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
+    apply_resident_udp_socket_buffer_tuning, exchange_resident_proxy_dns_tcp_stream_async,
+    open_marked_quic_endpoint_for_remote, open_resident_proxy_udp_bridge_async,
+    probe_resident_proxy_dns_udp_with_forwarder_async, run_resident_proxy_dns_tcp_connection_async,
+    scope_quic_endpoint_observation, set_socket_mark,
 };
+use super::{DnsTcpFrameReader, ResolvedHostAddrs, write_dns_tcp_payload_async};
 
 /// One bounded DNS TLS stream type keeps framing, pooling, and HTTP/2 ownership
 /// identical across all DNS TLS transports. BoringSSL is selected at handshake
@@ -132,9 +127,7 @@ mod cache;
 mod domain_routing;
 mod error_response;
 mod reload;
-mod request;
 mod routing;
-mod tcp_wire;
 mod trace_summary;
 mod transport;
 mod udp_response;
@@ -161,11 +154,6 @@ use self::error_response::build_reject_response;
 pub(crate) use self::reload::ResidentDnsReloadHandle;
 use self::reload::ResidentDnsReloadRestoreReport;
 pub use self::reload::ResidentDnsReloadSnapshot;
-pub(crate) use self::request::{
-    ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
-    ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
-    ProxyDnsResponseBytes, exchange_proxy_dns_framed_stream,
-};
 #[cfg(test)]
 use self::routing::parse_dns_upstream;
 use self::routing::{
@@ -173,9 +161,6 @@ use self::routing::{
     parse_request_default_action, parse_response_default_action, select_request_action,
     select_response_action, select_response_action_for_upstream,
 };
-#[cfg(test)]
-pub(super) use self::tcp_wire::read_dns_tcp_payload_async;
-pub(super) use self::tcp_wire::{DnsTcpFrameReader, write_dns_tcp_payload_async};
 pub(super) use self::trace_summary::{ResidentDnsTraceSummary, ResidentDnsTransportTrace};
 use self::trace_summary::{
     ResidentDnsTransportTraceInput, capture_dns_transport_trace_async, record_dns_transport_trace,
@@ -206,6 +191,10 @@ pub(in crate::dns) use self::upstream_model::{
 };
 pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
 pub(in crate::dns) use self::upstream_router::ResidentDnsUpstreamSelection;
+pub(crate) use crate::transport::dns_request::{
+    ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
+    exchange_proxy_dns_framed_stream,
+};
 
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
@@ -278,6 +267,69 @@ pub(super) struct ResidentDnsPlan {
     mark: u32,
     upstream_router: Option<Arc<ResidentDnsUpstreamRouter>>,
     target_refresh_owner: Option<Arc<ResidentDnsTargetRefreshOwner>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ResidentDnsResolver {
+    plan: Arc<ResidentDnsPlan>,
+}
+
+impl ResidentDnsResolver {
+    pub(crate) fn new(plan: Arc<ResidentDnsPlan>) -> Self {
+        Self { plan }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn asis(mark: u32) -> Self {
+        Self::new(Arc::new(ResidentDnsPlan::asis(mark)))
+    }
+
+    pub(crate) async fn resolve_domain_has_ip_for_dial(&self, domain: &str, ip: IpAddr) -> bool {
+        self.plan.resolve_domain_has_ip_for_dial(domain, ip).await
+    }
+
+    pub(crate) async fn query_tcp(
+        &self,
+        original_dst: SocketAddr,
+        request: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        handle_resident_dns_tcp_async(&self.plan, original_dst, request).await
+    }
+
+    pub(crate) fn server_failure_response(request: &[u8]) -> Result<Vec<u8>, String> {
+        build_dns_server_failure_response(request)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ResidentDnsDispatcher {
+    plan: Arc<ResidentDnsPlan>,
+}
+
+impl ResidentDnsDispatcher {
+    pub(crate) fn new(plan: Arc<ResidentDnsPlan>) -> Self {
+        Self { plan }
+    }
+
+    pub(crate) fn asis(mark: u32) -> Self {
+        Self::new(Arc::new(ResidentDnsPlan::asis(mark)))
+    }
+
+    pub(crate) async fn query_udp(
+        &self,
+        original_dst: SocketAddr,
+        request: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        handle_resident_dns_udp_async(&self.plan, original_dst, request).await
+    }
+
+    pub(crate) async fn shutdown_forwarders(&self, deadline: time::Instant) -> Value {
+        self.plan.shutdown_forwarders(deadline).await
+    }
+
+    pub(crate) fn server_failure_response(request: &[u8]) -> Result<Vec<u8>, String> {
+        build_dns_server_failure_response(request)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -363,11 +415,8 @@ impl ResidentDnsPlan {
             .forwarders
             .acquire_health_proxy_udp_forwarder(target, binding)
             .await?;
-        let result = super::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
-            lease.forwarder(),
-            lookup_host,
-        )
-        .await;
+        let result =
+            probe_resident_proxy_dns_udp_with_forwarder_async(lease.forwarder(), lookup_host).await;
         let release = lease.release().await;
         match (result, release) {
             (Ok(()), Ok(())) => Ok(()),

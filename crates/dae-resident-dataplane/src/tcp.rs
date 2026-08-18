@@ -83,6 +83,7 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use dae_outbound::vmess::aead_tcp_client_session_start;
 
+use super::ResidentDnsResolver;
 use super::client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, async_resident_tls_underlay_name,
     async_tls_underlay_name, open_async_resident_tls_client_with_binding,
@@ -93,7 +94,6 @@ use super::direct::{
     DirectTcpConnection, DirectTcpRelayStats, open_direct_tcp_connection_async,
     relay_tcp_direct_async,
 };
-use super::dns::ResidentDnsPlan;
 use super::events::{
     ResidentEventKind, ResidentEventMetadata, append_event, append_event_with_metadata,
 };

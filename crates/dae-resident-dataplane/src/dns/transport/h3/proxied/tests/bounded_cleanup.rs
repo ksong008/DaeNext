@@ -81,9 +81,9 @@ impl ProxiedDoh3ExchangeTarget for ForcedCleanupExchange {
     async fn shutdown_bridge(
         &mut self,
         deadline: ProxiedDoh3CleanupDeadline,
-    ) -> Result<Option<ResidentProxyUdpBridgeShutdownCompletion>, String> {
+    ) -> Result<Option<ResidentOwnedTaskShutdownCompletion>, String> {
         self.record_deadline(deadline);
-        Ok(Some(ResidentProxyUdpBridgeShutdownCompletion::Aborted))
+        Ok(Some(ResidentOwnedTaskShutdownCompletion::Aborted))
     }
 
     fn observe_cleanup(&self, outcome: &ProxiedDoh3CleanupOutcome) {
@@ -149,7 +149,7 @@ async fn one_cleanup_deadline_drives_all_forced_completion_classes() {
     assert_eq!(cleanup.driver, Some(ProxiedDoh3DriverCompletion::Aborted));
     assert_eq!(
         cleanup.bridge,
-        Some(ResidentProxyUdpBridgeShutdownCompletion::Aborted)
+        Some(ResidentOwnedTaskShutdownCompletion::Aborted)
     );
     assert!(
         deadlines

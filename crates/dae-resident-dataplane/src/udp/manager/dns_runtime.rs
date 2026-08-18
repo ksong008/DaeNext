@@ -1,21 +1,21 @@
 use super::*;
 
 pub(super) struct ResidentUdpDnsRuntime {
-    plan: Arc<ResidentDnsPlan>,
+    plan: ResidentDnsDispatcher,
     dispatcher: ResidentDnsFastPathDispatcher,
     pub(super) handle: ResidentDnsFastPathHandle,
 }
 
 impl ResidentUdpDnsRuntime {
     pub(super) fn start(
-        plan: Arc<ResidentDnsPlan>,
+        plan: ResidentDnsDispatcher,
         udp_reply: UdpReplyHandle,
         metrics: Arc<ResidentDataplaneMetrics>,
         concurrency: usize,
         queue_depth: usize,
     ) -> Self {
         let dispatcher = ResidentDnsFastPathDispatcher::start(
-            Arc::clone(&plan),
+            plan.clone(),
             udp_reply,
             metrics,
             concurrency,

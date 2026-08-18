@@ -23,7 +23,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time;
 
-use crate::udp::{ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit};
+use crate::{ResidentUdpPayloadAdmission, ResidentUdpPayloadPermit};
 
 use super::*;
 use crate::plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};

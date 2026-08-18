@@ -378,7 +378,7 @@ pub(crate) async fn handle_tcp_connection_async_or_handoff(
         None
     };
     if transparent_tcp_dns_fast_path_applies(original_dst, explicit_dns_route.as_ref()) {
-        let dns = Arc::clone(&router.dns);
+        let dns = router.dns.clone();
         drop(router);
         Box::pin(handle_transparent_tcp_dns_fast_path_async(
             &mut inbound,

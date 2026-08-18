@@ -2,10 +2,7 @@ use dae_dns::DNS_DEFAULT_PORT;
 
 use super::*;
 use crate::RESIDENT_UDP_RESPONSE_TIMEOUT;
-use crate::dns::{
-    DnsTcpFrameReader, build_dns_server_failure_response, handle_resident_dns_tcp_async,
-    write_dns_tcp_payload_async,
-};
+use crate::{DnsTcpFrameReader, ResidentDnsResolver, write_dns_tcp_payload_async};
 
 pub(super) fn transparent_tcp_dns_destination(original_dst: SocketAddr) -> bool {
     original_dst.port() == DNS_DEFAULT_PORT
@@ -22,7 +19,7 @@ pub(super) fn transparent_tcp_dns_fast_path_applies(
 pub(super) async fn handle_transparent_tcp_dns_fast_path_async(
     inbound: &mut TokioTcpStream,
     original_dst: SocketAddr,
-    dns: Arc<ResidentDnsPlan>,
+    dns: ResidentDnsResolver,
     stop: SharedResidentStopSignal,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<(), String> {
@@ -38,12 +35,12 @@ pub(super) async fn handle_transparent_tcp_dns_fast_path_async(
         metrics.add_upload(request.len());
         let response = match time::timeout(
             RESIDENT_UDP_RESPONSE_TIMEOUT,
-            handle_resident_dns_tcp_async(&dns, original_dst, &request),
+            dns.query_tcp(original_dst, &request),
         )
         .await
         {
             Ok(Ok(response)) => response,
-            Ok(Err(_)) | Err(_) => build_dns_server_failure_response(&request)?,
+            Ok(Err(_)) | Err(_) => ResidentDnsResolver::server_failure_response(&request)?,
         };
         write_dns_tcp_payload_async(inbound, &response).await?;
         metrics.add_download(response.len());

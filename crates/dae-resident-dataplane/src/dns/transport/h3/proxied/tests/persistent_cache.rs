@@ -5,7 +5,7 @@ use crate::dns::transport::test_support::{
     DnsQuicTestProtocol, DnsQuicTestServer, Socks5UdpRelay, dns_proxy_binding, dns_test_response,
     socks5_dns_proxy,
 };
-use crate::tcp::quic_endpoint_metrics_snapshot;
+use crate::quic_endpoint_metrics_snapshot;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn routed_doh3_reuses_one_outer_relay_and_inner_client_for_large_responses() {

@@ -179,10 +179,10 @@ impl ProxiedDoh3ExchangeTarget for FakeExchange {
     async fn shutdown_bridge(
         &mut self,
         _deadline: ProxiedDoh3CleanupDeadline,
-    ) -> Result<Option<ResidentProxyUdpBridgeShutdownCompletion>, String> {
+    ) -> Result<Option<ResidentOwnedTaskShutdownCompletion>, String> {
         if std::mem::take(&mut self.owned.bridge) {
             self.record(CleanupEvent::BridgeShutdown)?;
-            Ok(Some(ResidentProxyUdpBridgeShutdownCompletion::Joined))
+            Ok(Some(ResidentOwnedTaskShutdownCompletion::Joined))
         } else {
             Ok(None)
         }

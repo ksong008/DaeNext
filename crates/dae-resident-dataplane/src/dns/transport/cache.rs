@@ -1406,13 +1406,13 @@ mod tests {
         );
         assert_eq!(cache.metrics.snapshot()["proxyDnsHealthLeasesCurrent"], 2);
 
-        crate::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
+        crate::probe_resident_proxy_dns_udp_with_forwarder_async(
             first.forwarder(),
             "health.example",
         )
         .await
         .unwrap();
-        crate::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
+        crate::probe_resident_proxy_dns_udp_with_forwarder_async(
             second.forwarder(),
             "health.example",
         )
@@ -1473,7 +1473,7 @@ mod tests {
             .await
             .unwrap();
         let probe = tokio::spawn(async move {
-            let result = crate::udp::probe_resident_proxy_dns_udp_with_forwarder_async(
+            let result = crate::probe_resident_proxy_dns_udp_with_forwarder_async(
                 lease.forwarder(),
                 "cancelled-health.example",
             )

@@ -6,7 +6,7 @@ use dae_dns::{DnsPacketView, validate_dns_packet_response_for_request_fast};
 use tokio::time;
 
 use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
-use super::tcp::set_socket_mark;
+use super::set_socket_mark;
 use super::udp::encode_dns_qname;
 
 mod candidate_error;

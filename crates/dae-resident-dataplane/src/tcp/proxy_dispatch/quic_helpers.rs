@@ -1,8 +1,7 @@
 use super::*;
 
 use crate::{
-    QuicCandidateRaceResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
-    authority_from_host_port, resolve_socket_addr_candidates,
+    QuicCandidateRaceResourceProfile, authority_from_host_port, resolve_socket_addr_candidates,
 };
 
 use std::fmt;
@@ -1022,29 +1021,6 @@ fn hysteria2_crypto_error_code(
     };
     let raw = u64::from(code);
     (0x100..0x200).contains(&raw).then_some(code)
-}
-
-pub(crate) async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
-    time::timeout(RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, endpoint.wait_idle())
-        .await
-        .is_ok()
-}
-
-pub(crate) fn set_socket_mark(fd: i32, mark: u32) -> std::io::Result<()> {
-    let mark = mark as libc::c_int;
-    let status = unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_MARK,
-            (&mark as *const libc::c_int).cast::<libc::c_void>(),
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        )
-    };
-    if status < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

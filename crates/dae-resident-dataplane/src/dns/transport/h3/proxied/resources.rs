@@ -1,5 +1,5 @@
 use super::*;
-use crate::udp::ResidentProxyUdpBridgeShutdownCompletion;
+use crate::ResidentOwnedTaskShutdownCompletion;
 
 use super::lifecycle::{
     ProxiedDoh3CleanupDeadline, ProxiedDoh3DriverCompletion, ProxiedDoh3EndpointCompletion,
@@ -55,7 +55,7 @@ impl ProxiedDoh3Resources {
     pub(super) async fn shutdown_bridge(
         &mut self,
         deadline: ProxiedDoh3CleanupDeadline,
-    ) -> Result<Option<ResidentProxyUdpBridgeShutdownCompletion>, String> {
+    ) -> Result<Option<ResidentOwnedTaskShutdownCompletion>, String> {
         let Some(bridge) = self.bridge.take() else {
             return Ok(None);
         };

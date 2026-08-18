@@ -2,11 +2,11 @@ use std::future::Future;
 
 use super::*;
 #[cfg(test)]
+use crate::ResidentOwnedTaskShutdownCompletion;
+#[cfg(test)]
 use crate::dns::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
-#[cfg(test)]
-use crate::udp::ResidentProxyUdpBridgeShutdownCompletion;
 
 #[cfg(test)]
 mod cleanup;
@@ -69,7 +69,7 @@ pub(super) trait ProxiedDoh3ExchangeTarget: Send {
     fn shutdown_bridge(
         &mut self,
         deadline: ProxiedDoh3CleanupDeadline,
-    ) -> impl Future<Output = Result<Option<ResidentProxyUdpBridgeShutdownCompletion>, String>> + Send;
+    ) -> impl Future<Output = Result<Option<ResidentOwnedTaskShutdownCompletion>, String>> + Send;
 
     fn observe_cleanup(&self, outcome: &ProxiedDoh3CleanupOutcome);
 }

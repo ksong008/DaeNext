@@ -13,13 +13,10 @@ use tokio::net::{
 use tokio::sync::Semaphore;
 use tokio::time;
 
-#[cfg(test)]
-use super::dns::read_dns_tcp_payload_async;
 use super::dns::{
-    DNS_MAX_UDP_MESSAGE_SIZE, DnsTcpFrameReader, ResidentDnsPlan, ResidentDnsQueryResult,
-    ResidentDnsTraceSummary, ResidentDnsTransportTrace, build_dns_server_failure_response,
-    fit_dns_response_to_udp_request, handle_resident_dns_local_trace_async,
-    write_dns_tcp_payload_async,
+    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsQueryResult, ResidentDnsTraceSummary,
+    ResidentDnsTransportTrace, build_dns_server_failure_response, fit_dns_response_to_udp_request,
+    handle_resident_dns_local_trace_async,
 };
 #[cfg(test)]
 use super::dns::{

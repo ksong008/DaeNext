@@ -182,7 +182,7 @@ pub(super) fn build_resident_dataplane_generation(
         Arc::clone(&proxy_groups),
         routing_tuple_map_id,
         routing_matcher.clone(),
-        Arc::clone(&dns),
+        dns::ResidentDnsResolver::new(Arc::clone(&dns)),
         tcp_dial_mode,
         sniffing_timeout,
         so_mark_from_dae,
@@ -225,7 +225,7 @@ pub(super) fn build_resident_dataplane_generation(
         routing_matcher,
         tcp_dial_mode,
         so_mark_from_dae,
-        Arc::clone(&dns),
+        dns::ResidentDnsDispatcher::new(Arc::clone(&dns)),
         udp_runtime_config.clone(),
         health_resuscitation,
         owner

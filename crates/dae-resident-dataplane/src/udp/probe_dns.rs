@@ -1,7 +1,7 @@
 use super::*;
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::dns::ProxyDnsRequestContext;
+use crate::ProxyDnsRequestContext;
 
 const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
 
@@ -16,12 +16,6 @@ pub(crate) struct ResidentProxyUdpBridge {
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
     last_error: Arc<Mutex<Option<String>>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentProxyUdpBridgeShutdownCompletion {
-    Joined,
-    Aborted,
 }
 
 impl ResidentProxyUdpBridge {
@@ -64,12 +58,12 @@ impl ResidentProxyUdpBridge {
     pub(crate) async fn shutdown_and_join_until(
         mut self,
         deadline: time::Instant,
-    ) -> Result<ResidentProxyUdpBridgeShutdownCompletion, String> {
+    ) -> Result<ResidentOwnedTaskShutdownCompletion, String> {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
         let Some(task) = self.task.take() else {
-            return Ok(ResidentProxyUdpBridgeShutdownCompletion::Joined);
+            return Ok(ResidentOwnedTaskShutdownCompletion::Joined);
         };
         shutdown::join_bridge_task_until(task, deadline).await
     }
@@ -391,7 +385,7 @@ pub(crate) async fn probe_resident_proxy_udp_async(
         juicity_owner_registry,
         anytls_owner_registry,
     );
-    let dns = ResidentDnsPlan::asis(binding.effective_socket_mark());
+    let dns = ResidentDnsDispatcher::asis(binding.effective_socket_mark());
     let mut exchange = executor
         .execute(&dns, &binding, original_dst, payload)
         .await
