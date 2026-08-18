@@ -11,6 +11,7 @@ test-support = []
 
 [dependencies]
 dae-datapath.workspace = true
+dae-outbound.workspace = true
 h2.workspace = true
 libc.workspace = true
 serde.workspace = true

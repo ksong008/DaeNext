@@ -1,9 +1,9 @@
 use super::*;
 
+use crate::ProxiedDoh3CleanupMetricObservation;
 #[cfg(test)]
 use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::ResidentOwnedTaskShutdownCompletion;
-use crate::metrics::ProxiedDoh3CleanupMetricObservation;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
