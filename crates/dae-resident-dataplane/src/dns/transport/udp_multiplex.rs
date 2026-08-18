@@ -215,7 +215,7 @@ async fn open_udp_multiplex_handle_with_config(
     runtime: &ResidentDnsUdpRuntimeConfig,
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> Result<ResidentDnsUdpMultiplexHandle, String> {
-    let socket = open_connected_dns_udp_socket(target, mark).await?;
+    let socket = open_connected_dns_udp_socket(target, mark, runtime.socket_buffer_bytes).await?;
     let opened = start_udp_multiplex_actor(target, socket, runtime, metrics);
     Ok(opened.handle)
 }
@@ -380,6 +380,7 @@ fn rewrite_dns_packet_id_in_place(payload: &mut [u8], id: u16) {
 async fn open_connected_dns_udp_socket(
     target: SocketAddr,
     mark: u32,
+    socket_buffer_bytes: usize,
 ) -> Result<tokio::net::UdpSocket, String> {
     let bind = match target {
         SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
@@ -387,7 +388,7 @@ async fn open_connected_dns_udp_socket(
     };
     let socket =
         std::net::UdpSocket::bind(bind).map_err(|err| format!("bind DNS UDP socket: {err}"))?;
-    apply_resident_udp_socket_buffer_tuning(&socket);
+    apply_udp_socket_buffer_tuning(socket.as_raw_fd(), socket_buffer_bytes);
     if mark != 0 {
         set_socket_mark(socket.as_raw_fd(), mark)
             .map_err(|err| format!("set DNS UDP SO_MARK {mark}: {err}"))?;

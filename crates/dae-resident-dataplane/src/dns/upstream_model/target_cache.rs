@@ -4,12 +4,12 @@ use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::Notify;
 
-use crate::resident_dns_upstream_refresh_interval;
-
 use super::target_refresh::ResidentDnsTargetRefreshHandle;
 
 const DNS_UPSTREAM_STALE_RETRY_DIVISOR: u32 = 10;
 const DNS_UPSTREAM_STALE_RETRY_MIN: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const DNS_UPSTREAM_REFRESH_TEST_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::dns) enum ResidentDnsTargetRefreshError {
@@ -437,7 +437,7 @@ impl ResidentDnsResolvedTargetCache {
             refreshing: AtomicBool::new(false),
             refresh_changed: Notify::new(),
             next_epoch: AtomicU64::new(2),
-            refresh_interval: resident_dns_upstream_refresh_interval(),
+            refresh_interval: DNS_UPSTREAM_REFRESH_TEST_INTERVAL,
         }
     }
 
@@ -447,9 +447,10 @@ impl ResidentDnsResolvedTargetCache {
     }
 }
 
+#[cfg(test)]
 impl Default for ResidentDnsResolvedTargetCache {
     fn default() -> Self {
-        Self::new(resident_dns_upstream_refresh_interval())
+        Self::new(DNS_UPSTREAM_REFRESH_TEST_INTERVAL)
     }
 }
 
@@ -468,7 +469,9 @@ mod tests {
 
     #[tokio::test]
     async fn expired_target_cache_refreshes_and_replaces_addresses_without_an_owner() {
-        let cache = Arc::new(ResidentDnsResolvedTargetCache::default());
+        let cache = Arc::new(ResidentDnsResolvedTargetCache::new(
+            DNS_UPSTREAM_REFRESH_TEST_INTERVAL,
+        ));
         let calls = Arc::new(AtomicUsize::new(0));
         let first = cache
             .resolve({

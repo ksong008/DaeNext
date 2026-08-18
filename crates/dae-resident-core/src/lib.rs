@@ -34,10 +34,14 @@ pub use payload_admission::{
 };
 pub use relay_deadline::{reset_resident_relay_idle_deadline, resident_relay_idle_deadline};
 pub use resource_profile::*;
-pub use socket::set_socket_mark;
+pub use socket::{apply_udp_socket_buffer_tuning, set_socket_mark};
 pub use stop_signal::{
     ResidentStopListener, ResidentStopSignal, SharedResidentStopSignal, run_until_resident_stop,
 };
+
+pub trait ResidentHealthResuscitation: std::fmt::Debug + Send + Sync {
+    fn trigger(&self, outbound: u8, network_type: dae_outbound::NetworkType);
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResidentOwnedTaskShutdownCompletion {
