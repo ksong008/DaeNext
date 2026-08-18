@@ -22,7 +22,7 @@ pub use hierarchical::{
 };
 pub use http::is_valid_http_method;
 pub use mac::{ParseMacError, parse_mac};
-pub use path_safety::{PathSafetyError, ensure_file_in_sub_dir};
+pub use path_safety::{PathSafetyError, ensure_file_in_sub_dir, open_verified_in_sub_dir};
 pub use port::{ParsePortRangeError, parse_port_range};
 pub use subscription_persist::{
     SUBSCRIPTION_RESOLVE_CONCURRENCY, cleanup_subscription_persist_files,
