@@ -20,6 +20,16 @@ pub(crate) fn load_user_by_username(
     username: &str,
 ) -> io::Result<Option<UserRecord>> {
     ensure_state_schema(state)?;
+    load_user_by_username_without_schema_check(state, username)
+}
+
+/// F-05: 认证热路径直查——schema/integrity 由启动时的
+/// `ensure_state_schema`（server 入口）保证，每次请求重复执行
+/// `PRAGMA quick_check` 造成不必要的 DB I/O 与锁竞争。
+pub(crate) fn load_user_by_username_without_schema_check(
+    state: &Path,
+    username: &str,
+) -> io::Result<Option<UserRecord>> {
     let conn = open_state_connection(state)?;
     query_user(
         &conn,

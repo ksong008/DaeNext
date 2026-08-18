@@ -46,22 +46,34 @@ pub(super) fn civil_from_days(days: i64) -> (i64, i64, i64) {
 
 pub(super) fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
     ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    let mut stmt = conn
-        .prepare("SELECT id, username FROM users ORDER BY id")
+    // F-15: 先生成全部材料，再单 transaction 更新；中途失败不留
+    // "部分用户已重置"的中间状态。
+    let mut conn = open_state_connection(state)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(sqlite_io_error)?;
+    let materials = {
+        let mut stmt = tx
+            .prepare("SELECT id, username FROM users ORDER BY id")
+            .map_err(sqlite_io_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sqlite_io_error)?;
+        let mut materials = Vec::new();
+        for row in rows {
+            let (id, username) = row.map_err(sqlite_io_error)?;
+            let password = random_recovery_password()?;
+            let secret = random_secret_hex()?;
+            let password_hash = hash_password(secret.as_bytes(), &password);
+            materials.push((id, username, password_hash, secret, password));
+        }
+        materials
+    };
     let mut users = Vec::new();
-    for row in rows {
-        let (id, username) = row.map_err(sqlite_io_error)?;
-        let password = random_recovery_password()?;
-        let secret = random_secret_hex()?;
-        let password_hash = hash_password(secret.as_bytes(), &password);
-        conn.execute(
+    for (id, username, password_hash, secret, password) in materials {
+        tx.execute(
             "UPDATE users SET password_hash = ?1, jwt_secret = ?2 WHERE id = ?3",
             params![password_hash, secret, id],
         )
@@ -72,6 +84,7 @@ pub(super) fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
             "password": password,
         }));
     }
+    tx.commit().map_err(sqlite_io_error)?;
     Ok(json!({
         "status": "pass",
         "state": path_string(state),
