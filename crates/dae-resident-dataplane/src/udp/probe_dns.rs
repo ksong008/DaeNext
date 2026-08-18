@@ -406,9 +406,8 @@ pub async fn probe_resident_proxy_udp_async(
         juicity_owner_registry,
         anytls_owner_registry,
     );
-    let dns = ResidentDnsDispatcher::asis(binding.effective_socket_mark());
     let mut exchange = executor
-        .execute(&dns, &binding, original_dst, payload)
+        .execute_proxy_packet(&binding, original_dst, payload)
         .await
         .map(|(_, response)| response);
     if let Ok(response) = &exchange

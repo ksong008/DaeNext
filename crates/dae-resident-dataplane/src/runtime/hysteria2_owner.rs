@@ -1,6 +1,6 @@
 pub(crate) use dae_resident_transport::{
-    Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, Hysteria2UdpSessionLease,
-    start_hysteria2_owner_registry, start_hysteria2_owner_registry_on,
+    Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, start_hysteria2_owner_registry,
+    start_hysteria2_owner_registry_on,
 };
 
 #[cfg(test)]

@@ -25,6 +25,7 @@ members = [
     "crates/dae-resident-plan",
     "crates/dae-resident-tcp",
     "crates/dae-resident-transport",
+    "crates/dae-resident-udp",
     "crates/dae-routing",
     "crates/dae-sysdump",
     "crates/dae-sniffing",
@@ -104,6 +105,7 @@ dae-resident-dataplane = { path = "crates/dae-resident-dataplane", default-featu
 dae-resident-plan = { path = "crates/dae-resident-plan" }
 dae-resident-tcp = { path = "crates/dae-resident-tcp" }
 dae-resident-transport = { path = "crates/dae-resident-transport" }
+dae-resident-udp = { path = "crates/dae-resident-udp" }
 dae-product-identity = { path = "crates/dae-product-identity" }
 dae-routing = { path = "crates/dae-routing" }
 dae-sniffing = { path = "crates/dae-sniffing" }

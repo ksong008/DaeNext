@@ -58,7 +58,7 @@ fn assert_sources_exclude(root: &Path, forbidden: &[&str]) {
 
 #[test]
 fn dns_production_does_not_import_tcp_or_udp_private_modules() {
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/dns");
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../dae-resident-dns/src");
     assert_sources_exclude(
         &source_root,
         &[
@@ -72,10 +72,10 @@ fn dns_production_does_not_import_tcp_or_udp_private_modules() {
 
 #[test]
 fn tcp_and_udp_production_do_not_import_dns_private_modules() {
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for domain in ["tcp", "udp"] {
+    let crates_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    for domain in ["dae-resident-tcp", "dae-resident-udp"] {
         assert_sources_exclude(
-            &source_root.join(domain),
+            &crates_root.join(domain).join("src"),
             &["crate::dns::", "super::super::dns::"],
         );
     }

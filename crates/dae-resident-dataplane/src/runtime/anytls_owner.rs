@@ -1,6 +1,5 @@
 pub(crate) use dae_resident_transport::{
-    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, start_anytls_owner_registry,
-    start_anytls_owner_registry_on,
+    AnyTlsOwnerRegistryHandle, start_anytls_owner_registry, start_anytls_owner_registry_on,
 };
 #[cfg(test)]
 pub(crate) use dae_resident_transport::{
