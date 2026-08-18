@@ -1,0 +1,41 @@
+# path	maximum	category	rationale
+crates/dae-resident-dataplane/src/client/boring_session.rs	1	InternalInvariant	BoringSSL session state is initialized before retrieval.
+crates/dae-resident-dataplane/src/client/tls_fragment.rs	2	InternalInvariant	TLS fragment state is present only in the delayed path.
+crates/dae-resident-dataplane/src/dns.rs	2	InternalInvariant	Validated resident DNS plans retain their selected transport.
+crates/dae-resident-dataplane/src/dns/request/bytes.rs	2	InternalInvariant	Admitted DNS byte owners retain their permit and payload.
+crates/dae-resident-dataplane/src/dns_listener.rs	2	InternalInvariant	Resident DNS listener state is initialized before dispatch.
+crates/dae-resident-dataplane/src/memory_bench.rs	1	InternalInvariant	Benchmark memory fixtures are constructed with fixed test inputs.
+crates/dae-resident-dataplane/src/ownership_bench.rs	6	InternalInvariant	Benchmark ownership fixtures retain their validated entries.
+crates/dae-resident-dataplane/src/plan/check_plans.rs	2	InternalInvariant	Validated resident probe plans contain an admitted target.
+crates/dae-resident-dataplane/src/plan/executable_graph.rs	4	InternalInvariant	Static executable graph identity widths are fixed.
+crates/dae-resident-dataplane/src/plan/model.rs	1	InternalInvariant	Validated proxy plans contain their selected binding.
+crates/dae-resident-dataplane/src/runtime/anytls_owner.rs	1	InternalInvariant	Static AnyTLS owner identity is fixed.
+crates/dae-resident-dataplane/src/runtime/executor.rs	1	InternalInvariant	Runtime access precedes explicit owner shutdown.
+crates/dae-resident-dataplane/src/runtime/generation.rs	3	InternalInvariant	Generation lifecycle state is retained during one owner turn.
+crates/dae-resident-dataplane/src/runtime/hysteria2_owner.rs	4	InternalInvariant	Validated Hysteria2 owner state retains limits and queues.
+crates/dae-resident-dataplane/src/runtime/juicity_owner.rs	1	InternalInvariant	An elected Juicity build owns its queued waiter.
+crates/dae-resident-dataplane/src/runtime/matrix/source_materialization.rs	2	InternalInvariant	Classified source rows retain reconciliation witnesses.
+crates/dae-resident-dataplane/src/runtime/meek_transport_owner.rs	1	InternalInvariant	A live Meek lease owns its physical connection.
+crates/dae-resident-dataplane/src/runtime/metrics.rs	1	InternalInvariant	Resident metric state is initialized before observation.
+crates/dae-resident-dataplane/src/runtime/runtime.rs	1	InternalInvariant	Prepared shutdown owns its workload control.
+crates/dae-resident-dataplane/src/runtime/transport_identity.rs	1	InternalInvariant	Static transport identity namespace is fixed.
+crates/dae-resident-dataplane/src/runtime/tuic_owner.rs	3	InternalInvariant	Validated TUIC owner state retains limits and queues.
+crates/dae-resident-dataplane/src/runtime_owner/manual_probe_execution.rs	1	InternalInvariant	Manual probe runtime remains owned until shutdown.
+crates/dae-resident-dataplane/src/tcp/proxy_dispatch/hysteria2_port_hopping.rs	10	InternalInvariant	Port-hopping state locks are process-local invariants.
+crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_endpoint/admission.rs	2	InternalInvariant	Validated QUIC admission retains its bounded permit state.
+crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_endpoint/metrics.rs	14	InternalInvariant	QUIC observation IDs and registry locks are process-local.
+crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_endpoint/model.rs	1	InternalInvariant	Static QUIC endpoint identity namespace is fixed.
+crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_endpoint/runtime.rs	2	InternalInvariant	The first endpoint driver spawn owns one abort registration.
+crates/dae-resident-dataplane/src/tcp/proxy_dispatch/quic_helpers.rs	4	InternalInvariant	Validated QUIC helper state retains its bounded carrier.
+crates/dae-resident-dataplane/src/tcp/transport_helpers/xhttp_h2/xmux/h2_manager.rs	2	InternalInvariant	An admitted H2 xmux lease owns its client and permit.
+crates/dae-resident-dataplane/src/tcp/transport_helpers/xhttp_h2/xmux/h3_manager.rs	2	InternalInvariant	An admitted H3 xmux lease owns its client and permit.
+crates/dae-resident-dataplane/src/tcp/transport_helpers/xhttp_h2/xmux/key.rs	1	InternalInvariant	Static xmux identity namespace is fixed.
+crates/dae-resident-dataplane/src/tcp/vless_relay/support.rs	2	InternalInvariant	Validated VLESS relay support retains its frame state.
+crates/dae-resident-dataplane/src/tcp/vless_relay/vision_duplex/driver.rs	1	InternalInvariant	A completed Vision write remains at the queue front in one poll cycle.
+crates/dae-resident-dataplane/src/tcp/websocket/duplex_control.rs	2	InternalInvariant	Queued WebSocket control frames retain their active state.
+crates/dae-resident-dataplane/src/udp/manager.rs	3	InternalInvariant	Selected generation and pin entries remain installed during one actor turn.
+crates/dae-resident-dataplane/src/udp/manager/router.rs	1	InternalInvariant	Plan validation installs the default outbound group.
+crates/dae-resident-dataplane/src/udp/manager/session_shards/worker.rs	4	InternalInvariant	Session insertion and reserved reaper capacity are actor-local.
+crates/dae-resident-dataplane/src/udp/manager/sniff.rs	2	InternalInvariant	Sniffer removal follows a successful same-turn lookup.
+crates/dae-resident-dataplane/src/udp/reply/actor/socket.rs	1	InternalInvariant	UDP reply socket state is initialized before actor use.
+crates/dae-resident-dataplane/src/udp/session_executor/quic.rs	4	InternalInvariant	Validated QUIC session state retains its admitted carrier.
