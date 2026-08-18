@@ -10,9 +10,9 @@ use dae_runtime_control::{
     apply_domain_routing_state_entries_by_id, ip_to_key,
 };
 
-use crate::GenerationToken;
+use dae_resident_core::GenerationToken;
 #[cfg(test)]
-use crate::{LogicalGenerationId, PhysicalRuntimeId};
+use dae_resident_core::{LogicalGenerationId, PhysicalRuntimeId};
 
 use super::unix_now;
 
@@ -20,10 +20,10 @@ mod maintenance;
 mod reload;
 #[cfg(test)]
 mod tests;
-pub(crate) use self::maintenance::ResidentDnsDomainRoutingMaintenanceHandle;
+pub use self::maintenance::ResidentDnsDomainRoutingMaintenanceHandle;
 #[cfg(test)]
-pub(super) use self::reload::build_resident_dns_domain_routing_update_plan_from_entry;
-pub(super) use self::reload::{
+use self::reload::build_resident_dns_domain_routing_update_plan_from_entry;
+pub use self::reload::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
 };
 
@@ -32,7 +32,7 @@ type ResidentDomainRoutingMapApply =
     fn(u32, &[DomainRoutingStateEntry], &[DomainRoutingIpKey]) -> io::Result<()>;
 
 #[derive(Debug)]
-pub(crate) struct ResidentDnsDomainRouting {
+pub struct ResidentDnsDomainRouting {
     map_id: u32,
     generation: GenerationToken,
     fence: Arc<ResidentDomainRoutingGenerationFence>,
@@ -44,7 +44,7 @@ pub(crate) struct ResidentDnsDomainRouting {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ResidentDomainRoutingGenerationFence {
+pub struct ResidentDomainRoutingGenerationFence {
     state: Mutex<ResidentDomainRoutingGenerationFenceState>,
 }
 
@@ -90,7 +90,7 @@ impl ResidentDnsDomainRouting {
         )
     }
 
-    pub(crate) fn new_for_generation(
+    pub fn new_for_generation(
         map_id: u32,
         generation: GenerationToken,
         routing_matcher: RoutingMatcher,
@@ -112,7 +112,7 @@ impl ResidentDnsDomainRouting {
         }
     }
 
-    pub(super) fn record_accepted_response(
+    pub fn record_accepted_response(
         &self,
         cache_plan: &DnsResponseCachePlan,
     ) -> Result<(), String> {
@@ -175,7 +175,7 @@ impl ResidentDnsDomainRouting {
         Ok(())
     }
 
-    pub(super) fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<(), String> {
+    pub fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
@@ -279,7 +279,7 @@ impl ResidentDnsDomainRouting {
         )
     }
 
-    pub(crate) fn activate_generation(&self) -> Result<(), String> {
+    pub fn activate_generation(&self) -> Result<(), String> {
         let state = self
             .state
             .lock()

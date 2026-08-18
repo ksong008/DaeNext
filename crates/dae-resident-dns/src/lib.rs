@@ -1,4 +1,5 @@
 mod cache;
+mod domain_routing;
 mod error_response;
 mod udp_response;
 
@@ -7,6 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub use cache::{
     ResidentDnsFlightPermit, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
     ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot,
+};
+pub use domain_routing::{
+    ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
+    ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
+    ResidentDomainRoutingGenerationFence,
 };
 pub use error_response::{build_dns_server_failure_response, build_reject_response};
 pub use udp_response::fit_dns_response_to_udp_request;

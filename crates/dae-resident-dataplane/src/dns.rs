@@ -20,8 +20,6 @@ use dae_dns::{
 };
 use dae_outbound::{L4Proto, NetworkType};
 use dae_routing::{IpPrefix, Query, RoutingMatcher};
-#[cfg(test)]
-use dae_runtime_control::ip_to_key;
 use http::Request;
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -123,25 +121,12 @@ impl ResidentDnsTlsStream {
     }
 }
 
-mod domain_routing;
 mod reload;
 mod routing;
 mod trace_summary;
 mod transport;
 mod upstream_model;
 mod upstream_router;
-pub(super) use self::domain_routing::{
-    ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
-    ResidentDomainRoutingGenerationFence,
-};
-use self::domain_routing::{
-    ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
-};
-#[cfg(test)]
-use self::domain_routing::{
-    build_resident_dns_domain_routing_update_plan,
-    build_resident_dns_domain_routing_update_plan_from_entry,
-};
 pub(crate) use self::reload::ResidentDnsReloadHandle;
 use self::reload::ResidentDnsReloadRestoreReport;
 pub use self::reload::ResidentDnsReloadSnapshot;
@@ -182,9 +167,12 @@ pub(in crate::dns) use self::upstream_model::{
 pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
 pub(in crate::dns) use self::upstream_router::ResidentDnsUpstreamSelection;
 pub(super) use dae_resident_dns::{
-    DNS_MAX_UDP_MESSAGE_SIZE, build_dns_server_failure_response, fit_dns_response_to_udp_request,
+    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
+    ResidentDomainRoutingGenerationFence, build_dns_server_failure_response,
+    fit_dns_response_to_udp_request,
 };
 use dae_resident_dns::{
+    ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
     ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache,
     ResidentDnsRuntimeCacheSnapshot, build_reject_response,
 };

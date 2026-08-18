@@ -1,28 +1,26 @@
 use super::*;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(in crate::dns) struct ResidentDnsDomainRoutingReloadSnapshot {
+pub struct ResidentDnsDomainRoutingReloadSnapshot {
     accepted_responses: Vec<(DnsCacheKey, DnsCacheEntry)>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(in crate::dns) struct ResidentDnsDomainRoutingRestoreReport {
-    pub(in crate::dns) accepted_response_entries: usize,
-    pub(in crate::dns) sniffed_domain_entries: usize,
-    pub(in crate::dns) skipped_expired_entries: usize,
-    pub(in crate::dns) skipped_unmatched_entries: usize,
+pub struct ResidentDnsDomainRoutingRestoreReport {
+    pub accepted_response_entries: usize,
+    pub sniffed_domain_entries: usize,
+    pub skipped_expired_entries: usize,
+    pub skipped_unmatched_entries: usize,
 }
 
 impl ResidentDnsDomainRoutingReloadSnapshot {
-    pub(in crate::dns) fn entry_count(&self) -> usize {
+    pub fn entry_count(&self) -> usize {
         self.accepted_responses.len()
     }
 }
 
 impl ResidentDnsDomainRouting {
-    pub(in crate::dns) fn snapshot_for_reload(
-        &self,
-    ) -> Result<ResidentDnsDomainRoutingReloadSnapshot, String> {
+    pub fn snapshot_for_reload(&self) -> Result<ResidentDnsDomainRoutingReloadSnapshot, String> {
         let now_unix = unix_now();
         let mut state = self
             .state
@@ -33,7 +31,7 @@ impl ResidentDnsDomainRouting {
         Ok(ResidentDnsDomainRoutingReloadSnapshot { accepted_responses })
     }
 
-    pub(in crate::dns) fn restore_reload_snapshot(
+    pub fn restore_reload_snapshot(
         &self,
         snapshot: &ResidentDnsDomainRoutingReloadSnapshot,
     ) -> Result<ResidentDnsDomainRoutingRestoreReport, String> {
@@ -79,7 +77,7 @@ impl ResidentDnsDomainRouting {
     }
 }
 
-pub(in crate::dns) fn build_resident_dns_domain_routing_update_plan_from_entry(
+pub(super) fn build_resident_dns_domain_routing_update_plan_from_entry(
     routing_matcher: &RoutingMatcher,
     domain_bitmap: &mut Vec<u32>,
     key: &DnsCacheKey,

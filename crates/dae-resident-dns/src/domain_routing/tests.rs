@@ -45,6 +45,88 @@ fn response_plan(name: &str, ip: &str, deadline_unix: i64) -> DnsResponseCachePl
 }
 
 #[test]
+fn update_plan_records_accepted_response_ips() {
+    let matcher = matching_domain_routing().routing_matcher.clone();
+    let mut bitmap_buffer = Vec::new();
+    let cache_plan = response_plan(
+        "example.test.",
+        "203.0.113.42",
+        unix_now().saturating_add(300),
+    );
+    let plan =
+        build_resident_dns_domain_routing_update_plan(&matcher, &mut bitmap_buffer, &cache_plan)
+            .unwrap()
+            .unwrap();
+
+    assert_eq!(plan.key.qname, "example.test.");
+    assert_eq!(plan.entry.route_owner_key, "example.test.|1|1");
+    assert_eq!(plan.ips, vec![ip_to_key("203.0.113.42".parse().unwrap())]);
+    assert_eq!(plan.entry.domain_bitmap, vec![0x1]);
+}
+
+#[test]
+fn reload_plan_recomputes_bitmap_from_new_matcher() {
+    let old_matcher = RoutingMatcher::from_fixture_value(&serde_json::json!({
+        "domain_sets": [
+            {"bit": 3, "key": "suffix", "patterns": ["example.test"]}
+        ],
+        "matches": [
+            {"type": "domain_set", "outbound": "direct"},
+            {"type": "fallback", "outbound": "block"}
+        ]
+    }))
+    .unwrap();
+    let new_matcher = matching_domain_routing().routing_matcher.clone();
+    let mut bitmap_buffer = Vec::new();
+    let cache_plan = response_plan(
+        "example.test.",
+        "203.0.113.42",
+        unix_now().saturating_add(300),
+    );
+    let old_plan = build_resident_dns_domain_routing_update_plan(
+        &old_matcher,
+        &mut bitmap_buffer,
+        &cache_plan,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(old_plan.entry.domain_bitmap, vec![0x8]);
+
+    let reloaded = build_resident_dns_domain_routing_update_plan_from_entry(
+        &new_matcher,
+        &mut bitmap_buffer,
+        &old_plan.key,
+        &old_plan.entry,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reloaded.entry.route_owner_key, "example.test.|1|1");
+    assert_eq!(reloaded.entry.domain_bitmap, vec![0x1]);
+    assert_eq!(
+        reloaded.ips,
+        vec![ip_to_key("203.0.113.42".parse().unwrap())]
+    );
+}
+
+#[test]
+fn update_plan_skips_unmatched_domain() {
+    let matcher = matching_domain_routing().routing_matcher.clone();
+    let mut bitmap_buffer = Vec::new();
+    let cache_plan = response_plan(
+        "invalid.test.",
+        "203.0.113.42",
+        unix_now().saturating_add(300),
+    );
+
+    let plan =
+        build_resident_dns_domain_routing_update_plan(&matcher, &mut bitmap_buffer, &cache_plan)
+            .unwrap();
+
+    assert_eq!(plan, None);
+}
+
+#[test]
 fn capacity_eviction_removes_the_domain_routing_owner_with_its_cache_entry() {
     let domain_routing = matching_domain_routing();
     let deadline = unix_now().saturating_add(300);
