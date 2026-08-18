@@ -1,8 +1,10 @@
+mod direct_dial;
 mod dns_name;
 mod dns_tcp_wire;
 mod quic_endpoint;
 mod resolver;
 
+pub use direct_dial::{DirectTcpConnection, open_direct_tcp_connection_async};
 pub use dns_name::encode_dns_qname;
 pub use dns_tcp_wire::{
     DnsTcpFrameReader, read_dns_tcp_payload_async, write_dns_tcp_payload_async,

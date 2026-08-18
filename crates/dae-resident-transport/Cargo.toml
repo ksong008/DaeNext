@@ -9,6 +9,7 @@ repository.workspace = true
 default = []
 
 [dependencies]
+dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-resident-core.workspace = true
 dae-runtime-control.workspace = true
