@@ -210,7 +210,7 @@ pub(super) async fn forward_dns_udp_to_routed_target_async(
                     ))
                 })?;
             forwarder
-                .exchange_with_context(payload, context)
+                .exchange(payload, context)
                 .await
                 .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote)))
         }

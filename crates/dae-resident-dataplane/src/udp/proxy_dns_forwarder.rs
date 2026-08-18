@@ -3,9 +3,12 @@ use crate::{
     ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
     dns::{
         DnsRequestIdAllocator, ProxyDnsRequestContext, ProxyDnsRequestError,
-        ProxyDnsRequestFailure, ProxyDnsRequestStage, ResidentDnsTransportOwnerObservation,
-        ResidentDnsUdpActorExecutor,
+        ProxyDnsRequestFailure, ProxyDnsRequestStage, ResidentDnsUdpActorExecutor,
     },
+};
+use dae_resident_dns::{
+    ResidentDnsProxyFuture, ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder,
+    ResidentDnsProxyUdpTransport, ResidentDnsTransportOwnerObservation,
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde_json::{Value, json};
@@ -13,6 +16,27 @@ use serde_json::{Value, json};
 mod actor;
 
 use self::actor::{ResidentProxyDnsUdpActorHandle, start_proxy_dns_udp_actor};
+
+pub(crate) fn resident_dns_proxy_udp_transport(
+    runtime_config: ResidentDnsUdpRuntimeConfig,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    actor_executor: Arc<ResidentDnsUdpActorExecutor>,
+    owners: ResidentTransportOwnerRegistries,
+) -> Arc<dyn ResidentDnsProxyUdpTransport> {
+    Arc::new(ResidentDataplaneDnsProxyUdpTransport {
+        runtime_config,
+        metrics,
+        actor_executor,
+        owners,
+    })
+}
+
+struct ResidentDataplaneDnsProxyUdpTransport {
+    runtime_config: ResidentDnsUdpRuntimeConfig,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    actor_executor: Arc<ResidentDnsUdpActorExecutor>,
+    owners: ResidentTransportOwnerRegistries,
+}
 
 pub(crate) struct ResidentProxyDnsUdpForwarder {
     owner_observation: Arc<ResidentDnsTransportOwnerObservation>,
@@ -357,9 +381,70 @@ impl ResidentProxyDnsUdpForwarder {
         Arc::clone(&self.owner_observation)
     }
 
-    #[cfg(test)]
     pub(crate) fn actor_count(&self) -> usize {
         self.actors.len()
+    }
+}
+
+impl ResidentDnsProxyUdpForwarder for ResidentProxyDnsUdpForwarder {
+    fn exchange<'a>(
+        &'a self,
+        payload: &'a [u8],
+        context: ProxyDnsRequestContext,
+    ) -> ResidentDnsProxyFuture<'a, Result<Vec<u8>, ProxyDnsRequestError>> {
+        Box::pin(self.exchange_with_context(payload, context))
+    }
+
+    fn shutdown(&self, deadline: time::Instant) -> ResidentDnsProxyFuture<'_, Value> {
+        Box::pin(ResidentProxyDnsUdpForwarder::shutdown(self, deadline))
+    }
+
+    fn owner_observation(&self) -> Arc<ResidentDnsTransportOwnerObservation> {
+        ResidentProxyDnsUdpForwarder::owner_observation(self)
+    }
+
+    fn actor_count(&self) -> usize {
+        ResidentProxyDnsUdpForwarder::actor_count(self)
+    }
+}
+
+impl ResidentDnsProxyUdpTransport for ResidentDataplaneDnsProxyUdpTransport {
+    fn open_forwarder(
+        &self,
+        binding: ResidentProxyBinding,
+        original_dst: SocketAddr,
+    ) -> Result<Arc<dyn ResidentDnsProxyUdpForwarder>, String> {
+        ResidentProxyDnsUdpForwarder::new_with_optional_transport_owner(
+            binding,
+            original_dst,
+            self.runtime_config.clone(),
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.actor_executor),
+            self.owners.clone(),
+        )
+        .map(|forwarder| Arc::new(forwarder) as Arc<dyn ResidentDnsProxyUdpForwarder>)
+    }
+
+    fn open_bridge(
+        &self,
+        binding: ResidentProxyBinding,
+        original_dst: SocketAddr,
+        owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
+    ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyUdpBridge>, String>> {
+        let owners = self.owners.clone();
+        Box::pin(async move {
+            open_resident_proxy_udp_bridge_async(
+                binding,
+                original_dst,
+                owners.hysteria2(),
+                owners.tuic(),
+                owners.juicity(),
+                owners.anytls(),
+                owner_deadline,
+            )
+            .await
+            .map(|bridge| Box::new(bridge) as Box<dyn ResidentDnsProxyUdpBridge>)
+        })
     }
 }
 

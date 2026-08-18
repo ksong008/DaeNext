@@ -174,11 +174,8 @@ pub(in crate::dns) struct ResidentDnsForwarderCache {
     pub(in crate::dns) resources: ResidentDnsResourceProfile,
     pub(in crate::dns) tcp_udp_hedges: ResidentDnsTcpUdpHedgeRegistry,
     pub(in crate::dns) metrics: Arc<ResidentDataplaneMetrics>,
-    pub(in crate::dns) hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
-    pub(in crate::dns) tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
-    pub(in crate::dns) juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
-    pub(in crate::dns) anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     pub(in crate::dns) proxy_tcp_transport: Option<Arc<dyn ResidentDnsProxyTcpTransport>>,
+    pub(in crate::dns) proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
     pub(in crate::dns) health_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::dns) closing: std::sync::atomic::AtomicBool,
 }
@@ -187,24 +184,26 @@ impl Default for ResidentDnsForwarderCache {
     fn default() -> Self {
         let udp_runtime = ResidentDnsUdpRuntimeConfig::standalone();
         let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+            udp_runtime.clone(),
+            Arc::clone(&metrics),
+        ));
+        let owners = ResidentTransportOwnerRegistries::default();
         Self {
             state: Mutex::new(ResidentDnsForwarderCacheState::default()),
             health_state: Mutex::new(ResidentDnsForwarderCacheState::default()),
-            udp_executor: Arc::new(ResidentDnsUdpActorExecutor::new(
-                udp_runtime.clone(),
-                Arc::clone(&metrics),
-            )),
-            udp_runtime,
+            udp_executor: Arc::clone(&udp_executor),
+            udp_runtime: udp_runtime.clone(),
             resources: ResidentDnsResourceProfile::selected(),
             tcp_udp_hedges: ResidentDnsTcpUdpHedgeRegistry::default(),
-            metrics,
-            hysteria2_owner_registry: None,
-            tuic_owner_registry: None,
-            juicity_owner_registry: None,
-            anytls_owner_registry: None,
-            proxy_tcp_transport: Some(resident_dns_proxy_tcp_transport(
-                ResidentTransportOwnerRegistries::default(),
-            )),
+            metrics: Arc::clone(&metrics),
+            proxy_tcp_transport: Some(resident_dns_proxy_tcp_transport(owners.clone())),
+            proxy_udp_transport: resident_dns_proxy_udp_transport(
+                udp_runtime.clone(),
+                Arc::clone(&metrics),
+                udp_executor,
+                owners,
+            ),
             health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
@@ -216,47 +215,43 @@ impl ResidentDnsForwarderCache {
         udp_runtime: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
     ) -> Self {
+        let udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+            udp_runtime.clone(),
+            Arc::clone(&metrics),
+        ));
+        let owners = ResidentTransportOwnerRegistries::default();
         Self {
             state: Mutex::new(ResidentDnsForwarderCacheState::default()),
             health_state: Mutex::new(ResidentDnsForwarderCacheState::default()),
-            udp_executor: Arc::new(ResidentDnsUdpActorExecutor::new(
-                udp_runtime.clone(),
-                Arc::clone(&metrics),
-            )),
-            udp_runtime,
+            udp_executor: Arc::clone(&udp_executor),
+            udp_runtime: udp_runtime.clone(),
             resources: ResidentDnsResourceProfile::selected(),
             tcp_udp_hedges: ResidentDnsTcpUdpHedgeRegistry::default(),
-            metrics,
-            hysteria2_owner_registry: None,
-            tuic_owner_registry: None,
-            juicity_owner_registry: None,
-            anytls_owner_registry: None,
-            proxy_tcp_transport: Some(resident_dns_proxy_tcp_transport(
-                ResidentTransportOwnerRegistries::default(),
-            )),
+            metrics: Arc::clone(&metrics),
+            proxy_tcp_transport: Some(resident_dns_proxy_tcp_transport(owners.clone())),
+            proxy_udp_transport: resident_dns_proxy_udp_transport(
+                udp_runtime.clone(),
+                Arc::clone(&metrics),
+                udp_executor,
+                owners,
+            ),
             health_runtime: tokio::runtime::Handle::try_current().ok(),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
-    pub(in crate::dns) fn new_with_transport_owner(
+    pub(in crate::dns) fn new_with_proxy_transports(
         udp_runtime: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
         runtime: tokio::runtime::Handle,
-        transport_owners: ResidentTransportOwnerRegistries,
+        udp_executor: Arc<ResidentDnsUdpActorExecutor>,
         proxy_tcp_transport: Arc<dyn ResidentDnsProxyTcpTransport>,
+        proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
     ) -> Self {
-        let mut cache = Self::new(udp_runtime.clone(), Arc::clone(&metrics));
-        cache.udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new_on(
-            udp_runtime,
-            metrics,
-            runtime.clone(),
-        ));
-        cache.hysteria2_owner_registry = transport_owners.hysteria2();
-        cache.tuic_owner_registry = transport_owners.tuic();
-        cache.juicity_owner_registry = transport_owners.juicity();
-        cache.anytls_owner_registry = transport_owners.anytls();
+        let mut cache = Self::new(udp_runtime, metrics);
+        cache.udp_executor = udp_executor;
         cache.proxy_tcp_transport = Some(proxy_tcp_transport);
+        cache.proxy_udp_transport = proxy_udp_transport;
         cache.health_runtime = Some(runtime);
         cache
     }
@@ -298,7 +293,7 @@ enum ResidentDnsRetiredForwarderKind {
     ProxyQuic(Weak<AsyncMutex<ResidentDnsProxyQuicForwarder>>),
     ProxyH3(Weak<AsyncMutex<ResidentDnsProxyH3Forwarder>>),
     Udp(Weak<ResidentDnsUdpForwarder>),
-    ProxyUdp(Weak<ResidentProxyDnsUdpForwarder>),
+    ProxyUdp(Weak<dyn ResidentDnsProxyUdpForwarder>),
     Tcp(Weak<ResidentDnsTcpForwarder>),
     Tls(Weak<ResidentDnsTlsForwarder>),
     Https(Weak<ResidentDnsHttpsForwarder>),
@@ -440,14 +435,14 @@ impl ResidentDnsHealthForwarderClose {
 pub(in crate::dns) struct ResidentDnsHealthForwarderLease {
     cache: Arc<ResidentDnsForwarderCache>,
     key: Option<ResidentDnsForwarderKey>,
-    forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+    forwarder: Arc<dyn ResidentDnsProxyUdpForwarder>,
 }
 
 impl ResidentDnsHealthForwarderLease {
     pub(in crate::dns) fn new(
         cache: Arc<ResidentDnsForwarderCache>,
         key: ResidentDnsForwarderKey,
-        forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+        forwarder: Arc<dyn ResidentDnsProxyUdpForwarder>,
     ) -> Self {
         Self {
             cache,
@@ -456,7 +451,7 @@ impl ResidentDnsHealthForwarderLease {
         }
     }
 
-    pub(in crate::dns) fn forwarder(&self) -> Arc<ResidentProxyDnsUdpForwarder> {
+    pub(in crate::dns) fn forwarder(&self) -> Arc<dyn ResidentDnsProxyUdpForwarder> {
         Arc::clone(&self.forwarder)
     }
 
@@ -487,7 +482,7 @@ pub(in crate::dns) enum ResidentDnsForwarderEntryKind {
     ProxyQuic(Arc<AsyncMutex<ResidentDnsProxyQuicForwarder>>),
     ProxyH3(Arc<AsyncMutex<ResidentDnsProxyH3Forwarder>>),
     Udp(Arc<ResidentDnsUdpForwarder>),
-    ProxyUdp(Arc<ResidentProxyDnsUdpForwarder>),
+    ProxyUdp(Arc<dyn ResidentDnsProxyUdpForwarder>),
     Tcp(Arc<ResidentDnsTcpForwarder>),
     Tls(Arc<ResidentDnsTlsForwarder>),
     Https(Arc<ResidentDnsHttpsForwarder>),
@@ -585,46 +580,6 @@ impl ResidentDnsForwarderSelectionKey {
     }
 }
 
-pub(crate) struct ResidentDnsTransportOwnerObservation {
-    metrics: Arc<ResidentDataplaneMetrics>,
-    charged_bytes: usize,
-    evicted: AtomicBool,
-    released: AtomicBool,
-}
-
-impl ResidentDnsTransportOwnerObservation {
-    pub(crate) fn new(metrics: Arc<ResidentDataplaneMetrics>, charged_bytes: usize) -> Arc<Self> {
-        metrics.dns_transport_owner_opened(charged_bytes);
-        Arc::new(Self {
-            metrics,
-            charged_bytes,
-            evicted: AtomicBool::new(false),
-            released: AtomicBool::new(false),
-        })
-    }
-
-    pub(in crate::dns) fn mark_evicted(&self) {
-        if !self.evicted.swap(true, Ordering::AcqRel) {
-            self.metrics.dns_transport_owner_evicted();
-        }
-    }
-
-    pub(crate) fn release(&self) {
-        if !self.released.swap(true, Ordering::AcqRel) {
-            self.metrics.dns_transport_owner_released(
-                self.charged_bytes,
-                self.evicted.load(Ordering::Acquire),
-            );
-        }
-    }
-}
-
-impl Drop for ResidentDnsTransportOwnerObservation {
-    fn drop(&mut self) {
-        self.release();
-    }
-}
-
 pub(in crate::dns) struct ResidentDnsQuicForwarder {
     pub(in crate::dns) owner_observation: Arc<ResidentDnsTransportOwnerObservation>,
     pub(in crate::dns) task_executor: Arc<ResidentDnsUdpActorExecutor>,
@@ -647,8 +602,8 @@ pub(in crate::dns) struct ResidentDnsProxyQuicForwarder {
     pub(in crate::dns) upstream: ResidentDnsUpstream,
     pub(in crate::dns) remote: SocketAddr,
     pub(in crate::dns) binding: ResidentProxyBinding,
-    pub(in crate::dns) owners: ResidentTransportOwnerRegistries,
-    pub(in crate::dns) bridge: Option<ResidentProxyUdpBridge>,
+    pub(in crate::dns) proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
+    pub(in crate::dns) bridge: Option<Box<dyn ResidentDnsProxyUdpBridge>>,
     pub(in crate::dns) endpoint: Option<ObservedQuicEndpoint>,
     pub(in crate::dns) connection: Option<quinn::Connection>,
     pub(in crate::dns) session_cache:
@@ -666,9 +621,9 @@ pub(in crate::dns) struct ResidentDnsProxyH3Forwarder {
     pub(in crate::dns) upstream: ResidentDnsUpstream,
     pub(in crate::dns) remote: SocketAddr,
     pub(in crate::dns) binding: ResidentProxyBinding,
-    pub(in crate::dns) owners: ResidentTransportOwnerRegistries,
+    pub(in crate::dns) proxy_udp_transport: Arc<dyn ResidentDnsProxyUdpTransport>,
     pub(in crate::dns) metrics: Arc<ResidentDataplaneMetrics>,
-    pub(in crate::dns) bridge: Option<ResidentProxyUdpBridge>,
+    pub(in crate::dns) bridge: Option<Box<dyn ResidentDnsProxyUdpBridge>>,
     pub(in crate::dns) endpoint: Option<ObservedQuicEndpoint>,
     pub(in crate::dns) connection: Option<quinn::Connection>,
     pub(in crate::dns) session_cache:

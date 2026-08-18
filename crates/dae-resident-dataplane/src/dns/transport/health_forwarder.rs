@@ -62,21 +62,9 @@ impl ResidentDnsForwarderCache {
                         ));
                     }
                 } else {
-                    let forwarder = Arc::new(
-                        ResidentProxyDnsUdpForwarder::new_with_optional_transport_owner(
-                            binding.clone(),
-                            target,
-                            self.udp_runtime.clone(),
-                            Arc::clone(&self.metrics),
-                            Arc::clone(&self.udp_executor),
-                            ResidentTransportOwnerRegistries::new(
-                                self.hysteria2_owner_registry.clone(),
-                                self.tuic_owner_registry.clone(),
-                                self.juicity_owner_registry.clone(),
-                            )
-                            .with_anytls(self.anytls_owner_registry.clone()),
-                        )?,
-                    );
+                    let forwarder = self
+                        .proxy_udp_transport
+                        .open_forwarder(binding.clone(), target)?;
                     let last_used = next_dns_forwarder_tick(&mut state);
                     let kind = ResidentDnsForwarderEntryKind::ProxyUdp(Arc::clone(&forwarder));
                     let owner_observation = kind.owner_observation();
@@ -109,7 +97,7 @@ impl ResidentDnsForwarderCache {
     pub(in crate::dns) fn schedule_health_proxy_udp_forwarder_release(
         self: &Arc<Self>,
         key: ResidentDnsForwarderKey,
-        forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+        forwarder: Arc<dyn ResidentDnsProxyUdpForwarder>,
     ) {
         let cache = Arc::clone(self);
         let release = async move {
@@ -129,7 +117,7 @@ impl ResidentDnsForwarderCache {
     pub(in crate::dns) async fn release_health_proxy_udp_forwarder(
         self: Arc<Self>,
         key: ResidentDnsForwarderKey,
-        forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+        forwarder: Arc<dyn ResidentDnsProxyUdpForwarder>,
     ) -> Result<(), String> {
         let (close, owner_observation) = {
             let mut state = self

@@ -105,14 +105,14 @@ async fn open_cached_proxy_dns_h3_client(
             return Ok((client.clone(), connection.stable_id()));
         }
     }
-    let (upstream, remote, proxy, owners, metrics, client_config) = {
+    let (upstream, remote, proxy, proxy_udp_transport, metrics, client_config) = {
         let forwarder =
             lock_proxy_dns_h3_forwarder(forwarder, context, "read endpoint plan").await?;
         (
             forwarder.upstream.clone(),
             forwarder.remote,
             forwarder.binding.clone(),
-            forwarder.owners.clone(),
+            Arc::clone(&forwarder.proxy_udp_transport),
             Arc::clone(&forwarder.metrics),
             proxy_dns_h3_client_config(&forwarder)?,
         )
@@ -121,13 +121,9 @@ async fn open_cached_proxy_dns_h3_client(
         .run(
             ProxyDnsRequestStage::OwnerAcquire,
             ProxyDnsRequestFailure::Network,
-            open_resident_proxy_udp_bridge_async(
+            proxy_udp_transport.open_bridge(
                 proxy.clone(),
                 remote,
-                owners.hysteria2(),
-                owners.tuic(),
-                owners.juicity(),
-                owners.anytls(),
                 Some(dae_runtime_control::AbsoluteDeadline::at(
                     context.deadline().into_std(),
                 )),

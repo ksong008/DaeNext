@@ -42,18 +42,18 @@ use super::plan::build_resident_dataplane_plan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{ResidentProxyBinding, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
+#[cfg(test)]
+use super::udp::ResidentProxyUdpBridge;
+use super::{DnsTcpFrameReader, ResolvedHostAddrs, write_dns_tcp_payload_async};
 use super::{
-    AnyTlsOwnerRegistryHandle, Hysteria2OwnerRegistryHandle, JuicityOwnerRegistryHandle,
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
     QuicEndpointOpenContext, QuicEndpointProtocol, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
     RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics, ResidentDnsResourceProfile,
-    ResidentDnsUdpRuntimeConfig, ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge,
-    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
+    ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
     apply_resident_udp_socket_buffer_tuning, open_marked_quic_endpoint_for_remote,
-    open_resident_proxy_udp_bridge_async, probe_resident_proxy_dns_udp_with_forwarder_async,
-    resident_dns_proxy_tcp_transport, scope_quic_endpoint_observation, set_socket_mark,
+    probe_resident_proxy_dns_udp_with_forwarder_async, resident_dns_proxy_tcp_transport,
+    resident_dns_proxy_udp_transport, scope_quic_endpoint_observation, set_socket_mark,
 };
-use super::{DnsTcpFrameReader, ResolvedHostAddrs, write_dns_tcp_payload_async};
 
 /// One bounded DNS TLS stream type keeps framing, pooling, and HTTP/2 ownership
 /// identical across all DNS TLS transports. BoringSSL is selected at handshake
@@ -149,7 +149,6 @@ pub(crate) use self::transport::udp_multiplex::{
 use self::transport::{
     ResidentDnsTcpMultiplexHandle, forward_dns_tcp_asis_async, forward_dns_to_upstream_async,
 };
-pub(crate) use self::upstream_model::ResidentDnsTransportOwnerObservation;
 pub(in crate::dns) use self::upstream_model::{
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
     ResidentDnsForwarderEntryKind, ResidentDnsForwarderKey, ResidentDnsForwarderSelectionKey,
@@ -172,9 +171,11 @@ pub(super) use dae_resident_dns::{
 };
 use dae_resident_dns::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
-    ResidentDnsProxyTcpTransport, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
-    ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot, build_reject_response,
-    exchange_resident_proxy_dns_tcp_stream, run_resident_proxy_dns_tcp_connection,
+    ResidentDnsProxyTcpTransport, ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder,
+    ResidentDnsProxyUdpTransport, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
+    ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot, ResidentDnsTransportOwnerObservation,
+    build_reject_response, exchange_resident_proxy_dns_tcp_stream,
+    run_resident_proxy_dns_tcp_connection,
 };
 pub(crate) use dae_resident_transport::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
@@ -366,13 +367,25 @@ impl ResidentDnsPlan {
         executor: tokio::runtime::Handle,
         transport_owners: ResidentTransportOwnerRegistries,
     ) -> Self {
+        let udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new_on(
+            runtime.clone(),
+            Arc::clone(&metrics),
+            executor.clone(),
+        ));
         let proxy_tcp_transport = resident_dns_proxy_tcp_transport(transport_owners.clone());
-        self.forwarders = Arc::new(ResidentDnsForwarderCache::new_with_transport_owner(
+        let proxy_udp_transport = resident_dns_proxy_udp_transport(
+            runtime.clone(),
+            Arc::clone(&metrics),
+            Arc::clone(&udp_executor),
+            transport_owners,
+        );
+        self.forwarders = Arc::new(ResidentDnsForwarderCache::new_with_proxy_transports(
             runtime,
             metrics,
             executor,
-            transport_owners,
+            udp_executor,
             proxy_tcp_transport,
+            proxy_udp_transport,
         ));
         self
     }

@@ -2,6 +2,7 @@ use super::*;
 use std::net::{IpAddr, Ipv4Addr};
 
 use crate::ProxyDnsRequestContext;
+use dae_resident_dns::{ResidentDnsProxyFuture, ResidentDnsProxyUdpBridge};
 use dae_resident_transport::encode_dns_qname;
 
 const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
@@ -78,6 +79,25 @@ impl Drop for ResidentProxyUdpBridge {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+    }
+}
+
+impl ResidentDnsProxyUdpBridge for ResidentProxyUdpBridge {
+    fn local_addr(&self) -> SocketAddr {
+        ResidentProxyUdpBridge::local_addr(self)
+    }
+
+    fn last_error(&self) -> Option<String> {
+        ResidentProxyUdpBridge::last_error(self)
+    }
+
+    fn shutdown_and_join_until(
+        self: Box<Self>,
+        deadline: time::Instant,
+    ) -> ResidentDnsProxyFuture<'static, Result<ResidentOwnedTaskShutdownCompletion, String>> {
+        Box::pin(
+            async move { ResidentProxyUdpBridge::shutdown_and_join_until(*self, deadline).await },
+        )
     }
 }
 
@@ -472,13 +492,13 @@ async fn wait_for_udp_probe_response(
 }
 
 pub(crate) async fn probe_resident_proxy_dns_udp_with_forwarder_async(
-    forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+    forwarder: Arc<dyn dae_resident_dns::ResidentDnsProxyUdpForwarder>,
     lookup_host: &str,
 ) -> Result<(), String> {
     let id = fastrand::u16(0..=u16::MAX);
     let query = build_dns_a_query(id, lookup_host)?;
     let response = forwarder
-        .exchange_with_context(
+        .exchange(
             &query,
             ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
         )

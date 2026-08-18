@@ -8,7 +8,7 @@ use super::lifecycle::{
 
 #[derive(Default)]
 pub(super) struct ProxiedDoh3Resources {
-    pub(super) bridge: Option<ResidentProxyUdpBridge>,
+    pub(super) bridge: Option<Box<dyn ResidentDnsProxyUdpBridge>>,
     pub(super) endpoint: Option<ObservedQuicEndpoint>,
     pub(super) connection: Option<quinn::Connection>,
     pub(super) client: Option<h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>>,
@@ -74,7 +74,7 @@ impl ProxiedDoh3Resources {
         driver_task: tokio::task::JoinHandle<()>,
     ) -> Self {
         Self {
-            bridge: Some(bridge),
+            bridge: Some(Box::new(bridge)),
             endpoint: Some(endpoint),
             connection: Some(connection),
             client: Some(client),

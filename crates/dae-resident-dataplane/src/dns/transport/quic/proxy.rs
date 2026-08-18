@@ -126,14 +126,14 @@ async fn open_cached_proxy_dns_quic_connection(
             return Ok(connection.clone());
         }
     }
-    let (upstream, remote, proxy, owners, client_config) = {
+    let (upstream, remote, proxy, proxy_udp_transport, client_config) = {
         let forwarder =
             lock_proxy_dns_quic_forwarder(forwarder, context, "read endpoint plan").await?;
         (
             forwarder.upstream.clone(),
             forwarder.remote,
             forwarder.binding.clone(),
-            forwarder.owners.clone(),
+            Arc::clone(&forwarder.proxy_udp_transport),
             proxy_dns_quic_client_config(&forwarder)?,
         )
     };
@@ -141,13 +141,9 @@ async fn open_cached_proxy_dns_quic_connection(
         .run(
             ProxyDnsRequestStage::OwnerAcquire,
             ProxyDnsRequestFailure::Network,
-            open_resident_proxy_udp_bridge_async(
+            proxy_udp_transport.open_bridge(
                 proxy.clone(),
                 remote,
-                owners.hysteria2(),
-                owners.tuic(),
-                owners.juicity(),
-                owners.anytls(),
                 Some(dae_runtime_control::AbsoluteDeadline::at(
                     context.deadline().into_std(),
                 )),
@@ -164,7 +160,7 @@ async fn open_cached_proxy_dns_quic_connection(
     ) {
         Ok(endpoint) => endpoint,
         Err(error) => {
-            let error = append_bridge_error(error, &bridge);
+            let error = append_bridge_error(error, bridge.as_ref());
             let cleanup = shutdown_proxy_dns_bridge(bridge, context).await;
             return Err(append_cleanup_error(error, cleanup));
         }
@@ -179,7 +175,7 @@ async fn open_cached_proxy_dns_quic_connection(
     {
         Ok(connection) => connection,
         Err(error) => {
-            let error = append_bridge_error(error, &bridge);
+            let error = append_bridge_error(error, bridge.as_ref());
             let cleanup = shutdown_proxy_dns_quic(endpoint, bridge, context).await;
             return Err(append_cleanup_error(error, cleanup));
         }
@@ -427,7 +423,7 @@ async fn forward_proxy_dns_over_quic(
 
 fn append_bridge_error(
     error: ProxyDnsRequestError,
-    bridge: &ResidentProxyUdpBridge,
+    bridge: &dyn ResidentDnsProxyUdpBridge,
 ) -> ProxyDnsRequestError {
     let Some(bridge_error) = bridge.last_error() else {
         return error;
@@ -440,7 +436,7 @@ fn append_bridge_error(
 }
 
 async fn shutdown_proxy_dns_bridge(
-    bridge: ResidentProxyUdpBridge,
+    bridge: Box<dyn ResidentDnsProxyUdpBridge>,
     context: ProxyDnsRequestContext,
 ) -> Result<(), ProxyDnsRequestError> {
     cleanup_proxy_dns_quic_resources(None, Some(bridge), context)
@@ -450,7 +446,7 @@ async fn shutdown_proxy_dns_bridge(
 
 async fn shutdown_proxy_dns_quic(
     endpoint: ObservedQuicEndpoint,
-    bridge: ResidentProxyUdpBridge,
+    bridge: Box<dyn ResidentDnsProxyUdpBridge>,
     context: ProxyDnsRequestContext,
 ) -> Result<(), ProxyDnsRequestError> {
     cleanup_proxy_dns_quic_resources(Some(endpoint), Some(bridge), context)
@@ -507,7 +503,7 @@ impl ProxyDnsQuicCleanupOutcome {
 
 async fn cleanup_proxy_dns_quic_resources(
     endpoint: Option<ObservedQuicEndpoint>,
-    bridge: Option<ResidentProxyUdpBridge>,
+    bridge: Option<Box<dyn ResidentDnsProxyUdpBridge>>,
     context: ProxyDnsRequestContext,
 ) -> ProxyDnsQuicCleanupOutcome {
     let deadline = context.deadline();

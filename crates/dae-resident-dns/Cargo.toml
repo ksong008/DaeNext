@@ -16,7 +16,5 @@ dae-resident-plan.workspace = true
 dae-resident-transport.workspace = true
 dae-routing.workspace = true
 dae-runtime-control.workspace = true
-tokio.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true
+tokio.workspace = true
