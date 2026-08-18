@@ -86,13 +86,14 @@ impl TuicLink {
             .filter(|value| !value.is_empty())
             .or_else(|| query_value(&query, "sni").filter(|value| !value.is_empty()))
             .unwrap_or_else(|| host.clone());
-        let mut allow_insecure = parse_allow_insecure(&query);
+        let allow_insecure = parse_allow_insecure(&query);
         let disable_sni = query_value(&query, "disable_sni")
             .and_then(|value| parse_bool(&value))
             .unwrap_or(false);
         if disable_sni {
+            // F-11: disable_sni 只控制 SNI 发送，绝不隐式关闭证书验证。
+            // 需要跳过验证必须显式 allow_insecure=1 或证书 pin。
             sni.clear();
-            allow_insecure = true;
         }
         let alpn = if query_has(&query, "alpn") {
             split_alpn(&query_value(&query, "alpn").unwrap_or_default())

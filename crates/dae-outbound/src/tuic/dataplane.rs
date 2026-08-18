@@ -104,6 +104,11 @@ pub fn run_true_quic_dataplane_smoke(
     quic_options.password = link.password.clone();
     if !link.sni.is_empty() {
         quic_options.server_name = link.sni.clone();
+    } else if link.disable_sni && link.server.parse::<std::net::IpAddr>().is_ok() {
+        // F-11: disable_sni 且服务器为 IP 字面量时，用 IP 作为验证主机名
+        // （BoringSSL 对 IP 做 IP SAN 验证），保持安全且可用；域名场景
+        // 不发 SNI 无法做主机名验证，必须显式 allow_insecure/pin。
+        quic_options.server_name = link.server.clone();
     }
     if !link.alpn.is_empty() {
         quic_options.alpn = link.alpn.clone();
@@ -126,9 +131,11 @@ pub fn run_true_quic_dataplane_smoke(
         && quic.handshake_idle_timeout_secs
             == super::quic_loopback::DEFAULT_TUIC_HANDSHAKE_IDLE_TIMEOUT_SECS
         && quic.alpn_protocols == vec![DEFAULT_TUIC_ALPN.to_owned()];
+    // F-11: disable_sni 不再隐式携带 allow_insecure；证书验证由
+    // 显式 allow_insecure/pin 独立控制。
     let disable_sni_contract_admitted = disable_sni_probe.disable_sni
         && disable_sni_probe.sni.is_empty()
-        && disable_sni_probe.allow_insecure;
+        && !disable_sni_probe.allow_insecure;
     let udp_relay_mode_native_admitted = udp_relay_mode == TuicUdpRelayMode::Native;
     let underlay_contract_admitted = underlay.tcp_underlay_uses_udp
         && underlay.tcp_underlay_preserves_mark

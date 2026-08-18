@@ -118,7 +118,10 @@ fn decrypt_quic_initial_packet(packet: &[u8]) -> Result<DecryptedInitialPacket, 
     if packet_len <= QUIC_AEAD_TAG_LEN {
         return Err(SniffingError::NotApplicable);
     }
-    if pn_offset + 4 + QUIC_HP_SAMPLE_LEN > packet.len() {
+    // A-10: sample 必须完整位于当前共包 packet 的 packet_end 内；
+    // 用 packet.len()（整个 datagram）会在后续共包 packet 存在时
+    // 跨越边界取字节，产生错误 mask。
+    if pn_offset + 4 + QUIC_HP_SAMPLE_LEN > packet_end {
         return Err(SniffingError::NeedMore);
     }
 
