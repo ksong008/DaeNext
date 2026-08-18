@@ -1,15 +1,12 @@
 use super::*;
-pub(crate) fn vision_uplink_command(
-    record_type: u8,
-    tls_state: &VisionInnerTlsState,
-) -> Option<u8> {
+pub fn vision_uplink_command(record_type: u8, tls_state: &VisionInnerTlsState) -> Option<u8> {
     if record_type != TLS_CONTENT_TYPE_APPLICATION_DATA {
         return Some(VISION_COMMAND_CONTINUE);
     }
     tls_state.application_data_command()
 }
 
-pub(crate) fn server_hello_decision(selected_tls13: bool, cipher_suite: u16) -> VisionTlsDecision {
+pub fn server_hello_decision(selected_tls13: bool, cipher_suite: u16) -> VisionTlsDecision {
     if selected_tls13 && tls13_cipher_allows_direct(cipher_suite) {
         VisionTlsDecision::Direct
     } else {
@@ -17,6 +14,6 @@ pub(crate) fn server_hello_decision(selected_tls13: bool, cipher_suite: u16) -> 
     }
 }
 
-pub(crate) fn tls13_cipher_allows_direct(cipher: u16) -> bool {
+pub fn tls13_cipher_allows_direct(cipher: u16) -> bool {
     (0x1301..=0x1305).contains(&cipher) && cipher != TLS13_AES_128_CCM_8_SHA256
 }

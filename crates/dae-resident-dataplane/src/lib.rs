@@ -48,7 +48,6 @@ mod dns;
 mod dns_listener;
 mod events;
 mod execution;
-mod execution_types;
 pub mod facade;
 pub(crate) mod geodata;
 pub(crate) mod host_routing_plan;
@@ -230,50 +229,7 @@ pub(crate) use self::vless_mux_owner::{
 #[cfg(test)]
 #[path = "runtime/vless_mux_owner_live_tests.rs"]
 mod vless_mux_owner_live_tests;
-
-#[derive(Clone, Default)]
-pub(crate) struct ResidentTransportOwnerRegistries {
-    hysteria2: Option<Hysteria2OwnerRegistryHandle>,
-    tuic: Option<TuicOwnerRegistryHandle>,
-    juicity: Option<JuicityOwnerRegistryHandle>,
-    anytls: Option<AnyTlsOwnerRegistryHandle>,
-}
-
-impl ResidentTransportOwnerRegistries {
-    pub(crate) fn new(
-        hysteria2: Option<Hysteria2OwnerRegistryHandle>,
-        tuic: Option<TuicOwnerRegistryHandle>,
-        juicity: Option<JuicityOwnerRegistryHandle>,
-    ) -> Self {
-        Self {
-            hysteria2,
-            tuic,
-            juicity,
-            anytls: None,
-        }
-    }
-
-    pub(crate) fn with_anytls(mut self, anytls: Option<AnyTlsOwnerRegistryHandle>) -> Self {
-        self.anytls = anytls;
-        self
-    }
-
-    pub(crate) fn hysteria2(&self) -> Option<Hysteria2OwnerRegistryHandle> {
-        self.hysteria2.clone()
-    }
-
-    pub(crate) fn tuic(&self) -> Option<TuicOwnerRegistryHandle> {
-        self.tuic.clone()
-    }
-
-    pub(crate) fn juicity(&self) -> Option<JuicityOwnerRegistryHandle> {
-        self.juicity.clone()
-    }
-
-    pub(crate) fn anytls(&self) -> Option<AnyTlsOwnerRegistryHandle> {
-        self.anytls.clone()
-    }
-}
+pub(crate) use dae_resident_transport::ResidentTransportOwnerRegistries;
 #[cfg(test)]
 #[path = "runtime/anytls_owner_live_tests.rs"]
 mod anytls_owner_live_tests;

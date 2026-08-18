@@ -3,15 +3,15 @@ use std::collections::VecDeque;
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum VisionUplinkWriteMode {
+pub enum VisionUplinkWriteMode {
     PlainOverlay,
     DirectPass,
 }
 
 #[derive(Debug)]
-pub(crate) struct VisionUplinkWrite {
-    pub(crate) mode: VisionUplinkWriteMode,
-    pub(crate) payload: Vec<u8>,
+pub struct VisionUplinkWrite {
+    pub mode: VisionUplinkWriteMode,
+    pub payload: Vec<u8>,
 }
 
 fn queue_vision_write(
@@ -24,7 +24,7 @@ fn queue_vision_write(
     }
 }
 
-pub(crate) fn queue_vision_uplink(
+pub fn queue_vision_uplink(
     pending: &mut Vec<u8>,
     writes: &mut VecDeque<VisionUplinkWrite>,
     user_uuid: [u8; 16],

@@ -24,14 +24,14 @@ const RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 static ACTIVE_EVENT_WRITER: OnceLock<ArcSwapOption<ResidentEventWriterInner>> = OnceLock::new();
 
 #[derive(Debug)]
-pub(crate) struct ResidentEventWriterRuntime {
+pub struct ResidentEventWriterRuntime {
     handle: ResidentEventWriterHandle,
     thread: Option<JoinHandle<()>>,
     completion: Option<Receiver<ResidentEventWriterExit>>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ResidentEventWriterHandle {
+pub struct ResidentEventWriterHandle {
     inner: Arc<ResidentEventWriterInner>,
 }
 
@@ -60,7 +60,7 @@ enum ResidentEventWriterExit {
 }
 
 impl ResidentEventWriterRuntime {
-    pub(crate) fn start(path: PathBuf, lock: Arc<Mutex<()>>, queue_capacity: usize) -> Self {
+    pub fn start(path: PathBuf, lock: Arc<Mutex<()>>, queue_capacity: usize) -> Self {
         let queue_capacity = queue_capacity.max(1);
         let (sender, receiver) = mpsc::sync_channel(queue_capacity);
         let metrics = Arc::new(ResidentEventWriterMetrics::new(queue_capacity as u64));
@@ -100,32 +100,32 @@ impl ResidentEventWriterRuntime {
         runtime
     }
 
-    pub(crate) fn metrics_snapshot(&self) -> Value {
+    pub fn metrics_snapshot(&self) -> Value {
         self.handle.metrics_snapshot()
     }
 
-    pub(crate) fn read_handle(&self) -> ResidentEventWriterHandle {
+    pub fn read_handle(&self) -> ResidentEventWriterHandle {
         self.handle.clone()
     }
 
     /// Clears the resident event log; documented no-op in dispatch-only mode
     /// (see [`ResidentEventWriterHandle::clear`]).
-    pub(crate) fn clear(&self) -> std::io::Result<()> {
+    pub fn clear(&self) -> std::io::Result<()> {
         self.handle.clear()
     }
 
     /// Prunes the resident event log; documented no-op in dispatch-only mode
     /// (see [`ResidentEventWriterHandle::prune`]).
-    pub(crate) fn prune(&self) -> std::io::Result<()> {
+    pub fn prune(&self) -> std::io::Result<()> {
         self.handle.prune()
     }
 
     #[cfg(test)]
-    pub(crate) fn shutdown(&mut self) -> Value {
+    pub fn shutdown(&mut self) -> Value {
         self.shutdown_until(deadline_after(RESIDENT_EVENT_WRITER_CONTROL_TIMEOUT))
     }
 
-    pub(crate) fn shutdown_until(&mut self, deadline: Instant) -> Value {
+    pub fn shutdown_until(&mut self, deadline: Instant) -> Value {
         clear_active_resident_event_writer(&self.handle.inner);
         if self.thread.is_none() {
             return json!({
@@ -200,7 +200,7 @@ impl ResidentEventWriterHandle {
         submit_event(&self.inner, event);
     }
 
-    pub(crate) fn metrics_snapshot(&self) -> Value {
+    pub fn metrics_snapshot(&self) -> Value {
         self.inner.metrics.snapshot()
     }
 
@@ -209,7 +209,7 @@ impl ResidentEventWriterHandle {
     /// Resident events are dispatch-only: the module retains no log file or
     /// buffer, so this is a documented no-op that reports success. Retention
     /// limits are enforced by the sink consumer (daemon product log).
-    pub(crate) fn clear(&self) -> std::io::Result<()> {
+    pub fn clear(&self) -> std::io::Result<()> {
         self.control(ResidentEventWriterCommand::Clear)
     }
 
@@ -218,7 +218,7 @@ impl ResidentEventWriterHandle {
     /// Resident events are dispatch-only: the module retains no log file or
     /// buffer, so this is a documented no-op that reports success. Retention
     /// limits are enforced by the sink consumer (daemon product log).
-    pub(crate) fn prune(&self) -> std::io::Result<()> {
+    pub fn prune(&self) -> std::io::Result<()> {
         self.control(ResidentEventWriterCommand::Prune)
     }
 }

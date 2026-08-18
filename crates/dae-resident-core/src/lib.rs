@@ -1,6 +1,9 @@
 #![recursion_limit = "256"]
 
 mod active_generation_slot;
+pub mod events;
+mod execution;
+mod execution_types;
 mod generation_identity;
 mod generation_lifecycle;
 mod metrics;
@@ -16,6 +19,10 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 pub use active_generation_slot::ActiveGenerationSlot;
+pub use execution::{
+    RuntimeExecutionDescriptor, append_runtime_execution_descriptor, tcp_execution_descriptor,
+    udp_execution_descriptor,
+};
 pub use generation_identity::{
     GenerationToken, LogicalGenerationId, PhysicalRuntimeId, PublicationEpoch,
 };
@@ -29,7 +36,9 @@ pub use network_defaults::{
     RESIDENT_IDLE_SLEEP, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_RUNTIME_TASK_JOIN_GRACE,
     RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY, RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT,
     RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT, RESIDENT_TCP_IDLE_TIMEOUT,
-    RESIDENT_UDP_RESPONSE_TIMEOUT, VLESS_RESPONSE_VERSION, resident_udp_runtime_topology,
+    RESIDENT_UDP_RESPONSE_TIMEOUT, TLS_RECORD_HEADER_LEN, TLS_RECORD_MAX_PAYLOAD_LEN,
+    VISION_COMMAND_CONTINUE, VISION_COMMAND_DIRECT, VISION_COMMAND_END, VLESS_RESPONSE_VERSION,
+    resident_udp_runtime_topology,
 };
 pub use payload_admission::{
     ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,

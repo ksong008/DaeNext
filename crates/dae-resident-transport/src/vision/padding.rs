@@ -1,4 +1,4 @@
-pub(crate) fn vision_padding_block(
+pub fn vision_padding_block(
     payload: &[u8],
     command: u8,
     user_uuid: [u8; 16],
@@ -22,7 +22,7 @@ pub(crate) fn vision_padding_block(
     out
 }
 
-pub(crate) fn vision_padding_len(content_len: usize, long_padding: bool) -> usize {
+pub fn vision_padding_len(content_len: usize, long_padding: bool) -> usize {
     if content_len < 900 && long_padding {
         900 - content_len + fastrand::usize(..500)
     } else {

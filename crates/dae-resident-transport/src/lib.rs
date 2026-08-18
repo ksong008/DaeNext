@@ -13,15 +13,18 @@ mod hysteria2_owner;
 mod hysteria2_port_hopping;
 mod juicity_owner;
 mod meek_transport_owner;
+mod owner_registries;
 mod proxy_handshake;
 mod quic_candidate_race;
 mod quic_connections;
 mod quic_endpoint;
 mod quic_transport;
 mod resolver;
+mod stream_io;
 mod tls_client;
 mod transport_identity;
 mod tuic_owner;
+mod vision;
 mod vless_mux_owner;
 
 pub use anytls_frame::AnyTlsFrameReader;
@@ -69,6 +72,7 @@ pub use meek_transport_owner::{
 pub use meek_transport_owner::{
     start_meek_transport_generation_owner, start_meek_transport_generation_owner_for_test,
 };
+pub use owner_registries::ResidentTransportOwnerRegistries;
 pub use proxy_handshake::{http_proxy_connect_plain_async, socks5_connect_async};
 pub use quic_endpoint::{
     ObservedQuicEndpoint, QuicEndpointAdmissionContext, QuicEndpointCallerClass,
@@ -88,6 +92,10 @@ pub use resolver::{
     resolve_host_addrs_with_bootstrap_dns_ttl, resolve_host_addrs_with_configured_fallback_dns_ttl,
     resolve_socket_addr_candidates, try_socket_addr_candidates, try_tcp_socket_addr_candidates,
 };
+pub use stream_io::{
+    AsyncPrefixedStream, CursorBytes, HttpHeadRead, HttpHeadReadError, HttpHeadReadOptions,
+    read_http_head,
+};
 pub use tls_client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, ResidentTlsConfigCacheClearReport,
     async_resident_tls_underlay_name, async_tls_underlay_name, clear_resident_tls_config_caches,
@@ -103,6 +111,7 @@ pub use tuic_owner::{
     TuicOwnerRegistryHandle, TuicSharedTransport, TuicTransportLease, TuicUdpAssociationLease,
     start_tuic_owner_registry, start_tuic_owner_registry_on,
 };
+pub use vision::*;
 pub use vless_mux_owner::{
     VlessMuxGenerationOwnerHandle, VlessMuxLogicalStream, acquire_vless_mux_logical_stream,
     start_vless_mux_generation_owner_on,
