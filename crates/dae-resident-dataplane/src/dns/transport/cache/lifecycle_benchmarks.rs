@@ -35,7 +35,7 @@ async fn periodic_health_rebuild_and_held_lease_close_to_zero() {
     let socks = Socks5UdpRelay::start().await;
     let binding = dns_proxy_binding(socks5_dns_proxy(socks.address()), 7_372);
 
-    let rebuild_cache = Arc::new(ResidentDnsForwarderCache::default());
+    let rebuild_cache = Arc::new(test_resident_dns_forwarder_cache());
     let mut rebuild_samples = Vec::with_capacity(PERIODIC_HEALTH_SAMPLE_ROUNDS);
     for _ in 0..PERIODIC_HEALTH_SAMPLE_ROUNDS {
         let started = Instant::now();
@@ -55,7 +55,7 @@ async fn periodic_health_rebuild_and_held_lease_close_to_zero() {
     }
     let rebuild_metrics = rebuild_cache.metrics.snapshot();
 
-    let held_cache = Arc::new(ResidentDnsForwarderCache::default());
+    let held_cache = Arc::new(test_resident_dns_forwarder_cache());
     let held_lease = held_cache
         .acquire_health_proxy_udp_forwarder(target, binding)
         .await

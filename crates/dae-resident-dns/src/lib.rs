@@ -2,6 +2,7 @@ mod cache;
 mod domain_routing;
 mod error_response;
 mod geodata;
+mod proxy_probe;
 mod proxy_transport;
 mod udp_response;
 mod udp_runtime;
@@ -19,13 +20,14 @@ pub use domain_routing::{
 };
 pub use error_response::{build_dns_server_failure_response, build_reject_response};
 pub use geodata::ResidentDnsGeodata;
+pub use proxy_probe::probe_resident_proxy_dns_udp_with_forwarder_async;
 pub use proxy_transport::{
     ResidentDnsProxyFuture, ResidentDnsProxySelection, ResidentDnsProxySelectionError,
     ResidentDnsProxySelector, ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession,
     ResidentDnsProxyTcpTransport, ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder,
     ResidentDnsProxyUdpTransport, ResidentDnsQuicEndpointTransport,
-    ResidentDnsTransportOwnerObservation, exchange_resident_proxy_dns_tcp_stream,
-    run_resident_proxy_dns_tcp_connection,
+    ResidentDnsTransportOwnerObservation, ResidentDnsTransportPorts,
+    exchange_resident_proxy_dns_tcp_stream, run_resident_proxy_dns_tcp_connection,
 };
 pub use udp_response::fit_dns_response_to_udp_request;
 pub use udp_runtime::ResidentDnsUdpRuntimeConfig;

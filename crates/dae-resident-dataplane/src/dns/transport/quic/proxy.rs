@@ -686,7 +686,7 @@ mod tests {
         let selection = ResidentDnsUpstreamSelection::Proxy {
             binding: binding.clone(),
         };
-        let cache = ResidentDnsForwarderCache::default();
+        let cache = test_resident_dns_forwarder_cache();
         let forwarder = cache
             .proxy_quic_forwarder(&upstream, server.address(), binding, &selection)
             .unwrap();

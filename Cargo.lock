@@ -914,6 +914,7 @@ dependencies = [
  "dae-resident-transport",
  "dae-routing",
  "dae-runtime-control",
+ "fastrand",
  "serde_json",
  "tokio",
 ]

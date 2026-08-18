@@ -148,25 +148,45 @@ pub(super) fn build_resident_dataplane_generation(
         so_mark_from_dae,
         Some(Arc::new(health_resuscitation.clone())),
     ));
-    let dns =
-        Arc::new(
-            dns_plan
-                .with_udp_runtime_resources_and_transport_owner(
-                    udp_runtime_config.dns_udp_runtime_config(),
-                    Arc::clone(&metrics),
-                    owner.data_plane_handle(),
-                    ResidentTransportOwnerRegistries::new(
-                        Some(owner.hysteria2_owner_registry().ok_or_else(|| {
-                            "Hysteria2 owner registry was not installed".to_owned()
-                        })?),
-                        owner.tuic_owner_registry(),
-                        owner.juicity_owner_registry(),
-                    )
-                    .with_anytls(owner.anytls_owner_registry()),
-                )
-                .with_domain_routing(dns_domain_routing.clone())
-                .with_upstream_routing(Some(dns_upstream_router)),
-        );
+    let dns_udp_runtime = udp_runtime_config.dns_udp_runtime_config();
+    let dns_udp_executor = Arc::new(dns::ResidentDnsUdpActorExecutor::new_on(
+        dns_udp_runtime.clone(),
+        Arc::clone(&metrics),
+        owner.data_plane_handle(),
+    ));
+    let dns_transport_owners = ResidentTransportOwnerRegistries::new(
+        Some(
+            owner
+                .hysteria2_owner_registry()
+                .ok_or_else(|| "Hysteria2 owner registry was not installed".to_owned())?,
+        ),
+        owner.tuic_owner_registry(),
+        owner.juicity_owner_registry(),
+    )
+    .with_anytls(owner.anytls_owner_registry());
+    let dns_proxy_tcp_transport = resident_dns_proxy_tcp_transport(dns_transport_owners.clone());
+    let dns_proxy_udp_transport = resident_dns_proxy_udp_transport(
+        dns_udp_runtime.clone(),
+        Arc::clone(&metrics),
+        Arc::clone(&dns_udp_executor),
+        dns_transport_owners,
+    );
+    let dns = Arc::new(
+        dns_plan
+            .with_udp_runtime_resources_and_transports(
+                dns_udp_runtime,
+                Arc::clone(&metrics),
+                owner.data_plane_handle(),
+                dns_udp_executor,
+                dae_resident_dns::ResidentDnsTransportPorts::new(
+                    dns_proxy_tcp_transport,
+                    dns_proxy_udp_transport,
+                    Arc::new(crate::transport::quic_endpoint::ResidentDnsQuicEndpointPolicy),
+                ),
+            )
+            .with_domain_routing(dns_domain_routing.clone())
+            .with_upstream_routing(Some(dns_upstream_router)),
+    );
     let dns_reload_restore = match dns_reload_snapshot {
         Some(snapshot) => dns
             .restore_reload_snapshot(snapshot)

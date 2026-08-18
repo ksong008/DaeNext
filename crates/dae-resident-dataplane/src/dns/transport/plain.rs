@@ -1124,7 +1124,7 @@ mod tests {
             .await;
 
         let plan = ResidentDnsPlan::asis(0);
-        let forwarders = Arc::new(ResidentDnsForwarderCache::default());
+        let forwarders = Arc::new(test_resident_dns_forwarder_cache());
         let query = build_dns_query_packet(0x6060, "next-target.example", DNS_QTYPE_A).unwrap();
         let response = forward_dns_tcp_async(
             &upstream,
@@ -1183,7 +1183,7 @@ mod tests {
         };
         let binding = dns_proxy_binding(socks5_dns_proxy(relay.address()), 1);
         let selection = ResidentDnsUpstreamSelection::Proxy { binding };
-        let cache = Arc::new(ResidentDnsForwarderCache::default());
+        let cache = Arc::new(test_resident_dns_forwarder_cache());
         let forwarder = cache
             .tcp_forwarder(&upstream, target, 0, &selection)
             .unwrap();

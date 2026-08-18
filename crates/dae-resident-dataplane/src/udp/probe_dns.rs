@@ -1,8 +1,8 @@
 use super::*;
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::ProxyDnsRequestContext;
 use dae_resident_dns::{ResidentDnsProxyFuture, ResidentDnsProxyUdpBridge};
+#[cfg(test)]
 use dae_resident_transport::encode_dns_qname;
 
 const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
@@ -491,20 +491,13 @@ async fn wait_for_udp_probe_response(
         .map(|(_, response)| response)
 }
 
+#[cfg(test)]
 pub(crate) async fn probe_resident_proxy_dns_udp_with_forwarder_async(
     forwarder: Arc<dyn dae_resident_dns::ResidentDnsProxyUdpForwarder>,
     lookup_host: &str,
 ) -> Result<(), String> {
-    let id = fastrand::u16(0..=u16::MAX);
-    let query = build_dns_a_query(id, lookup_host)?;
-    let response = forwarder
-        .exchange(
-            &query,
-            ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
-        )
+    dae_resident_dns::probe_resident_proxy_dns_udp_with_forwarder_async(forwarder, lookup_host)
         .await
-        .map_err(|error| error.to_string())?;
-    dns_a_response_has_answer(id, &response)
 }
 
 fn take_udp_response_for_fixed_target(
@@ -522,6 +515,7 @@ fn take_udp_response_for_fixed_target(
         })
 }
 
+#[cfg(test)]
 pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
     let mut query = Vec::with_capacity(64);
     query.extend_from_slice(&id.to_be_bytes());
@@ -536,6 +530,7 @@ pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, S
     Ok(query)
 }
 
+#[cfg(test)]
 pub(crate) fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {
     if response.len() < 12 {
         return Err(format!("DNS response too short: {} bytes", response.len()));
@@ -587,6 +582,7 @@ pub(crate) fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Resul
     Err("DNS response has no A answer records".to_owned())
 }
 
+#[cfg(test)]
 pub(crate) fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
     let mut jumps = 0_usize;
     loop {

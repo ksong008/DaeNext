@@ -50,10 +50,15 @@ use super::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
     QuicEndpointOpenContext, QuicEndpointProtocol, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
     RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics, ResidentDnsResourceProfile,
-    ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    probe_resident_proxy_dns_udp_with_forwarder_async, resident_dns_proxy_tcp_transport,
-    resident_dns_proxy_udp_transport, scope_quic_endpoint_observation, set_socket_mark,
+    ResidentDnsUdpRuntimeConfig, SharedResidentStopSignal, scope_quic_endpoint_observation,
+    set_socket_mark,
 };
+#[cfg(test)]
+use super::{
+    ResidentTransportOwnerRegistries, resident_dns_proxy_tcp_transport,
+    resident_dns_proxy_udp_transport,
+};
+#[cfg(test)]
 use crate::transport::quic_endpoint::ResidentDnsQuicEndpointPolicy;
 use dae_resident_core::apply_udp_socket_buffer_tuning;
 
@@ -151,6 +156,8 @@ pub(crate) use self::transport::udp_multiplex::{
 use self::transport::{
     ResidentDnsTcpMultiplexHandle, forward_dns_tcp_asis_async, forward_dns_to_upstream_async,
 };
+#[cfg(test)]
+use self::upstream_model::test_resident_dns_forwarder_cache;
 pub(in crate::dns) use self::upstream_model::{
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
     ResidentDnsForwarderEntryKind, ResidentDnsForwarderKey, ResidentDnsForwarderSelectionKey,
@@ -177,8 +184,8 @@ use dae_resident_dns::{
     ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder, ResidentDnsProxyUdpTransport,
     ResidentDnsQuicEndpointTransport, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
     ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot, ResidentDnsTransportOwnerObservation,
-    build_reject_response, exchange_resident_proxy_dns_tcp_stream,
-    run_resident_proxy_dns_tcp_connection,
+    ResidentDnsTransportPorts, build_reject_response, exchange_resident_proxy_dns_tcp_stream,
+    probe_resident_proxy_dns_udp_with_forwarder_async, run_resident_proxy_dns_tcp_connection,
 };
 pub(crate) use dae_resident_transport::{
     DnsTcpFrameReader, ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure,
@@ -364,33 +371,22 @@ impl ResidentDnsPlan {
         self
     }
 
-    pub(super) fn with_udp_runtime_resources_and_transport_owner(
+    pub(super) fn with_udp_runtime_resources_and_transports(
         mut self,
         runtime: ResidentDnsUdpRuntimeConfig,
         metrics: Arc<ResidentDataplaneMetrics>,
         executor: tokio::runtime::Handle,
-        transport_owners: ResidentTransportOwnerRegistries,
+        udp_executor: Arc<ResidentDnsUdpActorExecutor>,
+        transports: ResidentDnsTransportPorts,
     ) -> Self {
-        let udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new_on(
-            runtime.clone(),
-            Arc::clone(&metrics),
-            executor.clone(),
-        ));
-        let proxy_tcp_transport = resident_dns_proxy_tcp_transport(transport_owners.clone());
-        let proxy_udp_transport = resident_dns_proxy_udp_transport(
-            runtime.clone(),
-            Arc::clone(&metrics),
-            Arc::clone(&udp_executor),
-            transport_owners,
-        );
         self.forwarders = Arc::new(ResidentDnsForwarderCache::new_with_proxy_transports(
             runtime,
             metrics,
-            executor,
+            Some(executor),
             udp_executor,
-            proxy_tcp_transport,
-            proxy_udp_transport,
-            Arc::new(ResidentDnsQuicEndpointPolicy),
+            transports.proxy_tcp(),
+            transports.proxy_udp(),
+            transports.quic_endpoint(),
         ));
         self
     }

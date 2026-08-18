@@ -18,5 +18,6 @@ dae-resident-plan.workspace = true
 dae-resident-transport.workspace = true
 dae-routing.workspace = true
 dae-runtime-control.workspace = true
+fastrand.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
