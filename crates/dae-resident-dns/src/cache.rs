@@ -5,22 +5,24 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use super::{
-    ProxyDnsRequestContext, ProxyDnsRequestStage, ResidentDnsUpstream, ResidentDnsUpstreamScheme,
-    unix_now,
+use dae_resident_core::ResidentDnsResourceProfile;
+use dae_resident_transport::{
+    ProxyDnsRequestContext, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
+
+use crate::unix_now;
 use dae_dns::cache::DNS_CACHE_MAX_ENTRIES;
 use dae_dns::{DnsCacheEntry, DnsCacheKey, DnsCacheStats, DnsPacketView};
 
 mod reload;
-pub(super) use self::reload::ResidentDnsRuntimeCacheSnapshot;
+pub use self::reload::ResidentDnsRuntimeCacheSnapshot;
 mod deadline_index;
 use self::deadline_index::{ResidentDnsCacheDeadline, ResidentDnsCacheDeadlineIndex};
 
 const DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS: i64 = 60;
 
 #[derive(Debug)]
-pub(super) struct ResidentDnsRuntimeCache {
+pub struct ResidentDnsRuntimeCache {
     state: Mutex<ResidentDnsRuntimeCacheState>,
     inflight: Mutex<BTreeMap<ResidentDnsResponseCacheKey, Arc<ResidentDnsFlightState>>>,
     flight_entry_limit: usize,
@@ -30,7 +32,7 @@ pub(super) struct ResidentDnsRuntimeCache {
 
 impl Default for ResidentDnsRuntimeCache {
     fn default() -> Self {
-        let resources = super::ResidentDnsResourceProfile::selected();
+        let resources = ResidentDnsResourceProfile::selected();
         Self {
             state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
             inflight: Mutex::new(BTreeMap::new()),
@@ -58,31 +60,31 @@ struct ResidentDnsStoredCacheEntry {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(super) struct ResidentDnsResponseCacheKey {
+pub struct ResidentDnsResponseCacheKey {
     base: DnsCacheKey,
     scope: ResidentDnsResponseCacheScope,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(super) enum ResidentDnsResponseCacheScope {
+pub enum ResidentDnsResponseCacheScope {
     Reject,
     AsIs {
         original_dst: SocketAddr,
     },
     Upstream {
         index: u8,
-        scheme: ResidentDnsUpstreamScheme,
+        scheme: String,
         authority: String,
         path: String,
     },
 }
 
 impl ResidentDnsResponseCacheKey {
-    pub(super) fn new(base: DnsCacheKey, scope: ResidentDnsResponseCacheScope) -> Self {
+    pub fn new(base: DnsCacheKey, scope: ResidentDnsResponseCacheScope) -> Self {
         Self { base, scope }
     }
 
-    pub(super) fn with_base(&self, base: DnsCacheKey) -> Self {
+    pub fn with_base(&self, base: DnsCacheKey) -> Self {
         Self {
             base,
             scope: self.scope.clone(),
@@ -98,12 +100,12 @@ impl ResidentDnsResponseCacheKey {
 }
 
 impl ResidentDnsResponseCacheScope {
-    pub(super) fn upstream(upstream: &ResidentDnsUpstream) -> Self {
+    pub fn upstream(index: u8, scheme: &str, authority: &str, path: &str) -> Self {
         Self::Upstream {
-            index: upstream.index,
-            scheme: upstream.scheme,
-            authority: upstream.target.authority.to_string(),
-            path: upstream.path.to_string(),
+            index,
+            scheme: scheme.to_owned(),
+            authority: authority.to_owned(),
+            path: path.to_owned(),
         }
     }
 }
@@ -185,7 +187,7 @@ enum ResidentDnsFlightRole {
     Follower,
 }
 
-pub(super) struct ResidentDnsFlightPermit<'a> {
+pub struct ResidentDnsFlightPermit<'a> {
     cache: &'a ResidentDnsRuntimeCache,
     key: ResidentDnsResponseCacheKey,
     state: Arc<ResidentDnsFlightState>,
@@ -194,9 +196,9 @@ pub(super) struct ResidentDnsFlightPermit<'a> {
 }
 
 impl ResidentDnsRuntimeCache {
-    #[cfg(test)]
-    pub(super) fn with_flight_entry_limit(flight_entry_limit: usize) -> Self {
-        let resources = super::ResidentDnsResourceProfile::selected();
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_flight_entry_limit(flight_entry_limit: usize) -> Self {
+        let resources = ResidentDnsResourceProfile::selected();
         Self::with_flight_limits(
             flight_entry_limit,
             resources.flight_followers_per_entry(),
@@ -204,8 +206,8 @@ impl ResidentDnsRuntimeCache {
         )
     }
 
-    #[cfg(test)]
-    pub(super) fn with_flight_limits(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_flight_limits(
         flight_entry_limit: usize,
         flight_follower_limit: usize,
         flight_retained_bytes: usize,
@@ -221,7 +223,7 @@ impl ResidentDnsRuntimeCache {
         }
     }
 
-    pub(super) fn begin_flight(
+    pub fn begin_flight(
         &self,
         key: ResidentDnsResponseCacheKey,
     ) -> Result<ResidentDnsFlightPermit<'_>, String> {
@@ -263,7 +265,7 @@ impl ResidentDnsRuntimeCache {
         })
     }
 
-    pub(super) fn lookup_response_into(
+    pub fn lookup_response_into(
         &self,
         key: &ResidentDnsResponseCacheKey,
         request: &DnsPacketView<'_>,
@@ -279,7 +281,7 @@ impl ResidentDnsRuntimeCache {
         lookup_scoped_response_into(&mut state, now_unix, key, request, ignore_fixed_ttl, out)
     }
 
-    pub(super) fn lookup_key_has_any_ip(
+    pub fn lookup_key_has_any_ip(
         &self,
         key: &DnsCacheKey,
         ignore_fixed_ttl: bool,
@@ -300,7 +302,7 @@ impl ResidentDnsRuntimeCache {
             }))
     }
 
-    pub(super) fn insert_response(
+    pub fn insert_response(
         &self,
         now_unix: i64,
         key: ResidentDnsResponseCacheKey,
@@ -319,7 +321,7 @@ impl ResidentDnsRuntimeCache {
         Ok(())
     }
 
-    pub(super) fn remove_base_key(&self, key: &DnsCacheKey) -> Result<Vec<DnsCacheEntry>, String> {
+    pub fn remove_base_key(&self, key: &DnsCacheKey) -> Result<Vec<DnsCacheEntry>, String> {
         let mut state = self
             .state
             .lock()
@@ -342,37 +344,37 @@ impl ResidentDnsRuntimeCache {
         Ok(removed)
     }
 
-    #[cfg(test)]
-    pub(super) fn inflight_len(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn inflight_len(&self) -> usize {
         self.inflight
             .lock()
             .map(|inflight| inflight.len())
             .unwrap_or(0)
     }
 
-    #[cfg(test)]
-    pub(super) fn flight_retained_bytes(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn flight_retained_bytes(&self) -> usize {
         self.flight_retained_budget.current.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
-    pub(super) fn entry_len(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn entry_len(&self) -> usize {
         self.state
             .lock()
             .map(|state| state.entries.len())
             .unwrap_or(0)
     }
 
-    #[cfg(test)]
-    pub(super) fn deadline_len(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn deadline_len(&self) -> usize {
         self.state
             .lock()
             .map(|state| state.deadlines.len())
             .unwrap_or(0)
     }
 
-    #[cfg(test)]
-    pub(super) fn stats(&self) -> dae_dns::DnsCacheStats {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn stats(&self) -> dae_dns::DnsCacheStats {
         self.state
             .lock()
             .map(|state| state.stats.clone())
@@ -480,14 +482,14 @@ fn remove_cache_entry(
 }
 
 impl ResidentDnsFlightPermit<'_> {
-    pub(super) fn is_leader(&self) -> bool {
+    pub fn is_leader(&self) -> bool {
         matches!(
             self.role,
             ResidentDnsFlightRole::Leader | ResidentDnsFlightRole::DetachedLeader
         )
     }
 
-    pub(super) async fn wait(
+    pub async fn wait(
         &self,
         context: ProxyDnsRequestContext,
         request_id: u16,
@@ -503,7 +505,7 @@ impl ResidentDnsFlightPermit<'_> {
             context
                 .run(
                     ProxyDnsRequestStage::Queued,
-                    super::ProxyDnsRequestFailure::Cancelled,
+                    ProxyDnsRequestFailure::Cancelled,
                     async {
                         notified.await;
                         Ok::<(), std::convert::Infallible>(())
@@ -514,7 +516,7 @@ impl ResidentDnsFlightPermit<'_> {
         }
     }
 
-    pub(super) fn publish(&mut self, result: Result<&[u8], &str>) -> Result<(), String> {
+    pub fn publish(&mut self, result: Result<&[u8], &str>) -> Result<(), String> {
         if !self.is_leader() {
             return Err("resident DNS flight follower cannot publish".to_owned());
         }

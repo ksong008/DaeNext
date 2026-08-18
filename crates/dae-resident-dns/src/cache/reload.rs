@@ -1,20 +1,18 @@
 use super::*;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(in crate::dns) struct ResidentDnsRuntimeCacheSnapshot {
+pub struct ResidentDnsRuntimeCacheSnapshot {
     entries: Vec<(ResidentDnsResponseCacheKey, DnsCacheEntry)>,
 }
 
 impl ResidentDnsRuntimeCacheSnapshot {
-    pub(in crate::dns) fn entry_count(&self) -> usize {
+    pub fn entry_count(&self) -> usize {
         self.entries.len()
     }
 }
 
 impl ResidentDnsRuntimeCache {
-    pub(in crate::dns) fn snapshot_for_reload(
-        &self,
-    ) -> Result<ResidentDnsRuntimeCacheSnapshot, String> {
+    pub fn snapshot_for_reload(&self) -> Result<ResidentDnsRuntimeCacheSnapshot, String> {
         let now_unix = unix_now();
         let mut state = self
             .state
@@ -31,7 +29,7 @@ impl ResidentDnsRuntimeCache {
         Ok(ResidentDnsRuntimeCacheSnapshot { entries })
     }
 
-    pub(in crate::dns) fn restore_reload_snapshot(
+    pub fn restore_reload_snapshot(
         &self,
         snapshot: &ResidentDnsRuntimeCacheSnapshot,
     ) -> Result<usize, String> {

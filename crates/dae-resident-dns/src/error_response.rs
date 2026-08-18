@@ -4,14 +4,11 @@ use dae_dns::{
     DnsPacketView,
 };
 
-pub(super) fn build_reject_response(
-    request: &[u8],
-    view: &DnsPacketView<'_>,
-) -> Result<Vec<u8>, String> {
+pub fn build_reject_response(request: &[u8], view: &DnsPacketView<'_>) -> Result<Vec<u8>, String> {
     build_empty_dns_response(request, view, DNS_RCODE_NOERROR, false)
 }
 
-pub(crate) fn build_dns_server_failure_response(request: &[u8]) -> Result<Vec<u8>, String> {
+pub fn build_dns_server_failure_response(request: &[u8]) -> Result<Vec<u8>, String> {
     let view = DnsPacketView::parse(request)
         .map_err(|err| format!("parse DNS request for SERVFAIL: {err}"))?;
     ensure_dns_request(&view)?;

@@ -871,6 +871,7 @@ dependencies = [
  "dae-netutil",
  "dae-outbound",
  "dae-resident-core",
+ "dae-resident-dns",
  "dae-resident-plan",
  "dae-resident-transport",
  "dae-routing",
@@ -899,6 +900,16 @@ dependencies = [
  "tokio",
  "tokio-boring",
  "url",
+]
+
+[[package]]
+name = "dae-resident-dns"
+version = "3.1.0"
+dependencies = [
+ "dae-dns",
+ "dae-resident-core",
+ "dae-resident-transport",
+ "tokio",
 ]
 
 [[package]]
