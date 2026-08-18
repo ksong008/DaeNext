@@ -919,6 +919,7 @@ name = "dae-resident-transport"
 version = "3.1.0"
 dependencies = [
  "bytes",
+ "dae-datapath",
  "dae-dns",
  "dae-resident-core",
  "dae-runtime-control",
