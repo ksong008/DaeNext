@@ -101,7 +101,9 @@ impl ResidentDnsUdpActorExecutor {
     ) -> Result<ResidentDnsUdpMultiplexHandle, String> {
         let metrics = Arc::clone(&self.metrics);
         self.spawn_actor(move || async move {
-            let socket = open_connected_dns_udp_socket(target, mark).await?;
+            let socket =
+                open_connected_dns_udp_socket(target, mark, runtime_config.socket_buffer_bytes)
+                    .await?;
             Ok(start_udp_multiplex_actor(
                 target,
                 socket,

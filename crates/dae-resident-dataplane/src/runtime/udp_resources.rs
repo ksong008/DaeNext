@@ -14,6 +14,7 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) runtime_shards: usize,
     pub(crate) runtime_worker_threads: usize,
     pub(crate) worker_stack_bytes: usize,
+    pub(crate) socket_buffer_bytes: usize,
     pub(crate) dispatch_queue_depth: usize,
     pub(crate) ingress_drain_budget: usize,
     pub(crate) ingress_syscall_batch_limit: usize,
@@ -41,6 +42,7 @@ pub(crate) struct ResidentDnsUdpRuntimeConfig {
     pub(crate) proxy_actor_limit: usize,
     pub(crate) actor_worker_threads: usize,
     pub(crate) worker_stack_bytes: usize,
+    pub(crate) socket_buffer_bytes: usize,
     pub(crate) queue_depth: usize,
     pub(crate) pending_limit: usize,
     pub(crate) inflight_window: usize,
@@ -84,6 +86,7 @@ impl ResidentUdpRuntimeConfig {
             runtime_shards,
             runtime_worker_threads,
             worker_stack_bytes: resources.tcp_flow_stack_bytes.value(),
+            socket_buffer_bytes: resources.udp_socket_buffer_bytes.value(),
             dispatch_queue_depth,
             ingress_drain_budget: session_queue_depth,
             ingress_syscall_batch_limit: runtime_profile.udp_syscall_batch_limit(),
@@ -158,6 +161,7 @@ impl ResidentUdpRuntimeConfig {
             worker_stack_bytes: self
                 .worker_stack_bytes
                 .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
+            socket_buffer_bytes: self.socket_buffer_bytes,
             queue_depth: self.dns_udp_forwarder_queue_depth,
             pending_limit: self.dns_udp_forwarder_pending_limit,
             inflight_window: self
@@ -258,6 +262,7 @@ impl ResidentDnsUdpRuntimeConfig {
             actor_worker_threads: actor_worker_threads.max(1),
             worker_stack_bytes: RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT
                 .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
+            socket_buffer_bytes: resident_udp_socket_buffer_bytes(),
             queue_depth: profile.dns_udp_forwarder_queue_depth_default(),
             pending_limit: profile.dns_udp_forwarder_pending_limit_default(),
             inflight_window: profile.dns_udp_forwarder_inflight_window_default(),
@@ -338,6 +343,7 @@ mod tests {
             runtime_shards: 4,
             runtime_worker_threads: 3,
             worker_stack_bytes: 512 * 1024,
+            socket_buffer_bytes: 4 * 1024 * 1024,
             dispatch_queue_depth: 512,
             ingress_drain_budget: 128,
             ingress_syscall_batch_limit: 16,
@@ -446,6 +452,7 @@ mod tests {
             runtime_shards: 3,
             runtime_worker_threads: 2,
             worker_stack_bytes: 768 * 1024,
+            socket_buffer_bytes: 4 * 1024 * 1024,
             dispatch_queue_depth: 96,
             ingress_drain_budget: 16,
             ingress_syscall_batch_limit: 8,

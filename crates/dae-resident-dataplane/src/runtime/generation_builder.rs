@@ -146,7 +146,7 @@ pub(super) fn build_resident_dataplane_generation(
         routing_matcher.clone(),
         Arc::clone(&udp_proxy_groups),
         so_mark_from_dae,
-        Some(health_resuscitation.clone()),
+        Some(Arc::new(health_resuscitation.clone())),
     ));
     let dns =
         Arc::new(

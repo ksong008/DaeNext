@@ -1,12 +1,12 @@
 use super::*;
-use crate::ResidentHealthResuscitationHandle;
+use dae_resident_core::ResidentHealthResuscitation;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentDnsUpstreamRouter {
     pub(in crate::dns) routing_matcher: RoutingMatcher,
     pub(in crate::dns) proxy_groups: SharedResidentProxyGroupMap,
     pub(in crate::dns) so_mark_from_dae: u32,
-    health_resuscitation: Option<ResidentHealthResuscitationHandle>,
+    health_resuscitation: Option<Arc<dyn ResidentHealthResuscitation>>,
 }
 
 #[derive(Clone, Debug)]
@@ -27,7 +27,7 @@ impl ResidentDnsUpstreamRouter {
         routing_matcher: RoutingMatcher,
         proxy_groups: SharedResidentProxyGroupMap,
         so_mark_from_dae: u32,
-        health_resuscitation: Option<ResidentHealthResuscitationHandle>,
+        health_resuscitation: Option<Arc<dyn ResidentHealthResuscitation>>,
     ) -> Self {
         Self {
             routing_matcher,

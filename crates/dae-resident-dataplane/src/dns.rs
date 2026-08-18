@@ -51,11 +51,11 @@ use super::{
     QuicEndpointOpenContext, QuicEndpointProtocol, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
     RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics, ResidentDnsResourceProfile,
     ResidentDnsUdpRuntimeConfig, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    apply_resident_udp_socket_buffer_tuning, probe_resident_proxy_dns_udp_with_forwarder_async,
-    resident_dns_proxy_tcp_transport, resident_dns_proxy_udp_transport,
-    scope_quic_endpoint_observation, set_socket_mark,
+    probe_resident_proxy_dns_udp_with_forwarder_async, resident_dns_proxy_tcp_transport,
+    resident_dns_proxy_udp_transport, scope_quic_endpoint_observation, set_socket_mark,
 };
 use crate::transport::quic_endpoint::ResidentDnsQuicEndpointPolicy;
+use dae_resident_core::apply_udp_socket_buffer_tuning;
 
 /// One bounded DNS TLS stream type keeps framing, pooling, and HTTP/2 ownership
 /// identical across all DNS TLS transports. BoringSSL is selected at handshake

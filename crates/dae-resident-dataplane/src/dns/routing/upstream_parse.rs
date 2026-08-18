@@ -2,7 +2,7 @@ use super::*;
 use std::time::Duration;
 
 #[cfg(test)]
-use crate::resident_dns_upstream_refresh_interval;
+const DNS_UPSTREAM_REFRESH_TEST_INTERVAL: Duration = Duration::from_secs(60);
 
 pub(super) fn parse_dns_fallback_resolver(config: &Config) -> Result<SocketAddr, String> {
     config
@@ -31,7 +31,7 @@ pub(in crate::dns) fn parse_dns_upstream(
         link,
         fallback_resolver,
         resolver_mark,
-        resident_dns_upstream_refresh_interval(),
+        DNS_UPSTREAM_REFRESH_TEST_INTERVAL,
     )
 }
 
