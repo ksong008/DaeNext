@@ -1,0 +1,35 @@
+# path	maximum	category	rationale
+crates/dae-resident-core/src/active_generation_slot.rs	3	InternalInvariant	Published generation slots always contain an active value.
+crates/dae-resident-core/src/metrics.rs	1	InternalInvariant	Static metric JSON values are serializable.
+crates/dae-resident-dataplane/src/plan/check_plans.rs	2	InternalInvariant	Validated probe plans contain at least one target.
+crates/dae-resident-dataplane/src/runtime/executor.rs	1	InternalInvariant	Runtime access precedes explicit owner shutdown.
+crates/dae-resident-dataplane/src/runtime/matrix/source_materialization.rs	2	InternalInvariant	Registry-classified rows have reconciliation and materialization witnesses.
+crates/dae-resident-dataplane/src/runtime/runtime.rs	1	InternalInvariant	Prepared shutdown owns its workload control.
+crates/dae-resident-dataplane/src/runtime_owner/manual_probe_execution.rs	1	InternalInvariant	Manual probe runtime remains owned until shutdown.
+crates/dae-resident-dataplane/src/transport/mod.rs	2	InternalInvariant	Validated resource profiles use nonzero QUIC limits.
+crates/dae-resident-dataplane/src/udp/manager.rs	3	InternalInvariant	Selected generation and pin entries remain installed during one actor turn.
+crates/dae-resident-dataplane/src/udp/manager/router.rs	1	InternalInvariant	Plan validation installs the default outbound group.
+crates/dae-resident-dataplane/src/udp/manager/session_shards/worker.rs	4	InternalInvariant	Session insertion and reserved reaper capacity are actor-local invariants.
+crates/dae-resident-dataplane/src/udp/manager/sniff.rs	2	InternalInvariant	Sniffer removal follows a successful same-turn lookup.
+crates/dae-resident-model/src/executable_graph.rs	4	InternalInvariant	Static identity namespaces and digest widths are fixed.
+crates/dae-resident-model/src/model.rs	1	InternalInvariant	Validated proxy plans contain their selected binding.
+crates/dae-resident-tcp/src/vless_relay/vision_duplex/driver.rs	1	InternalInvariant	A completed Vision write remains at the queue front in the same poll cycle.
+crates/dae-resident-transport/src/anytls_owner.rs	1	InternalInvariant	Static AnyTLS owner identity namespace is valid.
+crates/dae-resident-transport/src/dns_request/bytes.rs	2	InternalInvariant	Move-only DNS byte owners retain their admitted permit and payload until consumption.
+crates/dae-resident-transport/src/hysteria2_owner.rs	4	InternalInvariant	Validated owner limits and queued messages remain present during one owner turn.
+crates/dae-resident-transport/src/hysteria2_port_hopping.rs	10	InternalInvariant	Port-hopping state locks can only be poisoned by an internal task panic.
+crates/dae-resident-transport/src/juicity_owner.rs	1	InternalInvariant	An elected Juicity build has a queued waiter.
+crates/dae-resident-transport/src/meek_transport_owner.rs	1	InternalInvariant	A live Meek lease owns its physical connection.
+crates/dae-resident-transport/src/quic_endpoint.rs	2	InternalInvariant	Validated resource profiles use nonzero QUIC limits.
+crates/dae-resident-transport/src/quic_endpoint/metrics.rs	16	InternalInvariant	Observation IDs and registry locks are process-local invariants.
+crates/dae-resident-transport/src/quic_endpoint/model.rs	1	InternalInvariant	Static QUIC endpoint identity namespace is valid.
+crates/dae-resident-transport/src/quic_endpoint/runtime.rs	2	InternalInvariant	The first endpoint driver spawn owns one abort registration.
+crates/dae-resident-transport/src/quic_transport.rs	4	InternalInvariant	Fixed BLAKE2 width and candidate endpoint ownership are construction invariants.
+crates/dae-resident-transport/src/tls_client/boring_session.rs	1	InternalInvariant	BoringSSL ex-data index is initialized before retrieval.
+crates/dae-resident-transport/src/tls_client/tls_fragment.rs	2	InternalInvariant	Pending TLS fragment delay exists only in the delayed state.
+crates/dae-resident-transport/src/transport_identity.rs	1	InternalInvariant	Static transport identity namespace is valid.
+crates/dae-resident-transport/src/tuic_owner.rs	3	InternalInvariant	Validated TUIC owner state retains limits and queued messages during one owner turn.
+crates/dae-resident-transport/src/websocket/duplex_control.rs	2	InternalInvariant	Queued WebSocket control frames retain their active frame state.
+crates/dae-resident-transport/src/xhttp/xmux/h2_manager.rs	2	InternalInvariant	An admitted H2 xmux lease owns its selected client and permit.
+crates/dae-resident-transport/src/xhttp/xmux/h3_manager.rs	2	InternalInvariant	An admitted H3 xmux lease owns its selected client and permit.
+crates/dae-resident-transport/src/xhttp/xmux/key.rs	1	InternalInvariant	Static xmux identity namespace is valid.

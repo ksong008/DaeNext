@@ -91,9 +91,9 @@ impl VlessResponseStripper {
                     self.header[0]
                 ));
             }
-            self.header_len = Some(2 + self.header[1] as usize);
+            let header_len = 2 + self.header[1] as usize;
+            self.header_len = Some(header_len);
             let input = &input[take..];
-            let header_len = self.header_len.expect("set above");
             let needed = header_len.saturating_sub(self.header.len());
             let header_take = needed.min(input.len());
             self.header.extend_from_slice(&input[..header_take]);
@@ -104,7 +104,9 @@ impl VlessResponseStripper {
             return Ok(std::borrow::Cow::Borrowed(&input[header_take..]));
         }
 
-        let header_len = self.header_len.expect("checked above");
+        let Some(header_len) = self.header_len else {
+            return Err("VLESS response header length is unavailable".to_owned());
+        };
         let needed = header_len.saturating_sub(self.header.len());
         let take = needed.min(input.len());
         self.header.extend_from_slice(&input[..take]);
