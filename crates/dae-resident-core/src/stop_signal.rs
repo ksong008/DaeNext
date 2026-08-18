@@ -6,15 +6,15 @@ use std::sync::{
 
 use tokio::sync::watch;
 
-pub(crate) type SharedResidentStopSignal = Arc<ResidentStopSignal>;
+pub type SharedResidentStopSignal = Arc<ResidentStopSignal>;
 
-pub(crate) struct ResidentStopSignal {
+pub struct ResidentStopSignal {
     requested: AtomicBool,
     sender: watch::Sender<bool>,
 }
 
 impl ResidentStopSignal {
-    pub(crate) fn shared() -> SharedResidentStopSignal {
+    pub fn shared() -> SharedResidentStopSignal {
         let (sender, _receiver) = watch::channel(false);
         Arc::new(Self {
             requested: AtomicBool::new(false),
@@ -22,29 +22,29 @@ impl ResidentStopSignal {
         })
     }
 
-    pub(crate) fn load(&self, ordering: Ordering) -> bool {
+    pub fn load(&self, ordering: Ordering) -> bool {
         self.requested.load(ordering)
     }
 
-    pub(crate) fn store(&self, requested: bool, ordering: Ordering) {
+    pub fn store(&self, requested: bool, ordering: Ordering) {
         if self.requested.swap(requested, ordering) != requested {
             self.sender.send_replace(requested);
         }
     }
 
-    pub(crate) fn listener(&self) -> ResidentStopListener {
+    pub fn listener(&self) -> ResidentStopListener {
         ResidentStopListener {
             receiver: self.sender.subscribe(),
         }
     }
 }
 
-pub(crate) struct ResidentStopListener {
+pub struct ResidentStopListener {
     receiver: watch::Receiver<bool>,
 }
 
 impl ResidentStopListener {
-    pub(crate) async fn cancelled(&mut self) {
+    pub async fn cancelled(&mut self) {
         loop {
             if *self.receiver.borrow() {
                 return;
@@ -56,7 +56,7 @@ impl ResidentStopListener {
     }
 }
 
-pub(crate) async fn run_until_resident_stop<F>(
+pub async fn run_until_resident_stop<F>(
     stop: &SharedResidentStopSignal,
     future: F,
 ) -> Option<F::Output>

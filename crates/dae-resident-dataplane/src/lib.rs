@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, RwLock,
+    Arc, Mutex,
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -130,17 +130,9 @@ mod generation;
 pub(crate) use self::generation::ResidentDataplaneGeneration;
 pub(crate) use self::generation::resident_dataplane_generation_lifetime_counts;
 use self::generation::{
-    ActiveGenerationSlot, ResidentDataplaneGenerationLifetime, ResidentGenerationDrainControl,
+    ResidentDataplaneGenerationLifetime, ResidentGenerationDrainControl,
     next_resident_dataplane_generation_id,
 };
-#[path = "runtime/generation_identity.rs"]
-mod generation_identity;
-pub(crate) use self::generation_identity::{
-    GenerationToken, LogicalGenerationId, PhysicalRuntimeId, PublicationEpoch,
-};
-#[path = "runtime/generation_lifecycle.rs"]
-mod generation_lifecycle;
-use self::generation_lifecycle::*;
 #[path = "runtime/generation_builder.rs"]
 mod generation_builder;
 use self::generation_builder::*;
@@ -157,12 +149,6 @@ use self::read_view::ResidentRuntimeOwnerReadHandle;
 #[path = "runtime/executor.rs"]
 mod executor;
 use self::executor::*;
-#[path = "runtime/stop_signal.rs"]
-mod stop_signal;
-pub(crate) use self::stop_signal::*;
-#[path = "runtime/relay_deadline.rs"]
-mod relay_deadline;
-pub(crate) use self::relay_deadline::*;
 #[path = "runtime/group_selector_summary.rs"]
 mod group_selector_summary;
 pub(crate) use self::group_selector_summary::*;

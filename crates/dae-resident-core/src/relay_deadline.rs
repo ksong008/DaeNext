@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use tokio::time::{self, Sleep};
 
-pub(crate) fn resident_relay_idle_deadline(timeout: Duration) -> Sleep {
+pub fn resident_relay_idle_deadline(timeout: Duration) -> Sleep {
     time::sleep(timeout)
 }
 
-pub(crate) fn reset_resident_relay_idle_deadline(deadline: Pin<&mut Sleep>, timeout: Duration) {
+pub fn reset_resident_relay_idle_deadline(deadline: Pin<&mut Sleep>, timeout: Duration) {
     deadline.reset(time::Instant::now() + timeout);
 }
 

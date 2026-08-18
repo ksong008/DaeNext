@@ -40,18 +40,6 @@ impl Drop for ResidentDataplaneGenerationLifetime {
     }
 }
 
-#[derive(Debug)]
-struct ActiveGenerationSlotInner<T> {
-    generation: RwLock<Option<Arc<T>>>,
-    publication: AtomicU64,
-    publication_signal: tokio::sync::watch::Sender<PublicationEpoch>,
-}
-
-#[derive(Debug)]
-pub(crate) struct ActiveGenerationSlot<T> {
-    inner: Arc<ActiveGenerationSlotInner<T>>,
-}
-
 pub(crate) struct ResidentGenerationDrainControl {
     id: LogicalGenerationId,
     lifecycle: ResidentGenerationLifecycle,
@@ -166,81 +154,6 @@ impl ResidentGenerationDrainControl {
     }
 }
 
-impl<T> Clone for ActiveGenerationSlot<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-impl<T> ActiveGenerationSlot<T> {
-    pub(crate) fn new(generation: Arc<T>) -> Self {
-        let (publication_signal, _) = tokio::sync::watch::channel(PublicationEpoch::INITIAL);
-        Self {
-            inner: Arc::new(ActiveGenerationSlotInner {
-                generation: RwLock::new(Some(generation)),
-                publication: AtomicU64::new(PublicationEpoch::INITIAL.get()),
-                publication_signal,
-            }),
-        }
-    }
-
-    pub(crate) fn load(&self) -> Arc<T> {
-        self.inner
-            .generation
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(Arc::clone)
-            .expect("resident active generation slot was cleared during terminal shutdown")
-    }
-
-    pub(crate) fn load_versioned(&self) -> (PublicationEpoch, Arc<T>) {
-        let active = self
-            .inner
-            .generation
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let generation = active
-            .as_ref()
-            .map(Arc::clone)
-            .expect("resident active generation slot was cleared during terminal shutdown");
-        let publication = PublicationEpoch::new(self.inner.publication.load(Ordering::Acquire));
-        (publication, generation)
-    }
-
-    pub(crate) fn subscribe_publication(&self) -> tokio::sync::watch::Receiver<PublicationEpoch> {
-        self.inner.publication_signal.subscribe()
-    }
-
-    pub(crate) fn publish(&self, generation: Arc<T>) -> Arc<T> {
-        {
-            let mut active = self
-                .inner
-                .generation
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let previous = active
-                .replace(generation)
-                .expect("resident active generation slot was cleared before publication");
-            let publication =
-                PublicationEpoch::new(self.inner.publication.fetch_add(1, Ordering::Release))
-                    .next();
-            self.inner.publication_signal.send_replace(publication);
-            previous
-        }
-    }
-
-    pub(crate) fn clear(&self) -> Option<Arc<T>> {
-        self.inner
-            .generation
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-    }
-}
-
 pub struct ResidentDataplaneGeneration {
     pub(crate) id: LogicalGenerationId,
     pub(crate) reload_generation: PhysicalRuntimeId,
@@ -304,51 +217,6 @@ impl ResidentDataplaneGeneration {
 mod tests {
     use super::*;
 
-    #[test]
-    fn active_generation_slot_pins_loaded_arc_across_publication() {
-        let first = Arc::new(String::from("first"));
-        let slot = ActiveGenerationSlot::new(Arc::clone(&first));
-        let (first_publication, pinned) = slot.load_versioned();
-        let retired = slot.publish(Arc::new(String::from("second")));
-        let (second_publication, active) = slot.load_versioned();
-
-        assert_eq!(pinned.as_str(), "first");
-        assert!(Arc::ptr_eq(&pinned, &first));
-        assert!(Arc::ptr_eq(&retired, &first));
-        assert_eq!(active.as_str(), "second");
-        assert!(second_publication > first_publication);
-    }
-
-    #[tokio::test]
-    async fn active_generation_slot_notifies_waiters_after_publication() {
-        let first = Arc::new(String::from("first"));
-        let slot = ActiveGenerationSlot::new(Arc::clone(&first));
-        let mut publication = slot.subscribe_publication();
-        assert_eq!(*publication.borrow_and_update(), PublicationEpoch::INITIAL);
-
-        let previous = slot.publish(Arc::new(String::from("second")));
-
-        tokio::time::timeout(Duration::from_secs(1), publication.changed())
-            .await
-            .expect("generation publication must wake waiters")
-            .expect("active generation slot must retain its publication sender");
-        assert_eq!(*publication.borrow_and_update(), PublicationEpoch::new(2));
-        assert!(Arc::ptr_eq(&previous, &first));
-    }
-
-    #[test]
-    fn active_generation_slot_clear_releases_shared_inner_generation_owner() {
-        let generation = Arc::new(String::from("generation"));
-        let slot = ActiveGenerationSlot::new(Arc::clone(&generation));
-        let cloned_slot = slot.clone();
-
-        let cleared = slot.clear().expect("active generation must be present");
-
-        assert!(Arc::ptr_eq(&cleared, &generation));
-        assert!(cloned_slot.clear().is_none());
-        assert_eq!(Arc::strong_count(&generation), 2);
-    }
-
     #[tokio::test]
     async fn generation_force_stop_wakes_flow_waiters() {
         let control = ResidentGenerationDrainControl::new(
@@ -364,17 +232,5 @@ mod tests {
             .expect("generation stop must wake active flows");
         assert!(control.flow_stop_is_requested());
         assert!(control.udp_stop_is_requested());
-    }
-
-    #[test]
-    fn active_generation_slot_publication_wrap_is_change_only() {
-        let slot = ActiveGenerationSlot::new(Arc::new(String::from("first")));
-        slot.inner.publication.store(u64::MAX, Ordering::Release);
-
-        slot.publish(Arc::new(String::from("second")));
-
-        let (publication, active) = slot.load_versioned();
-        assert_eq!(publication, PublicationEpoch::new(0));
-        assert_eq!(active.as_str(), "second");
     }
 }
