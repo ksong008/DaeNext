@@ -106,7 +106,14 @@ impl DatagramRelay {
         }
         self.response_buffer_reclaimed = false;
         match socket.try_recv_from(&mut self.response_buf) {
-            Ok((read, _)) => decode(&self.response_buf[..read]).map(Some),
+            Ok((read, from)) => {
+                // A-11: SOCKS5 UDP 无认证，回包来源必须与所选 relay
+                // 候选一致；非预期来源视为注入，丢弃（下次轮询再收）。
+                if from != self.remote_candidates[self.selected_index] {
+                    return Ok(None);
+                }
+                decode(&self.response_buf[..read]).map(Some)
+            }
             Err(err) if response_receive_is_pending(&err) => Ok(None),
             Err(err) => Err(format!("receive {label} UDP datagram: {err}")),
         }
@@ -132,12 +139,18 @@ impl DatagramRelay {
         if self.response_buf.len() < UDP_DATAGRAM_RESPONSE_CAPACITY {
             self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
         }
-        let (read, _) = socket
-            .recv_from(&mut self.response_buf)
-            .await
-            .map_err(|err| format!("receive {label} UDP datagram: {err}"))?;
-        self.response_buffer_reclaimed = false;
-        decode(&self.response_buf[..read])
+        loop {
+            let (read, from) = socket
+                .recv_from(&mut self.response_buf)
+                .await
+                .map_err(|err| format!("receive {label} UDP datagram: {err}"))?;
+            // A-11: 丢弃非预期来源的报文并继续等待真实 relay 响应。
+            if from != self.remote_candidates[self.selected_index] {
+                continue;
+            }
+            self.response_buffer_reclaimed = false;
+            return decode(&self.response_buf[..read]);
+        }
     }
 
     pub(super) fn has_response_buffer(&self) -> bool {
