@@ -1,6 +1,7 @@
 use super::*;
 use crate::daed_product::durable_commit::{
-    ensure_private_directory, reserve_private_file, sync_directory as sync_durable_directory,
+    DurableTransaction, ensure_private_directory, reserve_private_file,
+    sync_directory as sync_durable_directory,
 };
 
 pub(super) struct PreparedRuntimeGeneration {
@@ -11,6 +12,7 @@ pub(super) struct PreparedRuntimeGeneration {
     pub(super) database_snapshot: RuntimeDatabaseSnapshot,
     pub(super) journal_path: Option<PathBuf>,
     pub(super) backup_path: Option<PathBuf>,
+    pub(super) transaction: Option<DurableTransaction>,
     probe_generation: Option<u64>,
     committed: bool,
 }
@@ -83,6 +85,7 @@ pub(super) fn prepare_runtime_generation(
             database_snapshot,
             journal_path: None,
             backup_path: None,
+            transaction: None,
             probe_generation: None,
             committed: false,
         });
@@ -120,6 +123,7 @@ pub(super) fn prepare_runtime_generation(
         database_snapshot,
         journal_path: None,
         backup_path: None,
+        transaction: None,
         probe_generation: None,
         committed: false,
     };

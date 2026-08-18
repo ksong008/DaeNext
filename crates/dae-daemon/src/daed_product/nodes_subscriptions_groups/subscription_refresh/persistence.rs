@@ -3,9 +3,9 @@ use super::*;
 #[cfg(test)]
 use crate::daed_product::durable_commit::write_reserved_file_synced;
 use crate::daed_product::durable_commit::{
-    ValidatedLeafName, atomic_replace_synced, cleanup_matching_artifacts,
+    DurableArtifactSet, DurableTransaction, ValidatedLeafName, cleanup_matching_artifacts,
     copy_bounded_regular_file_synced, ensure_private_directory, read_json_journal,
-    remove_file_if_exists, reserve_private_file, sync_directory, write_json_journal,
+    remove_file_if_exists, reserve_private_file,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -26,15 +26,9 @@ struct SubscriptionPersistJournal {
 }
 
 pub(super) struct PreparedSubscriptionPersist {
-    directory: PathBuf,
-    target: PathBuf,
-    candidate: Option<PathBuf>,
-    backup: Option<PathBuf>,
-    journal: Option<PathBuf>,
+    transaction: DurableTransaction,
     generation: String,
     metadata_key: String,
-    activated: bool,
-    database_committed: bool,
 }
 
 impl PreparedSubscriptionPersist {
@@ -77,7 +71,6 @@ impl PreparedSubscriptionPersist {
             None
         };
         let metadata_key = format!("subscription_persist_generation:{subscription_id}");
-        let journal_path = directory.join(JOURNAL_FILE);
         let journal = SubscriptionPersistJournal {
             format: 1,
             generation: generation.clone(),
@@ -86,39 +79,32 @@ impl PreparedSubscriptionPersist {
             candidate: leaf_name(&candidate)?,
             backup: backup.as_deref().map(leaf_name).transpose()?,
         };
-        if let Err(error) = write_journal(directory, &journal) {
-            let _ = remove_file_if_exists(&candidate);
-            if let Some(backup) = backup.as_ref() {
-                let _ = remove_file_if_exists(backup);
-            }
+        validate_journal(&journal)?;
+        let artifacts = DurableArtifactSet::new(
+            directory.to_path_buf(),
+            ValidatedLeafName::new(journal.target.clone())?,
+            ValidatedLeafName::new(journal.candidate.clone())?,
+            journal
+                .backup
+                .as_ref()
+                .map(|name| ValidatedLeafName::new(name.clone()))
+                .transpose()?,
+            ValidatedLeafName::new(JOURNAL_FILE)?,
+            ValidatedLeafName::new(JOURNAL_NEXT_FILE)?,
+        )?;
+        let transaction = DurableTransaction::new(artifacts);
+        if let Err(error) = transaction.write_intent(JOURNAL_MAX_BYTES, &journal) {
             return Err(error);
         }
         Ok(Self {
-            directory: directory.to_path_buf(),
-            target,
-            candidate: Some(candidate),
-            backup,
-            journal: Some(journal_path),
+            transaction,
             generation,
             metadata_key,
-            activated: false,
-            database_committed: false,
         })
     }
 
     pub(super) fn activate(&mut self) -> io::Result<()> {
-        let candidate = self
-            .candidate
-            .as_ref()
-            .ok_or_else(|| io::Error::other("persisted subscription candidate is unavailable"))?;
-        atomic_replace_synced(
-            &self.directory,
-            &ValidatedLeafName::from_path(candidate)?,
-            &ValidatedLeafName::from_path(&self.target)?,
-        )?;
-        self.candidate = None;
-        self.activated = true;
-        Ok(())
+        self.transaction.activate()
     }
 
     pub(super) fn record_generation(&self, tx: &Connection) -> io::Result<()> {
@@ -130,91 +116,26 @@ impl PreparedSubscriptionPersist {
         Ok(())
     }
 
+    pub(super) fn commit_database<R, E>(
+        &mut self,
+        commit: impl FnOnce() -> Result<R, E>,
+    ) -> Result<R, E> {
+        self.transaction.commit_database(commit)
+    }
+
     pub(super) fn finish(mut self) -> io::Result<()> {
-        self.database_committed = true;
-        self.remove_intent_then_backup()
+        self.transaction.finish_in_place()
     }
 
     pub(super) fn rollback(mut self) -> io::Result<()> {
-        let mut errors = Vec::new();
-        if self.activated {
-            match self.backup.as_ref() {
-                Some(backup) => {
-                    if let Err(error) = fs::rename(backup, &self.target) {
-                        errors.push(format!("restore persisted subscription backup: {error}"));
-                    } else {
-                        self.backup = None;
-                    }
-                }
-                None => {
-                    if let Err(error) = remove_file_if_exists(&self.target) {
-                        errors.push(format!("remove new persisted subscription: {error}"));
-                    }
-                }
-            }
-            if let Err(error) = sync_directory(&self.directory) {
-                errors.push(error.to_string());
-            }
-        }
-        if let Some(candidate) = self.candidate.take()
-            && let Err(error) = remove_file_if_exists(&candidate)
-        {
-            errors.push(format!("remove persisted subscription candidate: {error}"));
-        }
-        if errors.is_empty() {
-            self.remove_intent_then_backup()?;
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(io::Error::other(errors.join("; ")))
-        }
-    }
-
-    fn remove_intent_then_backup(&mut self) -> io::Result<()> {
-        if let Some(journal) = self.journal.take() {
-            remove_file_if_exists(&journal)?;
-            sync_directory(&self.directory)?;
-        }
-        if let Some(backup) = self.backup.take() {
-            remove_file_if_exists(&backup)?;
-        }
-        if let Some(candidate) = self.candidate.take() {
-            remove_file_if_exists(&candidate)?;
-        }
-        sync_directory(&self.directory)
+        self.transaction.rollback()
     }
 }
 
 impl Drop for PreparedSubscriptionPersist {
     fn drop(&mut self) {
-        if self.journal.is_some() && !self.database_committed && self.activated {
-            match self.backup.as_ref() {
-                Some(backup) => {
-                    if fs::rename(backup, &self.target).is_ok() {
-                        self.backup = None;
-                    }
-                }
-                None => {
-                    let _ = remove_file_if_exists(&self.target);
-                }
-            }
-            let _ = sync_directory(&self.directory);
-        }
-        if let Some(candidate) = self.candidate.take() {
-            let _ = remove_file_if_exists(&candidate);
-        }
-        if self.journal.is_some()
-            && !self.database_committed
-            && let Some(journal) = self.journal.take()
-        {
-            let _ = remove_file_if_exists(&journal);
-            let _ = sync_directory(&self.directory);
-        }
-        if self.journal.is_none()
-            && let Some(backup) = self.backup.take()
-        {
-            let _ = remove_file_if_exists(&backup);
+        if self.transaction.needs_rollback() {
+            let _ = self.transaction.rollback();
         }
     }
 }
@@ -234,13 +155,6 @@ pub(in crate::daed_product) fn recover_subscription_persist_transaction(
             Err(error) => return Err(error),
         };
     validate_journal(&journal)?;
-    let target = ValidatedLeafName::new(journal.target.clone())?.path_in(&directory);
-    let candidate = ValidatedLeafName::new(journal.candidate.clone())?.path_in(&directory);
-    let backup = journal
-        .backup
-        .as_ref()
-        .map(|name| ValidatedLeafName::new(name.clone()).map(|leaf| leaf.path_in(&directory)))
-        .transpose()?;
     let committed = open_state_connection(state)?
         .query_row(
             "SELECT value FROM daed_product_metadata WHERE key = ?1",
@@ -251,28 +165,19 @@ pub(in crate::daed_product) fn recover_subscription_persist_transaction(
         .map_err(sqlite_io_error)?
         .as_deref()
         == Some(journal.generation.as_str());
-    if committed {
-        if !target.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "committed persisted subscription file is missing",
-            ));
-        }
-    } else {
-        match backup.as_ref() {
-            Some(backup) => fs::rename(backup, &target)?,
-            None => remove_file_if_exists(&target)?,
-        }
-        sync_directory(&directory)?;
-    }
-    remove_file_if_exists(&candidate)?;
-    remove_file_if_exists(&journal_path)?;
-    sync_directory(&directory)?;
-    if let Some(backup) = backup.as_ref() {
-        remove_file_if_exists(backup)?;
-    }
-    remove_file_if_exists(&directory.join(JOURNAL_NEXT_FILE))?;
-    sync_directory(&directory)
+    let artifacts = DurableArtifactSet::new(
+        directory,
+        ValidatedLeafName::new(journal.target.clone())?,
+        ValidatedLeafName::new(journal.candidate.clone())?,
+        journal
+            .backup
+            .as_ref()
+            .map(|name| ValidatedLeafName::new(name.clone()))
+            .transpose()?,
+        ValidatedLeafName::new(JOURNAL_FILE)?,
+        ValidatedLeafName::new(JOURNAL_NEXT_FILE)?,
+    )?;
+    DurableTransaction::reconcile(artifacts, committed)
 }
 
 impl PersistedSubscriptionContent<'_> {
@@ -332,17 +237,6 @@ fn reserve_artifact(
 
 fn copy_file_synced(source: &Path, destination: &Path) -> io::Result<()> {
     copy_bounded_regular_file_synced(source, destination, subscription_http_body_limit() as u64)
-}
-
-fn write_journal(directory: &Path, journal: &SubscriptionPersistJournal) -> io::Result<()> {
-    validate_journal(journal)?;
-    write_json_journal(
-        directory,
-        &ValidatedLeafName::new(JOURNAL_FILE)?,
-        &ValidatedLeafName::new(JOURNAL_NEXT_FILE)?,
-        JOURNAL_MAX_BYTES,
-        journal,
-    )
 }
 
 fn validate_journal(journal: &SubscriptionPersistJournal) -> io::Result<()> {

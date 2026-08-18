@@ -1,9 +1,8 @@
 use super::prepare::PreparedRuntimeGeneration;
 use super::*;
 use crate::daed_product::durable_commit::{
-    DurableArtifactSet, ValidatedLeafName, cleanup_matching_artifacts, create_synced_file,
-    read_json_journal, remove_file_if_exists, sync_directory as sync_durable_directory,
-    write_json_journal,
+    DurableArtifactSet, DurableTransaction, ValidatedLeafName, cleanup_matching_artifacts,
+    create_synced_file, read_json_journal,
 };
 use serde::{Deserialize, Serialize};
 
@@ -58,64 +57,32 @@ pub(super) fn write_runtime_apply_journal(
         candidate: leaf_name(staged)?,
         backup: backup.as_deref().map(leaf_name).transpose()?,
     };
-    let path = artifacts.journal_path();
-    let next = artifacts.journal_next_path();
-    let write_result = write_json_journal(
-        artifacts.directory(),
-        &ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL).map_err(|error| error.to_string())?,
-        &ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL_NEXT).map_err(|error| error.to_string())?,
-        RUNTIME_APPLY_JOURNAL_MAX_BYTES,
-        &journal,
-    )
-    .map_err(|error| {
-        format!(
-            "write runtime apply journal {}: {error}",
-            path_string(&path)
-        )
-    });
-    if let Err(error) = write_result {
-        let _ = fs::remove_file(&next);
-        if let Some(backup) = backup.as_ref() {
-            let _ = fs::remove_file(backup);
-        }
-        return Err(error);
-    }
-    candidate.journal_path = Some(path);
+    let transaction = DurableTransaction::new(artifacts);
+    transaction
+        .write_intent(RUNTIME_APPLY_JOURNAL_MAX_BYTES, &journal)
+        .map_err(|error| {
+            format!(
+                "write runtime apply journal {}: {error}",
+                path_string(&transaction.artifacts().journal_path())
+            )
+        })?;
+    candidate.journal_path = Some(transaction.artifacts().journal_path());
     candidate.backup_path = backup;
+    candidate.transaction = Some(transaction);
     Ok(())
 }
 
 pub(super) fn remove_runtime_apply_journal(
     candidate: &mut PreparedRuntimeGeneration,
 ) -> Result<(), String> {
-    let mut errors = Vec::new();
-    let parent = candidate.output_path.as_deref().and_then(Path::parent);
-    if let Some(path) = candidate.journal_path.take() {
-        if let Err(error) = remove_file_if_exists(&path) {
-            errors.push(format!("remove {}: {error}", path_string(&path)));
-        } else if let Some(parent) = parent
-            && let Err(error) = sync_runtime_directory(parent)
-        {
-            errors.push(error);
-        }
+    if let Some(transaction) = candidate.transaction.take() {
+        transaction
+            .finish()
+            .map_err(|error| format!("finish runtime apply transaction: {error}"))?;
     }
-    if errors.is_empty()
-        && let Some(path) = candidate.backup_path.take()
-        && let Err(error) = remove_file_if_exists(&path)
-    {
-        errors.push(format!("remove {}: {error}", path_string(&path)));
-    }
-    if errors.is_empty()
-        && let Some(parent) = parent
-        && let Err(error) = sync_runtime_directory(parent)
-    {
-        errors.push(error);
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
+    candidate.journal_path = None;
+    candidate.backup_path = None;
+    Ok(())
 }
 
 pub(in crate::daed_product) fn recover_runtime_apply_transaction(
@@ -151,9 +118,6 @@ pub(in crate::daed_product) fn recover_runtime_apply_transaction(
         ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL_NEXT).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let output = artifacts.target_path();
-    let staged = artifacts.candidate_path();
-    let backup = artifacts.backup_path();
     let committed_generation = open_state_connection(state)
         .map_err(|error| format!("open runtime state for apply recovery: {error}"))?
         .query_row(
@@ -163,28 +127,11 @@ pub(in crate::daed_product) fn recover_runtime_apply_transaction(
         )
         .optional()
         .map_err(|error| format!("read committed runtime generation: {error}"))?;
-    if committed_generation.as_deref() != Some(journal.generation.as_str()) {
-        match backup.as_ref() {
-            Some(backup) => fs::rename(backup, &output)
-                .map_err(|error| format!("restore interrupted runtime materialization: {error}"))?,
-            None => remove_file_if_exists(&output)
-                .map_err(|error| format!("remove interrupted runtime materialization: {error}"))?,
-        }
-    } else if !output.is_file() {
-        return Err("committed runtime generation is missing generated.dae".to_owned());
-    }
-    remove_file_if_exists(&staged)
-        .map_err(|error| format!("remove interrupted runtime candidate: {error}"))?;
-    remove_file_if_exists(&journal_path)
-        .map_err(|error| format!("remove runtime apply recovery journal: {error}"))?;
-    sync_runtime_directory(&runtime_dir)?;
-    if let Some(backup) = backup.as_ref() {
-        remove_file_if_exists(backup)
-            .map_err(|error| format!("remove runtime apply recovery backup: {error}"))?;
-    }
-    remove_file_if_exists(&runtime_dir.join(RUNTIME_APPLY_JOURNAL_NEXT))
-        .map_err(|error| format!("remove runtime apply recovery next journal: {error}"))?;
-    sync_runtime_directory(&runtime_dir)
+    DurableTransaction::recover(
+        artifacts,
+        committed_generation.as_deref() == Some(journal.generation.as_str()),
+    )
+    .map_err(|error| format!("recover runtime materialization transaction: {error}"))
 }
 
 fn validate_journal(journal: &RuntimeApplyJournal) -> Result<(), String> {
@@ -251,11 +198,6 @@ fn runtime_artifact_set(
         ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL_NEXT).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())
-}
-
-fn sync_runtime_directory(path: &Path) -> Result<(), String> {
-    sync_durable_directory(path)
-        .map_err(|error| format!("sync directory {}: {error}", path_string(path)))
 }
 
 #[cfg(test)]

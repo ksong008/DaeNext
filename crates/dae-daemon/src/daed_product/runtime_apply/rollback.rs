@@ -116,6 +116,15 @@ fn restore_runtime_database(
 fn restore_previous_materialization(
     candidate: &mut PreparedRuntimeGeneration,
 ) -> Result<(), String> {
+    if let Some(mut transaction) = candidate.transaction.take() {
+        transaction
+            .rollback()
+            .map_err(|error| format!("rollback runtime materialization transaction: {error}"))?;
+        candidate.candidate_path = None;
+        candidate.journal_path = None;
+        candidate.backup_path = None;
+        return Ok(());
+    }
     if let Some(candidate_path) = candidate.candidate_path.take() {
         match fs::remove_file(&candidate_path) {
             Ok(()) => {}

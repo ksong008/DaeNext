@@ -124,6 +124,160 @@ impl DurableArtifactSet {
     }
 }
 
+#[derive(Debug)]
+pub(in crate::daed_product) struct DurableTransaction {
+    artifacts: DurableArtifactSet,
+    activated: bool,
+    database_committed: bool,
+    finished: bool,
+}
+
+impl DurableTransaction {
+    pub(in crate::daed_product) fn new(artifacts: DurableArtifactSet) -> Self {
+        Self {
+            artifacts,
+            activated: false,
+            database_committed: false,
+            finished: false,
+        }
+    }
+
+    pub(in crate::daed_product) fn artifacts(&self) -> &DurableArtifactSet {
+        &self.artifacts
+    }
+
+    pub(in crate::daed_product) fn write_intent<T: Serialize>(
+        &self,
+        max_bytes: u64,
+        value: &T,
+    ) -> io::Result<()> {
+        write_json_journal(
+            self.artifacts.directory(),
+            &self.artifacts.journal,
+            &self.artifacts.journal_next,
+            max_bytes,
+            value,
+        )
+    }
+
+    pub(in crate::daed_product) fn activate(&mut self) -> io::Result<()> {
+        fs::rename(
+            self.artifacts.candidate.path_in(self.artifacts.directory()),
+            self.artifacts.target.path_in(self.artifacts.directory()),
+        )?;
+        self.activated = true;
+        sync_directory(self.artifacts.directory())?;
+        Ok(())
+    }
+
+    pub(in crate::daed_product) fn commit_database<R, E>(
+        &mut self,
+        commit: impl FnOnce() -> Result<R, E>,
+    ) -> Result<R, E> {
+        let result = commit()?;
+        self.database_committed = true;
+        Ok(result)
+    }
+
+    pub(in crate::daed_product) fn needs_rollback(&self) -> bool {
+        !self.finished && !self.database_committed
+    }
+
+    pub(in crate::daed_product) fn finish(mut self) -> io::Result<()> {
+        self.database_committed = true;
+        self.finish_in_place()
+    }
+
+    pub(in crate::daed_product) fn finish_in_place(&mut self) -> io::Result<()> {
+        self.database_committed = true;
+        let result = cleanup_transaction_artifacts(&self.artifacts);
+        self.finished = result.is_ok();
+        result
+    }
+
+    pub(in crate::daed_product) fn rollback(&mut self) -> io::Result<()> {
+        let mut errors = Vec::new();
+        if self.activated {
+            if let Err(error) = restore_transaction_target(&self.artifacts) {
+                errors.push(error.to_string());
+            }
+            self.activated = false;
+        }
+        if let Err(error) = cleanup_transaction_artifacts(&self.artifacts) {
+            errors.push(error.to_string());
+        }
+        self.finished = errors.is_empty();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(io::Error::other(errors.join("; ")))
+        }
+    }
+
+    pub(in crate::daed_product) fn reconcile(
+        artifacts: DurableArtifactSet,
+        database_committed: bool,
+    ) -> io::Result<()> {
+        if database_committed {
+            if !artifacts.target_path().is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "committed durable target is missing",
+                ));
+            }
+        } else {
+            restore_transaction_target(&artifacts)?;
+        }
+        cleanup_transaction_artifacts(&artifacts)
+    }
+
+    pub(in crate::daed_product) fn recover(
+        artifacts: DurableArtifactSet,
+        database_committed: bool,
+    ) -> io::Result<()> {
+        Self::reconcile(artifacts, database_committed)
+    }
+}
+
+impl Drop for DurableTransaction {
+    fn drop(&mut self) {
+        if !self.finished && !self.database_committed && !self.activated {
+            let _ = cleanup_transaction_artifacts(&self.artifacts);
+        }
+    }
+}
+
+fn restore_transaction_target(artifacts: &DurableArtifactSet) -> io::Result<()> {
+    match artifacts.backup_path() {
+        Some(backup) => fs::rename(backup, artifacts.target_path())?,
+        None => remove_file_if_exists(&artifacts.target_path())?,
+    }
+    sync_directory(artifacts.directory())
+}
+
+fn cleanup_transaction_artifacts(artifacts: &DurableArtifactSet) -> io::Result<()> {
+    let mut errors = Vec::new();
+    for path in [
+        artifacts.journal_path(),
+        artifacts.journal_next_path(),
+        artifacts.candidate_path(),
+    ] {
+        if let Err(error) = remove_file_if_exists(&path) {
+            errors.push(error.to_string());
+        }
+    }
+    if let Some(backup) = artifacts.backup_path()
+        && let Err(error) = remove_file_if_exists(&backup)
+    {
+        errors.push(error.to_string());
+    }
+    if errors.is_empty() {
+        sync_directory(artifacts.directory())
+    } else {
+        Err(io::Error::other(errors.join("; ")))
+    }
+}
+
 pub(in crate::daed_product) trait FaultCheckpoints<Point: Copy> {
     fn checkpoint(&mut self, point: Point) -> io::Result<()>;
 }
@@ -272,15 +426,6 @@ pub(in crate::daed_product) fn write_json_journal<T: Serialize>(
         let _ = remove_file_if_exists(&next_path);
     }
     result
-}
-
-pub(in crate::daed_product) fn atomic_replace_synced(
-    directory: &Path,
-    source: &ValidatedLeafName,
-    destination: &ValidatedLeafName,
-) -> io::Result<()> {
-    fs::rename(source.path_in(directory), destination.path_in(directory))?;
-    sync_directory(directory)
 }
 
 pub(in crate::daed_product) fn remove_leaf_if_exists_synced(

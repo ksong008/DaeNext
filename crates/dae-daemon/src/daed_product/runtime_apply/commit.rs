@@ -1,4 +1,4 @@
-use super::prepare::{PreparedRuntimeGeneration, sync_directory};
+use super::prepare::PreparedRuntimeGeneration;
 use super::*;
 
 pub(super) fn commit_runtime_generation(
@@ -13,33 +13,51 @@ pub(super) fn commit_runtime_generation(
     if candidate.candidate_path.is_some() && candidate.output_path.is_some() {
         super::journal::write_runtime_apply_journal(candidate)?;
     }
-    if let (Some(candidate_path), Some(output_path)) = (
+    if let (Some(_candidate_path), Some(output_path)) = (
         candidate.candidate_path.as_ref(),
         candidate.output_path.as_ref(),
     ) {
         checkpoints
             .checkpoint(RuntimeApplyCheckpoint::RenameCandidate)
             .map_err(|err| format!("rename runtime candidate checkpoint: {err}"))?;
-        fs::rename(candidate_path, output_path).map_err(|err| {
-            format!(
-                "activate runtime materialization {}: {err}",
-                path_string(output_path)
-            )
-        })?;
-        if let Some(parent) = output_path.parent() {
-            sync_directory(parent)?;
-        }
+        candidate
+            .transaction
+            .as_mut()
+            .ok_or_else(|| "runtime apply transaction is missing before activation".to_owned())?
+            .activate()
+            .map_err(|err| {
+                format!(
+                    "activate runtime materialization {}: {err}",
+                    path_string(output_path)
+                )
+            })?;
         candidate.candidate_path = None;
     }
 
-    commit_runtime_state(
-        state,
-        plan,
-        runtime_log_level,
-        process_transition,
-        candidate,
-        checkpoints,
-    )?;
+    let commit_result = if let Some(mut transaction) = candidate.transaction.take() {
+        let result = transaction.commit_database(|| {
+            commit_runtime_state(
+                state,
+                plan,
+                runtime_log_level,
+                process_transition,
+                candidate,
+                checkpoints,
+            )
+        });
+        candidate.transaction = Some(transaction);
+        result
+    } else {
+        commit_runtime_state(
+            state,
+            plan,
+            runtime_log_level,
+            process_transition,
+            candidate,
+            checkpoints,
+        )
+    };
+    commit_result?;
     super::journal::remove_runtime_apply_journal(candidate)?;
     candidate.mark_committed();
     Ok(plan.report(config_dir, false))
