@@ -4,7 +4,7 @@ use dae_resident_core::ResidentHealthResuscitation;
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentDnsUpstreamRouter {
     pub(in crate::dns) routing_matcher: RoutingMatcher,
-    pub(in crate::dns) proxy_groups: SharedResidentProxyGroupMap,
+    proxy_selector: Arc<dyn ResidentDnsProxySelector>,
     pub(in crate::dns) so_mark_from_dae: u32,
     health_resuscitation: Option<Arc<dyn ResidentHealthResuscitation>>,
 }
@@ -25,13 +25,13 @@ pub(in crate::dns) struct ResidentDnsUpstreamSelectionCandidate {
 impl ResidentDnsUpstreamRouter {
     pub(crate) fn new(
         routing_matcher: RoutingMatcher,
-        proxy_groups: SharedResidentProxyGroupMap,
+        proxy_selector: Arc<dyn ResidentDnsProxySelector>,
         so_mark_from_dae: u32,
         health_resuscitation: Option<Arc<dyn ResidentHealthResuscitation>>,
     ) -> Self {
         Self {
             routing_matcher,
-            proxy_groups,
+            proxy_selector,
             so_mark_from_dae: effective_so_mark_from_dae(so_mark_from_dae),
             health_resuscitation,
         }
@@ -77,17 +77,7 @@ impl ResidentDnsUpstreamRouter {
                 upstream.tag, upstream.target.authority, target
             )),
             outbound => {
-                let Some(proxy_group) = self.proxy_groups.get(&outbound) else {
-                    return Err(format!(
-                        "DNS upstream {} {} selected outbound {} but no Rust proxy plan is available",
-                        upstream.tag,
-                        upstream.target.authority,
-                        OutboundIndex(outbound)
-                    ));
-                };
-                let proxy = match proxy_group
-                    .select_proxy_for_dns_upstream_candidate_detail(proxy_network_type)
-                {
+                let proxy = match self.proxy_selector.select(outbound, proxy_network_type) {
                     Ok(proxy) => proxy,
                     Err(err) => {
                         if err.no_alive
@@ -100,7 +90,7 @@ impl ResidentDnsUpstreamRouter {
                 };
                 Ok(ResidentDnsUpstreamSelectionCandidate {
                     selection: ResidentDnsUpstreamSelection::Proxy {
-                        binding: proxy.proxy.with_route_socket_mark(mark),
+                        binding: proxy.binding.with_route_socket_mark(mark),
                     },
                     network_type: proxy.network_type,
                     latency_ms: proxy.latency_ms,

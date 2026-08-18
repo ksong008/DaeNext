@@ -217,21 +217,26 @@ fn dns_upstream_routing_config_with_group(routing: &str, group_body: &str) -> Co
 
 fn dns_upstream_router_for_config(
     config: &Config,
-) -> (ResidentDnsUpstreamRouter, ResidentDnsUpstream) {
+) -> (
+    ResidentDnsUpstreamRouter,
+    ResidentDnsUpstream,
+    SharedResidentProxyGroupMap,
+) {
     let geodata = test_geodata();
     let runtime_plan = build_resident_dataplane_plan(config).unwrap();
     let dns_plan = build_resident_dns_plan(config, &geodata).unwrap();
     let matcher = build_resident_userspace_routing_matcher_with_geodata(config, &geodata).unwrap();
+    let proxy_groups = share_resident_proxy_groups(runtime_plan.proxies.clone());
     let router = ResidentDnsUpstreamRouter::new(
         matcher,
-        share_resident_proxy_groups(runtime_plan.proxies.clone()),
+        ResidentDnsProxyGroupSelector::shared(Arc::clone(&proxy_groups)),
         config.global.so_mark_from_dae,
         None,
     );
     let ResidentDnsRequestAction::Upstream(upstream) = dns_plan.request_default_action else {
         panic!("expected upstream default action");
     };
-    (router, upstream)
+    (router, upstream, proxy_groups)
 }
 
 fn test_dns_plan_with_router(
@@ -266,7 +271,7 @@ fn dns_upstream_router_selects_proxy_group_for_upstream_domain() {
         .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
         .as_str(),
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let (router, upstream, _) = dns_upstream_router_for_config(&config);
     let selection = select_single_test_dns_upstream_target(
         &config,
         router,
@@ -290,7 +295,7 @@ fn dns_upstream_router_keeps_direct_fallback_direct() {
             fallback: direct
             "#
     ));
-    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let (router, upstream, _) = dns_upstream_router_for_config(&config);
     let selection = select_single_test_dns_upstream_target(
         &config,
         router,
@@ -312,7 +317,7 @@ fn dns_upstream_router_rejects_blocked_upstream_target() {
             fallback: block
             "#
     ));
-    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let (router, upstream, _) = dns_upstream_router_for_config(&config);
     let plan = test_dns_plan_with_router(&config, router);
     let err = transport::select_dns_upstream_targets(
         &plan,
@@ -338,8 +343,8 @@ fn dns_upstream_router_selects_tcp_upstream_with_tcp_health_state() {
             policy: min
             "#,
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
-    let group = router.proxy_groups.values().next().unwrap();
+    let (router, upstream, proxy_groups) = dns_upstream_router_for_config(&config);
+    let group = proxy_groups.values().next().unwrap();
     group
         .record_check_result("node_a", NetworkType::TCP4, Some(200), 1)
         .unwrap();
@@ -380,8 +385,8 @@ fn dns_upstream_router_selects_udp_upstream_with_dns_udp_health_state() {
             policy: min
             "#,
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
-    let group = router.proxy_groups.values().next().unwrap();
+    let (router, upstream, proxy_groups) = dns_upstream_router_for_config(&config);
+    let group = proxy_groups.values().next().unwrap();
     group
         .record_check_result("node_a", NetworkType::TCP4, Some(200), 1)
         .unwrap();
@@ -422,8 +427,8 @@ fn dns_upstream_candidates_select_lower_latency_tcp_path_for_tcp_udp() {
             policy: min
             "#,
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
-    let group = router.proxy_groups.values().next().unwrap();
+    let (router, upstream, proxy_groups) = dns_upstream_router_for_config(&config);
+    let group = proxy_groups.values().next().unwrap();
     group
         .record_check_result("node_a", NetworkType::DNS_UDP4, Some(200), 1)
         .unwrap();
@@ -462,8 +467,8 @@ fn dns_upstream_candidates_keep_multiple_resolved_targets_generic() {
             policy: min
             "#,
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
-    let group = router.proxy_groups.values().next().unwrap();
+    let (router, upstream, proxy_groups) = dns_upstream_router_for_config(&config);
+    let group = proxy_groups.values().next().unwrap();
     group
         .record_check_result("node_a", NetworkType::DNS_UDP4, Some(80), 1)
         .unwrap();
@@ -784,8 +789,8 @@ fn dns_upstream_targets_use_matching_family_as_selector_fallback_tie_breaker() {
             policy: min
             "#,
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
-    let group = router.proxy_groups.values().next().unwrap();
+    let (router, upstream, proxy_groups) = dns_upstream_router_for_config(&config);
+    let group = proxy_groups.values().next().unwrap();
     group
         .record_check_result("node_a", NetworkType::DNS_UDP4, None, 1)
         .unwrap();
@@ -828,8 +833,8 @@ fn dns_upstream_targets_keep_single_family_selector_fallback() {
             policy: min
             "#,
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
-    let group = router.proxy_groups.values().next().unwrap();
+    let (router, upstream, proxy_groups) = dns_upstream_router_for_config(&config);
+    let group = proxy_groups.values().next().unwrap();
     group
         .record_check_result("node_a", NetworkType::DNS_UDP4, None, 1)
         .unwrap();
@@ -872,8 +877,8 @@ fn dns_upstream_fixed_group_stays_fixed_across_udp_and_tcp_selection() {
             policy: fixed(0)
             "#,
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
-    let group = router.proxy_groups.values().next().unwrap();
+    let (router, upstream, proxy_groups) = dns_upstream_router_for_config(&config);
+    let group = proxy_groups.values().next().unwrap();
     group
         .record_check_result("node_a", NetworkType::DNS_UDP4, Some(300), 1)
         .unwrap();
@@ -935,7 +940,7 @@ fn dns_upstream_selection_respects_l4_routing_per_phase() {
         "#
     .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST);
     let config = parse_config(&input);
-    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let (router, upstream, _) = dns_upstream_router_for_config(&config);
 
     let udp = select_single_test_dns_upstream_target(
         &config,
@@ -1004,7 +1009,7 @@ fn dns_upstream_selection_respects_ipversion_routing_per_target() {
         "#
     .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST);
     let config = parse_config(&input);
-    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let (router, upstream, _) = dns_upstream_router_for_config(&config);
 
     let v4 = select_single_test_dns_upstream_target(
         &config,
@@ -1048,8 +1053,8 @@ fn dns_upstream_targets_choose_lower_latency_matching_proxy_candidate() {
             policy: min
             "#,
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
-    let group = router.proxy_groups.values().next().unwrap();
+    let (router, upstream, proxy_groups) = dns_upstream_router_for_config(&config);
+    let group = proxy_groups.values().next().unwrap();
     group
         .record_check_result("node_a", NetworkType::DNS_UDP4, Some(200), 1)
         .unwrap();
@@ -1739,7 +1744,9 @@ async fn resident_dns_live_upstream_pressure_uses_parameterized_upstream() {
             build_resident_userspace_routing_matcher_with_geodata(&parsed, &geodata).unwrap();
         let router = ResidentDnsUpstreamRouter::new(
             matcher,
-            share_resident_proxy_groups(runtime_plan.proxies.clone()),
+            ResidentDnsProxyGroupSelector::shared(share_resident_proxy_groups(
+                runtime_plan.proxies.clone(),
+            )),
             parsed.global.so_mark_from_dae,
             None,
         );
@@ -2778,7 +2785,7 @@ fn resident_dns_forwarder_cache_reuses_proxy_udp_by_selection() {
         .replace("__DNS_UPSTREAM_HOST__", TEST_DNS_UPSTREAM_HOST)
         .as_str(),
     );
-    let (router, upstream) = dns_upstream_router_for_config(&config);
+    let (router, upstream, _) = dns_upstream_router_for_config(&config);
     let target = test_dns_upstream_target_v4();
     let selection =
         select_single_test_dns_upstream_target(&config, router, &upstream, target, L4Proto::Udp);

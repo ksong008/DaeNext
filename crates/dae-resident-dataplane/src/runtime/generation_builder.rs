@@ -144,7 +144,7 @@ pub(super) fn build_resident_dataplane_generation(
     });
     let dns_upstream_router = Arc::new(dns::ResidentDnsUpstreamRouter::new(
         routing_matcher.clone(),
-        Arc::clone(&udp_proxy_groups),
+        crate::plan::ResidentDnsProxyGroupSelector::shared(Arc::clone(&udp_proxy_groups)),
         so_mark_from_dae,
         Some(Arc::new(health_resuscitation.clone())),
     ));
