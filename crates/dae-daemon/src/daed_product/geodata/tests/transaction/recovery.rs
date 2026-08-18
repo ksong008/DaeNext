@@ -7,6 +7,7 @@ fn geodata_activating_crash_recovers_the_old_generation() {
     fs::rename(&fixture.data_stage, fixture.dir.join(GEOSITE_FILE)).unwrap();
 
     recover_geodata_transaction(&fixture.dir, &fixture.state, GeodataKind::Geosite).unwrap();
+    recover_geodata_transaction(&fixture.dir, &fixture.state, GeodataKind::Geosite).unwrap();
 
     fixture.assert_old_generation();
     fixture.cleanup();
@@ -26,6 +27,7 @@ fn geodata_files_activated_crash_keeps_new_generation_and_completes_pending_stat
     journal.phase = GeodataJournalPhase::FilesActivated;
     write_geodata_journal(&fixture.dir, GeodataKind::Geosite, &journal).unwrap();
 
+    recover_geodata_transaction(&fixture.dir, &fixture.state, GeodataKind::Geosite).unwrap();
     recover_geodata_transaction(&fixture.dir, &fixture.state, GeodataKind::Geosite).unwrap();
 
     fixture.assert_new_generation();
@@ -47,6 +49,7 @@ fn geodata_committed_cleanup_interruption_is_recovered_without_rollback() {
     assert_eq!(result.status["version"], json!("new-tag"));
     fixture.assert_new_generation();
 
+    recover_geodata_transaction(&fixture.dir, &fixture.state, GeodataKind::Geosite).unwrap();
     recover_geodata_transaction(&fixture.dir, &fixture.state, GeodataKind::Geosite).unwrap();
 
     fixture.assert_new_generation();

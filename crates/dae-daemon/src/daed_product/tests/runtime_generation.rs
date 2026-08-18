@@ -19,7 +19,7 @@ impl CommittedRuntimeFixture {
         let config_dir = product.root().join("config");
         let runtime = ProductRuntimeManager::new();
         let prepared = prepare_runtime_reload_config(product.state()).unwrap();
-        let mut checkpoints = NoopRuntimeApplyCheckpoints;
+        let mut checkpoints = NoopFaultCheckpoints;
         apply_runtime_generation(
             &runtime,
             product.state(),

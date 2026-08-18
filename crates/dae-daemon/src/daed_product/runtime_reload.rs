@@ -163,7 +163,7 @@ pub(in crate::daed_product) fn apply_prepared_runtime_reload(
     prepared: PreparedRuntimeReload,
     latency_seed: &[Value],
 ) -> Result<AppliedRuntimeReload, String> {
-    let mut checkpoints = NoopRuntimeApplyCheckpoints;
+    let mut checkpoints = NoopFaultCheckpoints;
     let (runtime_report, materialized_report) = apply_runtime_generation(
         runtime,
         state,

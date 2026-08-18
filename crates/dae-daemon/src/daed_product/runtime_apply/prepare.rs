@@ -1,5 +1,7 @@
 use super::*;
-use std::fs::{File, OpenOptions};
+use crate::daed_product::durable_commit::{
+    ensure_private_directory, reserve_private_file, sync_directory as sync_durable_directory,
+};
 
 pub(super) struct PreparedRuntimeGeneration {
     pub(super) generation: String,
@@ -68,7 +70,7 @@ pub(super) fn prepare_runtime_generation(
     config_dir: Option<&Path>,
     plan: &RuntimeMaterializationPlan,
     generation: &str,
-    checkpoints: &mut dyn RuntimeApplyCheckpoints,
+    checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<PreparedRuntimeGeneration, String> {
     ensure_state_schema(state).map_err(|err| format!("prepare runtime state: {err}"))?;
     let database_snapshot = snapshot_runtime_database(state)?;
@@ -89,7 +91,7 @@ pub(super) fn prepare_runtime_generation(
     checkpoints
         .checkpoint(RuntimeApplyCheckpoint::CreateDirectory)
         .map_err(|err| format!("prepare runtime directory checkpoint: {err}"))?;
-    fs::create_dir_all(&runtime_dir).map_err(|err| {
+    ensure_private_directory(&runtime_dir).map_err(|err| {
         format!(
             "create runtime directory {}: {err}",
             path_string(&runtime_dir)
@@ -125,25 +127,15 @@ pub(super) fn prepare_runtime_generation(
         .candidate_path
         .as_ref()
         .expect("prepared runtime candidate path is present");
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(candidate_path)
-        .map_err(|err| {
-            format!(
-                "create runtime candidate {}: {err}",
-                path_string(candidate_path)
-            )
-        })?;
-    file.write_all(plan.content.as_bytes()).map_err(|err| {
+    let mut file = reserve_private_file(candidate_path).map_err(|err| {
         format!(
-            "write runtime candidate {}: {err}",
+            "create runtime candidate {}: {err}",
             path_string(candidate_path)
         )
     })?;
-    set_private_runtime_file_permissions(candidate_path).map_err(|err| {
+    file.write_all(plan.content.as_bytes()).map_err(|err| {
         format!(
-            "set runtime candidate permissions {}: {err}",
+            "write runtime candidate {}: {err}",
             path_string(candidate_path)
         )
     })?;
@@ -204,7 +196,6 @@ fn snapshot_runtime_database(state: &Path) -> Result<RuntimeDatabaseSnapshot, St
 }
 
 pub(super) fn sync_directory(path: &Path) -> Result<(), String> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
+    sync_durable_directory(path)
         .map_err(|err| format!("sync directory {}: {err}", path_string(path)))
 }

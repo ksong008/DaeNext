@@ -1,7 +1,11 @@
-use super::prepare::{PreparedRuntimeGeneration, sync_directory};
+use super::prepare::PreparedRuntimeGeneration;
 use super::*;
+use crate::daed_product::durable_commit::{
+    DurableArtifactSet, ValidatedLeafName, cleanup_matching_artifacts, create_synced_file,
+    read_json_journal, remove_file_if_exists, sync_directory as sync_durable_directory,
+    write_json_journal,
+};
 use serde::{Deserialize, Serialize};
-use std::fs::OpenOptions;
 
 const RUNTIME_APPLY_JOURNAL: &str = ".generated.dae.apply-journal.json";
 const RUNTIME_APPLY_JOURNAL_NEXT: &str = ".generated.dae.apply-journal.next";
@@ -30,35 +34,21 @@ pub(super) fn write_runtime_apply_journal(
     let runtime_dir = output
         .parent()
         .ok_or_else(|| "runtime materialization path has no parent".to_owned())?;
-    let backup = candidate
-        .previous_content
-        .as_ref()
-        .map(|_| runtime_dir.join(format!(".generated.dae.{}.backup", candidate.generation)));
+    let artifacts = runtime_artifact_set(
+        runtime_dir,
+        &candidate.generation,
+        candidate.previous_content.is_some(),
+    )?;
+    if artifacts.target_path() != *output || artifacts.candidate_path() != *staged {
+        return Err("runtime apply artifact paths do not match the generation".to_owned());
+    }
+    let backup = artifacts.backup_path();
     if let (Some(previous), Some(backup)) = (candidate.previous_content.as_ref(), backup.as_ref()) {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(backup)
-            .map_err(|error| {
-                format!(
-                    "create runtime apply backup {}: {error}",
-                    path_string(backup)
-                )
-            })?;
-        set_private_runtime_file_permissions(backup).map_err(|error| {
+        create_synced_file(backup, previous).map_err(|error| {
             format!(
-                "set runtime apply backup permissions {}: {error}",
+                "create runtime apply backup {}: {error}",
                 path_string(backup)
             )
-        })?;
-        file.write_all(previous).map_err(|error| {
-            format!(
-                "write runtime apply backup {}: {error}",
-                path_string(backup)
-            )
-        })?;
-        file.sync_all().map_err(|error| {
-            format!("sync runtime apply backup {}: {error}", path_string(backup))
         })?;
     }
     let journal = RuntimeApplyJournal {
@@ -68,44 +58,21 @@ pub(super) fn write_runtime_apply_journal(
         candidate: leaf_name(staged)?,
         backup: backup.as_deref().map(leaf_name).transpose()?,
     };
-    let bytes = serde_json::to_vec(&journal)
-        .map_err(|error| format!("serialize runtime apply journal: {error}"))?;
-    let next = runtime_dir.join(RUNTIME_APPLY_JOURNAL_NEXT);
-    let path = runtime_dir.join(RUNTIME_APPLY_JOURNAL);
-    let write_result = (|| {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&next)
-            .map_err(|error| {
-                format!(
-                    "create runtime apply journal {}: {error}",
-                    path_string(&next)
-                )
-            })?;
-        set_private_runtime_file_permissions(&next).map_err(|error| {
-            format!(
-                "set runtime apply journal permissions {}: {error}",
-                path_string(&next)
-            )
-        })?;
-        file.write_all(&bytes).map_err(|error| {
-            format!(
-                "write runtime apply journal {}: {error}",
-                path_string(&next)
-            )
-        })?;
-        file.sync_all().map_err(|error| {
-            format!("sync runtime apply journal {}: {error}", path_string(&next))
-        })?;
-        fs::rename(&next, &path).map_err(|error| {
-            format!(
-                "activate runtime apply journal {}: {error}",
-                path_string(&path)
-            )
-        })?;
-        sync_directory(runtime_dir)
-    })();
+    let path = artifacts.journal_path();
+    let next = artifacts.journal_next_path();
+    let write_result = write_json_journal(
+        artifacts.directory(),
+        &ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL).map_err(|error| error.to_string())?,
+        &ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL_NEXT).map_err(|error| error.to_string())?,
+        RUNTIME_APPLY_JOURNAL_MAX_BYTES,
+        &journal,
+    )
+    .map_err(|error| {
+        format!(
+            "write runtime apply journal {}: {error}",
+            path_string(&path)
+        )
+    });
     if let Err(error) = write_result {
         let _ = fs::remove_file(&next);
         if let Some(backup) = backup.as_ref() {
@@ -127,7 +94,7 @@ pub(super) fn remove_runtime_apply_journal(
         if let Err(error) = remove_file_if_exists(&path) {
             errors.push(format!("remove {}: {error}", path_string(&path)));
         } else if let Some(parent) = parent
-            && let Err(error) = sync_directory(parent)
+            && let Err(error) = sync_runtime_directory(parent)
         {
             errors.push(error);
         }
@@ -140,7 +107,7 @@ pub(super) fn remove_runtime_apply_journal(
     }
     if errors.is_empty()
         && let Some(parent) = parent
-        && let Err(error) = sync_directory(parent)
+        && let Err(error) = sync_runtime_directory(parent)
     {
         errors.push(error);
     }
@@ -157,29 +124,36 @@ pub(in crate::daed_product) fn recover_runtime_apply_transaction(
 ) -> Result<(), String> {
     let runtime_dir = config_dir.join("runtime");
     let journal_path = runtime_dir.join(RUNTIME_APPLY_JOURNAL);
-    let metadata = match fs::metadata(&journal_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return cleanup_orphan_runtime_transaction_files(&runtime_dir);
-        }
-        Err(error) => {
-            return Err(format!(
-                "inspect runtime apply journal {}: {error}",
-                path_string(&journal_path)
-            ));
-        }
-    };
-    if !metadata.is_file() || metadata.len() > RUNTIME_APPLY_JOURNAL_MAX_BYTES {
-        return Err("runtime apply journal is not a bounded regular file".to_owned());
-    }
-    let journal: RuntimeApplyJournal = serde_json::from_slice(
-        &fs::read(&journal_path).map_err(|error| format!("read runtime apply journal: {error}"))?,
-    )
-    .map_err(|error| format!("parse runtime apply journal: {error}"))?;
+    let journal: RuntimeApplyJournal =
+        match read_json_journal(&journal_path, RUNTIME_APPLY_JOURNAL_MAX_BYTES) {
+            Ok(journal) => journal,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return cleanup_orphan_runtime_transaction_files(&runtime_dir);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "inspect runtime apply journal {}: {error}",
+                    path_string(&journal_path)
+                ));
+            }
+        };
     validate_journal(&journal)?;
-    let output = runtime_dir.join(&journal.output);
-    let staged = runtime_dir.join(&journal.candidate);
-    let backup = journal.backup.as_ref().map(|leaf| runtime_dir.join(leaf));
+    let artifacts = DurableArtifactSet::new(
+        &runtime_dir,
+        ValidatedLeafName::new(journal.output.clone()).map_err(|error| error.to_string())?,
+        ValidatedLeafName::new(journal.candidate.clone()).map_err(|error| error.to_string())?,
+        journal
+            .backup
+            .as_ref()
+            .map(|leaf| ValidatedLeafName::new(leaf.clone()).map_err(|error| error.to_string()))
+            .transpose()?,
+        ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL).map_err(|error| error.to_string())?,
+        ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL_NEXT).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let output = artifacts.target_path();
+    let staged = artifacts.candidate_path();
+    let backup = artifacts.backup_path();
     let committed_generation = open_state_connection(state)
         .map_err(|error| format!("open runtime state for apply recovery: {error}"))?
         .query_row(
@@ -203,29 +177,29 @@ pub(in crate::daed_product) fn recover_runtime_apply_transaction(
         .map_err(|error| format!("remove interrupted runtime candidate: {error}"))?;
     remove_file_if_exists(&journal_path)
         .map_err(|error| format!("remove runtime apply recovery journal: {error}"))?;
-    sync_directory(&runtime_dir)?;
+    sync_runtime_directory(&runtime_dir)?;
     if let Some(backup) = backup.as_ref() {
         remove_file_if_exists(backup)
             .map_err(|error| format!("remove runtime apply recovery backup: {error}"))?;
     }
     remove_file_if_exists(&runtime_dir.join(RUNTIME_APPLY_JOURNAL_NEXT))
         .map_err(|error| format!("remove runtime apply recovery next journal: {error}"))?;
-    sync_directory(&runtime_dir)
+    sync_runtime_directory(&runtime_dir)
 }
 
 fn validate_journal(journal: &RuntimeApplyJournal) -> Result<(), String> {
     if journal.format != 1 || journal.generation.is_empty() || journal.generation.len() > 128 {
         return Err("invalid runtime apply journal header".to_owned());
     }
-    leaf_path(&journal.output)?;
-    leaf_path(&journal.candidate)?;
+    ValidatedLeafName::new(journal.output.clone()).map_err(|error| error.to_string())?;
+    ValidatedLeafName::new(journal.candidate.clone()).map_err(|error| error.to_string())?;
     if journal.output != "generated.dae"
         || journal.candidate != format!(".generated.dae.{}.candidate", journal.generation)
     {
         return Err("runtime apply journal path does not match its generation".to_owned());
     }
     if let Some(backup) = journal.backup.as_deref() {
-        leaf_path(backup)?;
+        ValidatedLeafName::new(backup.to_owned()).map_err(|error| error.to_string())?;
         if backup != format!(".generated.dae.{}.backup", journal.generation) {
             return Err("runtime apply journal backup does not match its generation".to_owned());
         }
@@ -234,69 +208,54 @@ fn validate_journal(journal: &RuntimeApplyJournal) -> Result<(), String> {
 }
 
 fn leaf_name(path: &Path) -> Result<String, String> {
-    path.file_name()
-        .and_then(|leaf| leaf.to_str())
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            format!(
-                "runtime transaction path has no UTF-8 leaf: {}",
-                path_string(path)
-            )
-        })
-}
-
-fn leaf_path(leaf: &str) -> Result<(), String> {
-    let path = Path::new(leaf);
-    let mut components = path.components();
-    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
-        return Err("runtime apply journal contains a non-leaf path".to_owned());
-    }
-    Ok(())
-}
-
-fn remove_file_if_exists(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
+    ValidatedLeafName::from_path(path)
+        .map(|leaf| leaf.to_string())
+        .map_err(|error| error.to_string())
 }
 
 fn cleanup_orphan_runtime_transaction_files(runtime_dir: &Path) -> Result<(), String> {
-    let entries = match fs::read_dir(runtime_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(format!(
-                "inspect runtime transaction directory {}: {error}",
-                path_string(runtime_dir)
-            ));
-        }
-    };
-    let mut removed = false;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("read runtime transaction entry: {error}"))?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
+    cleanup_matching_artifacts(runtime_dir, |name| {
         if name == RUNTIME_APPLY_JOURNAL_NEXT
             || (name.starts_with(".generated.dae.")
                 && (name.ends_with(".candidate")
                     || name.ends_with(".rollback")
                     || name.ends_with(".backup")))
         {
-            remove_file_if_exists(&entry.path()).map_err(|error| {
-                format!(
-                    "remove orphan runtime transaction file {}: {error}",
-                    path_string(&entry.path())
-                )
-            })?;
-            removed = true;
+            return true;
         }
-    }
-    if removed {
-        sync_directory(runtime_dir)?;
-    }
-    Ok(())
+        false
+    })
+    .map_err(|error| {
+        format!(
+            "cleanup runtime transaction directory {}: {error}",
+            path_string(runtime_dir)
+        )
+    })
+}
+
+fn runtime_artifact_set(
+    runtime_dir: &Path,
+    generation: &str,
+    has_backup: bool,
+) -> Result<DurableArtifactSet, String> {
+    DurableArtifactSet::new(
+        runtime_dir,
+        ValidatedLeafName::new("generated.dae").map_err(|error| error.to_string())?,
+        ValidatedLeafName::new(format!(".generated.dae.{generation}.candidate"))
+            .map_err(|error| error.to_string())?,
+        has_backup
+            .then(|| ValidatedLeafName::new(format!(".generated.dae.{generation}.backup")))
+            .transpose()
+            .map_err(|error| error.to_string())?,
+        ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL).map_err(|error| error.to_string())?,
+        ValidatedLeafName::new(RUNTIME_APPLY_JOURNAL_NEXT).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn sync_runtime_directory(path: &Path) -> Result<(), String> {
+    sync_durable_directory(path)
+        .map_err(|error| format!("sync directory {}: {error}", path_string(path)))
 }
 
 #[cfg(test)]
@@ -347,6 +306,7 @@ mod tests {
         let (fixture, config_dir) = interrupted_apply_fixture("runtime-journal-rollback", false);
 
         recover_runtime_apply_transaction(fixture.state(), &config_dir).unwrap();
+        recover_runtime_apply_transaction(fixture.state(), &config_dir).unwrap();
 
         assert_eq!(
             fs::read(config_dir.join("runtime/generated.dae")).unwrap(),
@@ -364,6 +324,7 @@ mod tests {
     fn recovery_keeps_new_file_when_database_commit_completed() {
         let (fixture, config_dir) = interrupted_apply_fixture("runtime-journal-commit", true);
 
+        recover_runtime_apply_transaction(fixture.state(), &config_dir).unwrap();
         recover_runtime_apply_transaction(fixture.state(), &config_dir).unwrap();
 
         assert_eq!(
