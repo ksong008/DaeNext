@@ -4,6 +4,7 @@ mod error_response;
 mod geodata;
 mod proxy_probe;
 mod proxy_transport;
+mod runtime;
 mod udp_response;
 mod udp_runtime;
 
@@ -28,6 +29,14 @@ pub use proxy_transport::{
     ResidentDnsProxyUdpTransport, ResidentDnsQuicEndpointTransport,
     ResidentDnsTransportOwnerObservation, ResidentDnsTransportPorts,
     exchange_resident_proxy_dns_tcp_stream, run_resident_proxy_dns_tcp_connection,
+};
+pub use runtime::{
+    DnsRequestIdAllocator, ResidentDnsDispatcher, ResidentDnsPlan, ResidentDnsQueryResult,
+    ResidentDnsReloadHandle, ResidentDnsReloadSnapshot, ResidentDnsResolver,
+    ResidentDnsTraceSummary, ResidentDnsTransportTrace, ResidentDnsUdpActorCompletion,
+    ResidentDnsUdpActorExecutor, ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
+    ResidentDnsUpstreamRouter, build_resident_dns_plan_with_refresh_interval,
+    handle_resident_dns_local_trace_async,
 };
 pub use udp_response::fit_dns_response_to_udp_request;
 pub use udp_runtime::ResidentDnsUdpRuntimeConfig;

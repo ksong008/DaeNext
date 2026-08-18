@@ -1,14 +1,14 @@
 use super::*;
 use crate::{
     ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig,
-    dns::{
-        DnsRequestIdAllocator, ProxyDnsRequestContext, ProxyDnsRequestError,
-        ProxyDnsRequestFailure, ProxyDnsRequestStage, ResidentDnsUdpActorExecutor,
-    },
+    dns::{DnsRequestIdAllocator, ResidentDnsUdpActorExecutor},
 };
 use dae_resident_dns::{
     ResidentDnsProxyFuture, ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder,
     ResidentDnsProxyUdpTransport, ResidentDnsTransportOwnerObservation,
+};
+use dae_resident_transport::{
+    ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde_json::{Value, json};

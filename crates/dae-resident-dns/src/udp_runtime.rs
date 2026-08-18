@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use dae_resident_core::{
-    RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentRuntimeProfile, ResidentUdpPayloadAdmission,
-    resident_udp_runtime_topology,
+    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentRuntimeProfile,
+    ResidentUdpPayloadAdmission, resident_udp_runtime_topology,
 };
 
 const DNS_TRANSPORT_WORKER_STACK_BYTES_MIN: usize = 2 * 1024 * 1024;
@@ -10,7 +10,6 @@ const TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 const UDP_SOCKET_BUFFER_BYTES_DEFAULT: usize = 512 * 1024;
 const UDP_SOCKET_BUFFER_BYTES_MIN: usize = 64 * 1024;
 const UDP_SOCKET_BUFFER_BYTES_MAX: usize = 8 * 1024 * 1024;
-const RUNTIME_RESOURCE_DRAIN_GRACE: Duration = Duration::from_millis(1_500);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResidentDnsUdpRuntimeConfig {
@@ -58,7 +57,7 @@ impl ResidentDnsUdpRuntimeConfig {
             attempt_timeout: Self::attempt_timeout_for(attempts),
             shard_idle_timeout: profile.dns_udp_shard_idle_timeout(),
             actor_idle_timeout: None,
-            shutdown_timeout: RUNTIME_RESOURCE_DRAIN_GRACE,
+            shutdown_timeout: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
             payload_admission: ResidentUdpPayloadAdmission::new(
                 0,
                 profile.udp_queued_payload_bytes_default(),
