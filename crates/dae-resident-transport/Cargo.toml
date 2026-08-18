@@ -7,6 +7,7 @@ repository.workspace = true
 
 [features]
 default = []
+test-support = ["dae-outbound/test-support", "dae-resident-plan/test-support"]
 test-boringssl-tls-profile = []
 test-boringssl-unbuffered-bio = []
 
@@ -25,6 +26,8 @@ foreign-types.workspace = true
 futures-util.workspace = true
 fastrand.workspace = true
 getrandom.workspace = true
+h2.workspace = true
+http.workspace = true
 libc.workspace = true
 quinn.workspace = true
 quinn-boring.workspace = true
@@ -37,3 +40,4 @@ tokio-boring.workspace = true
 [dev-dependencies]
 base64.workspace = true
 dae-outbound = { workspace = true, features = ["test-support"] }
+dae-resident-plan = { workspace = true, features = ["test-support"] }

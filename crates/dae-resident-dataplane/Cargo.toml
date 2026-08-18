@@ -76,3 +76,4 @@ dae-outbound = { workspace = true, features = ["test-support"] }
 dae-resident-core = { workspace = true, features = ["test-support"] }
 dae-resident-dns = { workspace = true, features = ["test-support"] }
 dae-resident-plan = { workspace = true, features = ["test-support"] }
+dae-resident-transport = { workspace = true, features = ["test-support"] }

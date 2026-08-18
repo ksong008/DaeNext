@@ -1,14 +1,21 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use boring::ssl::SslAcceptor;
 use bytes::Bytes;
 use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
+use dae_resident_core::{
+    RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT, ResidentStopSignal, SharedResidentStopSignal,
+};
+use dae_resident_plan as plan;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time;
 
+use super::h2_carrier_owner::start_h2_carrier_generation_owner;
 use super::*;
 
 static NEXT_H2_TEST_GENERATION: AtomicU64 = AtomicU64::new(80_000);

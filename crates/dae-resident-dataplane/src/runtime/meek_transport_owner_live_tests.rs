@@ -1,15 +1,25 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use boring::ssl::SslAcceptor;
 use dae_outbound::shared_transport::MeekRoundTripOptions;
 use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
+use dae_resident_core::{
+    RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT, ResidentRuntimeProfile, ResidentStopSignal,
+    SharedResidentStopSignal,
+};
+use dae_resident_plan as plan;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time;
 
+use super::meek_transport_owner::{
+    start_meek_transport_generation_owner, start_meek_transport_generation_owner_for_test,
+};
 use super::*;
 
 static NEXT_MEEK_TEST_GENERATION: AtomicU64 = AtomicU64::new(90_000);

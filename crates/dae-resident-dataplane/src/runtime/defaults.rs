@@ -1,5 +1,4 @@
 use super::*;
-pub(crate) const VLESS_RESPONSE_VERSION: u8 = 0;
 pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 // A half-closed upload must keep draining a response across at least one
 // ordinary Internet RTT. Download activity refreshes this idle window; it is
@@ -18,7 +17,6 @@ pub(crate) const RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE: Duration = Duration::f
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "RESIDENT_TCP_FLOW_STACK_BYTES";
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_LEGACY_ENV: &str =
     "DAE_RESIDENT_TCP_FLOW_STACK_BYTES";
-pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MIN: usize = 512 * 1024;
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
 // Native VLESS Encryption performs ML-KEM-768 key generation/decapsulation on

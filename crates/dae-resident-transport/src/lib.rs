@@ -1,12 +1,18 @@
+#![recursion_limit = "256"]
+
 mod direct_dial;
 mod dns_name;
 mod dns_request;
 mod dns_tcp_wire;
+mod h2_carrier_owner;
 mod http_connect_head;
+mod meek_transport_owner;
 mod proxy_handshake;
 mod quic_endpoint;
 mod resolver;
 mod tls_client;
+mod transport_identity;
+mod vless_mux_owner;
 
 pub use direct_dial::{DirectTcpConnection, open_direct_tcp_connection_async};
 pub use dns_name::encode_dns_qname;
@@ -17,6 +23,20 @@ pub use dns_request::{
 };
 pub use dns_tcp_wire::{
     DnsTcpFrameReader, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use h2_carrier_owner::start_h2_carrier_generation_owner;
+pub use h2_carrier_owner::{
+    H2CarrierGenerationOwnerHandle, H2CarrierLease, H2CarrierResponseFuture, acquire_h2_carrier,
+    start_h2_carrier_generation_owner_on,
+};
+pub use meek_transport_owner::{
+    MeekTransportGenerationOwnerHandle, MeekTransportLease, acquire_meek_transport,
+    start_meek_transport_generation_owner_on,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use meek_transport_owner::{
+    start_meek_transport_generation_owner, start_meek_transport_generation_owner_for_test,
 };
 pub use proxy_handshake::{http_proxy_connect_plain_async, socks5_connect_async};
 pub use quic_endpoint::{
@@ -43,4 +63,13 @@ pub use tls_client::{
     open_async_vless_tls_client_with_flow_at_candidates, open_async_xhttp_endpoint_tls_client,
     open_async_xhttp_endpoint_tls_client_at_candidates, open_proxy_tcp_stream_with_binding,
     take_boring_tls_io_profile_snapshot,
+};
+pub use transport_identity::resident_transport_binding_identity_digest;
+pub use vless_mux_owner::{
+    VlessMuxGenerationOwnerHandle, VlessMuxLogicalStream, acquire_vless_mux_logical_stream,
+    start_vless_mux_generation_owner_on,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use vless_mux_owner::{
+    start_vless_mux_generation_owner, start_vless_mux_generation_owner_for_test,
 };
