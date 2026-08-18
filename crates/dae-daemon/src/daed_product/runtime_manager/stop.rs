@@ -47,6 +47,73 @@ impl ProductRuntimeManager {
     ) -> Result<Value, String> {
         self.prepare_stop()?.commit_and_wait(cleanup_mode)
     }
+
+    /// A-08: apply 失败回滚专用——**不获取 stop gate**。调用方已持有
+    /// apply gate，再取同一把 gate 必然超时自锁（30s），且 stop_epoch
+    /// 语义在 rollback 上下文不适用（正在被回滚的就是本 apply）。
+    /// 语义等价于 was_running=false 的 stop：丢弃候选 runtime 并复位状态。
+    pub(in crate::daed_product) fn discard_runtime_without_stop_gate(
+        &self,
+        cleanup_mode: &str,
+    ) -> Result<Value, String> {
+        let started = Instant::now();
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+        if inner.runtime.is_some() {
+            return Err(
+                "runtime apply rollback attempted to discard an active runtime without the stop gate"
+                    .to_owned(),
+            );
+        }
+        let (stopped_runtime, was_running, cleanup_epoch) =
+            reset_runtime_state(&mut inner, cleanup_mode);
+        debug_assert!(!was_running && stopped_runtime.is_none());
+        drop(inner);
+        drop(lifecycle);
+        drop(stopped_runtime);
+        Ok(stop_report(
+            started,
+            false,
+            cleanup_epoch,
+            cleanup_mode,
+            None,
+        ))
+    }
+}
+
+/// A-08: 复位 ProductRuntimeState 的运行时字段（take_runtime 与
+/// discard_runtime_without_stop_gate 共用）。
+fn reset_runtime_state(
+    inner: &mut ProductRuntimeState,
+    cleanup_mode: &str,
+) -> (Option<ProductRuntimeInstance>, bool, u64) {
+    inner.lifecycle_epoch = inner.lifecycle_epoch.wrapping_add(1);
+    let was_running = inner.runtime.is_some();
+    let stopped_runtime = inner.runtime.take();
+    if was_running {
+        let cleanup_epoch = inner.lifecycle_epoch;
+        inner.cleanup.begin(cleanup_epoch, cleanup_mode);
+    }
+    inner.config = None;
+    inner.config_content = None;
+    inner.transition_identity = None;
+    inner.process_baseline_config = None;
+    inner.traffic_carry = RuntimeTrafficCarry::default();
+    inner.runtime_started_at = None;
+    inner.stop_count += 1;
+    inner.last_transition_at = Some(now_text());
+    inner.last_report = None;
+    inner.last_error = None;
+    inner.active_generation = None;
+    inner.pending_process_transition = None;
+    let cleanup_epoch = inner.lifecycle_epoch;
+    (stopped_runtime, was_running, cleanup_epoch)
 }
 
 impl<'a> PreparedProductRuntimeStop<'a> {
@@ -110,26 +177,8 @@ impl<'a> PreparedProductRuntimeStop<'a> {
         Instant,
         RuntimeStopPermit<'a>,
     ) {
-        self.inner.lifecycle_epoch = self.inner.lifecycle_epoch.wrapping_add(1);
-        let was_running = self.inner.runtime.is_some();
-        let stopped_runtime = self.inner.runtime.take();
-        if was_running {
-            let cleanup_epoch = self.inner.lifecycle_epoch;
-            self.inner.cleanup.begin(cleanup_epoch, cleanup_mode);
-        }
-        self.inner.config = None;
-        self.inner.config_content = None;
-        self.inner.transition_identity = None;
-        self.inner.process_baseline_config = None;
-        self.inner.traffic_carry = RuntimeTrafficCarry::default();
-        self.inner.runtime_started_at = None;
-        self.inner.stop_count += 1;
-        self.inner.last_transition_at = Some(now_text());
-        self.inner.last_report = None;
-        self.inner.last_error = None;
-        self.inner.active_generation = None;
-        self.inner.pending_process_transition = None;
-        let cleanup_epoch = self.inner.lifecycle_epoch;
+        let (stopped_runtime, was_running, cleanup_epoch) =
+            reset_runtime_state(&mut self.inner, cleanup_mode);
         let manager_inner = Arc::clone(&self.manager.inner);
         let started = self.started;
         let coordinator = self.coordinator;

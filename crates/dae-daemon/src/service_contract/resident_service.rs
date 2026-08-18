@@ -1,8 +1,16 @@
 use super::*;
+
+static CONTROL_FILE_WRITE_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+const CONTROL_FILE_CREATE_ATTEMPTS: usize = 32;
 pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> {
     if options.disable_sudo && unsafe { libc::geteuid() } != 0 {
         return Err("auto-sudo is disabled and current user is not root".to_owned());
     }
+    // A-04: 在任何派生线程（网络探测 resolver 等）创建之前屏蔽服务信号，
+    // 保证所有线程继承已屏蔽的掩码；否则 kill(SIGUSR1) 会被未屏蔽线程
+    // 以默认动作（终止进程）接收。
+    block_service_signals()?;
     let runtime_config = load_config_file(&options.config)
         .map_err(|err| format!("resident run config validation failed: {err}"))?;
     if !runtime_config.global.disable_waiting_network {
@@ -10,7 +18,6 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
             .map_err(|err| format!("waiting for network before subscriptions failed: {err}"))?;
     }
     let geodata_asset_dirs = resident_config_geodata_asset_dirs(&options.config);
-    block_service_signals()?;
     let mut state = ResidentServiceState {
         runtime: Some(start_resident_production_runtime_with_asset_dirs(
             &runtime_config,
@@ -66,7 +73,11 @@ pub(super) struct ResidentServiceState {
 
 pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String> {
     let pid = match options.pid {
-        Some(pid) => pid,
+        // A-05: kill(0/-1) 会群发信号到进程组/所有进程——拒绝非正 PID。
+        Some(pid) if pid > 0 => pid,
+        Some(pid) => {
+            return Err(format!("refusing to signal non-positive pid {pid}"));
+        }
         None => read_pid_file(&options.pid_file)?,
     };
     if options.abort_connections {
@@ -106,8 +117,12 @@ fn wait_for_reload_progress(
         thread::sleep(Duration::from_millis(200));
         match read_progress(progress_file) {
             Ok((code, content)) => {
-                if code == RELOAD_DONE || code == RELOAD_ERROR {
+                if code == RELOAD_DONE {
                     return Ok(format!("{content}\n"));
+                }
+                if code == RELOAD_ERROR {
+                    // A-06: reload 失败必须以 Err 返回（CLI 非零退出）。
+                    return Err(format!("reload failed on the daemon side: {content}"));
                 }
             }
             // A transient read failure (e.g. the daemon atomically replacing
@@ -269,9 +284,18 @@ pub(super) fn read_progress(path: &Path) -> Result<(u8, String), String> {
 pub(super) fn read_pid_file(path: &Path) -> Result<i32, String> {
     let text = fs::read_to_string(path)
         .map_err(|err| format!("failed to read pid file {}: {err}", path.display()))?;
-    text.trim()
+    let pid = text
+        .trim()
         .parse::<i32>()
-        .map_err(|err| format!("failed to parse pid file {}: {err}", path.display()))
+        .map_err(|err| format!("failed to parse pid file {}: {err}", path.display()))?;
+    // A-05: 拒绝非正 PID（kill 0/-1 群发）。
+    if pid <= 0 {
+        return Err(format!(
+            "pid file {} contains non-positive pid {pid}",
+            path.display()
+        ));
+    }
+    Ok(pid)
 }
 
 pub(super) fn log_event(options: &ResidentRunOptions, message: &str) -> Result<(), String> {
@@ -288,9 +312,14 @@ pub(super) fn log_event(options: &ResidentRunOptions, message: &str) -> Result<(
             .map_err(|err| format!("failed to create log dir {}: {err}", parent.display()))?;
     }
     use std::io::Write;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options
         .open(path)
         .map_err(|err| format!("failed to open log {}: {err}", path.display()))?;
     file.write_all(line.as_bytes())
@@ -302,13 +331,66 @@ pub(super) fn write_text_file(path: &Path, content: &str, mode: u32) -> Result<(
 }
 
 pub(super) fn write_bytes_file(path: &Path, content: &[u8], mode: u32) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create path {}: {err}", parent.display()))?;
+    use std::io::Write;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)
+        .map_err(|err| format!("failed to create path {}: {err}", parent.display()))?;
+    let leaf = path
+        .file_name()
+        .and_then(|leaf| leaf.to_str())
+        .ok_or_else(|| format!("control file has no UTF-8 leaf name: {}", path.display()))?;
+    let (temporary, mut file) = (0..CONTROL_FILE_CREATE_ATTEMPTS)
+        .find_map(|_| {
+            let sequence =
+                CONTROL_FILE_WRITE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let temporary = parent.join(format!(".{leaf}.tmp-{}-{sequence}", std::process::id()));
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW).mode(mode);
+            }
+            match options.open(&temporary) {
+                Ok(file) => Some(Ok((temporary, file))),
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => None,
+                Err(err) => Some(Err(format!(
+                    "failed to create temporary control file {}: {err}",
+                    temporary.display()
+                ))),
+            }
+        })
+        .unwrap_or_else(|| {
+            Err(format!(
+                "failed to reserve a temporary control file for {} after {} attempts",
+                path.display(),
+                CONTROL_FILE_CREATE_ATTEMPTS
+            ))
+        })?;
+    let write_result = (|| {
+        file.set_permissions(fs::Permissions::from_mode(mode))
+            .map_err(|err| format!("failed to chmod {}: {err}", temporary.display()))?;
+        file.write_all(content)
+            .map_err(|err| format!("failed to write {}: {err}", temporary.display()))?;
+        file.sync_all()
+            .map_err(|err| format!("failed to sync {}: {err}", temporary.display()))?;
+        fs::rename(&temporary, path).map_err(|err| {
+            format!(
+                "failed to atomically replace {} with {}: {err}",
+                path.display(),
+                temporary.display()
+            )
+        })?;
+        let directory = fs::File::open(parent)
+            .map_err(|err| format!("failed to open {}: {err}", parent.display()))?;
+        directory
+            .sync_all()
+            .map_err(|err| format!("failed to sync {}: {err}", parent.display()))
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    fs::write(path, content).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .map_err(|err| format!("failed to chmod {}: {err}", path.display()))
+    write_result
 }
 
 pub(super) fn notify_systemd(state: &str) -> Result<(), String> {
@@ -456,10 +538,10 @@ mod tests {
         let mut error_bytes = vec![RELOAD_ERROR, b'\n'];
         error_bytes.extend_from_slice(b"boom");
         fs::write(&error_file, error_bytes).unwrap();
-        assert_eq!(
-            wait_for_reload_progress(&error_file, Some(Duration::from_secs(2))).unwrap(),
-            "boom\n"
-        );
+        // A-06: RELOAD_ERROR 必须以 Err 返回（CLI 非零退出）。
+        let error =
+            wait_for_reload_progress(&error_file, Some(Duration::from_secs(2))).unwrap_err();
+        assert!(error.contains("boom"), "error = {error}");
         let _ = fs::remove_dir_all(&root);
     }
 

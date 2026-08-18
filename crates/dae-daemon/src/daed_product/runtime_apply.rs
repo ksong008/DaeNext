@@ -3,6 +3,7 @@ use super::*;
 mod activate;
 mod commit;
 mod coordinator;
+mod journal;
 mod prepare;
 mod reconcile;
 mod rollback;
@@ -12,6 +13,7 @@ use self::commit::commit_runtime_generation;
 pub(in crate::daed_product) use self::coordinator::{
     RuntimeApplyCoordinator, RuntimeApplyIntent, RuntimeApplyPermit, RuntimeStopPermit,
 };
+pub(in crate::daed_product) use self::journal::recover_runtime_apply_transaction;
 use self::prepare::prepare_runtime_generation;
 use self::reconcile::{record_apply_failure, record_apply_success};
 use self::rollback::rollback_runtime_generation;

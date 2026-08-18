@@ -193,7 +193,9 @@ impl ProductRuntimeManager {
             )?;
             Ok(())
         } else {
-            self.stop_and_wait_for_cleanup("runtime-apply-rollback")?;
+            // A-08: apply 失败回滚路径——调用方持有 apply gate，再进入
+            // stop gate 必然 30s 超时自锁；改用无 gate 的候选丢弃。
+            self.discard_runtime_without_stop_gate("runtime-apply-rollback")?;
             Ok(())
         }
     }

@@ -100,9 +100,12 @@ fn assert_no_staged_runtime_files(config_dir: &Path) {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     assert!(
-        names
-            .iter()
-            .all(|name| !name.ends_with(".candidate") && !name.ends_with(".rollback")),
+        names.iter().all(|name| {
+            !name.ends_with(".candidate")
+                && !name.ends_with(".rollback")
+                && !name.ends_with(".backup")
+                && !name.contains("apply-journal")
+        }),
         "staged runtime files remain: {names:?}"
     );
 }
@@ -313,6 +316,17 @@ fn runtime_generation_rollback_failure_is_reported_as_reconciliation_required() 
         let last_error = summary["lastError"].as_str().unwrap();
         assert!(last_error.contains(RuntimeFaultPoint::CommitDatabase.as_str()));
         assert!(last_error.contains(RuntimeFaultPoint::Rollback.as_str()));
+        assert!(
+            fixture
+                .config_dir
+                .join("runtime/.generated.dae.apply-journal.json")
+                .is_file()
+        );
+        recover_runtime_apply_transaction(fixture.product.state(), &fixture.config_dir).unwrap();
+        assert_eq!(
+            fs::read(fixture.config_dir.join("runtime/generated.dae")).unwrap(),
+            fixture.generated_content
+        );
         assert_no_staged_runtime_files(&fixture.config_dir);
     });
 }

@@ -33,6 +33,9 @@ pub(super) fn rollback_runtime_generation(
     ) {
         errors.push(format!("restore runtime database failed: {err}"));
     }
+    if let Err(err) = super::journal::remove_runtime_apply_journal(candidate) {
+        errors.push(format!("remove runtime apply journal failed: {err}"));
+    }
     if let Some(config_dir) = config_dir
         && let Err(err) = refresh_log_policy_and_apply_log_limits(config_dir, state, Some(runtime))
     {
