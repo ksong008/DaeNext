@@ -188,8 +188,8 @@ impl ResidentGenerationDrain {
         self.finalize_matching_retirements(Some(generation_id));
     }
 
-    pub(super) fn finalize_retirements(&self) {
-        self.finalize_matching_retirements(None);
+    pub(super) fn commit_retirements(&self) {
+        self.reap(Instant::now());
     }
 
     fn finalize_matching_retirements(&self, generation_id: Option<LogicalGenerationId>) {
