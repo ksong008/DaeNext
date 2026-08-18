@@ -22,7 +22,7 @@ for package in "${packages[@]}"; do
   cargo_args+=(-p "$package")
 done
 
-if ! cargo clippy "${cargo_args[@]}" --lib --message-format=json -- \
+if ! cargo clippy "${cargo_args[@]}" --lib --bins --examples --message-format=json -- \
   -W clippy::unwrap_used -W clippy::expect_used >"$audit_file" 2>&1; then
   tail -c 12000 "$audit_file" >&2
   exit 1
@@ -49,6 +49,7 @@ resident_crates = {
     "dae-resident-transport",
     "dae-resident-udp",
 }
+allowed_categories = {"InternalInvariant"}
 
 actual: collections.Counter[str] = collections.Counter()
 with audit_path.open(encoding="utf-8") as audit:
@@ -82,11 +83,27 @@ with baseline_path.open(encoding="utf-8") as source:
         if len(fields) != 4:
             raise SystemExit(f"{baseline_path}:{line_number}: expected four tab-separated fields")
         path, maximum, category, _rationale = fields
-        if category in {"ExternalInput", "RemotePeer"}:
+        if category not in allowed_categories:
             raise SystemExit(
-                f"{baseline_path}:{line_number}: {category} panic cannot be approved"
+                f"{baseline_path}:{line_number}: unsupported panic baseline category {category}"
             )
-        baseline[path] = (int(maximum), category)
+        try:
+            maximum_value = int(maximum)
+        except ValueError as error:
+            raise SystemExit(
+                f"{baseline_path}:{line_number}: panic budget must be an integer"
+            ) from error
+        if maximum_value < 0:
+            raise SystemExit(f"{baseline_path}:{line_number}: panic budget cannot be negative")
+        source_path = pathlib.Path(path)
+        if (
+            len(source_path.parts) < 3
+            or source_path.parts[0] != "crates"
+            or source_path.parts[1] not in resident_crates
+            or not source_path.is_file()
+        ):
+            raise SystemExit(f"{baseline_path}:{line_number}: baseline source file is missing: {path}")
+        baseline[path] = (maximum_value, category)
 
 failures: list[str] = []
 for path, count in sorted(actual.items()):
@@ -99,6 +116,9 @@ for path, count in sorted(actual.items()):
         failures.append(
             f"production panic budget increased: {path}: {count} > {maximum} ({category})"
         )
+
+for path in sorted(set(baseline) - set(actual)):
+    failures.append(f"stale production panic baseline entry: {path}")
 
 if failures:
     print("FAIL: resident production panic surface")
