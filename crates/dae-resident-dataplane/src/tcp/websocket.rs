@@ -4,11 +4,11 @@ use dae_outbound::shared_transport::{
     websocket_client_handshake, websocket_client_mask_key,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::time;
 
 use super::super::RESIDENT_CONNECT_TIMEOUT;
 use super::super::client::AsyncVlessTlsClient;
 use super::SpawnedLogicalStream;
+use crate::{HttpHeadRead, HttpHeadReadOptions, read_http_head};
 
 mod async_payload;
 mod duplex_control;
@@ -32,11 +32,10 @@ pub(crate) async fn websocket_handshake_over_resident_tls_async(
     client
         .write_plain_all(&handshake.request, "write websocket handshake")
         .await?;
-    let (response, leftover) =
-        read_http_head_over_resident_tls_async(client, "read websocket handshake").await?;
-    validate_websocket_handshake_response(&response, &handshake.expected_accept)
+    let response = read_http_head_with_connect_timeout(client, "read websocket handshake").await?;
+    validate_websocket_handshake_response(&response.head, &handshake.expected_accept)
         .map_err(|err| format!("validate websocket upgrade: {err}"))?;
-    Ok(leftover)
+    Ok(response.leftover)
 }
 
 pub(crate) async fn httpupgrade_handshake_over_resident_tls_async(
@@ -48,10 +47,11 @@ pub(crate) async fn httpupgrade_handshake_over_resident_tls_async(
     client
         .write_plain_all(&request, "write HTTP Upgrade handshake")
         .await?;
-    let (response, leftover) =
-        read_http_head_over_resident_tls_async(client, "read HTTP Upgrade handshake").await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))?;
-    Ok(leftover)
+    let response =
+        read_http_head_with_connect_timeout(client, "read HTTP Upgrade handshake").await?;
+    validate_http_status(&response.head, 101)
+        .map_err(|err| format!("validate HTTP Upgrade: {err}"))?;
+    Ok(response.leftover)
 }
 
 pub(crate) async fn websocket_handshake_over_async_stream<S>(
@@ -67,11 +67,10 @@ where
         .write_all(&handshake.request)
         .await
         .map_err(|err| format!("write websocket handshake: {err}"))?;
-    let (response, leftover) =
-        read_http_head_from_async_stream(stream, "read websocket handshake").await?;
-    validate_websocket_handshake_response(&response, &handshake.expected_accept)
+    let response = read_http_head_with_connect_timeout(stream, "read websocket handshake").await?;
+    validate_websocket_handshake_response(&response.head, &handshake.expected_accept)
         .map_err(|err| format!("validate websocket upgrade: {err}"))?;
-    Ok(leftover)
+    Ok(response.leftover)
 }
 
 pub(crate) async fn httpupgrade_handshake_over_async_stream<S>(
@@ -87,10 +86,11 @@ where
         .write_all(&request)
         .await
         .map_err(|err| format!("write HTTP Upgrade handshake: {err}"))?;
-    let (response, leftover) =
-        read_http_head_from_async_stream(stream, "read HTTP Upgrade handshake").await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate HTTP Upgrade: {err}"))?;
-    Ok(leftover)
+    let response =
+        read_http_head_with_connect_timeout(stream, "read HTTP Upgrade handshake").await?;
+    validate_http_status(&response.head, 101)
+        .map_err(|err| format!("validate HTTP Upgrade: {err}"))?;
+    Ok(response.leftover)
 }
 
 pub(crate) async fn write_websocket_binary_frame_to_async_stream<S>(
@@ -157,59 +157,22 @@ fn websocket_binary_header(payload_len: usize, mask: [u8; 4]) -> Result<([u8; 8]
     Ok((header, header_len))
 }
 
-async fn read_http_head_over_resident_tls_async(
-    client: &mut AsyncVlessTlsClient,
-    label: &str,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 512];
-    loop {
-        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, client.read_plain(&mut buf))
-            .await
-            .map_err(|_| format!("{label}: timeout"))?
-            .map_err(|err| format!("{label}: {err}"))?;
-        if read == 0 {
-            return Err(format!("{label}: early eof"));
-        }
-        response.extend_from_slice(&buf[..read]);
-        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
-            let leftover = response[index + 4..].to_vec();
-            response.truncate(index + 4);
-            return Ok((response, leftover));
-        }
-        if response.len() > 16 * 1024 {
-            return Err(format!("{label}: response head too large"));
-        }
-    }
-}
-
-async fn read_http_head_from_async_stream<S>(
+async fn read_http_head_with_connect_timeout<S>(
     stream: &mut S,
     label: &str,
-) -> Result<(Vec<u8>, Vec<u8>), String>
+) -> Result<HttpHeadRead, String>
 where
     S: AsyncRead + Unpin,
 {
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 512];
-    loop {
-        let read = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.read(&mut buf))
-            .await
-            .map_err(|_| format!("{label}: timeout"))?
-            .map_err(|err| format!("{label}: {err}"))?;
-        if read == 0 {
-            return Err(format!("{label}: early eof"));
-        }
-        response.extend_from_slice(&buf[..read]);
-        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
-            let leftover = response[index + 4..].to_vec();
-            response.truncate(index + 4);
-            return Ok((response, leftover));
-        }
-        if response.len() > 16 * 1024 {
-            return Err(format!("{label}: response head too large"));
-        }
-    }
+    read_http_head(
+        stream,
+        HttpHeadReadOptions {
+            max_bytes: 16 * 1024,
+            read_timeout: Some(RESIDENT_CONNECT_TIMEOUT),
+        },
+    )
+    .await
+    .map_err(|error| format!("{label}: {error}"))
 }
 
 pub(crate) async fn write_websocket_binary_frame_over_resident_tls_async(

@@ -58,6 +58,7 @@ mod plan;
 mod probe;
 mod resolver;
 mod runtime_owner;
+mod stream_io;
 mod subscription_fetch;
 mod tcp;
 mod udp;
@@ -82,6 +83,10 @@ pub(crate) use self::resolver::{
     ResolvedHostAddrs, TcpCandidateRacePolicy, authority_from_host_port,
     resolve_host_addrs_with_bootstrap_dns_ttl, resolve_host_addrs_with_configured_fallback_dns_ttl,
     resolve_socket_addr_candidates, try_socket_addr_candidates, try_tcp_socket_addr_candidates,
+};
+pub(crate) use self::stream_io::{
+    AsyncPrefixedStream, CursorBytes, HttpHeadRead, HttpHeadReadError, HttpHeadReadOptions,
+    read_http_head,
 };
 
 #[path = "runtime/defaults.rs"]

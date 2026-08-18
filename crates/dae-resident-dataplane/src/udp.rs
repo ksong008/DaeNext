@@ -7,10 +7,10 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use super::{
-    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
-    Hysteria2OwnerRegistryHandle, Hysteria2UdpSessionLease, JuicityOwnerRegistryHandle,
-    JuicityTransportLease, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    TuicOwnerRegistryHandle, TuicUdpAssociationLease,
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, AsyncPrefixedStream, H2CarrierLease,
+    HttpHeadReadOptions, Hysteria2OwnerRegistryHandle, Hysteria2UdpSessionLease,
+    JuicityOwnerRegistryHandle, JuicityTransportLease, ResidentTransportOwnerRegistries,
+    SharedResidentStopSignal, TuicOwnerRegistryHandle, TuicUdpAssociationLease, read_http_head,
 };
 #[cfg(not(test))]
 use super::{ResidentAllocatorReclaimReason, resident_allocator_request_reclaim};

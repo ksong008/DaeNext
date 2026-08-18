@@ -2,7 +2,7 @@ use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 use super::*;
 
@@ -329,35 +329,36 @@ async fn open_vmess_underlay(
         }
         VmessAeadUdpWrapperKind::WebSocketPlain => {
             let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
-            websocket_handshake_async(
+            let leftover = websocket_handshake_async(
                 &mut stream,
                 &proxy.stream_host,
                 &proxy.stream_path,
                 "VMess WebSocket UDP",
             )
             .await?;
+            let mut state = AsyncWebSocketPayloadState::default();
+            state.inject_leftover(leftover)?;
             write_vmess_websocket_frame(
                 &mut stream,
                 first_write,
                 "write VMess WebSocket UDP first packet",
             )
             .await?;
-            Ok(VmessAeadUdpUnderlay::WebSocketPlain {
-                stream,
-                state: AsyncWebSocketPayloadState::default(),
-            })
+            Ok(VmessAeadUdpUnderlay::WebSocketPlain { stream, state })
         }
         VmessAeadUdpWrapperKind::WebSocketTls => {
             let mut client =
                 open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
             let tls_underlay = async_resident_tls_underlay_name(&client);
-            websocket_handshake_async(
+            let leftover = websocket_handshake_async(
                 &mut client,
                 &proxy.stream_host,
                 &proxy.stream_path,
                 "VMess TLS WebSocket UDP",
             )
             .await?;
+            let mut state = AsyncWebSocketPayloadState::default();
+            state.inject_leftover(leftover)?;
             write_vmess_websocket_frame(
                 &mut client,
                 first_write,
@@ -366,19 +367,20 @@ async fn open_vmess_underlay(
             .await?;
             Ok(VmessAeadUdpUnderlay::WebSocketTls {
                 client,
-                state: AsyncWebSocketPayloadState::default(),
+                state,
                 tls_underlay,
             })
         }
         VmessAeadUdpWrapperKind::HttpUpgradePlain => {
             let mut stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
-            httpupgrade_handshake_async(
+            let leftover = httpupgrade_handshake_async(
                 &mut stream,
                 &proxy.stream_host,
                 &proxy.stream_path,
                 "VMess HTTPUpgrade UDP",
             )
             .await?;
+            let mut stream = AsyncPrefixedStream::new(leftover, stream);
             write_vmess_stream_bytes(
                 &mut stream,
                 first_write,
@@ -391,13 +393,14 @@ async fn open_vmess_underlay(
             let mut client =
                 open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
             let tls_underlay = async_resident_tls_underlay_name(&client);
-            httpupgrade_handshake_async(
+            let leftover = httpupgrade_handshake_async(
                 &mut client,
                 &proxy.stream_host,
                 &proxy.stream_path,
                 "VMess TLS HTTPUpgrade UDP",
             )
             .await?;
+            let mut client = AsyncPrefixedStream::new(leftover, client);
             write_vmess_stream_bytes(
                 &mut client,
                 first_write,
@@ -451,12 +454,16 @@ async fn read_vmess_underlay_plaintext(
     let mut read_buf = ReadBuf::new(out);
     poll_fn(|cx| {
         let poll_result = match underlay {
-            VmessAeadUdpUnderlay::PlainTcp { stream }
-            | VmessAeadUdpUnderlay::HttpUpgradePlain { stream } => {
+            VmessAeadUdpUnderlay::PlainTcp { stream } => {
                 Pin::new(stream).poll_read(cx, &mut read_buf)
             }
-            VmessAeadUdpUnderlay::TlsTcp { client, .. }
-            | VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
+            VmessAeadUdpUnderlay::HttpUpgradePlain { stream } => {
+                Pin::new(stream).poll_read(cx, &mut read_buf)
+            }
+            VmessAeadUdpUnderlay::TlsTcp { client, .. } => {
+                Pin::new(client).poll_read(cx, &mut read_buf)
+            }
+            VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
                 Pin::new(client).poll_read(cx, &mut read_buf)
             }
             VmessAeadUdpUnderlay::TcpHttpHeaderPlain { stream } => {
@@ -514,10 +521,10 @@ enum VmessAeadUdpUnderlay {
         tls_underlay: &'static str,
     },
     HttpUpgradePlain {
-        stream: tokio::net::TcpStream,
+        stream: AsyncPrefixedStream<tokio::net::TcpStream>,
     },
     HttpUpgradeTls {
-        client: AsyncResidentTlsClient,
+        client: AsyncPrefixedStream<AsyncResidentTlsClient>,
         tls_underlay: &'static str,
     },
     GrpcTls {
@@ -584,18 +591,20 @@ impl VmessAeadUdpUnderlay {
 
     async fn shutdown(&mut self) {
         match self {
-            Self::PlainTcp { stream }
-            | Self::WebSocketPlain { stream, .. }
-            | Self::HttpUpgradePlain { stream } => {
+            Self::PlainTcp { stream } | Self::WebSocketPlain { stream, .. } => {
+                let _ = stream.shutdown().await;
+            }
+            Self::HttpUpgradePlain { stream } => {
                 let _ = stream.shutdown().await;
             }
             Self::TcpHttpHeaderPlain { stream } => {
                 let _ = stream.shutdown().await;
             }
-            Self::TlsTcp { client, .. }
-            | Self::WebSocketTls { client, .. }
-            | Self::HttpUpgradeTls { client, .. } => {
+            Self::TlsTcp { client, .. } | Self::WebSocketTls { client, .. } => {
                 client.shutdown().await;
+            }
+            Self::HttpUpgradeTls { client, .. } => {
+                let _ = client.shutdown().await;
             }
             Self::TcpHttpHeaderTls { client, .. } => {
                 let _ = client.shutdown().await;
@@ -623,13 +632,23 @@ async fn write_vmess_wrapped_bytes(
     payload: &[u8],
 ) -> Result<(), String> {
     match underlay {
-        VmessAeadUdpUnderlay::PlainTcp { stream }
-        | VmessAeadUdpUnderlay::HttpUpgradePlain { stream } => {
+        VmessAeadUdpUnderlay::PlainTcp { stream } => {
             write_vmess_stream_bytes(stream, payload, "write VMess wrapped UDP session packet")
                 .await
         }
-        VmessAeadUdpUnderlay::TlsTcp { client, .. }
-        | VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
+        VmessAeadUdpUnderlay::HttpUpgradePlain { stream } => {
+            write_vmess_stream_bytes(stream, payload, "write VMess wrapped UDP session packet")
+                .await
+        }
+        VmessAeadUdpUnderlay::TlsTcp { client, .. } => {
+            write_vmess_stream_bytes(
+                client,
+                payload,
+                "write VMess TLS wrapped UDP session packet",
+            )
+            .await
+        }
+        VmessAeadUdpUnderlay::HttpUpgradeTls { client, .. } => {
             write_vmess_stream_bytes(
                 client,
                 payload,
@@ -678,7 +697,7 @@ async fn websocket_handshake_async<S>(
     host: &str,
     path: &str,
     label: &str,
-) -> Result<(), String>
+) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -691,9 +710,18 @@ where
         &format!("write {label} handshake"),
     )
     .await?;
-    let response = read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
-    validate_websocket_handshake_response(&response, &handshake.expected_accept)
-        .map_err(|err| format!("validate {label} upgrade: {err}"))
+    let response = read_http_head(
+        stream,
+        HttpHeadReadOptions {
+            max_bytes: 16 * 1024,
+            read_timeout: Some(RESIDENT_UDP_RESPONSE_TIMEOUT),
+        },
+    )
+    .await
+    .map_err(|error| format!("read {label} handshake: {error}"))?;
+    validate_websocket_handshake_response(&response.head, &handshake.expected_accept)
+        .map_err(|err| format!("validate {label} upgrade: {err}"))?;
+    Ok(response.leftover)
 }
 
 async fn httpupgrade_handshake_async<S>(
@@ -701,7 +729,7 @@ async fn httpupgrade_handshake_async<S>(
     host: &str,
     path: &str,
     label: &str,
-) -> Result<(), String>
+) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -709,32 +737,18 @@ where
     let request =
         http_upgrade_request(&options).map_err(|err| format!("build {label} handshake: {err}"))?;
     write_vmess_stream_bytes(stream, &request, &format!("write {label} handshake")).await?;
-    let response = read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
-    validate_http_status(&response, 101).map_err(|err| format!("validate {label} upgrade: {err}"))
-}
-
-async fn read_http_head_from_async<S>(stream: &mut S, label: &str) -> Result<Vec<u8>, String>
-where
-    S: AsyncRead + Unpin,
-{
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 512];
-    loop {
-        let read = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, stream.read(&mut buf))
-            .await
-            .map_err(|_| format!("{label}: timeout"))?
-            .map_err(|err| format!("{label}: {err}"))?;
-        if read == 0 {
-            return Err(format!("{label}: early eof"));
-        }
-        response.extend_from_slice(&buf[..read]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(response);
-        }
-        if response.len() > 16 * 1024 {
-            return Err(format!("{label}: response head too large"));
-        }
-    }
+    let response = read_http_head(
+        stream,
+        HttpHeadReadOptions {
+            max_bytes: 16 * 1024,
+            read_timeout: Some(RESIDENT_UDP_RESPONSE_TIMEOUT),
+        },
+    )
+    .await
+    .map_err(|error| format!("read {label} handshake: {error}"))?;
+    validate_http_status(&response.head, 101)
+        .map_err(|err| format!("validate {label} upgrade: {err}"))?;
+    Ok(response.leftover)
 }
 
 async fn write_vmess_websocket_frame<S>(
@@ -921,7 +935,89 @@ fn vmess_udp_pending_session_result(
 
 #[cfg(test)]
 mod fixed_target_tests {
+    use dae_outbound::shared_transport::websocket_accept_for_key;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
+
+    #[tokio::test]
+    async fn websocket_handshake_preserves_first_frame_from_response_read() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            let request = read_http_head(
+                &mut server,
+                HttpHeadReadOptions {
+                    max_bytes: 4096,
+                    read_timeout: None,
+                },
+            )
+            .await
+            .unwrap();
+            let request = std::str::from_utf8(&request.head).unwrap();
+            let key = request
+                .lines()
+                .find_map(|line| line.strip_prefix("Sec-WebSocket-Key: "))
+                .unwrap();
+            let accept = websocket_accept_for_key(key);
+            let mut response = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+            )
+            .into_bytes();
+            response.extend_from_slice(&[0x82, 5]);
+            response.extend_from_slice(b"first");
+            server.write_all(&response).await.unwrap();
+        });
+
+        let leftover = websocket_handshake_async(
+            &mut client,
+            "fixture.example",
+            "/ws",
+            "VMess fixture WebSocket UDP",
+        )
+        .await
+        .unwrap();
+        server_task.await.unwrap();
+        let mut state = AsyncWebSocketPayloadState::default();
+        state.inject_leftover(leftover).unwrap();
+        let mut reader = AsyncWebSocketPayloadReader::new(&mut client, &mut state);
+        let mut payload = [0_u8; 5];
+        reader.read_exact(&mut payload).await.unwrap();
+        assert_eq!(&payload, b"first");
+    }
+
+    #[tokio::test]
+    async fn httpupgrade_handshake_preserves_first_tunnel_payload() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            let _request = read_http_head(
+                &mut server,
+                HttpHeadReadOptions {
+                    max_bytes: 4096,
+                    read_timeout: None,
+                },
+            )
+            .await
+            .unwrap();
+            server
+                .write_all(b"HTTP/1.1 101 Switching Protocols\r\n\r\nfirst")
+                .await
+                .unwrap();
+        });
+
+        let leftover = httpupgrade_handshake_async(
+            &mut client,
+            "fixture.example",
+            "/upgrade",
+            "VMess fixture HTTPUpgrade UDP",
+        )
+        .await
+        .unwrap();
+        server_task.await.unwrap();
+        let mut stream = AsyncPrefixedStream::new(leftover, client);
+        let mut payload = [0_u8; 5];
+        stream.read_exact(&mut payload).await.unwrap();
+        assert_eq!(&payload, b"first");
+    }
 
     #[tokio::test]
     async fn grpc_ready_only_response_read_does_not_wait_for_a_packet() {

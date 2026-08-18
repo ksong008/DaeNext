@@ -119,10 +119,10 @@ use super::vision::{
     VisionUplinkWriteMode, queue_vision_uplink,
 };
 use super::{
-    RESIDENT_ANYTLS_RELAY_BUFFER_SIZE, RESIDENT_CONNECT_TIMEOUT,
-    RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT,
-    TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION, resident_normalized_socket_addr,
-    resident_socket_addr_display, resident_tcp_network_name,
+    CursorBytes, HttpHeadReadError, HttpHeadReadOptions, RESIDENT_ANYTLS_RELAY_BUFFER_SIZE,
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
+    RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION, read_http_head,
+    resident_normalized_socket_addr, resident_socket_addr_display, resident_tcp_network_name,
 };
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -223,9 +223,9 @@ use self::stream_helpers::*;
 mod http_connect_head;
 use self::http_connect_head::*;
 pub(crate) use self::stream_helpers::{
-    AsyncPrefixedStream, http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async,
-    socks5_connect_async,
+    http_proxy_connect_plain_async, open_plain_proxy_tcp_stream_async, socks5_connect_async,
 };
+pub(crate) use super::AsyncPrefixedStream;
 mod shadowsocks_relay;
 pub(crate) use self::shadowsocks_relay::{
     relay_tcp_over_shadowsocks_2022_async, relay_tcp_over_shadowsocks_2022_simple_obfs_http_async,
