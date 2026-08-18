@@ -953,6 +953,7 @@ name = "dae-resident-transport"
 version = "3.1.0"
 dependencies = [
  "base64",
+ "blake2",
  "boring 5.1.0",
  "boring-sys 5.1.0",
  "brotli",

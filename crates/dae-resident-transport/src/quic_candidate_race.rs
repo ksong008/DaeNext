@@ -7,7 +7,7 @@ use std::time::Instant;
 use dae_runtime_control::{AbsoluteDeadline, OwnerCancellation, OwnerCancellationSignal};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 
-use crate::{QuicCandidateRaceResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE};
+use dae_resident_core::{QuicCandidateRaceResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE};
 
 const QUIC_CANDIDATE_FAILURE_DETAIL_LIMIT: usize = 8;
 

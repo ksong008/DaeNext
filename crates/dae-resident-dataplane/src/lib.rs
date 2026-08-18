@@ -280,6 +280,9 @@ mod anytls_owner_live_tests;
 #[path = "runtime/health_checks.rs"]
 mod health_checks;
 #[cfg(test)]
+#[path = "runtime/hysteria2_owner_live_tests.rs"]
+mod hysteria2_owner_live_tests;
+#[cfg(test)]
 #[path = "runtime/juicity_owner_live_tests.rs"]
 mod juicity_owner_live_tests;
 #[cfg(test)]

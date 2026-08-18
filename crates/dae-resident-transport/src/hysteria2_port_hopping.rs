@@ -1,5 +1,3 @@
-use super::*;
-
 use std::fmt;
 use std::future::{Future, poll_fn};
 use std::io::{self, IoSliceMut};
@@ -13,6 +11,7 @@ use std::sync::{
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use dae_resident_core::set_socket_mark;
 use quinn::udp;
 use serde_json::{Value, json};
 

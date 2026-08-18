@@ -5,10 +5,8 @@ pub(crate) mod dns_tcp_wire {
 }
 
 pub(crate) mod quic_endpoint {
-    use std::num::NonZeroUsize;
-    use std::sync::Arc;
-
     use dae_runtime_control::{OwnerGeneration, OwnerResourceBudget};
+    use std::num::NonZeroUsize;
 
     use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     #[cfg(not(test))]
@@ -16,12 +14,9 @@ pub(crate) mod quic_endpoint {
     use crate::plan::ResidentProxyPlan;
 
     pub(crate) use dae_resident_transport::{
-        ObservedQuicEndpoint, QuicEndpointAdmissionContext, QuicEndpointCallerClass,
-        QuicEndpointDrainReport, QuicEndpointIdentityRole, QuicEndpointOpenContext,
-        QuicEndpointOpenError, QuicEndpointProtocol, QuicEndpointUnderlay,
-        inherit_quic_endpoint_observation, quic_endpoint_drain_deadlines,
-        scope_quic_endpoint_observation, wait_quic_endpoints_idle_or_released_until,
-        wait_quic_endpoints_idle_until,
+        ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
+        QuicEndpointOpenContext, QuicEndpointProtocol, inherit_quic_endpoint_observation,
+        scope_quic_endpoint_observation,
     };
 
     #[derive(Clone, Copy, Debug, Default)]
@@ -112,28 +107,6 @@ pub(crate) mod quic_endpoint {
             deadline,
             cancellation,
         )
-    }
-
-    pub(crate) async fn open_observed_quic_endpoint_waiting(
-        mark: u32,
-        runtime: Option<Arc<dyn quinn::Runtime>>,
-        remote: std::net::SocketAddr,
-        bind: std::net::SocketAddr,
-        underlay: QuicEndpointUnderlay,
-        context: QuicEndpointOpenContext,
-        admission_context: QuicEndpointAdmissionContext<'_>,
-    ) -> Result<ObservedQuicEndpoint, QuicEndpointOpenError> {
-        configure_admission().map_err(|_| QuicEndpointOpenError::Construction)?;
-        dae_resident_transport::open_observed_quic_endpoint_waiting(
-            mark,
-            runtime,
-            remote,
-            bind,
-            underlay,
-            context,
-            admission_context,
-        )
-        .await
     }
 
     pub(crate) async fn wait_quic_endpoint_idle_after_close(

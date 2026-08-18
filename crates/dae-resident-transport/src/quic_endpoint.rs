@@ -7,9 +7,13 @@ mod runtime;
 mod socket;
 
 use std::net::{SocketAddr, UdpSocket};
+use std::num::NonZeroUsize;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
+#[cfg(not(test))]
+use dae_resident_core::ResidentRuntimeProfileSelection;
+use dae_runtime_control::OwnerResourceBudget;
 use dae_runtime_control::{AbsoluteDeadline, OwnerAdmissionRejection, OwnerCancellationSignal};
 
 pub use self::drain::{
@@ -147,6 +151,7 @@ pub fn open_marked_quic_endpoint_for_remote(
     deadline: AbsoluteDeadline,
     cancellation: &OwnerCancellationSignal,
 ) -> Result<ObservedQuicEndpoint, String> {
+    configure_resident_quic_endpoint_policy()?;
     open_observed_quic_endpoint(
         mark,
         quinn::default_runtime(),
@@ -184,6 +189,7 @@ pub fn open_observed_quic_endpoint(
     context: QuicEndpointOpenContext,
     admission_context: QuicEndpointAdmissionContext<'_>,
 ) -> Result<ObservedQuicEndpoint, String> {
+    configure_resident_quic_endpoint_policy()?;
     let endpoint_config = quinn_boring::helpers::default_endpoint_config();
     let admission_charge = QuicEndpointCharge::before_socket(
         &endpoint_config,
@@ -213,6 +219,7 @@ pub async fn open_observed_quic_endpoint_waiting(
     context: QuicEndpointOpenContext,
     admission_context: QuicEndpointAdmissionContext<'_>,
 ) -> Result<ObservedQuicEndpoint, QuicEndpointOpenError> {
+    configure_resident_quic_endpoint_policy().map_err(|_| QuicEndpointOpenError::Construction)?;
     let endpoint_config = quinn_boring::helpers::default_endpoint_config();
     let admission_charge = QuicEndpointCharge::before_socket(
         &endpoint_config,
@@ -242,6 +249,36 @@ pub async fn open_observed_quic_endpoint_waiting(
         reservation,
     )
     .map_err(|_| QuicEndpointOpenError::Construction)
+}
+
+fn configure_resident_quic_endpoint_policy() -> Result<(), String> {
+    #[cfg(test)]
+    let budget = OwnerResourceBudget::new(
+        NonZeroUsize::new(4096).expect("test QUIC endpoint limit is nonzero"),
+        NonZeroUsize::new(usize::MAX / 4).expect("test QUIC endpoint byte limit is nonzero"),
+    );
+    #[cfg(not(test))]
+    let budget = {
+        let profile = ResidentRuntimeProfileSelection::selected().profile;
+        OwnerResourceBudget::new(
+            NonZeroUsize::new(profile.quic_endpoint_limit_default())
+                .expect("resident QUIC endpoint count profile is nonzero"),
+            NonZeroUsize::new(profile.quic_endpoint_charged_bytes_default())
+                .expect("resident QUIC endpoint byte profile is nonzero"),
+        )
+    };
+    let _ = configure_quic_endpoint_admission(budget);
+    let _ = configure_quic_endpoint_observability_retention({
+        #[cfg(test)]
+        {
+            128
+        }
+        #[cfg(not(test))]
+        {
+            2
+        }
+    });
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
