@@ -118,6 +118,8 @@ pub(crate) use dae_resident_plan::{
     display_name_from_link, execution_link_hash, graph_id_from_link_hash, link_hash,
     redacted_link_source,
 };
+#[cfg(test)]
+pub(crate) use dae_resident_transport::AnyTlsFrameReader;
 pub(crate) use dae_resident_transport::{
     ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
     ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,

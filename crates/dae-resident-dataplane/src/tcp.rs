@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex, atomic::Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use super::AnyTlsFrameReader;
 use super::{
     AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
     H2CarrierOwnerResourceProfile, H2CarrierResponseFuture, Hysteria2OwnerRegistryHandle,
@@ -35,7 +37,6 @@ use dae_ebpf_support::{
 #[cfg(test)]
 use dae_outbound::hysteria2::build_hysteria2_runtime_client_config_with_udp_overhead;
 use dae_outbound::{
-    anytls::{AnyTlsFrame, contract as anytls_contract},
     http_proxy::{HttpConnectOptions, request as http_request},
     hysteria2::{
         HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD, Hysteria2CongestionRuntime,
@@ -118,9 +119,10 @@ use super::vision::{
     VisionUplinkWriteMode, queue_vision_uplink,
 };
 use super::{
-    CursorBytes, HttpHeadReadError, HttpHeadReadOptions, RESIDENT_ANYTLS_RELAY_BUFFER_SIZE,
-    RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT,
-    RESIDENT_TCP_IDLE_TIMEOUT, TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION, read_http_head,
+    ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, CursorBytes, HttpHeadReadError, HttpHeadReadOptions,
+    RESIDENT_ANYTLS_RELAY_BUFFER_SIZE, RESIDENT_CONNECT_TIMEOUT,
+    RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT, RESIDENT_TCP_IDLE_TIMEOUT,
+    TLS_RECORD_MAX_PAYLOAD_LEN, VLESS_RESPONSE_VERSION, read_http_head,
     resident_normalized_socket_addr, resident_socket_addr_display, resident_tcp_network_name,
 };
 use super::{ResidentDataplaneMetrics, ResidentTcpConnectionGuard};

@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+mod anytls_frame;
+mod anytls_owner;
 mod direct_dial;
 mod dns_name;
 mod dns_request;
@@ -14,6 +16,15 @@ mod tls_client;
 mod transport_identity;
 mod vless_mux_owner;
 
+pub use anytls_frame::AnyTlsFrameReader;
+pub use anytls_owner::{
+    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, start_anytls_owner_registry,
+    start_anytls_owner_registry_on,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use anytls_owner::{
+    anytls_owner_key_digest_for_test, start_anytls_owner_registry_with_resources,
+};
 pub use direct_dial::{DirectTcpConnection, open_direct_tcp_connection_async};
 pub use dns_name::encode_dns_qname;
 pub use dns_request::{
