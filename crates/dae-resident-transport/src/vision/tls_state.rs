@@ -1,22 +1,22 @@
 use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum VisionTlsDecision {
+pub enum VisionTlsDecision {
     Unknown,
     Direct,
     PlainOverlay,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct VisionInnerTlsState {
-    pub(crate) client_pending: Vec<u8>,
-    pub(crate) server_pending: Vec<u8>,
-    pub(crate) decision: VisionTlsDecision,
-    pub(crate) client_tls_observed: bool,
-    pub(crate) client_tls13_advertised: Option<bool>,
+pub struct VisionInnerTlsState {
+    pub client_pending: Vec<u8>,
+    pub server_pending: Vec<u8>,
+    pub decision: VisionTlsDecision,
+    pub client_tls_observed: bool,
+    pub client_tls13_advertised: Option<bool>,
 }
 
 impl VisionInnerTlsState {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             client_pending: Vec::new(),
             server_pending: Vec::new(),
@@ -26,7 +26,7 @@ impl VisionInnerTlsState {
         }
     }
 
-    pub(crate) fn observe_client_payload(&mut self, payload: &[u8]) -> Result<(), String> {
+    pub fn observe_client_payload(&mut self, payload: &[u8]) -> Result<(), String> {
         let mut advertised = self.client_tls13_advertised;
         let mut observed = self.client_tls_observed;
         observe_tls_records(&mut self.client_pending, payload, |record| {
@@ -48,7 +48,7 @@ impl VisionInnerTlsState {
         })
     }
 
-    pub(crate) fn observe_server_payload(&mut self, payload: &[u8]) -> Result<(), String> {
+    pub fn observe_server_payload(&mut self, payload: &[u8]) -> Result<(), String> {
         if self.decision != VisionTlsDecision::Unknown {
             return Ok(());
         }
@@ -84,7 +84,7 @@ impl VisionInnerTlsState {
         Ok(())
     }
 
-    pub(crate) fn application_data_command(&self) -> Option<u8> {
+    pub fn application_data_command(&self) -> Option<u8> {
         match self.decision {
             VisionTlsDecision::Unknown => None,
             VisionTlsDecision::Direct => Some(VISION_COMMAND_DIRECT),
@@ -92,7 +92,7 @@ impl VisionInnerTlsState {
         }
     }
 
-    pub(crate) fn client_tls_filter_active(&self) -> bool {
+    pub fn client_tls_filter_active(&self) -> bool {
         self.client_tls_observed
             || self
                 .client_pending
@@ -102,14 +102,14 @@ impl VisionInnerTlsState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum VisionUplinkState {
+pub enum VisionUplinkState {
     Padding,
     PlainOverlay,
     DirectPass,
 }
 
 #[cfg(test)]
-pub(crate) fn tls_application_data_records_complete(mut input: &[u8]) -> bool {
+pub fn tls_application_data_records_complete(mut input: &[u8]) -> bool {
     if input.is_empty() {
         return false;
     }

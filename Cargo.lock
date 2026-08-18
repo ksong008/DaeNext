@@ -842,6 +842,7 @@ dependencies = [
 name = "dae-resident-core"
 version = "3.1.0"
 dependencies = [
+ "arc-swap",
  "dae-datapath",
  "dae-outbound",
  "h2",
@@ -976,6 +977,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tls-parser",
  "tokio",
  "tokio-boring",
 ]

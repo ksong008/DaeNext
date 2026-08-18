@@ -1,16 +1,16 @@
 use super::*;
-pub(crate) fn looks_like_tls_record_start(pending: &[u8]) -> bool {
+pub fn looks_like_tls_record_start(pending: &[u8]) -> bool {
     could_be_tls_record_prefix(pending)
 }
 
-pub(crate) fn should_continue_vision_tls_filtering(
+pub fn should_continue_vision_tls_filtering(
     pending: &[u8],
     tls_state: &VisionInnerTlsState,
 ) -> bool {
     tls_state.client_tls_filter_active() && looks_like_tls_record_start(pending)
 }
 
-pub(crate) fn could_be_tls_record_prefix(pending: &[u8]) -> bool {
+pub fn could_be_tls_record_prefix(pending: &[u8]) -> bool {
     if pending.is_empty() {
         return true;
     }
@@ -37,9 +37,7 @@ pub(crate) fn could_be_tls_record_prefix(pending: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) fn pop_complete_tls_record(
-    pending: &mut Vec<u8>,
-) -> Result<Option<(u8, Vec<u8>)>, String> {
+pub fn pop_complete_tls_record(pending: &mut Vec<u8>) -> Result<Option<(u8, Vec<u8>)>, String> {
     let Some((record_type, record_len)) = peek_complete_tls_record(pending)? else {
         return Ok(None);
     };
@@ -47,13 +45,13 @@ pub(crate) fn pop_complete_tls_record(
     Ok(Some((record_type, record)))
 }
 
-pub(crate) fn take_vec_prefix(pending: &mut Vec<u8>, len: usize) -> Vec<u8> {
+pub fn take_vec_prefix(pending: &mut Vec<u8>, len: usize) -> Vec<u8> {
     debug_assert!(len <= pending.len());
     let tail = pending.split_off(len);
     std::mem::replace(pending, tail)
 }
 
-pub(crate) fn peek_complete_tls_record(pending: &[u8]) -> Result<Option<(u8, usize)>, String> {
+pub fn peek_complete_tls_record(pending: &[u8]) -> Result<Option<(u8, usize)>, String> {
     if pending.len() < TLS_RECORD_HEADER_LEN {
         return Ok(None);
     }

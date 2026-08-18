@@ -10,6 +10,7 @@ default = []
 test-support = []
 
 [dependencies]
+arc-swap.workspace = true
 dae-datapath.workspace = true
 dae-outbound.workspace = true
 h2.workspace = true

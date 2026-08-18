@@ -1,14 +1,14 @@
 use super::*;
-pub(crate) struct VisionUnpadder {
-    pub(crate) user_uuid: [u8; 16],
-    pub(crate) pending: Vec<u8>,
-    pub(crate) state: VisionUnpadState,
-    pub(crate) completed_blocks: usize,
-    pub(crate) direct_command_seen: bool,
+pub struct VisionUnpadder {
+    pub user_uuid: [u8; 16],
+    pub pending: Vec<u8>,
+    pub state: VisionUnpadState,
+    pub completed_blocks: usize,
+    pub direct_command_seen: bool,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum VisionUnpadState {
+pub enum VisionUnpadState {
     Initial,
     BlockHeader,
     BlockPayload {
@@ -20,7 +20,7 @@ pub(crate) enum VisionUnpadState {
 }
 
 impl VisionUnpadder {
-    pub(crate) fn new(user_uuid: [u8; 16]) -> Self {
+    pub fn new(user_uuid: [u8; 16]) -> Self {
         Self {
             user_uuid,
             pending: Vec::new(),
@@ -30,7 +30,7 @@ impl VisionUnpadder {
         }
     }
 
-    pub(crate) fn consume(&mut self, input: &[u8]) -> Result<Vec<u8>, String> {
+    pub fn consume(&mut self, input: &[u8]) -> Result<Vec<u8>, String> {
         if matches!(self.state, VisionUnpadState::Raw) {
             return Ok(input.to_vec());
         }

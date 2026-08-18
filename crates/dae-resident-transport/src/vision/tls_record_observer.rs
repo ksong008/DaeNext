@@ -1,5 +1,5 @@
 use super::*;
-pub(crate) fn observe_tls_records<F>(
+pub fn observe_tls_records<F>(
     pending: &mut Vec<u8>,
     payload: &[u8],
     mut observe: F,

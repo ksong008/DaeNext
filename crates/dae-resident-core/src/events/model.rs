@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use super::{ResidentEventLogDecision, current_unix, event_log_decision};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentEventKind {
+pub enum ResidentEventKind {
     DnsBindQueryFinished,
     DnsPathChosen,
     TcpRouteChosen,
@@ -13,7 +13,7 @@ pub(crate) enum ResidentEventKind {
 }
 
 impl ResidentEventKind {
-    pub(crate) const fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::DnsBindQueryFinished => "dns_bind_query_finished",
             Self::DnsPathChosen => "dns_path_chosen",
@@ -48,14 +48,14 @@ pub struct ResidentEventMetadata {
 }
 
 impl ResidentEventMetadata {
-    pub(crate) const fn new(kind: ResidentEventKind) -> Self {
+    pub const fn new(kind: ResidentEventKind) -> Self {
         Self {
             kind,
             route_log_context: false,
         }
     }
 
-    pub(crate) const fn with_route_log_context(mut self) -> Self {
+    pub const fn with_route_log_context(mut self) -> Self {
         self.route_log_context = true;
         self
     }
