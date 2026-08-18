@@ -1,6 +1,7 @@
 mod cache;
 mod domain_routing;
 mod error_response;
+mod geodata;
 mod proxy_transport;
 mod udp_response;
 
@@ -16,6 +17,7 @@ pub use domain_routing::{
     ResidentDomainRoutingGenerationFence,
 };
 pub use error_response::{build_dns_server_failure_response, build_reject_response};
+pub use geodata::ResidentDnsGeodata;
 pub use proxy_transport::{
     ResidentDnsProxyFuture, ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession,
     ResidentDnsProxyTcpTransport, ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder,

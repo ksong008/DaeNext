@@ -10,6 +10,7 @@ default = []
 test-support = []
 
 [dependencies]
+dae-config.workspace = true
 dae-dns.workspace = true
 dae-resident-core.workspace = true
 dae-resident-plan.workspace = true

@@ -28,11 +28,8 @@ use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio::time;
 
 use super::direct::open_direct_tcp_connection_async;
-use super::geodata::{
-    GeodataResolver as ResidentGeodataStore, expand_resident_dns_request_qname_rules_with_resolver,
-    expand_resident_dns_response_ip_params_with_resolver,
-    expand_resident_dns_response_qname_rules_with_resolver,
-};
+#[cfg(test)]
+use super::geodata::GeodataResolver as ResidentGeodataStore;
 #[cfg(test)]
 use super::host_routing_plan::build_resident_userspace_routing_matcher_with_geodata;
 #[cfg(test)]
@@ -173,10 +170,10 @@ pub(super) use dae_resident_dns::{
 };
 use dae_resident_dns::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
-    ResidentDnsProxyTcpTransport, ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder,
-    ResidentDnsProxyUdpTransport, ResidentDnsQuicEndpointTransport, ResidentDnsResponseCacheKey,
-    ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot,
-    ResidentDnsTransportOwnerObservation, build_reject_response,
+    ResidentDnsGeodata, ResidentDnsProxyTcpTransport, ResidentDnsProxyUdpBridge,
+    ResidentDnsProxyUdpForwarder, ResidentDnsProxyUdpTransport, ResidentDnsQuicEndpointTransport,
+    ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache,
+    ResidentDnsRuntimeCacheSnapshot, ResidentDnsTransportOwnerObservation, build_reject_response,
     exchange_resident_proxy_dns_tcp_stream, run_resident_proxy_dns_tcp_connection,
 };
 pub(crate) use dae_resident_transport::{
@@ -511,7 +508,7 @@ impl ResidentDnsPlan {
 
 pub(super) fn build_resident_dns_plan(
     config: &Config,
-    geodata: &ResidentGeodataStore,
+    geodata: &dyn ResidentDnsGeodata,
 ) -> Result<ResidentDnsPlan, String> {
     let so_mark_from_dae = effective_so_mark_from_dae(config.global.so_mark_from_dae);
     let upstreams = parse_dns_upstreams(config)?;
