@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::plan::resident_udp_chain_admission;
+use dae_resident_plan::resident_udp_chain_admission;
 use serde_json::{Value, json};
 
 #[cfg(test)]

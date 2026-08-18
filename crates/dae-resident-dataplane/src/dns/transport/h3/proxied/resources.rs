@@ -1,5 +1,5 @@
 use super::*;
-use crate::ResidentOwnedTaskShutdownCompletion;
+use dae_resident_core::ResidentOwnedTaskShutdownCompletion;
 
 use super::lifecycle::{
     ProxiedDoh3CleanupDeadline, ProxiedDoh3DriverCompletion, ProxiedDoh3EndpointCompletion,

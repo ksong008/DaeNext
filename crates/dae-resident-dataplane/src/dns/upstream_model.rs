@@ -820,4 +820,5 @@ impl ResidentDnsUpstreamScheme {
         matches!(self, Self::Udp | Self::Tcp | Self::TcpUdp | Self::Tls)
     }
 }
-use crate::{ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig};
+use dae_resident_core::ResidentDataplaneMetrics;
+use dae_resident_dns::ResidentDnsUdpRuntimeConfig;

@@ -2,11 +2,11 @@ use std::future::Future;
 
 use super::*;
 #[cfg(test)]
-use crate::ResidentOwnedTaskShutdownCompletion;
-#[cfg(test)]
 use crate::dns::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
+#[cfg(test)]
+use dae_resident_core::ResidentOwnedTaskShutdownCompletion;
 
 #[cfg(test)]
 mod cleanup;

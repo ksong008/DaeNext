@@ -1,5 +1,5 @@
 use super::*;
-use crate::ResidentRuntimeResourceConfig;
+use std::time::Duration;
 
 mod actions;
 mod qtype;
@@ -17,11 +17,12 @@ pub(super) use upstream_parse::parse_dns_upstream;
 use upstream_parse::split_keyable_link;
 use upstream_parse::{parse_dns_fallback_resolver, parse_dns_upstream_with_refresh_interval};
 
-pub(super) fn parse_dns_upstreams(config: &Config) -> Result<ResidentDnsUpstreams, String> {
+pub(super) fn parse_dns_upstreams(
+    config: &Config,
+    refresh_interval: Duration,
+) -> Result<ResidentDnsUpstreams, String> {
     let fallback_resolver = parse_dns_fallback_resolver(config)?;
     let resolver_mark = effective_so_mark_from_dae(config.global.so_mark_from_dae);
-    let refresh_interval =
-        ResidentRuntimeResourceConfig::from_config(config).dns_upstream_refresh_interval();
     let mut by_tag = BTreeMap::new();
     let mut tag_to_index = BTreeMap::new();
     let mut request_actions = Vec::new();

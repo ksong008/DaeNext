@@ -21,7 +21,7 @@ use self::lifecycle::{
 #[cfg(test)]
 use self::resources::ProxiedDoh3Resources;
 #[cfg(test)]
-use crate::ResidentOwnedTaskShutdownCompletion;
+use dae_resident_core::ResidentOwnedTaskShutdownCompletion;
 
 #[cfg(test)]
 mod tests;

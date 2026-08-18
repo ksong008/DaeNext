@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::{Mutex, Weak};
 use tokio::sync::mpsc;
 
-use crate::SharedResidentStopSignal;
+use dae_resident_core::SharedResidentStopSignal;
 
 use super::target_cache::ResidentDnsResolvedTargetCache;
 

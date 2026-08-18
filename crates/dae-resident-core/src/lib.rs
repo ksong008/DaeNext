@@ -27,6 +27,7 @@ pub use metrics::{
 pub use network_defaults::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY,
     RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT, RESIDENT_UDP_RESPONSE_TIMEOUT,
+    resident_udp_runtime_topology,
 };
 pub use payload_admission::{
     ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
