@@ -59,17 +59,11 @@ pub(super) fn apply_prepared_subscription_refresh_report(
     if !subscription_source_is_current(&tx, source)? {
         return Ok(SubscriptionCommitResult::Stale);
     }
-    if let Some(persist) = persist {
-        match persist {
-            #[cfg(test)]
-            PersistedSubscriptionContent::Bytes { path, bytes } => {
-                super::source::write_persisted_subscription(path, bytes)?;
-            }
-            #[cfg(not(test))]
-            PersistedSubscriptionContent::StagedFile { path, staging } => {
-                super::source::write_persisted_subscription_from_staging(path, staging)?;
-            }
-        }
+    let mut persisted = persist
+        .map(|persist| persistence::PreparedSubscriptionPersist::prepare(source.id, persist))
+        .transpose()?;
+    if let Some(persisted) = persisted.as_mut() {
+        persisted.activate()?;
     }
 
     let (runtime_input_changed, preserved_existing_nodes, refresh_outcome) =
@@ -112,7 +106,23 @@ pub(super) fn apply_prepared_subscription_refresh_report(
     if runtime_input_changed {
         bump_runtime_external_input_version_with_connection(&tx)?;
     }
-    tx.commit().map_err(sqlite_io_error)?;
+    if let Some(persisted) = persisted.as_ref() {
+        persisted.record_generation(&tx)?;
+    }
+    if let Err(error) = tx.commit().map_err(sqlite_io_error) {
+        return match persisted {
+            Some(persisted) => match persisted.rollback() {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(io::Error::other(format!(
+                    "{error}; persisted subscription rollback failed: {rollback}"
+                ))),
+            },
+            None => Err(error),
+        };
+    }
+    if let Some(persisted) = persisted {
+        persisted.finish()?;
+    }
 
     Ok(SubscriptionCommitResult::Applied(
         SubscriptionRefreshApplyResult {

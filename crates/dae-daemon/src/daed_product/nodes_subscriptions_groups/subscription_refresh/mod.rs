@@ -7,6 +7,7 @@ mod http;
 mod node_stage;
 mod node_sync;
 mod outcome;
+mod persistence;
 mod source;
 mod transaction;
 
@@ -29,6 +30,7 @@ const SUBSCRIPTION_HTTP_HEADER_LIMIT: usize = 128 * 1024;
 const SUBSCRIPTION_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 pub(in crate::daed_product) use helper::run_subscription_prepare_helper_command;
+pub(in crate::daed_product) use persistence::recover_subscription_persist_transaction;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SubscriptionSourceIdentity {
