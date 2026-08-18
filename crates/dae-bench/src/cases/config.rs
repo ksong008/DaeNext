@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use dae_config::marshal::marshal_config;
 use dae_config::merger::merge_config_file;
 use dae_config::parser::parse_config;
-use dae_config::schema::build_config_owned;
+use dae_config::schema::{build_config, build_config_owned};
 
 use crate::{BenchCase, Measurement, measure};
 
@@ -19,6 +19,26 @@ pub(crate) fn cases() -> Vec<BenchCase> {
             id: "config/schema_example",
             default_iters: 1_000,
             run: bench_config_schema_example,
+        },
+        BenchCase {
+            id: "config/schema_borrowed_example",
+            default_iters: 10_000,
+            run: bench_config_schema_borrowed_example,
+        },
+        BenchCase {
+            id: "config/schema_owned_clone_example",
+            default_iters: 10_000,
+            run: bench_config_schema_owned_clone_example,
+        },
+        BenchCase {
+            id: "config/schema_borrowed_large",
+            default_iters: 100,
+            run: bench_config_schema_borrowed_large,
+        },
+        BenchCase {
+            id: "config/schema_owned_clone_large",
+            default_iters: 100,
+            run: bench_config_schema_owned_clone_large,
         },
         BenchCase {
             id: "config/include_merger",
@@ -56,6 +76,81 @@ fn bench_config_schema_example(iters: u64, warmup: u64) -> Result<Measurement, S
         iters,
         warmup,
     ))
+}
+
+fn bench_config_schema_borrowed_example(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let sections = parse_config(include_str!("../../../../example.dae"))
+        .map_err(|error| format!("parse example.dae failed: {error}"))?;
+    Ok(measure(
+        || {
+            let config = build_config(black_box(&sections)).expect("build borrowed example config");
+            black_box(config.global.tproxy_port as u64 ^ config.routing.rules.len() as u64)
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_config_schema_owned_clone_example(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let sections = parse_config(include_str!("../../../../example.dae"))
+        .map_err(|error| format!("parse example.dae failed: {error}"))?;
+    Ok(measure(
+        || {
+            let config = build_config_owned(black_box(sections.clone()))
+                .expect("build owned cloned example config");
+            black_box(config.global.tproxy_port as u64 ^ config.routing.rules.len() as u64)
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_config_schema_borrowed_large(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let text = large_config_text(2_000, 200);
+    let sections =
+        parse_config(&text).map_err(|error| format!("parse large config failed: {error}"))?;
+    Ok(measure(
+        || {
+            let config = build_config(black_box(&sections)).expect("build borrowed large config");
+            black_box(config.node.len() as u64 ^ config.group.len() as u64)
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn bench_config_schema_owned_clone_large(iters: u64, warmup: u64) -> Result<Measurement, String> {
+    let text = large_config_text(2_000, 200);
+    let sections =
+        parse_config(&text).map_err(|error| format!("parse large config failed: {error}"))?;
+    Ok(measure(
+        || {
+            let config = build_config_owned(black_box(sections.clone()))
+                .expect("build owned cloned large config");
+            black_box(config.node.len() as u64 ^ config.group.len() as u64)
+        },
+        iters,
+        warmup,
+    ))
+}
+
+fn large_config_text(node_count: usize, group_count: usize) -> String {
+    use std::fmt::Write as _;
+
+    let mut text = String::from("global {}\nnode {\n");
+    for index in 0..node_count {
+        writeln!(text, "  node_{index}: 'socks5://127.0.0.1:1080'").unwrap();
+    }
+    text.push_str("}\ngroup {\n");
+    for index in 0..group_count {
+        writeln!(
+            text,
+            "  group_{index} {{ filter: name(node_{index}) policy: fixed(0) }}"
+        )
+        .unwrap();
+    }
+    text.push_str("}\nrouting { fallback: direct }\n");
+    text
 }
 
 fn bench_config_include_merger(iters: u64, warmup: u64) -> Result<Measurement, String> {
