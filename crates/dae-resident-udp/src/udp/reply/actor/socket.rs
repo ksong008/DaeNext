@@ -162,11 +162,10 @@ pub(super) async fn send_udp_reply_batch(
                 continue;
             }
         };
-        let earliest_deadline = indices
-            .iter()
-            .map(|index| requests[*index].deadline)
-            .min()
-            .expect("non-empty UDP reply batch has a deadline");
+        let Some(earliest_deadline) = indices.iter().map(|index| requests[*index].deadline).min()
+        else {
+            continue;
+        };
         let sent = match time::timeout_at(earliest_deadline, socket.writable()).await {
             Ok(Ok(())) => {
                 let datagrams = indices

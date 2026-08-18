@@ -807,11 +807,13 @@ async fn handle_resident_dns_request_without_preference(
     }
     let result = match action {
         ResidentDnsRequestAction::AsIs => {
+            let asis_transport = asis_transport
+                .ok_or_else(|| "asis DNS transport is unavailable for this request".to_owned())?;
             let response = forward_dns_asis_async(
                 original_dst,
                 payload,
                 plan.mark,
-                asis_transport.expect("asis transport checked before forwarding"),
+                asis_transport,
                 &plan.forwarders,
                 context,
             )
@@ -907,11 +909,13 @@ async fn handle_resident_dns_request_without_preference_trace(
     let result = match action {
         ResidentDnsRequestAction::AsIs => {
             trace.push_asis_attempt();
+            let asis_transport = asis_transport
+                .ok_or_else(|| "asis DNS transport is unavailable for this request".to_owned())?;
             let response = forward_dns_asis_async(
                 original_dst,
                 payload,
                 plan.mark,
-                asis_transport.expect("asis transport checked before forwarding"),
+                asis_transport,
                 &plan.forwarders,
                 context,
             )

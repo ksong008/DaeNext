@@ -126,20 +126,15 @@ impl Hysteria2QuicDatagramSession {
     }
 
     pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        if self.udp_session.is_none() {
-            return Err("Hysteria2 UDP session lease is not initialized".to_owned());
-        }
+        let udp_session = self
+            .udp_session
+            .as_mut()
+            .ok_or_else(|| "Hysteria2 UDP session lease is not initialized".to_owned())?;
         let expiration = earliest_expiration(
             self.fragments.next_expiration(),
             self.packet_ids.next_expiration(),
         );
-        let Some(response) = self
-            .udp_session
-            .as_mut()
-            .expect("Hysteria2 UDP session was checked above")
-            .receive_until(expiration)
-            .await?
-        else {
+        let Some(response) = udp_session.receive_until(expiration).await? else {
             self.fragments.expire();
             self.packet_ids.expire();
             return Ok(None);
@@ -155,7 +150,7 @@ impl Hysteria2QuicDatagramSession {
             HYSTERIA2_SESSION_IDENTITY_DOMAIN,
             &parsed.session_id().to_be_bytes(),
         )
-        .expect("static Hysteria2 identity domain and session id are nonempty");
+        .ok_or_else(|| "Hysteria2 response identity is empty".to_owned())?;
         let response = |payload| {
             UdpExchangeResult::new(payload, "quic-udp-datagram")
                 .with_quic_underlay("quinn-h3")
@@ -384,20 +379,15 @@ impl TuicQuicPacketSession {
     }
 
     pub(super) async fn wait_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        if self.udp_association.is_none() {
-            return Err("TUIC UDP association is not initialized".to_owned());
-        }
+        let udp_association = self
+            .udp_association
+            .as_mut()
+            .ok_or_else(|| "TUIC UDP association is not initialized".to_owned())?;
         let expiration = earliest_expiration(
             self.fragments.next_expiration(),
             self.packet_ids.next_expiration(),
         );
-        let Some(response) = self
-            .udp_association
-            .as_mut()
-            .expect("TUIC UDP association was checked above")
-            .receive_until(expiration)
-            .await?
-        else {
+        let Some(response) = udp_association.receive_until(expiration).await? else {
             self.fragments.expire();
             self.prune_fragment_sources();
             self.packet_ids.expire();
@@ -414,7 +404,7 @@ impl TuicQuicPacketSession {
             TUIC_ASSOCIATION_IDENTITY_DOMAIN,
             &parsed.association_id().to_be_bytes(),
         )
-        .expect("static TUIC identity domain and association id are nonempty");
+        .ok_or_else(|| "TUIC response identity is empty".to_owned())?;
         let execution_label = self.execution_label();
         let session_executor = self.session_executor_label();
         let base_response = |payload| {
