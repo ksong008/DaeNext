@@ -15,6 +15,9 @@ from typing import Any
 
 DEPENDENCY_KINDS = ("normal", "build", "dev")
 WORKSPACE_CRATE_PATH = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*::")
+WORKSPACE_CRATE_IMPORT = re.compile(
+    r"\b(?:extern\s+crate|(?:pub\s+)?use)\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+)
 BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 LINE_COMMENT = re.compile(r"//[^\n]*")
 
@@ -220,7 +223,9 @@ def validate_source_imports(
         for path, source_kind in source_files(package):
             source = remove_comments(path.read_text(encoding="utf-8"))
             for line_number, line in enumerate(source.splitlines(), start=1):
-                for module_name in WORKSPACE_CRATE_PATH.findall(line):
+                module_names = set(WORKSPACE_CRATE_PATH.findall(line))
+                module_names.update(WORKSPACE_CRATE_IMPORT.findall(line))
+                for module_name in module_names:
                     target = module_to_package.get(module_name)
                     if target is None or target == package_name:
                         continue
