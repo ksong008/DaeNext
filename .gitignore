@@ -1,5 +1,6 @@
 /target/
 /build/benchmark/
+**/__pycache__/
 **/*.rs.bk
 /tools/utls-fixture-generator/daenext-utls-fixture-generator
 
