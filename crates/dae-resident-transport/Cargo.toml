@@ -1,0 +1,20 @@
+[package]
+name = "dae-resident-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+dae-resident-core.workspace = true
+dae-runtime-control.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+quinn.workspace = true
+quinn-boring.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true

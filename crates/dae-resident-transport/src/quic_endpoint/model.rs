@@ -4,15 +4,13 @@ use std::net::SocketAddr;
 use dae_runtime_control::{OwnerGeneration, RedactedOwnerIdentity};
 use sha2::{Digest, Sha256};
 
-use crate::plan::ResidentProxyPlan;
-
 use super::charge::QuicEndpointCharge;
 
 const QUIC_ENDPOINT_IDENTITY_NAMESPACE: &str = "quinn-endpoint";
 const QUIC_ENDPOINT_IDENTITY_DOMAIN: &[u8] = b"dae/quinn-endpoint/provenance/v1";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum QuicEndpointProtocol {
+pub enum QuicEndpointProtocol {
     Hysteria2,
     Tuic,
     Juicity,
@@ -42,7 +40,7 @@ impl QuicEndpointProtocol {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum QuicEndpointCallerClass {
+pub enum QuicEndpointCallerClass {
     TcpData,
     UdpData,
     ConfiguredDns,
@@ -65,7 +63,7 @@ impl QuicEndpointCallerClass {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum QuicEndpointIdentityRole {
+pub enum QuicEndpointIdentityRole {
     ProtocolCarrier,
     XhttpPrimary,
     XhttpDownload,
@@ -74,7 +72,7 @@ pub(crate) enum QuicEndpointIdentityRole {
 }
 
 impl QuicEndpointIdentityRole {
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::ProtocolCarrier => "protocol-carrier",
             Self::XhttpPrimary => "xhttp-primary",
@@ -101,7 +99,7 @@ impl QuicEndpointAddressFamily {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum QuicEndpointUnderlay {
+pub enum QuicEndpointUnderlay {
     Ordinary,
     Salamander,
     PortHopping { transition_socket_limit: usize },
@@ -145,7 +143,7 @@ tokio::task_local! {
     static QUIC_ENDPOINT_TASK_OBSERVATION: QuicEndpointTaskObservation;
 }
 
-pub(crate) async fn scope_quic_endpoint_observation<F>(
+pub async fn scope_quic_endpoint_observation<F>(
     caller: QuicEndpointCallerClass,
     generation: Option<OwnerGeneration>,
     future: F,
@@ -158,7 +156,7 @@ where
         .await
 }
 
-pub(crate) fn inherit_quic_endpoint_observation<F>(future: F) -> impl Future<Output = F::Output>
+pub fn inherit_quic_endpoint_observation<F>(future: F) -> impl Future<Output = F::Output>
 where
     F: Future,
 {
@@ -176,7 +174,7 @@ where
 }
 
 #[derive(Clone)]
-pub(crate) struct QuicEndpointOpenContext {
+pub struct QuicEndpointOpenContext {
     protocol: QuicEndpointProtocol,
     caller: QuicEndpointCallerClass,
     generation: Option<OwnerGeneration>,
@@ -196,38 +194,7 @@ impl std::fmt::Debug for QuicEndpointOpenContext {
 }
 
 impl QuicEndpointOpenContext {
-    pub(crate) fn for_proxy(
-        protocol: QuicEndpointProtocol,
-        default_caller: QuicEndpointCallerClass,
-        default_generation: OwnerGeneration,
-        proxy: &ResidentProxyPlan,
-        role: QuicEndpointIdentityRole,
-        additional_identity: &[&[u8]],
-    ) -> Self {
-        let mut identity = IdentityDigest::new();
-        identity.part(protocol.as_str().as_bytes());
-        identity.part(role.as_str().as_bytes());
-        let mut current = Some(proxy);
-        while let Some(node) = current {
-            identity.part(node.graph_id.as_bytes());
-            identity.part(node.graph_link_hash.as_bytes());
-            current = node.chain_parent.as_deref();
-        }
-        for part in additional_identity {
-            identity.part(part);
-        }
-        let task = QUIC_ENDPOINT_TASK_OBSERVATION.try_with(|value| *value).ok();
-        Self {
-            protocol,
-            caller: task.map_or(default_caller, |value| value.caller),
-            generation: task
-                .and_then(|value| value.generation)
-                .or(Some(default_generation)),
-            key_seed: identity.finish(),
-        }
-    }
-
-    pub(crate) fn from_identity_parts(
+    pub fn from_identity_parts(
         protocol: QuicEndpointProtocol,
         default_caller: QuicEndpointCallerClass,
         generation: OwnerGeneration,

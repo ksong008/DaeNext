@@ -868,6 +868,7 @@ dependencies = [
  "dae-netutil",
  "dae-outbound",
  "dae-resident-core",
+ "dae-resident-transport",
  "dae-routing",
  "dae-runtime-control",
  "dae-sniffing",
@@ -894,6 +895,21 @@ dependencies = [
  "tokio",
  "tokio-boring",
  "url",
+]
+
+[[package]]
+name = "dae-resident-transport"
+version = "3.1.0"
+dependencies = [
+ "bytes",
+ "dae-resident-core",
+ "dae-runtime-control",
+ "futures-util",
+ "quinn",
+ "quinn-boring",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]

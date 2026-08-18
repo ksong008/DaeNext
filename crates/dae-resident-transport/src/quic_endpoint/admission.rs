@@ -7,19 +7,23 @@ use dae_runtime_control::{
 };
 use serde_json::{Value, json};
 
-#[cfg(not(test))]
-use crate::ResidentRuntimeProfileSelection;
-
 use super::charge::QuicEndpointCharge;
 
+static ADMISSION: OnceLock<PhysicalOwnerAdmission> = OnceLock::new();
+
+pub(super) enum ReserveQuicEndpointError {
+    Configuration,
+    Admission(OwnerAdmissionRejection),
+}
+
 #[derive(Clone, Copy)]
-pub(crate) struct QuicEndpointAdmissionContext<'a> {
+pub struct QuicEndpointAdmissionContext<'a> {
     deadline: AbsoluteDeadline,
     cancellation: &'a OwnerCancellationSignal,
 }
 
 impl<'a> QuicEndpointAdmissionContext<'a> {
-    pub(crate) const fn new(
+    pub const fn new(
         deadline: AbsoluteDeadline,
         cancellation: &'a OwnerCancellationSignal,
     ) -> Self {
@@ -30,28 +34,25 @@ impl<'a> QuicEndpointAdmissionContext<'a> {
     }
 }
 
-fn selected_budget() -> OwnerResourceBudget {
-    #[cfg(test)]
-    {
-        OwnerResourceBudget::new(
-            NonZeroUsize::new(4096).unwrap(),
-            NonZeroUsize::new(usize::MAX / 4).unwrap(),
-        )
+pub fn configure_quic_endpoint_admission(budget: OwnerResourceBudget) -> Result<(), String> {
+    let admission = ADMISSION.get_or_init(|| PhysicalOwnerAdmission::new(budget));
+    let configured = admission.metrics().budget;
+    if configured != budget {
+        return Err(format!(
+            "QUIC Endpoint admission budget already configured as count={} bytes={}, requested count={} bytes={}",
+            configured.max_active_owners(),
+            configured.max_charged_bytes(),
+            budget.max_active_owners(),
+            budget.max_charged_bytes(),
+        ));
     }
-    #[cfg(not(test))]
-    let profile = ResidentRuntimeProfileSelection::selected().profile;
-    #[cfg(not(test))]
-    OwnerResourceBudget::new(
-        NonZeroUsize::new(profile.quic_endpoint_limit_default())
-            .expect("resident QUIC Endpoint count profile is nonzero"),
-        NonZeroUsize::new(profile.quic_endpoint_charged_bytes_default())
-            .expect("resident QUIC Endpoint byte profile is nonzero"),
-    )
+    Ok(())
 }
 
-fn admission() -> &'static PhysicalOwnerAdmission {
-    static ADMISSION: OnceLock<PhysicalOwnerAdmission> = OnceLock::new();
-    ADMISSION.get_or_init(|| PhysicalOwnerAdmission::new(selected_budget()))
+fn admission() -> Result<&'static PhysicalOwnerAdmission, String> {
+    ADMISSION
+        .get()
+        .ok_or_else(|| "QUIC Endpoint admission budget is not configured".to_owned())
 }
 
 pub(super) fn reserve_quic_endpoint(
@@ -62,7 +63,7 @@ pub(super) fn reserve_quic_endpoint(
         .map_err(|_| "QUIC Endpoint charge does not fit the platform address space".to_owned())?;
     let charged_bytes = NonZeroUsize::new(charged_bytes)
         .ok_or_else(|| "QUIC Endpoint charge must be nonzero".to_owned())?;
-    admission()
+    admission()?
         .try_reserve(
             ChargedOwnerBytes::new(charged_bytes),
             context.deadline,
@@ -74,25 +75,28 @@ pub(super) fn reserve_quic_endpoint(
 pub(super) async fn reserve_quic_endpoint_until(
     charge: QuicEndpointCharge,
     context: QuicEndpointAdmissionContext<'_>,
-) -> Result<OwnerReservation, OwnerAdmissionRejection> {
+) -> Result<OwnerReservation, ReserveQuicEndpointError> {
     let charged_bytes = usize::try_from(charge.total_bytes).map_err(|_| {
-        OwnerAdmissionRejection::LimitsExceeded {
+        ReserveQuicEndpointError::Admission(OwnerAdmissionRejection::LimitsExceeded {
             count: false,
             charged_bytes: true,
-        }
+        })
     })?;
-    let charged_bytes =
-        NonZeroUsize::new(charged_bytes).ok_or(OwnerAdmissionRejection::LimitsExceeded {
+    let charged_bytes = NonZeroUsize::new(charged_bytes).ok_or(
+        ReserveQuicEndpointError::Admission(OwnerAdmissionRejection::LimitsExceeded {
             count: false,
             charged_bytes: true,
-        })?;
+        }),
+    )?;
     admission()
+        .map_err(|_| ReserveQuicEndpointError::Configuration)?
         .reserve_until(
             ChargedOwnerBytes::new(charged_bytes),
             context.deadline,
             context.cancellation,
         )
         .await
+        .map_err(ReserveQuicEndpointError::Admission)
 }
 
 fn admission_rejection_message(rejection: OwnerAdmissionRejection) -> String {
@@ -116,7 +120,14 @@ fn admission_rejection_message(rejection: OwnerAdmissionRejection) -> String {
 }
 
 pub(super) fn admission_snapshot() -> Value {
-    admission_metrics_json(admission().metrics())
+    match admission() {
+        Ok(admission) => admission_metrics_json(admission.metrics()),
+        Err(_) => json!({
+            "enforced": true,
+            "scope": "process-wide",
+            "configured": false,
+        }),
+    }
 }
 
 fn admission_metrics_json(metrics: OwnerAdmissionMetrics) -> Value {

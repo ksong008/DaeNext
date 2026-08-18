@@ -18,6 +18,8 @@ const QUIC_ENDPOINT_METRICS_SCHEMA: &str = "quinn-endpoint-resources";
 const QUIC_ENDPOINT_METRICS_SCHEMA_VERSION: u64 = 3;
 const QUIC_ENDPOINT_OBSERVABILITY_MODEL: &str = "bounded-generation-quinn-inventory";
 const QUIC_ENDPOINT_OBSERVABILITY_MODEL_VERSION: u64 = 2;
+static REGISTRY: OnceLock<Mutex<QuicEndpointMetricsRegistry>> = OnceLock::new();
+static INACTIVE_GENERATION_RETENTION: OnceLock<usize> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct QuicEndpointObservabilityProfile {
@@ -101,19 +103,6 @@ impl Default for QuicEndpointMetricsRegistry {
             generations: Vec::new(),
             inactive_generation_retention: QuicEndpointObservabilityProfile::CURRENT
                 .retained_inactive_generations,
-        }
-    }
-}
-
-#[cfg(test)]
-impl QuicEndpointMetricsRegistry {
-    fn for_parallel_process_tests() -> Self {
-        // Parallel endpoint tests use distinct generations and inspect their just-completed
-        // evidence. Keep that bounded evidence from being evicted by an unrelated test before
-        // its assertion; local registry tests and production retain the low-cardinality profile.
-        Self {
-            inactive_generation_retention: 128,
-            ..Self::default()
         }
     }
 }
@@ -657,13 +646,39 @@ fn state_name(state: PhysicalOwnerState) -> &'static str {
     }
 }
 
+pub fn configure_quic_endpoint_observability_retention(retention: usize) -> Result<(), String> {
+    let retention = retention.max(1);
+    if let Some(registry) = REGISTRY.get() {
+        let configured = registry.lock().unwrap().inactive_generation_retention;
+        return if configured == retention {
+            Ok(())
+        } else {
+            Err(format!(
+                "QUIC endpoint observability retention already configured as {configured}, requested {retention}"
+            ))
+        };
+    }
+    let _ = INACTIVE_GENERATION_RETENTION.set(retention);
+    let configured = *INACTIVE_GENERATION_RETENTION
+        .get()
+        .expect("QUIC endpoint observability retention was just initialized");
+    if configured != retention {
+        return Err(format!(
+            "QUIC endpoint observability retention already configured as {configured}, requested {retention}"
+        ));
+    }
+    Ok(())
+}
+
 fn registry() -> &'static Mutex<QuicEndpointMetricsRegistry> {
-    static REGISTRY: OnceLock<Mutex<QuicEndpointMetricsRegistry>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        #[cfg(test)]
-        let registry = QuicEndpointMetricsRegistry::for_parallel_process_tests();
-        #[cfg(not(test))]
-        let registry = QuicEndpointMetricsRegistry::default();
+        let registry = QuicEndpointMetricsRegistry {
+            inactive_generation_retention: INACTIVE_GENERATION_RETENTION
+                .get()
+                .copied()
+                .unwrap_or(QuicEndpointObservabilityProfile::CURRENT.retained_inactive_generations),
+            ..QuicEndpointMetricsRegistry::default()
+        };
         Mutex::new(registry)
     })
 }
@@ -787,7 +802,7 @@ impl Drop for QuicEndpointObservation {
     }
 }
 
-pub(crate) fn quic_endpoint_metrics_snapshot(generation: u64) -> Value {
+pub fn quic_endpoint_metrics_snapshot(generation: u64) -> Value {
     registry()
         .lock()
         .unwrap()
@@ -797,9 +812,7 @@ pub(crate) fn quic_endpoint_metrics_snapshot(generation: u64) -> Value {
 #[cfg(test)]
 mod registry_tests {
     use super::*;
-    use crate::transport::quic_endpoint::{
-        charge::QuicEndpointCharge, model::QuicEndpointOpenContext,
-    };
+    use crate::quic_endpoint::{charge::QuicEndpointCharge, model::QuicEndpointOpenContext};
 
     fn provenance(
         protocol: QuicEndpointProtocol,

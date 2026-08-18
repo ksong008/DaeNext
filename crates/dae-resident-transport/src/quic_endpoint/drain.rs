@@ -7,7 +7,7 @@ use tokio::time;
 use super::{ObservedQuicEndpoint, QuicEndpointReleaseProbe};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct QuicEndpointDrainReport {
+pub struct QuicEndpointDrainReport {
     requested: usize,
     idle_completed: usize,
     released: usize,
@@ -15,27 +15,27 @@ pub(crate) struct QuicEndpointDrainReport {
 }
 
 impl QuicEndpointDrainReport {
-    pub(crate) const fn requested(self) -> usize {
+    pub const fn requested(self) -> usize {
         self.requested
     }
 
-    pub(crate) const fn completed(self) -> usize {
+    pub const fn completed(self) -> usize {
         self.released
     }
 
-    pub(crate) const fn idle_completed(self) -> usize {
+    pub const fn idle_completed(self) -> usize {
         self.idle_completed
     }
 
-    pub(crate) const fn forced_released(self) -> usize {
+    pub const fn forced_released(self) -> usize {
         self.forced_released
     }
 
-    pub(crate) const fn timed_out(self) -> usize {
+    pub const fn timed_out(self) -> usize {
         self.requested.saturating_sub(self.released)
     }
 
-    pub(crate) const fn is_complete(self) -> bool {
+    pub const fn is_complete(self) -> bool {
         self.requested == self.released
     }
 }
@@ -43,7 +43,7 @@ impl QuicEndpointDrainReport {
 type QuicEndpointIdleFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type IndexedQuicEndpointFuture = Pin<Box<dyn Future<Output = usize> + Send>>;
 
-pub(crate) fn quic_endpoint_drain_deadlines(
+pub fn quic_endpoint_drain_deadlines(
     started: time::Instant,
     resource_grace: std::time::Duration,
 ) -> (time::Instant, time::Instant) {
@@ -54,7 +54,7 @@ pub(crate) fn quic_endpoint_drain_deadlines(
     (peer_close_deadline, resource_release_deadline)
 }
 
-pub(crate) async fn wait_quic_endpoints_idle_until(
+pub async fn wait_quic_endpoints_idle_until(
     endpoints: Vec<ObservedQuicEndpoint>,
     deadline: time::Instant,
 ) -> QuicEndpointDrainReport {
@@ -76,7 +76,7 @@ pub(crate) async fn wait_quic_endpoints_idle_until(
     }
 }
 
-pub(crate) async fn wait_quic_endpoints_idle_or_released_until(
+pub async fn wait_quic_endpoints_idle_or_released_until(
     endpoints: Vec<ObservedQuicEndpoint>,
     peer_close_deadline: time::Instant,
     resource_release_deadline: time::Instant,
