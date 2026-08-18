@@ -1889,7 +1889,7 @@ mod tests {
         let subscription = include_str!("../subscription_fetch.rs");
         let control_owners = include_str!("../control_transport_owners/mod.rs");
         let requirements = include_str!("../control_transport_owners/requirements.rs");
-        let model = include_str!("../plan/model.rs");
+        let model = include_str!("../../../dae-resident-plan/src/model.rs");
         let production = owner
             .split_once("#[cfg(test)]\nmod tests")
             .map_or(owner, |(production, _)| production);

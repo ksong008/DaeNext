@@ -21,6 +21,7 @@ members = [
     "crates/dae-outbound",
     "crates/dae-resident-core",
     "crates/dae-resident-dataplane",
+    "crates/dae-resident-plan",
     "crates/dae-resident-transport",
     "crates/dae-routing",
     "crates/dae-sysdump",
@@ -97,6 +98,7 @@ dae-netutil = { path = "crates/dae-netutil" }
 dae-outbound = { path = "crates/dae-outbound" }
 dae-resident-core = { path = "crates/dae-resident-core" }
 dae-resident-dataplane = { path = "crates/dae-resident-dataplane", default-features = false }
+dae-resident-plan = { path = "crates/dae-resident-plan" }
 dae-resident-transport = { path = "crates/dae-resident-transport" }
 dae-product-identity = { path = "crates/dae-product-identity" }
 dae-routing = { path = "crates/dae-routing" }

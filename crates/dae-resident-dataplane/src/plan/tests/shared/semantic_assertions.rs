@@ -52,7 +52,7 @@ pub(crate) fn protocol_matrix_source_fixtures_use_generic_semantics() {
 
 const PROTOCOL_MATRIX_SOURCE_PATHS: &[&str] = &[
     "src/plan.rs",
-    "src/plan/model.rs",
+    "../dae-resident-plan/src/model.rs",
     "src/plan/transport_defaults.rs",
     "src/plan/group_plan.rs",
     "src/plan/dataplane_builder.rs",

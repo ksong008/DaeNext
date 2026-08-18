@@ -1,15 +1,13 @@
 use serde_json::{Value, json};
 
-use super::super::client::ResidentTlsSessionCacheScope;
-use super::super::client::{ResidentTlsFactorySelection, ResidentTlsSessionPolicy};
-use super::super::{link_hash, redacted_link_source};
 use super::{
     GrpcMode, Mldsa65VerifyKey, RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY,
     ResidentEchPlan, ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan,
-    ResidentStreamWrapperPlan, ResidentTcpCarrierOwnership, ResidentUdpChainAdmission,
+    ResidentStreamWrapperPlan, ResidentTcpCarrierOwnership, ResidentTlsFactorySelection,
+    ResidentTlsSessionCacheScope, ResidentTlsSessionPolicy, ResidentUdpChainAdmission,
     ResidentUdpExecutionAgreement, ResidentUtlsFingerprintPlan, ResidentXhttpHttpVersion,
-    ResidentXhttpMode, ResidentXhttpQuicTlsProvider, ResidentXhttpSettingsPlan,
-    resident_udp_chain_admission,
+    ResidentXhttpMode, ResidentXhttpQuicTlsProvider, ResidentXhttpSettingsPlan, link_hash,
+    redacted_link_source, resident_udp_chain_admission,
 };
 
 mod runtime_limits;
@@ -22,7 +20,7 @@ const RUNTIME_COMPONENT_EVIDENCE_SCHEMA_VERSION: u64 = 2;
 const STREAM_WRAPPER_FACTORY_SCHEMA_VERSION: u64 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentExecutableGraphDescriptor {
+pub struct ResidentExecutableGraphDescriptor {
     graph_id: String,
     link_hash: String,
     redacted_link_source: String,
@@ -745,13 +743,13 @@ fn xhttp_settings_evidence_value(settings: &ResidentXhttpSettingsPlan) -> Value 
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ResidentGraphIdentity {
-    pub(super) graph_id: String,
-    pub(super) link_hash: String,
-    pub(super) redacted_link_source: String,
+pub struct ResidentGraphIdentity {
+    pub graph_id: String,
+    pub link_hash: String,
+    pub redacted_link_source: String,
 }
 
-pub(super) fn resident_graph_identity(link: &str) -> ResidentGraphIdentity {
+pub fn resident_graph_identity(link: &str) -> ResidentGraphIdentity {
     let link_hash = link_hash(link);
     let graph_hash = link_hash.trim_start_matches("sha256:");
     ResidentGraphIdentity {

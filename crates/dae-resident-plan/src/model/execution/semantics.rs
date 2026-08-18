@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum UdpPacketSemantics {
+pub enum UdpPacketSemantics {
     Dns,
     Xudp,
     MultiplexedStream,
@@ -17,7 +17,7 @@ pub(crate) enum UdpPacketSemantics {
 }
 
 impl UdpPacketSemantics {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Dns => "dns",
             Self::Xudp => "xudp",

@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentSecurityUnderlayPlan {
+pub enum ResidentSecurityUnderlayPlan {
     None,
     Aead,
     Aead2022,
@@ -55,14 +55,14 @@ impl ResidentSecurityUnderlayPlan {
         }
     }
 
-    pub(crate) fn transport_label(self) -> &'static str {
+    pub fn transport_label(self) -> &'static str {
         match self {
             Self::QuicTls => "quic",
             _ => "tcp",
         }
     }
 
-    pub(crate) fn graph_label(self) -> &'static str {
+    pub fn graph_label(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Aead => "aead",
@@ -78,7 +78,7 @@ impl ResidentSecurityUnderlayPlan {
         }
     }
 
-    pub(crate) fn is_tls_stream(self) -> bool {
+    pub fn is_tls_stream(self) -> bool {
         matches!(
             self,
             Self::StandardTls
@@ -90,7 +90,7 @@ impl ResidentSecurityUnderlayPlan {
         )
     }
 
-    pub(crate) fn is_standard_tls_stream(self) -> bool {
+    pub fn is_standard_tls_stream(self) -> bool {
         matches!(
             self,
             Self::StandardTls | Self::InsecureTls | Self::FragmentedTls | Self::FingerprintAwareTls

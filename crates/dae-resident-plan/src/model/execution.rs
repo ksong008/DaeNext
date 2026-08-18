@@ -8,28 +8,26 @@ mod semantics;
 mod tcp;
 mod udp;
 
-pub(crate) use protocol::{
-    ResidentProtocolShape, ResidentTcpProbeDispatch, ResidentTcpRuntimeDispatch,
-};
-pub(crate) use semantics::UdpPacketSemantics;
-pub(crate) use tcp::ResidentTcpCarrierOwnership;
-pub(crate) use udp::{
+pub use protocol::{ResidentProtocolShape, ResidentTcpProbeDispatch, ResidentTcpRuntimeDispatch};
+pub use semantics::UdpPacketSemantics;
+pub use tcp::ResidentTcpCarrierOwnership;
+pub use udp::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentStreamPacketTransport,
     ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition, ResidentUdpExecutorFactory,
     ResidentUdpPolicyClosedReason, ResidentUdpSourceContract, ResidentUdpWireIdentityContract,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentExecutionPlan {
-    pub(crate) protocol: ResidentProtocolShape,
-    pub(crate) security: ResidentSecurityUnderlayPlan,
-    pub(crate) wrapper: ResidentStreamWrapperPlan,
-    pub(crate) udp: ResidentUdpExecutorFactory,
-    pub(crate) runtime_generation: OwnerGeneration,
+pub struct ResidentExecutionPlan {
+    pub protocol: ResidentProtocolShape,
+    pub security: ResidentSecurityUnderlayPlan,
+    pub wrapper: ResidentStreamWrapperPlan,
+    pub udp: ResidentUdpExecutorFactory,
+    pub runtime_generation: OwnerGeneration,
 }
 
 impl ResidentExecutionPlan {
-    pub(crate) const fn plan_generation() -> OwnerGeneration {
+    pub const fn plan_generation() -> OwnerGeneration {
         UNMATERIALIZED_RESIDENT_PLAN_GENERATION
     }
 
@@ -52,11 +50,11 @@ impl ResidentExecutionPlan {
         self
     }
 
-    pub(crate) const fn runtime_generation(self) -> OwnerGeneration {
+    pub const fn runtime_generation(self) -> OwnerGeneration {
         self.runtime_generation
     }
 
-    pub(crate) fn executor_contract(self) -> ResidentProtocolExecutorContract {
+    pub fn executor_contract(self) -> ResidentProtocolExecutorContract {
         ResidentProtocolExecutorContract {
             tcp_executor: self.protocol.tcp_executor_label(self.wrapper),
             udp_executor: self.udp.executor_label(),
@@ -65,7 +63,7 @@ impl ResidentExecutionPlan {
         }
     }
 
-    pub(crate) const fn tcp_carrier_ownership(self) -> ResidentTcpCarrierOwnership {
+    pub const fn tcp_carrier_ownership(self) -> ResidentTcpCarrierOwnership {
         ResidentTcpCarrierOwnership::from_execution(self.protocol, self.wrapper)
     }
 }

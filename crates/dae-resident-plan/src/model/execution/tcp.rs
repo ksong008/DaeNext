@@ -2,7 +2,7 @@ use super::{ResidentProtocolShape, ResidentStreamWrapperPlan};
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentTcpCarrierOwnership {
+pub enum ResidentTcpCarrierOwnership {
     PerFlowUnframed,
     PerFlowWrapped,
     GenerationFramed,
@@ -55,7 +55,7 @@ impl ResidentTcpCarrierOwnership {
         }
     }
 
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::PerFlowUnframed => "per-flow-unframed",
             Self::PerFlowWrapped => "per-flow-wrapped",
@@ -64,11 +64,11 @@ impl ResidentTcpCarrierOwnership {
         }
     }
 
-    pub(crate) const fn cross_flow_reuse(self) -> bool {
+    pub const fn cross_flow_reuse(self) -> bool {
         matches!(self, Self::GenerationFramed | Self::GenerationMultiplexed)
     }
 
-    pub(crate) fn json(self) -> Value {
+    pub fn json(self) -> Value {
         let per_flow = !self.cross_flow_reuse();
         json!({
             "schemaVersion": 1,
@@ -94,7 +94,7 @@ impl ResidentTcpCarrierOwnership {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::ResidentXhttpHttpVersion;
+    use crate::ResidentXhttpHttpVersion;
 
     #[test]
     fn unframed_and_per_flow_wrappers_never_enter_shared_carriers() {

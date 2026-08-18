@@ -1,4 +1,4 @@
-use crate::{ResidentRuntimeProfile, ResidentRuntimeProfileSelection};
+use dae_resident_core::{ResidentRuntimeProfile, ResidentRuntimeProfileSelection};
 
 const LOW_MEMORY_XHTTP_PHYSICAL_CONNECTION_LIMIT: usize = 1;
 const BALANCED_XHTTP_PHYSICAL_CONNECTION_LIMIT: usize = 2;
