@@ -236,55 +236,6 @@ pub(super) fn write_persisted_subscription(path: &Path, bytes: &[u8]) -> io::Res
     Ok(())
 }
 
-#[cfg(not(test))]
-pub(super) fn write_persisted_subscription_from_staging(
-    path: &Path,
-    staging: &Path,
-) -> io::Result<()> {
-    let source = fs::File::open(staging)?;
-    let metadata = source.metadata()?;
-    if !metadata.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "persisted subscription staging path is not a regular file",
-        ));
-    }
-    if metadata.len() > subscription_http_body_limit() as u64 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "persisted subscription staging file exceeds {} bytes",
-                subscription_http_body_limit()
-            ),
-        ));
-    }
-    let Some(parent) = path.parent() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "persisted subscription path has no parent",
-        ));
-    };
-    fs::create_dir_all(parent)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-    }
-    let mut target = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)?;
-    io::copy(&mut io::BufReader::new(source), &mut target)?;
-    target.flush()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
-}
-
 fn read_all_limited<R: Read>(reader: &mut R, limit: usize) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut buf = [0_u8; 8192];
