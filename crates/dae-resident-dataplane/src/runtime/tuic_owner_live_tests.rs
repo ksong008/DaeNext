@@ -552,7 +552,7 @@ async fn tuic_owner_rebuilds_once_after_remote_close_and_invalidates_old_associa
         )
         .await
         .unwrap();
-    let first_connection_id = first.connection().stable_id();
+    let first_instance_id = first.instance_id();
     let mut old_association = registry
         .acquire(
             proxy.clone(),
@@ -589,7 +589,7 @@ async fn tuic_owner_rebuilds_once_after_remote_close_and_invalidates_old_associa
         )
         .await
         .unwrap();
-    assert_ne!(replacement.connection().stable_id(), first_connection_id);
+    assert_ne!(replacement.instance_id(), first_instance_id);
     let mut replacement_association = registry
         .acquire(
             proxy,

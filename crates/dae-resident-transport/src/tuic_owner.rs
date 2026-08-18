@@ -788,6 +788,11 @@ pub struct TuicTransportLease {
 }
 
 impl TuicTransportLease {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn instance_id(&self) -> u64 {
+        self.transport.instance_id
+    }
+
     pub fn connection(&self) -> &quinn::Connection {
         self.transport.connection()
     }
