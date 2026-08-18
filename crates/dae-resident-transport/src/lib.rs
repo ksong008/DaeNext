@@ -8,12 +8,20 @@ mod dns_request;
 mod dns_tcp_wire;
 mod h2_carrier_owner;
 mod http_connect_head;
+mod hysteria2_failure;
+mod hysteria2_owner;
+mod hysteria2_port_hopping;
+mod juicity_owner;
 mod meek_transport_owner;
 mod proxy_handshake;
+mod quic_candidate_race;
+mod quic_connections;
 mod quic_endpoint;
+mod quic_transport;
 mod resolver;
 mod tls_client;
 mod transport_identity;
+mod tuic_owner;
 mod vless_mux_owner;
 
 pub use anytls_frame::AnyTlsFrameReader;
@@ -41,6 +49,18 @@ pub use h2_carrier_owner::{
     H2CarrierGenerationOwnerHandle, H2CarrierLease, H2CarrierResponseFuture, acquire_h2_carrier,
     start_h2_carrier_generation_owner_on,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use hysteria2_owner::hysteria2_owner_identity_digest_for_test;
+pub use hysteria2_owner::{
+    Hysteria2OwnerRegistryHandle, Hysteria2SharedTransport, Hysteria2TransportLease,
+    Hysteria2UdpSessionLease, start_hysteria2_owner_registry, start_hysteria2_owner_registry_on,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use juicity_owner::start_juicity_owner_registry_with_resources;
+pub use juicity_owner::{
+    JuicityOwnerRegistryHandle, JuicityTransportLease, start_juicity_owner_registry,
+    start_juicity_owner_registry_on,
+};
 pub use meek_transport_owner::{
     MeekTransportGenerationOwnerHandle, MeekTransportLease, acquire_meek_transport,
     start_meek_transport_generation_owner_on,
@@ -61,6 +81,7 @@ pub use quic_endpoint::{
     wait_quic_endpoint_idle_after_close_for, wait_quic_endpoints_idle_or_released_until,
     wait_quic_endpoints_idle_until,
 };
+pub use quic_transport::connect_quic_endpoint_candidates_async;
 pub use resolver::{
     ResolvedHostAddrs, SocketAddressResolutionError, SocketCandidateAttemptError,
     SocketCandidateFailure, TcpCandidateRacePolicy, authority_from_host_port,
@@ -76,6 +97,12 @@ pub use tls_client::{
     take_boring_tls_io_profile_snapshot,
 };
 pub use transport_identity::resident_transport_binding_identity_digest;
+#[cfg(any(test, feature = "test-support"))]
+pub use tuic_owner::start_tuic_owner_registry_with_resources;
+pub use tuic_owner::{
+    TuicOwnerRegistryHandle, TuicSharedTransport, TuicTransportLease, TuicUdpAssociationLease,
+    start_tuic_owner_registry, start_tuic_owner_registry_on,
+};
 pub use vless_mux_owner::{
     VlessMuxGenerationOwnerHandle, VlessMuxLogicalStream, acquire_vless_mux_logical_stream,
     start_vless_mux_generation_owner_on,

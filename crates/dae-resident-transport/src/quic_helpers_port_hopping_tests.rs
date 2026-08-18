@@ -1,9 +1,9 @@
 use super::*;
 
-use crate::ResidentRuntimeProfile;
 use dae_outbound::shared_transport::test_support::{
     boring_quic_server_config, self_signed_tls_identity,
 };
+use dae_resident_core::ResidentRuntimeProfile;
 
 #[tokio::test]
 async fn port_hopping_preserves_the_live_quic_connection_across_streams() {

@@ -1,5 +1,57 @@
-use super::*;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use dae_outbound::hysteria2::{
+    Hysteria2CongestionRuntime, build_hysteria2_runtime_client_config_with_session_cache,
+};
+use dae_outbound::tuic::{
+    TuicCongestionController, build_tuic_runtime_client_config_with_session_cache,
+};
+use dae_resident_core::Hysteria2OwnerResourceProfile;
+use dae_resident_plan::{ResidentHysteria2ObfsPlan, ResidentProxyBinding, ResidentProxyPlan};
 use dae_runtime_control::OwnerGeneration;
+
+use crate::hysteria2_failure::{Hysteria2Failure, Hysteria2FailureClass};
+use crate::hysteria2_port_hopping::{
+    Hysteria2PortHoppingMetrics, Hysteria2PortHoppingRuntimeConfig,
+};
+use crate::quic_transport::{
+    Hysteria2ConnectionFailure, connect_hysteria2_quic_endpoint_candidates_async,
+    connect_quic_endpoint_candidates_async, hysteria2_initial_remote_candidates,
+    open_marked_hysteria2_quic_endpoint_for_remote, resolve_hysteria2_quic_remote_plan_async,
+    resolve_proxy_udp_addr_candidates_async,
+};
+use crate::{
+    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
+    QuicEndpointOpenContext, QuicEndpointOpenError, QuicEndpointProtocol,
+    open_marked_quic_endpoint_for_remote,
+};
+
+fn quic_endpoint_context_for_proxy(
+    protocol: QuicEndpointProtocol,
+    default_caller: QuicEndpointCallerClass,
+    default_generation: OwnerGeneration,
+    proxy: &ResidentProxyPlan,
+    role: QuicEndpointIdentityRole,
+    additional_identity: &[&[u8]],
+) -> QuicEndpointOpenContext {
+    let mut identity_parts = Vec::new();
+    let mut current = Some(proxy);
+    while let Some(node) = current {
+        identity_parts.push(node.graph_id.as_bytes());
+        identity_parts.push(node.graph_link_hash.as_bytes());
+        current = node.chain_parent.as_deref();
+    }
+    identity_parts.extend_from_slice(additional_identity);
+    QuicEndpointOpenContext::from_identity_parts(
+        protocol,
+        default_caller,
+        default_generation,
+        role,
+        &identity_parts,
+    )
+}
 
 pub(crate) struct ResidentConnectedQuicEndpoint {
     pub(crate) remote: SocketAddr,

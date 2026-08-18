@@ -7,7 +7,11 @@ repository.workspace = true
 
 [features]
 default = []
-test-support = ["dae-outbound/test-support", "dae-resident-plan/test-support"]
+test-support = [
+    "dae-outbound/test-support",
+    "dae-resident-core/test-support",
+    "dae-resident-plan/test-support",
+]
 test-boringssl-tls-profile = []
 test-boringssl-unbuffered-bio = []
 test-anytls-legacy-frame-reader = []
@@ -21,6 +25,7 @@ dae-resident-plan.workspace = true
 dae-runtime-control.workspace = true
 boring.workspace = true
 boring-sys.workspace = true
+blake2.workspace = true
 brotli.workspace = true
 bytes.workspace = true
 foreign-types.workspace = true
@@ -41,4 +46,5 @@ tokio-boring.workspace = true
 [dev-dependencies]
 base64.workspace = true
 dae-outbound = { workspace = true, features = ["test-support"] }
+dae-resident-core = { workspace = true, features = ["test-support"] }
 dae-resident-plan = { workspace = true, features = ["test-support"] }

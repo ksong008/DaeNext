@@ -18,11 +18,11 @@ use super::AnyTlsFrameReader;
 use super::{
     AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, H2CarrierLease,
     H2CarrierOwnerResourceProfile, H2CarrierResponseFuture, Hysteria2OwnerRegistryHandle,
-    Hysteria2OwnerResourceProfile, JuicityOwnerRegistryHandle, ResidentStopSignal,
-    ResidentTaskSetShutdown, ResidentTransportOwnerRegistries, SharedResidentStopSignal,
-    TuicOwnerRegistryHandle, acquire_h2_carrier, acquire_meek_transport,
-    record_resident_task_completion, reset_resident_relay_idle_deadline,
-    resident_relay_idle_deadline, run_until_resident_stop, shutdown_resident_task_set,
+    JuicityOwnerRegistryHandle, ResidentStopSignal, ResidentTaskSetShutdown,
+    ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
+    acquire_h2_carrier, acquire_meek_transport, record_resident_task_completion,
+    reset_resident_relay_idle_deadline, resident_relay_idle_deadline, run_until_resident_stop,
+    shutdown_resident_task_set,
 };
 
 use bytes::Bytes;
@@ -34,15 +34,9 @@ use dae_datapath::{
 use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
 };
-#[cfg(test)]
-use dae_outbound::hysteria2::build_hysteria2_runtime_client_config_with_udp_overhead;
 use dae_outbound::{
     http_proxy::{HttpConnectOptions, request as http_request},
-    hysteria2::{
-        HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD, Hysteria2CongestionRuntime,
-        build_hysteria2_runtime_client_config_with_session_cache, read_hysteria2_tcp_response,
-        write_hysteria2_tcp_request,
-    },
+    hysteria2::{read_hysteria2_tcp_response, write_hysteria2_tcp_request},
     juicity::write_juicity_tcp_request,
     shadowsocks::{
         AeadStreamCodec, AeadStreamFrameReader, SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE,
@@ -65,10 +59,7 @@ use dae_outbound::{
         validate_http_status,
     },
     trojan::packet as trojan_packet,
-    tuic::{
-        TuicCongestionController, build_tuic_runtime_client_config_with_session_cache,
-        write_tuic_connect_request,
-    },
+    tuic::write_tuic_connect_request,
     vless::packet,
     vless::{VlessEncryptedStream, contract::is_xtls_rprx_vision_flow},
     vmess::{
@@ -103,12 +94,12 @@ use super::plan::ResidentProxyGroupPlan;
 #[cfg(test)]
 use super::plan::share_resident_proxy_groups;
 use super::plan::{
-    ResidentHysteria2ObfsPlan, ResidentProtocolShape, ResidentProxyBinding, ResidentProxyPlan,
-    ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan,
-    ResidentTcpRuntimeDispatch, ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion,
-    ResidentXhttpMetaPlacement, ResidentXhttpMode, ResidentXhttpPaddingMethod,
-    ResidentXhttpPaddingPlacement, ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement,
-    ResidentXhttpXmuxPlan, SharedResidentProxyGroupMap,
+    ResidentProtocolShape, ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan,
+    ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan, ResidentTcpRuntimeDispatch,
+    ResidentXhttpEndpointPlan, ResidentXhttpHttpVersion, ResidentXhttpMetaPlacement,
+    ResidentXhttpMode, ResidentXhttpPaddingMethod, ResidentXhttpPaddingPlacement,
+    ResidentXhttpSettingsPlan, ResidentXhttpUplinkDataPlacement, ResidentXhttpXmuxPlan,
+    SharedResidentProxyGroupMap,
 };
 #[cfg(test)]
 use super::probe::{resident_tcp_probe_http_request, resident_tcp_probe_status_ok};
@@ -188,13 +179,11 @@ use crate::transport::quic_endpoint::open_marked_quic_endpoint_for_remote;
 mod proxy_dispatch;
 pub(super) use self::proxy_dispatch::*;
 pub(crate) use self::proxy_dispatch::{
-    Hysteria2PortHoppingMetrics, Hysteria2QuicConnectionRequest, ObservedQuicEndpoint,
-    QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointProtocol,
-    ResidentConnectedQuicEndpoint, connect_quic_endpoint_candidates_async,
-    inherit_quic_endpoint_observation, open_hysteria2_quic_connection_candidates_async,
-    open_juicity_quic_connection_candidates_async, open_tuic_quic_connection_candidates_async,
-    quic_endpoint_metrics_snapshot, scope_quic_endpoint_observation,
+    ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointProtocol,
+    inherit_quic_endpoint_observation, quic_endpoint_metrics_snapshot,
+    scope_quic_endpoint_observation,
 };
+pub(crate) use dae_resident_transport::connect_quic_endpoint_candidates_async;
 mod plain_handlers;
 pub(crate) use self::plain_handlers::http_proxy_connect_async;
 use self::plain_handlers::*;

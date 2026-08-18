@@ -1,5 +1,6 @@
 use super::*;
 
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
@@ -13,6 +14,9 @@ use tokio::sync::{Barrier, Notify, oneshot};
 
 use crate::plan::build_resident_proxy_plan_for_node;
 use crate::quic_endpoint_metrics_snapshot;
+use dae_resident_plan::ResidentProxyBinding;
+use dae_resident_transport::QuicEndpointCallerClass;
+use dae_runtime_control::AbsoluteDeadline;
 
 const SERVER_NAME: &str = "localhost";
 const AUTH_HEADER: &str = "Hysteria-Auth";
@@ -827,7 +831,7 @@ async fn multi_owner_shutdown_drains_endpoints_concurrently_and_reconciles_owner
         .as_u64()
         .unwrap() as usize;
     let endpoint_capacity = registry
-        .resources
+        .resource_profile_for_test()
         .owner_limit()
         .min(admission_owner_limit)
         .min(admission_byte_limit / endpoint_admission_charge);
@@ -873,7 +877,7 @@ async fn multi_owner_shutdown_drains_endpoints_concurrently_and_reconciles_owner
 async fn ten_no_response_nodes_release_all_endpoint_resources() {
     let blackhole = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
     let authority = format!("localhost:{}", blackhole.local_addr().unwrap().port());
-    let generation = 9_913;
+    let generation = 9_916;
     let stop = ResidentStopSignal::shared();
     let (registry, owner_thread) = start_hysteria2_owner_registry(
         generation,
@@ -944,7 +948,8 @@ async fn ten_no_response_nodes_release_all_endpoint_resources() {
     assert!(stop_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
     let endpoint_snapshot = quic_endpoint_metrics_snapshot(generation);
     assert!(
-        endpoint_snapshot["cumulativeCreations"].as_u64().unwrap() >= admitted_node_count as u64
+        endpoint_snapshot["cumulativeCreations"].as_u64().unwrap() >= admitted_node_count as u64,
+        "unexpected no-response endpoint snapshot: {endpoint_snapshot}"
     );
     assert_eq!(endpoint_snapshot["liveStates"]["total"], 0);
     assert_eq!(endpoint_snapshot["endpointDriverTasks"]["live"], 0);
