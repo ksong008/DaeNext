@@ -13,7 +13,7 @@ pub struct ResidentTrafficCounters {
 }
 
 impl ResidentDataplaneMetrics {
-    pub(crate) fn traffic_counters(&self) -> ResidentTrafficCounters {
+    pub fn traffic_counters(&self) -> ResidentTrafficCounters {
         ResidentTrafficCounters {
             upload_total: self.upload_total.load(Ordering::Relaxed),
             download_total: self.download_total.load(Ordering::Relaxed),

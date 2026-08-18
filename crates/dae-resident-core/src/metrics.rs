@@ -1,20 +1,25 @@
-use super::*;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
 use dae_outbound::shadowsocks::Ss2022UdpReplayMetricsSnapshot;
+use serde_json::{Value, json};
 
 #[path = "metrics/proxied_doh3.rs"]
 mod proxied_doh3;
 #[path = "metrics/traffic.rs"]
 mod traffic;
 
-pub(crate) use self::proxied_doh3::ProxiedDoh3CleanupMetricObservation;
+pub use self::proxied_doh3::ProxiedDoh3CleanupMetricObservation;
 use self::proxied_doh3::ProxiedDoh3CleanupMetrics;
 pub use self::traffic::ResidentTrafficCounters;
 
 #[derive(Debug, Default)]
-pub(crate) struct ResidentDataplaneMetrics {
-    pub(super) upload_total: AtomicU64,
-    pub(super) download_total: AtomicU64,
-    pub(super) active_tcp_connections: AtomicU64,
+pub struct ResidentDataplaneMetrics {
+    upload_total: AtomicU64,
+    download_total: AtomicU64,
+    active_tcp_connections: AtomicU64,
     tcp_admission_active: AtomicU64,
     tcp_admission_maximum_active: AtomicU64,
     tcp_admission_accepted_total: AtomicU64,
@@ -27,7 +32,7 @@ pub(crate) struct ResidentDataplaneMetrics {
     health_resuscitation_queued: AtomicU64,
     health_resuscitation_queue_full: AtomicU64,
     health_resuscitation_disconnected: AtomicU64,
-    pub(super) active_udp_sessions: AtomicU64,
+    active_udp_sessions: AtomicU64,
     udp_session_dispatch_queued: AtomicU64,
     udp_session_dispatch_queue_full: AtomicU64,
     udp_session_created: AtomicU64,
@@ -129,17 +134,17 @@ pub(crate) struct ResidentDataplaneMetrics {
     udp_reply_failed: AtomicU64,
 }
 
-pub(crate) struct UdpIngressMetricObservation {
-    pub(super) packets: usize,
-    pub(super) truncated: usize,
-    pub(super) control_truncated: usize,
-    pub(super) invalid: usize,
-    pub(super) budget_hit: bool,
-    pub(super) syscalls: usize,
-    pub(super) syscall_batches: usize,
-    pub(super) batch_datagrams: usize,
-    pub(super) batch_max: usize,
-    pub(super) would_block: usize,
+pub struct UdpIngressMetricObservation {
+    pub packets: usize,
+    pub truncated: usize,
+    pub control_truncated: usize,
+    pub invalid: usize,
+    pub budget_hit: bool,
+    pub syscalls: usize,
+    pub syscall_batches: usize,
+    pub batch_datagrams: usize,
+    pub batch_max: usize,
+    pub would_block: usize,
 }
 
 fn subtract_metric(metric: &AtomicU64, value: u64) {
@@ -150,7 +155,7 @@ fn subtract_metric(metric: &AtomicU64, value: u64) {
 }
 
 impl ResidentDataplaneMetrics {
-    pub(super) fn observe_ss2022_replay(
+    pub fn observe_ss2022_replay(
         &self,
         previous: Ss2022UdpReplayMetricsSnapshot,
         current: Ss2022UdpReplayMetricsSnapshot,
@@ -203,7 +208,7 @@ impl ResidentDataplaneMetrics {
         );
     }
 
-    pub(super) fn dns_transport_owner_opened(&self, charged_bytes: usize) {
+    pub fn dns_transport_owner_opened(&self, charged_bytes: usize) {
         let current = self
             .dns_transport_owners_current
             .fetch_add(1, Ordering::Relaxed)
@@ -219,7 +224,7 @@ impl ResidentDataplaneMetrics {
             .fetch_max(current_bytes, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_transport_owner_evicted(&self) {
+    pub fn dns_transport_owner_evicted(&self) {
         let current = self
             .dns_transport_owners_evicted_current
             .fetch_add(1, Ordering::Relaxed)
@@ -228,7 +233,7 @@ impl ResidentDataplaneMetrics {
             .fetch_max(current, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_transport_owner_released(&self, charged_bytes: usize, evicted: bool) {
+    pub fn dns_transport_owner_released(&self, charged_bytes: usize, evicted: bool) {
         subtract_metric(&self.dns_transport_owners_current, 1);
         subtract_metric(
             &self.dns_transport_owner_bytes_current,
@@ -239,15 +244,15 @@ impl ResidentDataplaneMetrics {
         }
     }
 
-    pub(super) fn tcp_opened(&self) {
+    pub fn tcp_opened(&self) {
         self.active_tcp_connections.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn tcp_closed(&self) {
+    pub fn tcp_closed(&self) {
         self.active_tcp_connections.fetch_sub(1, Ordering::Relaxed);
     }
 
-    pub(super) fn tcp_admitted(&self) {
+    pub fn tcp_admitted(&self) {
         let active = self
             .tcp_admission_active
             .fetch_add(1, Ordering::Relaxed)
@@ -258,7 +263,7 @@ impl ResidentDataplaneMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn tcp_admission_released(&self) {
+    pub fn tcp_admission_released(&self) {
         let _ = self.tcp_admission_active.fetch_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
@@ -266,12 +271,12 @@ impl ResidentDataplaneMetrics {
         );
     }
 
-    pub(super) fn tcp_admission_waited(&self) {
+    pub fn tcp_admission_waited(&self) {
         self.tcp_admission_wait_cycles
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn health_round_started(&self) {
+    pub fn health_round_started(&self) {
         let active = self
             .health_rounds_active
             .fetch_add(1, Ordering::Relaxed)
@@ -282,7 +287,7 @@ impl ResidentDataplaneMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn health_round_finished(&self, cancelled: bool) {
+    pub fn health_round_finished(&self, cancelled: bool) {
         let _ = self.health_rounds_active.fetch_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
@@ -297,91 +302,91 @@ impl ResidentDataplaneMetrics {
         }
     }
 
-    pub(super) fn health_resuscitation_queued(&self) {
+    pub fn health_resuscitation_queued(&self) {
         self.health_resuscitation_queued
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn health_resuscitation_queue_full(&self) {
+    pub fn health_resuscitation_queue_full(&self) {
         self.health_resuscitation_queue_full
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn health_resuscitation_disconnected(&self) {
+    pub fn health_resuscitation_disconnected(&self) {
         self.health_resuscitation_disconnected
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_opened(&self) {
+    pub fn udp_opened(&self) {
         self.active_udp_sessions.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_dispatch_queued(&self) {
+    pub fn udp_session_dispatch_queued(&self) {
         self.udp_session_dispatch_queued
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_dispatch_queue_full(&self) {
+    pub fn udp_session_dispatch_queue_full(&self) {
         self.udp_session_dispatch_queue_full
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_created(&self) {
+    pub fn udp_session_created(&self) {
         self.udp_session_created.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_reused(&self) {
+    pub fn udp_session_reused(&self) {
         self.udp_session_reused.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_admission_rejected(&self) {
+    pub fn udp_session_admission_rejected(&self) {
         self.udp_session_admission_rejected
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_queue_full(&self) {
+    pub fn udp_session_queue_full(&self) {
         self.udp_session_queue_full.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_stale_recreated(&self) {
+    pub fn udp_session_stale_recreated(&self) {
         self.udp_session_stale_recreated
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_actor_panicked(&self) {
+    pub fn udp_session_actor_panicked(&self) {
         self.udp_session_actor_panicked
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_cleanup_notification_failed(&self) {
+    pub fn udp_session_cleanup_notification_failed(&self) {
         self.udp_session_cleanup_notification_failed
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_session_shutdown_deadline_hit(&self) {
+    pub fn udp_session_shutdown_deadline_hit(&self) {
         self.udp_session_shutdown_deadline_hits
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_generation_pin_unavailable(&self) {
+    pub fn udp_generation_pin_unavailable(&self) {
         self.udp_generation_pin_unavailable
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_closed(&self) {
+    pub fn udp_closed(&self) {
         self.active_udp_sessions.fetch_sub(1, Ordering::Relaxed);
     }
 
-    pub(super) fn add_upload(&self, bytes: usize) {
+    pub fn add_upload(&self, bytes: usize) {
         self.upload_total.fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn add_download(&self, bytes: usize) {
+    pub fn add_download(&self, bytes: usize) {
         self.download_total
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn record_udp_ingress_batch(&self, observation: UdpIngressMetricObservation) {
+    pub fn record_udp_ingress_batch(&self, observation: UdpIngressMetricObservation) {
         let UdpIngressMetricObservation {
             packets,
             truncated,
@@ -427,15 +432,15 @@ impl ResidentDataplaneMetrics {
         }
     }
 
-    pub(super) fn udp_reply_queued(&self) {
+    pub fn udp_reply_queued(&self) {
         self.udp_reply_queued.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_actor_opened(&self) {
+    pub fn dns_udp_actor_opened(&self) {
         self.dns_udp_actors_opened.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_actor_closed(&self, fatal: bool) {
+    pub fn dns_udp_actor_closed(&self, fatal: bool) {
         self.dns_udp_actors_closed.fetch_add(1, Ordering::Relaxed);
         if fatal {
             self.dns_udp_actor_fatal_exits
@@ -443,17 +448,17 @@ impl ResidentDataplaneMetrics {
         }
     }
 
-    pub(super) fn dns_udp_forwarder_recreated(&self) {
+    pub fn dns_udp_forwarder_recreated(&self) {
         self.dns_udp_forwarder_recreated
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_queue_wait_timeout(&self) {
+    pub fn dns_udp_queue_wait_timeout(&self) {
         self.dns_udp_queue_wait_timeouts
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_pending_added(&self) {
+    pub fn dns_udp_pending_added(&self) {
         let current = self
             .dns_udp_pending_current
             .fetch_add(1, Ordering::Relaxed)
@@ -462,7 +467,7 @@ impl ResidentDataplaneMetrics {
             .fetch_max(current, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_pending_removed(&self, count: usize) {
+    pub fn dns_udp_pending_removed(&self, count: usize) {
         let count = count as u64;
         let _ = self.dns_udp_pending_current.fetch_update(
             Ordering::Relaxed,
@@ -471,25 +476,25 @@ impl ResidentDataplaneMetrics {
         );
     }
 
-    pub(super) fn dns_udp_pending_rejected(&self) {
+    pub fn dns_udp_pending_rejected(&self) {
         self.dns_udp_pending_rejected
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_id_exhausted(&self) {
+    pub fn dns_udp_id_exhausted(&self) {
         self.dns_udp_id_exhausted.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_retry(&self) {
+    pub fn dns_udp_retry(&self) {
         self.dns_udp_retries.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_shutdown_failed_requests(&self, count: usize) {
+    pub fn dns_udp_shutdown_failed_requests(&self, count: usize) {
         self.dns_udp_shutdown_requests_failed
             .fetch_add(count as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_send_syscall(&self, batch_size: usize) {
+    pub fn dns_udp_send_syscall(&self, batch_size: usize) {
         self.dns_udp_send_syscalls.fetch_add(1, Ordering::Relaxed);
         if batch_size > 1 {
             self.dns_udp_send_batches.fetch_add(1, Ordering::Relaxed);
@@ -500,65 +505,65 @@ impl ResidentDataplaneMetrics {
         }
     }
 
-    pub(super) fn dns_udp_datagrams_sent(&self, count: usize) {
+    pub fn dns_udp_datagrams_sent(&self, count: usize) {
         self.dns_udp_send_datagrams
             .fetch_add(count as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_recv_syscall(&self) {
+    pub fn dns_udp_recv_syscall(&self) {
         self.dns_udp_recv_syscalls.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_udp_datagram_received(&self) {
+    pub fn dns_udp_datagram_received(&self) {
         self.dns_udp_recv_datagrams.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_udp_executor_opened(&self) {
+    pub fn proxy_dns_udp_executor_opened(&self) {
         self.proxy_dns_udp_executors_opened
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_udp_executor_reused(&self) {
+    pub fn proxy_dns_udp_executor_reused(&self) {
         self.proxy_dns_udp_executors_reused
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_udp_executor_reset(&self) {
+    pub fn proxy_dns_udp_executor_reset(&self) {
         self.proxy_dns_udp_executors_reset
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_health_forwarder_opened(&self) {
+    pub fn proxy_dns_health_forwarder_opened(&self) {
         self.proxy_dns_health_forwarders_current
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_health_forwarder_closed(&self) {
+    pub fn proxy_dns_health_forwarder_closed(&self) {
         subtract_metric(&self.proxy_dns_health_forwarders_current, 1);
     }
 
-    pub(super) fn proxy_dns_health_lease_acquired(&self) {
+    pub fn proxy_dns_health_lease_acquired(&self) {
         self.proxy_dns_health_leases_current
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_health_lease_released(&self) {
+    pub fn proxy_dns_health_lease_released(&self) {
         subtract_metric(&self.proxy_dns_health_leases_current, 1);
     }
 
-    pub(super) fn proxy_dns_udp_queued_added(&self, bytes: usize) {
+    pub fn proxy_dns_udp_queued_added(&self, bytes: usize) {
         self.proxy_dns_udp_queued_current
             .fetch_add(1, Ordering::Relaxed);
         self.proxy_dns_udp_queued_bytes_current
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_udp_queued_removed(&self, bytes: usize) {
+    pub fn proxy_dns_udp_queued_removed(&self, bytes: usize) {
         subtract_metric(&self.proxy_dns_udp_queued_current, 1);
         subtract_metric(&self.proxy_dns_udp_queued_bytes_current, bytes as u64);
     }
 
-    pub(super) fn proxy_dns_udp_pending_added(&self, bytes: usize) {
+    pub fn proxy_dns_udp_pending_added(&self, bytes: usize) {
         self.proxy_dns_udp_pending_current
             .fetch_add(1, Ordering::Relaxed);
         self.proxy_dns_udp_pending_bytes_current
@@ -566,13 +571,13 @@ impl ResidentDataplaneMetrics {
         self.dns_udp_pending_added();
     }
 
-    pub(super) fn proxy_dns_udp_pending_removed(&self, bytes: usize) {
+    pub fn proxy_dns_udp_pending_removed(&self, bytes: usize) {
         subtract_metric(&self.proxy_dns_udp_pending_current, 1);
         subtract_metric(&self.proxy_dns_udp_pending_bytes_current, bytes as u64);
         self.dns_udp_pending_removed(1);
     }
 
-    pub(super) fn proxy_dns_udp_pending_metadata_added(&self, bytes: usize) {
+    pub fn proxy_dns_udp_pending_metadata_added(&self, bytes: usize) {
         let bytes = bytes as u64;
         let current = self
             .proxy_dns_udp_pending_metadata_bytes_current
@@ -582,14 +587,14 @@ impl ResidentDataplaneMetrics {
             .fetch_max(current, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_udp_pending_metadata_removed(&self, bytes: usize) {
+    pub fn proxy_dns_udp_pending_metadata_removed(&self, bytes: usize) {
         subtract_metric(
             &self.proxy_dns_udp_pending_metadata_bytes_current,
             bytes as u64,
         );
     }
 
-    pub(super) fn proxy_dns_udp_response_added(&self, bytes: usize) {
+    pub fn proxy_dns_udp_response_added(&self, bytes: usize) {
         let bytes = bytes as u64;
         let current = self
             .proxy_dns_udp_response_bytes_current
@@ -599,47 +604,47 @@ impl ResidentDataplaneMetrics {
             .fetch_max(current, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_udp_response_removed(&self, bytes: usize) {
+    pub fn proxy_dns_udp_response_removed(&self, bytes: usize) {
         subtract_metric(&self.proxy_dns_udp_response_bytes_current, bytes as u64);
     }
 
-    pub(super) fn proxy_dns_udp_abandoned(&self, bytes: usize) {
+    pub fn proxy_dns_udp_abandoned(&self, bytes: usize) {
         self.proxy_dns_udp_abandoned.fetch_add(1, Ordering::Relaxed);
         self.proxy_dns_udp_abandoned_bytes
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn proxy_dns_udp_expired(&self, bytes: usize) {
+    pub fn proxy_dns_udp_expired(&self, bytes: usize) {
         self.proxy_dns_udp_expired.fetch_add(1, Ordering::Relaxed);
         self.proxy_dns_udp_expired_bytes
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_response_validated(&self) {
+    pub fn udp_response_validated(&self) {
         self.udp_response_validated.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_response_compatibility_unverified(&self) {
+    pub fn udp_response_compatibility_unverified(&self) {
         self.udp_response_compatibility_unverified
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_response_dropped(&self, bytes: usize) {
+    pub fn udp_response_dropped(&self, bytes: usize) {
         self.udp_response_dropped.fetch_add(1, Ordering::Relaxed);
         self.udp_response_dropped_bytes
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_fast_path_queued(&self) {
+    pub fn dns_fast_path_queued(&self) {
         self.dns_fast_path_queued.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_fast_path_queue_full(&self) {
+    pub fn dns_fast_path_queue_full(&self) {
         self.dns_fast_path_queue_full
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_fast_path_started(&self) {
+    pub fn dns_fast_path_started(&self) {
         let active = self
             .dns_fast_path_active
             .fetch_add(1, Ordering::Relaxed)
@@ -648,7 +653,7 @@ impl ResidentDataplaneMetrics {
             .fetch_max(active, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_fast_path_finished(&self, failed: bool) {
+    pub fn dns_fast_path_finished(&self, failed: bool) {
         self.dns_fast_path_released();
         if failed {
             self.dns_fast_path_failed.fetch_add(1, Ordering::Relaxed);
@@ -656,28 +661,28 @@ impl ResidentDataplaneMetrics {
         self.dns_fast_path_completed.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_fast_path_rejected(&self) {
+    pub fn dns_fast_path_rejected(&self) {
         self.dns_fast_path_queue_full();
         self.dns_fast_path_failed.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_reply_queue_full(&self) {
+    pub fn udp_reply_queue_full(&self) {
         self.udp_reply_queue_full.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_reply_sent(&self) {
+    pub fn udp_reply_sent(&self) {
         self.udp_reply_sent.fetch_add(1, Ordering::Relaxed);
         self.udp_reply_datagrams.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_reply_sent_count(&self, count: usize) {
+    pub fn udp_reply_sent_count(&self, count: usize) {
         self.udp_reply_sent
             .fetch_add(count as u64, Ordering::Relaxed);
         self.udp_reply_datagrams
             .fetch_add(count as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_reply_send_syscall(&self, batch_size: usize) {
+    pub fn udp_reply_send_syscall(&self, batch_size: usize) {
         self.udp_reply_syscalls.fetch_add(1, Ordering::Relaxed);
         if batch_size > 1 {
             self.udp_reply_batches.fetch_add(1, Ordering::Relaxed);
@@ -688,17 +693,17 @@ impl ResidentDataplaneMetrics {
         }
     }
 
-    pub(super) fn udp_reply_partial_failure(&self) {
+    pub fn udp_reply_partial_failure(&self) {
         self.udp_reply_partial_failures
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_reply_send_would_block(&self) {
+    pub fn udp_reply_send_would_block(&self) {
         self.udp_reply_send_would_block
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dns_fast_path_cancelled(&self) {
+    pub fn dns_fast_path_cancelled(&self) {
         self.dns_fast_path_released();
         self.dns_fast_path_failed.fetch_add(1, Ordering::Relaxed);
         self.dns_fast_path_cancelled.fetch_add(1, Ordering::Relaxed);
@@ -712,21 +717,21 @@ impl ResidentDataplaneMetrics {
         );
     }
 
-    pub(super) fn udp_reply_socket_recreated(&self) {
+    pub fn udp_reply_socket_recreated(&self) {
         self.udp_reply_socket_recreated
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_reply_socket_idle_evicted(&self, count: usize) {
+    pub fn udp_reply_socket_idle_evicted(&self, count: usize) {
         self.udp_reply_socket_idle_evicted
             .fetch_add(count as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn udp_reply_failed(&self) {
+    pub fn udp_reply_failed(&self) {
         self.udp_reply_failed.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn snapshot(&self) -> Value {
+    pub fn snapshot(&self) -> Value {
         let traffic = self.traffic_counters();
         let mut snapshot = json!({
             "uploadTotal": traffic.upload_total,
@@ -881,16 +886,16 @@ fn adjust_current_metric(metric: &AtomicU64, previous: usize, current: usize) ->
     }
 }
 
-pub(crate) struct ResidentTcpConnectionGuard {
+pub struct ResidentTcpConnectionGuard {
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
-pub(crate) struct ResidentUdpActivityGuard {
+pub struct ResidentUdpActivityGuard {
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
 impl ResidentUdpActivityGuard {
-    pub(super) fn new(metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+    pub fn new(metrics: Arc<ResidentDataplaneMetrics>) -> Self {
         metrics.udp_opened();
         Self { metrics }
     }
@@ -903,7 +908,7 @@ impl Drop for ResidentUdpActivityGuard {
 }
 
 impl ResidentTcpConnectionGuard {
-    pub(super) fn new(metrics: Arc<ResidentDataplaneMetrics>) -> Self {
+    pub fn new(metrics: Arc<ResidentDataplaneMetrics>) -> Self {
         metrics.tcp_opened();
         Self { metrics }
     }

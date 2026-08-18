@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use super::ResidentDataplaneMetrics;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProxiedDoh3CleanupMetricObservation {
+pub struct ProxiedDoh3CleanupMetricObservation {
     endpoint_forced_drop: bool,
     driver_aborted: bool,
     bridge_aborted: bool,
@@ -13,7 +13,7 @@ pub(crate) struct ProxiedDoh3CleanupMetricObservation {
 }
 
 impl ProxiedDoh3CleanupMetricObservation {
-    pub(crate) const fn new(
+    pub const fn new(
         endpoint_forced_drop: bool,
         driver_aborted: bool,
         bridge_aborted: bool,
@@ -44,7 +44,7 @@ pub(super) struct ProxiedDoh3CleanupMetrics {
 }
 
 impl ProxiedDoh3CleanupMetrics {
-    pub(super) fn record(&self, input: ProxiedDoh3CleanupMetricObservation) {
+    pub fn record(&self, input: ProxiedDoh3CleanupMetricObservation) {
         self.completed.fetch_add(1, Ordering::Relaxed);
         if input.endpoint_forced_drop {
             self.endpoint_forced_drop.fetch_add(1, Ordering::Relaxed);
@@ -64,7 +64,7 @@ impl ProxiedDoh3CleanupMetrics {
         }
     }
 
-    pub(super) fn snapshot(&self) -> Value {
+    pub fn snapshot(&self) -> Value {
         json!({
             "completedTotal": self.completed.load(Ordering::Relaxed),
             "completionClasses": {
@@ -82,15 +82,12 @@ impl ProxiedDoh3CleanupMetrics {
 }
 
 impl ResidentDataplaneMetrics {
-    pub(crate) fn record_proxied_doh3_cleanup(
-        &self,
-        observation: ProxiedDoh3CleanupMetricObservation,
-    ) {
+    pub fn record_proxied_doh3_cleanup(&self, observation: ProxiedDoh3CleanupMetricObservation) {
         self.proxied_doh3_cleanup.record(observation);
     }
 
-    #[cfg(test)]
-    pub(crate) fn proxied_doh3_cleanup_snapshot(&self) -> Value {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn proxied_doh3_cleanup_snapshot(&self) -> Value {
         self.proxied_doh3_cleanup.snapshot()
     }
 }

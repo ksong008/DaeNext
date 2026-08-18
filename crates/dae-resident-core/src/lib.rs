@@ -1,6 +1,9 @@
+#![recursion_limit = "256"]
+
 mod active_generation_slot;
 mod generation_identity;
 mod generation_lifecycle;
+mod metrics;
 mod payload_admission;
 mod relay_deadline;
 mod resource_profile;
@@ -16,6 +19,10 @@ pub use generation_identity::{
     GenerationToken, LogicalGenerationId, PhysicalRuntimeId, PublicationEpoch,
 };
 pub use generation_lifecycle::{ResidentGenerationLifecycle, ResidentGenerationState};
+pub use metrics::{
+    ProxiedDoh3CleanupMetricObservation, ResidentDataplaneMetrics, ResidentTcpConnectionGuard,
+    ResidentTrafficCounters, ResidentUdpActivityGuard, UdpIngressMetricObservation,
+};
 pub use payload_admission::{
     ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
     admit_udp_payload,
