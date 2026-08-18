@@ -16,8 +16,6 @@ use dae_outbound::{
 };
 use serde_json::{Value, json};
 
-pub(crate) const PRODUCTION_NETNS: &str = "daens";
-
 pub(crate) use self::adapter_matrix::{
     resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
     resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
@@ -55,12 +53,10 @@ mod ownership_bench;
 mod plan;
 mod probe;
 mod runtime_owner;
-mod stream_io;
 mod subscription_fetch;
 mod tcp;
 mod transport;
 mod udp;
-mod vision;
 #[cfg(test)]
 pub(crate) use self::allocator_hooks::resident_allocator_stats_json;
 pub(crate) use self::allocator_hooks::{
@@ -81,7 +77,6 @@ pub use self::memory_bench::{
 pub use self::ownership_bench::{
     ResidentProxyOwnershipBenchmarkFixture, resident_proxy_ownership_benchmark_fixture,
 };
-pub(crate) use self::stream_io::{AsyncPrefixedStream, HttpHeadReadOptions, read_http_head};
 pub(crate) use self::tcp::resident_dns_proxy_tcp_transport;
 #[cfg(test)]
 pub(crate) use self::transport::dns_tcp_wire::read_dns_tcp_payload_async;
@@ -113,14 +108,11 @@ pub(crate) use dae_resident_plan::{
     display_name_from_link, execution_link_hash, graph_id_from_link_hash, link_hash,
     redacted_link_source,
 };
+pub(crate) use dae_resident_transport::resolve_host_addrs_with_configured_fallback_dns_ttl;
 pub(crate) use dae_resident_transport::{
     ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
     ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
     ProxyDnsResponseBytes,
-};
-pub(crate) use dae_resident_transport::{
-    resolve_host_addrs_with_configured_fallback_dns_ttl, resolve_socket_addr_candidates,
-    try_socket_addr_candidates,
 };
 
 #[path = "runtime/defaults.rs"]
@@ -172,15 +164,19 @@ pub const RESIDENT_MANUAL_PROBE_TASK_NAME: &str = "daed-latency";
 #[path = "runtime/hysteria2_owner.rs"]
 mod hysteria2_owner;
 pub(crate) use self::hysteria2_owner::{
-    Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, Hysteria2UdpSessionLease,
-    start_hysteria2_owner_registry, start_hysteria2_owner_registry_on,
+    Hysteria2OwnerRegistryHandle, Hysteria2TransportLease, start_hysteria2_owner_registry,
+    start_hysteria2_owner_registry_on,
 };
+#[cfg(test)]
+pub(crate) use dae_resident_transport::Hysteria2UdpSessionLease;
 #[path = "runtime/tuic_owner.rs"]
 mod tuic_owner;
 pub(crate) use self::tuic_owner::{
-    TuicOwnerRegistryHandle, TuicTransportLease, TuicUdpAssociationLease,
-    start_tuic_owner_registry, start_tuic_owner_registry_on,
+    TuicOwnerRegistryHandle, TuicTransportLease, start_tuic_owner_registry,
+    start_tuic_owner_registry_on,
 };
+#[cfg(test)]
+pub(crate) use dae_resident_transport::TuicUdpAssociationLease;
 #[path = "runtime/juicity_owner.rs"]
 mod juicity_owner;
 pub(crate) use self::juicity_owner::{
@@ -190,9 +186,10 @@ pub(crate) use self::juicity_owner::{
 #[path = "runtime/anytls_owner.rs"]
 mod anytls_owner;
 pub(crate) use self::anytls_owner::{
-    AnyTlsLogicalStreamLease, AnyTlsOwnerRegistryHandle, start_anytls_owner_registry,
-    start_anytls_owner_registry_on,
+    AnyTlsOwnerRegistryHandle, start_anytls_owner_registry, start_anytls_owner_registry_on,
 };
+#[cfg(test)]
+pub(crate) use dae_resident_transport::AnyTlsLogicalStreamLease;
 #[path = "runtime/h2_carrier_owner.rs"]
 mod h2_carrier_owner;
 #[path = "runtime/transport_identity.rs"]
@@ -200,8 +197,10 @@ mod transport_identity;
 #[cfg(test)]
 pub(crate) use self::h2_carrier_owner::acquire_h2_carrier;
 pub(crate) use self::h2_carrier_owner::{
-    H2CarrierGenerationOwnerHandle, H2CarrierLease, start_h2_carrier_generation_owner_on,
+    H2CarrierGenerationOwnerHandle, start_h2_carrier_generation_owner_on,
 };
+#[cfg(test)]
+pub(crate) use dae_resident_transport::H2CarrierLease;
 #[cfg(test)]
 #[path = "runtime/h2_carrier_owner_live_tests.rs"]
 mod h2_carrier_owner_live_tests;

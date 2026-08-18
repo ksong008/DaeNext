@@ -25,6 +25,7 @@ test-support = [
     "dae-resident-dns/test-support",
     "dae-resident-plan/test-support",
     "dae-resident-tcp/test-support",
+    "dae-resident-udp/test-support",
 ]
 
 [dependencies]
@@ -42,6 +43,7 @@ dae-resident-dns.workspace = true
 dae-resident-plan.workspace = true
 dae-resident-tcp.workspace = true
 dae-resident-transport.workspace = true
+dae-resident-udp.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
 dae-tls.workspace = true
@@ -83,3 +85,4 @@ dae-resident-dns = { workspace = true, features = ["test-support"] }
 dae-resident-plan = { workspace = true, features = ["test-support"] }
 dae-resident-tcp = { workspace = true, features = ["test-support"] }
 dae-resident-transport = { workspace = true, features = ["test-support"] }
+dae-resident-udp = { workspace = true, features = ["test-support"] }

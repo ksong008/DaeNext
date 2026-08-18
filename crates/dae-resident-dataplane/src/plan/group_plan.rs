@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use dae_resident_udp::ResidentDataUdpAvailabilityHandle;
+
 use super::*;
 
 const RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL: Duration = Duration::from_secs(1);
@@ -150,34 +152,6 @@ impl dae_resident_tcp::ResidentTcpProxySelector for ResidentTcpProxyGroupSelecto
                 message: error.message,
                 no_alive: error.no_alive,
             })
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct ResidentDataUdpAvailabilityHandle {
-    selector: std::sync::Weak<std::sync::RwLock<DialerGroup>>,
-    health_bootstrap: ResidentGroupHealthBootstrap,
-    observation: Arc<ResidentDataUdpObservation>,
-    candidate_index: usize,
-    enabled: bool,
-}
-
-impl ResidentDataUdpAvailabilityHandle {
-    pub(crate) fn record(&self, network_type: NetworkType, checked_at_unix: i64) {
-        if !self.enabled
-            || !self
-                .observation
-                .should_publish(network_type, checked_at_unix)
-        {
-            return;
-        }
-        if let Some(selector) = self.selector.upgrade()
-            && let Ok(mut selector) = selector.write()
-        {
-            selector.record_available_traffic(self.candidate_index, network_type, checked_at_unix);
-        }
-        self.health_bootstrap
-            .observe(self.candidate_index, HealthState::Alive);
     }
 }
 
@@ -788,13 +762,27 @@ impl ResidentProxyGroupPlan {
                 self.group_name
             ));
         };
-        Ok(ResidentDataUdpAvailabilityHandle {
-            selector: Arc::downgrade(&self.selector),
-            health_bootstrap: self.health_bootstrap.clone(),
-            observation: Arc::clone(&self.candidates[candidate_index].data_udp_observation),
-            candidate_index,
-            enabled: self.group_policy.needs_alive_state(),
-        })
+        let selector = Arc::downgrade(&self.selector);
+        let health_bootstrap = self.health_bootstrap.clone();
+        let observation = Arc::clone(&self.candidates[candidate_index].data_udp_observation);
+        let enabled = self.group_policy.needs_alive_state();
+        Ok(ResidentDataUdpAvailabilityHandle::new(
+            move |network_type, checked_at_unix| {
+                if !enabled || !observation.should_publish(network_type, checked_at_unix) {
+                    return;
+                }
+                if let Some(selector) = selector.upgrade()
+                    && let Ok(mut selector) = selector.write()
+                {
+                    selector.record_available_traffic(
+                        candidate_index,
+                        network_type,
+                        checked_at_unix,
+                    );
+                }
+                health_bootstrap.observe(candidate_index, HealthState::Alive);
+            },
+        ))
     }
 
     #[cfg(test)]

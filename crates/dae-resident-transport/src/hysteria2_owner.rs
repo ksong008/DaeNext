@@ -2486,7 +2486,7 @@ mod tests {
         let consumers = [
             include_str!("../../dae-resident-dataplane/src/runtime/generation_builder.rs"),
             include_str!("../../dae-resident-tcp/src/proxy_fetch.rs"),
-            include_str!("../../dae-resident-dataplane/src/udp/session_actor.rs"),
+            include_str!("../../dae-resident-udp/src/udp/session_actor.rs"),
             include_str!("../../dae-resident-dataplane/src/udp/proxy_dns_forwarder.rs"),
             include_str!("../../dae-resident-dataplane/src/runtime/health_scheduler.rs"),
             include_str!("../../dae-resident-dataplane/src/probe/native_tcp/quic_stream.rs"),
@@ -2508,7 +2508,7 @@ mod tests {
         assert!(control_owners.contains("start_hysteria2_owner_registry_on"));
         assert!(requirements.contains("Hysteria2QuicTcp"));
         assert!(
-            include_str!("../../dae-resident-dataplane/src/udp/session_executor/quic.rs")
+            include_str!("../../dae-resident-udp/src/udp/session_executor/quic.rs")
                 .contains("Hysteria2UdpSessionLease")
         );
         assert!(
