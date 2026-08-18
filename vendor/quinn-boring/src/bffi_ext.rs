@@ -478,10 +478,19 @@ impl QuicSslSession for SslSession {
     }
 
     fn decode<R: Buf>(ctx: &SslContextRef, r: &mut R) -> StdResult<SslSession, ErrorStack> {
+        // SSL_SESSION_from_bytes requires one contiguous allocation. Reject a
+        // segmented Buf instead of passing its total length with the first
+        // segment's pointer.
+        let total = r.remaining();
+        if total == 0 {
+            return Err(ErrorStack::get());
+        }
+        let in_ = r.chunk();
+        if in_.len() != total {
+            return Err(ErrorStack::get());
+        }
         unsafe {
-            let in_len = r.remaining();
-            let in_ = r.chunk();
-            bffi::SSL_SESSION_from_bytes(in_.as_ptr(), in_len, ctx.as_ptr())
+            bffi::SSL_SESSION_from_bytes(in_.as_ptr(), total, ctx.as_ptr())
                 .as_mut()
                 .map_or_else(
                     || Err(ErrorStack::get()),
