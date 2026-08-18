@@ -5,10 +5,12 @@ use dae_outbound::shared_transport::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use super::SpawnedLogicalStream;
-use crate::{HttpHeadRead, HttpHeadReadOptions, read_http_head};
+use crate::AsyncVlessTlsClient;
+use crate::{
+    HttpHeadRead, HttpHeadReadOptions, SpawnedLogicalStream, read_http_head,
+    write_all_vectored_header_payload,
+};
 use dae_resident_core::RESIDENT_CONNECT_TIMEOUT;
-use dae_resident_transport::AsyncVlessTlsClient;
 
 mod async_payload;
 mod duplex_control;
@@ -127,7 +129,7 @@ where
     for (index, byte) in payload.iter_mut().enumerate() {
         *byte ^= mask[index % mask.len()];
     }
-    super::write_all_vectored_header_payload(stream, &header[..header_len], payload)
+    write_all_vectored_header_payload(stream, &header[..header_len], payload)
         .await
         .map_err(|err| format!("{label}: {err}"))?;
     stream

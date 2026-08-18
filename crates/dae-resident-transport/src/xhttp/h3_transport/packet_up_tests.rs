@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::transport_helpers::xhttp_h2::xmux::xhttp_xmux_test_lease;
+use super::super::xmux::xhttp_xmux_test_lease;
 
 fn server_config() -> quinn::ServerConfig {
     let identity = self_signed_tls_identity(&["localhost"]).unwrap();

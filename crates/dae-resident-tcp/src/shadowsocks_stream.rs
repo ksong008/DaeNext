@@ -11,7 +11,7 @@ use dae_outbound::shared_transport::mux::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
-use super::websocket::{
+use dae_resident_transport::{
     AsyncWebSocketPayloadChannelReader, AsyncWebSocketPayloadChannelState,
     WebSocketBinaryFrameDecoder, WebSocketControlPollSender, WebSocketControlSender,
 };

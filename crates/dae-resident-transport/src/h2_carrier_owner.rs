@@ -1119,16 +1119,13 @@ mod tests {
     #[test]
     fn h2_carrier_source_keeps_physical_construction_inside_the_owner() {
         let owner = include_str!("h2_carrier_owner.rs");
-        let grpc = include_str!(
-            "../../dae-resident-dataplane/src/tcp/transport_helpers/grpc_common/open_stream.rs"
-        );
-        let body =
-            include_str!("../../dae-resident-dataplane/src/tcp/transport_helpers/h2_body.rs");
+        let grpc = include_str!("grpc_common/open_stream.rs");
+        let body = include_str!("h2_stream.rs");
         let production = owner
             .split_once("#[cfg(test)]\nmod tests")
             .map_or(owner, |(production, _)| production);
         let grpc_production = grpc
-            .split_once("#[cfg(test)]\npub(crate) async fn open_grpc_h2_stream_on_io")
+            .split_once("pub async fn open_grpc_h2_stream_on_io")
             .map_or(grpc, |(production, _)| production);
         assert!(production.contains("h2_builder.handshake(client)"));
         assert!(!grpc_production.contains("h2::client::handshake(client)"));

@@ -1,10 +1,5 @@
 use super::*;
-mod logical_stream;
-pub use self::logical_stream::*;
-mod grpc_common;
-pub use self::grpc_common::*;
-mod xhttp_h2;
-pub use self::xhttp_h2::*;
+pub use dae_resident_transport::*;
 mod grpc_relay;
 pub use self::grpc_relay::*;
 mod h2_body;

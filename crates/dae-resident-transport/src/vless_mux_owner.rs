@@ -1888,8 +1888,7 @@ mod tests {
     #[test]
     fn vless_mux_source_keeps_tls_construction_inside_owner() {
         let owner = include_str!("vless_mux_owner.rs");
-        let connection =
-            include_str!("../../dae-resident-dataplane/src/tcp/vless_handlers/connection.rs");
+        let connection = include_str!("../../dae-resident-tcp/src/vless_handlers/connection.rs");
         let probe = include_str!("../../dae-resident-dataplane/src/probe/native_tcp/vless.rs");
         let runtime_owner = include_str!("../../dae-resident-dataplane/src/runtime_owner.rs");
         let subscription = include_str!("../../dae-resident-dataplane/src/subscription_fetch.rs");

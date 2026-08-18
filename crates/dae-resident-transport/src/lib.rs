@@ -1,17 +1,37 @@
 #![recursion_limit = "256"]
 
+use std::collections::VecDeque;
+use std::future::poll_fn;
+use std::io::ErrorKind;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use dae_outbound::shared_transport::*;
+use dae_resident_core::*;
+use dae_resident_plan::*;
+use serde_json::{Value, json};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::time;
+
 mod anytls_frame;
 mod anytls_owner;
 mod direct_dial;
 mod dns_name;
 mod dns_request;
 mod dns_tcp_wire;
+mod grpc_common;
 mod h2_carrier_owner;
+mod h2_stream;
 mod http_connect_head;
 mod hysteria2_failure;
 mod hysteria2_owner;
 mod hysteria2_port_hopping;
 mod juicity_owner;
+mod logical_stream;
 mod meek_transport_owner;
 mod owner_registries;
 mod proxy_handshake;
@@ -26,6 +46,10 @@ mod transport_identity;
 mod tuic_owner;
 mod vision;
 mod vless_mux_owner;
+mod vmess_http_header;
+mod websocket;
+mod write_vectored;
+mod xhttp;
 
 pub use anytls_frame::AnyTlsFrameReader;
 pub use anytls_owner::{
@@ -46,11 +70,16 @@ pub use dns_request::{
 pub use dns_tcp_wire::{
     DnsTcpFrameReader, read_dns_tcp_payload_async, write_dns_tcp_payload_async,
 };
+pub use grpc_common::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use h2_carrier_owner::start_h2_carrier_generation_owner;
 pub use h2_carrier_owner::{
     H2CarrierGenerationOwnerHandle, H2CarrierLease, H2CarrierResponseFuture, acquire_h2_carrier,
     start_h2_carrier_generation_owner_on,
+};
+pub use h2_stream::{
+    open_h2_body_stream, open_h2_body_stream_with_deferred_response,
+    open_h2_body_stream_with_initial_chunks,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use hysteria2_owner::hysteria2_owner_identity_digest_for_test;
@@ -64,6 +93,7 @@ pub use juicity_owner::{
     JuicityOwnerRegistryHandle, JuicityTransportLease, start_juicity_owner_registry,
     start_juicity_owner_registry_on,
 };
+pub use logical_stream::{SpawnedLogicalStream, VLESS_WRAPPER_LOGICAL_STREAM_BUFFER_BYTES};
 pub use meek_transport_owner::{
     MeekTransportGenerationOwnerHandle, MeekTransportLease, acquire_meek_transport,
     start_meek_transport_generation_owner_on,
@@ -121,3 +151,7 @@ pub use vless_mux_owner::{
 pub use vless_mux_owner::{
     start_vless_mux_generation_owner, start_vless_mux_generation_owner_for_test,
 };
+pub use vmess_http_header::{VmessHttpHeaderStream, open_vmess_http_header_stream};
+pub use websocket::*;
+pub use write_vectored::write_all_vectored_header_payload;
+pub use xhttp::*;

@@ -1,5 +1,5 @@
-use super::super::websocket::AsyncWebSocketPayloadChannelState;
 use super::*;
+use dae_resident_transport::AsyncWebSocketPayloadChannelState;
 #[allow(clippy::too_many_arguments)]
 pub async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),

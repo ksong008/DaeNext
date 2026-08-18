@@ -1,8 +1,8 @@
 // xHTTP stream/client enums keep live H1/H2/H3 transport ownership inline.
 #![allow(clippy::large_enum_variant)]
 
-use super::*;
 use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+use crate::*;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -39,9 +39,8 @@ pub use self::client_io::{
 mod packet_up_pipeline;
 pub use self::packet_up_pipeline::XhttpPacketUpPipeline;
 
-mod relay;
-pub use self::relay::{
-    relay_tcp_over_xhttp_packet_up, relay_tcp_over_xhttp_stream,
+mod logical_stream;
+pub use self::logical_stream::{
     spawn_xhttp_packet_up_payload_stream, spawn_xhttp_stream_payload_stream,
 };
 

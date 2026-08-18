@@ -909,7 +909,7 @@ mod tests {
     #[test]
     fn meek_transport_source_keeps_tls_construction_inside_the_owner() {
         let owner = include_str!("meek_transport_owner.rs");
-        let polling = include_str!("../../dae-resident-dataplane/src/tcp/vless_handlers/meek.rs");
+        let polling = include_str!("../../dae-resident-tcp/src/vless_handlers/meek.rs");
         let runtime_owner = include_str!("../../dae-resident-dataplane/src/runtime_owner.rs");
         let subscription = include_str!("../../dae-resident-dataplane/src/subscription_fetch.rs");
         let control_owners =
