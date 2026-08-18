@@ -1,3 +1,4 @@
+use dae_netutil::{MagicNetworkEncoding, encode_magic_network_with_encoding};
 use sha2::{Digest, Sha256};
 use url::Url;
 
@@ -158,20 +159,24 @@ pub fn udp_stream_target(input: &str) -> Result<String, OutboundError> {
     Ok(format!("{}:{}", contract::UDP_MAGIC_DOMAIN, addr.port()))
 }
 
-pub fn underlay_contract(network: &str, mark: u32, mptcp: bool) -> AnyTLSUnderlayContract {
+pub fn underlay_contract(
+    network: &str,
+    mark: u32,
+    mptcp: bool,
+) -> Result<AnyTLSUnderlayContract, OutboundError> {
     let input = MagicNetwork {
         network: network.to_owned(),
         mark,
         mptcp,
     };
-    let input_encoded = input.encode();
+    let input_encoded = input.encode()?;
     let underlay = MagicNetwork {
         network: "tcp".to_owned(),
         mark,
         mptcp,
     };
-    let underlay_encoded = underlay.encode();
-    AnyTLSUnderlayContract {
+    let underlay_encoded = underlay.encode()?;
+    Ok(AnyTLSUnderlayContract {
         input_network: input.network,
         input_mark: input.mark,
         input_mptcp: input.mptcp,
@@ -181,7 +186,7 @@ pub fn underlay_contract(network: &str, mark: u32, mptcp: bool) -> AnyTLSUnderla
         underlay_mark: underlay.mark,
         underlay_mptcp: underlay.mptcp,
         underlay_encoded,
-    }
+    })
 }
 
 fn query_value(
@@ -203,14 +208,13 @@ fn format_host_port(host: &str, port: Option<u16>) -> String {
 }
 
 impl MagicNetwork {
-    fn encode(&self) -> Vec<u8> {
-        let network = self.network.as_bytes();
-        let mut out = Vec::with_capacity(2 + network.len() + 4 + 1);
-        out.push(0);
-        out.push(network.len() as u8);
-        out.extend_from_slice(network);
-        out.extend_from_slice(&self.mark.to_be_bytes());
-        out.push(u8::from(self.mptcp));
-        out
+    fn encode(&self) -> Result<Vec<u8>, OutboundError> {
+        encode_magic_network_with_encoding(
+            &self.network,
+            self.mark,
+            self.mptcp,
+            MagicNetworkEncoding::Framed,
+        )
+        .map_err(|error| OutboundError::BadAnyTLS(format!("magic-network: {error}")))
     }
 }

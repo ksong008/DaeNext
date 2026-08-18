@@ -710,6 +710,7 @@ dependencies = [
  "base64",
  "dae-ebpf-support",
  "dae-golden",
+ "dae-netutil",
  "libc",
  "serde_json",
 ]
@@ -804,6 +805,7 @@ dependencies = [
  "chacha20poly1305",
  "dae-core-types",
  "dae-golden",
+ "dae-netutil",
  "dae-tls",
  "fastrand",
  "foreign-types",

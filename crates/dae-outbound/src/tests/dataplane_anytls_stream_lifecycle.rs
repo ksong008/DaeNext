@@ -66,7 +66,7 @@ fn case_anytls_session_reuse_sequence_has_one_auth_and_two_streams() {
 
 #[test]
 fn case_anytls_reuse_underlay_preserves_tcp_mark_mptcp_boundary() {
-    let underlay = anytls::link::underlay_contract("tcp", 1234, true);
+    let underlay = anytls::link::underlay_contract("tcp", 1234, true).unwrap();
 
     assert_eq!(underlay.underlay_network, "tcp");
     assert_eq!(underlay.underlay_mark, 1234);

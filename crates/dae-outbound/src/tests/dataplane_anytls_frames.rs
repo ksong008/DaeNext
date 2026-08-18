@@ -54,7 +54,7 @@ fn case_anytls_tcp_first_flight_matches_native_session_order() {
 #[test]
 fn case_anytls_udp_magic_domain_and_underlay_preserve_native_boundary() {
     let stream_target = anytls::link::udp_stream_target("1.2.3.4:53").unwrap();
-    let underlay = anytls::link::underlay_contract("udp", 1234, true);
+    let underlay = anytls::link::underlay_contract("udp", 1234, true).unwrap();
 
     assert_eq!(stream_target, "sp.v2.udp-over-tcp.arpa:53");
     assert_eq!(underlay.underlay_network, "tcp");

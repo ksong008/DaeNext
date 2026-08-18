@@ -1,4 +1,5 @@
 use base64::{Engine as _, engine::general_purpose};
+use dae_netutil::{MagicNetworkEncoding, encode_magic_network_with_encoding};
 use url::Url;
 
 use crate::error::OutboundError;
@@ -183,13 +184,17 @@ pub fn validate_uuid(input: &str) -> Result<(), OutboundError> {
     Ok(())
 }
 
-pub fn underlay_contract(network: &str, mark: u32, mptcp: bool) -> JuicityUnderlayContract {
+pub fn underlay_contract(
+    network: &str,
+    mark: u32,
+    mptcp: bool,
+) -> Result<JuicityUnderlayContract, OutboundError> {
     let input = MagicNetwork {
         network: network.to_owned(),
         mark,
         mptcp,
     };
-    let input_encoded = input.encode();
+    let input_encoded = input.encode()?;
     let underlay = if network == "tcp" {
         MagicNetwork {
             network: "udp".to_owned(),
@@ -199,8 +204,8 @@ pub fn underlay_contract(network: &str, mark: u32, mptcp: bool) -> JuicityUnderl
     } else {
         input.clone()
     };
-    let underlay_encoded = underlay.encode();
-    JuicityUnderlayContract {
+    let underlay_encoded = underlay.encode()?;
+    Ok(JuicityUnderlayContract {
         input_network: input.network,
         input_mark: input.mark,
         input_mptcp: input.mptcp,
@@ -210,7 +215,7 @@ pub fn underlay_contract(network: &str, mark: u32, mptcp: bool) -> JuicityUnderl
         underlay_mark: underlay.mark,
         underlay_mptcp: underlay.mptcp,
         underlay_encoded,
-    }
+    })
 }
 
 fn query_value(
@@ -323,21 +328,29 @@ fn hex_nibble(byte: u8) -> Result<u8, OutboundError> {
 }
 
 impl MagicNetwork {
-    fn encode(&self) -> Vec<u8> {
-        let network = self.network.as_bytes();
-        let mut out = Vec::with_capacity(2 + network.len() + 4 + 1);
-        out.push(0);
-        out.push(network.len() as u8);
-        out.extend_from_slice(network);
-        out.extend_from_slice(&self.mark.to_be_bytes());
-        out.push(u8::from(self.mptcp));
-        out
+    fn encode(&self) -> Result<Vec<u8>, OutboundError> {
+        encode_magic_network_with_encoding(
+            &self.network,
+            self.mark,
+            self.mptcp,
+            MagicNetworkEncoding::Framed,
+        )
+        .map_err(|error| OutboundError::BadJuicity(format!("magic-network: {error}")))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn underlay_contract_rejects_oversized_magic_network() {
+        let network = "x".repeat(u8::MAX as usize + 1);
+        assert!(matches!(
+            underlay_contract(&network, 0, false),
+            Err(OutboundError::BadJuicity(message)) if message.contains("network too long")
+        ));
+    }
 
     #[test]
     fn export_url_roundtrips_special_characters_in_userinfo_and_name() {

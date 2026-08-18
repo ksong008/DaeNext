@@ -105,7 +105,10 @@ pub(super) fn run_tuic_underlay(args: &[String]) -> RunnerOutput {
         Err(err) => return RunnerOutput::stdout_error(err),
     };
     let mptcp = bool_arg(args, "--mptcp").unwrap_or(false);
-    let contract = tuic::link::underlay_contract(network, mark, mptcp);
+    let contract = match tuic::link::underlay_contract(network, mark, mptcp) {
+        Ok(contract) => contract,
+        Err(error) => return RunnerOutput::stdout_error(error.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
@@ -133,7 +136,8 @@ pub(super) fn run_tuic_smoke(args: &[String]) -> RunnerOutput {
     if let Err(err) = parsed.validate_uuid() {
         return RunnerOutput::stdout_error(err.to_string());
     }
-    let tcp_underlay = tuic::link::underlay_contract("tcp", 1234, true);
+    let tcp_underlay = tuic::link::underlay_contract("tcp", 1234, true)
+        .expect("fixed TUIC TCP network fits MagicNetwork framing");
     let udp_relay_mode = match TuicUdpRelayMode::from_config(&parsed.udp_relay_mode) {
         Ok(mode) => mode,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
