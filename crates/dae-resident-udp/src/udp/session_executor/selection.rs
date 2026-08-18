@@ -15,8 +15,10 @@ impl UdpSessionExecutor {
         let mut proxy = proxy.clone();
         proxy.materialize_execution();
         Self::new_proxy_packet_with_optional_transport_owner(
-            ResidentProxyBinding::configuration(Arc::new(proxy))
-                .expect("materialized UDP test proxy binding"),
+            match ResidentProxyBinding::configuration(Arc::new(proxy)) {
+                Ok(binding) => binding,
+                Err(_) => return Self::Dns,
+            },
             None,
             None,
             None,
