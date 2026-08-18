@@ -18,7 +18,7 @@ pub(super) struct ResidentDnsDomainRoutingMaintenanceSignal {
 }
 
 #[derive(Debug)]
-pub(crate) struct ResidentDnsDomainRoutingMaintenanceHandle {
+pub struct ResidentDnsDomainRoutingMaintenanceHandle {
     signal: ResidentDnsDomainRoutingMaintenanceSignal,
 }
 
@@ -92,7 +92,7 @@ impl ResidentDnsDomainRoutingMaintenanceSignal {
 }
 
 impl ResidentDnsDomainRoutingMaintenanceHandle {
-    pub(crate) fn stop(&self) {
+    pub fn stop(&self) {
         self.signal.stop();
     }
 }
@@ -104,7 +104,7 @@ impl Drop for ResidentDnsDomainRoutingMaintenanceHandle {
 }
 
 impl ResidentDnsDomainRouting {
-    pub(crate) fn start_maintenance(
+    pub fn start_maintenance(
         self: &Arc<Self>,
     ) -> Result<(ResidentDnsDomainRoutingMaintenanceHandle, JoinHandle<()>), String> {
         self.maintenance.begin()?;
