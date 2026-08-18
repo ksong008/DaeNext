@@ -3,27 +3,29 @@ use std::os::fd::AsRawFd;
 use std::time::Duration;
 
 use dae_dns::{DnsPacketView, validate_dns_packet_response_for_request_fast};
+use dae_resident_core::{RESIDENT_UDP_RESPONSE_TIMEOUT, set_socket_mark};
 use tokio::time;
 
-use super::RESIDENT_UDP_RESPONSE_TIMEOUT;
-use super::set_socket_mark;
-use super::udp::encode_dns_qname;
+use crate::encode_dns_qname;
 
 mod candidate_error;
 mod candidates;
 mod tcp_candidates;
-pub(crate) use candidates::{resolve_socket_addr_candidates, try_socket_addr_candidates};
-pub(crate) use tcp_candidates::{TcpCandidateRacePolicy, try_tcp_socket_addr_candidates};
+pub use candidate_error::{
+    SocketAddressResolutionError, SocketCandidateAttemptError, SocketCandidateFailure,
+};
+pub use candidates::{resolve_socket_addr_candidates, try_socket_addr_candidates};
+pub use tcp_candidates::{TcpCandidateRacePolicy, try_tcp_socket_addr_candidates};
 
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
 const DNS_QCLASS_IN: u16 = 1;
-const DNS_BOOTSTRAP_RESPONSE_READ_LIMIT: usize = super::dns::DNS_MAX_UDP_MESSAGE_SIZE;
+const DNS_BOOTSTRAP_RESPONSE_READ_LIMIT: usize = u16::MAX as usize;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedHostAddrs {
-    pub(crate) addrs: Vec<SocketAddr>,
-    pub(crate) valid_for: Duration,
+pub struct ResolvedHostAddrs {
+    pub addrs: Vec<SocketAddr>,
+    pub valid_for: Duration,
 }
 
 #[derive(Debug, Default)]
@@ -60,7 +62,7 @@ pub(crate) async fn resolve_host_with_configured_fallback_dns(
     }
 }
 
-pub(crate) async fn resolve_host_addrs_with_configured_fallback_dns_ttl(
+pub async fn resolve_host_addrs_with_configured_fallback_dns_ttl(
     host: &str,
     port: u16,
     fallback_resolver: SocketAddr,
@@ -108,7 +110,7 @@ pub(crate) async fn resolve_host_addrs_with_configured_fallback_dns_ttl(
 /// keeps its historical system-first behavior because it is also used by
 /// health checks and proxy-node endpoint resolution.  Callers that are
 /// building a resident DNS upstream must use this explicit bootstrap variant.
-pub(crate) async fn resolve_host_addrs_with_bootstrap_dns_ttl(
+pub async fn resolve_host_addrs_with_bootstrap_dns_ttl(
     host: &str,
     port: u16,
     bootstrap_resolver: SocketAddr,
@@ -259,7 +261,7 @@ fn resolved_host_valid_for(min_ttl: Option<u32>, refresh_interval: Duration) -> 
         .min(refresh_interval)
 }
 
-pub(crate) fn authority_from_host_port(host: &str, port: u16) -> String {
+pub fn authority_from_host_port(host: &str, port: u16) -> String {
     if host.parse::<Ipv6Addr>().is_ok() {
         format!("[{host}]:{port}")
     } else {

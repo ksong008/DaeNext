@@ -7,7 +7,7 @@ use super::candidate_error::{SocketAddressResolutionError, SocketCandidateAttemp
 
 pub(super) const SOCKET_CANDIDATE_ERROR_DETAIL_LIMIT: usize = 8;
 
-pub(crate) async fn resolve_socket_addr_candidates(
+pub async fn resolve_socket_addr_candidates(
     authority: &str,
     timeout: Duration,
     context: &str,
@@ -26,7 +26,7 @@ pub(crate) async fn resolve_socket_addr_candidates(
     Ok(candidates)
 }
 
-pub(crate) async fn try_socket_addr_candidates<T, F, Fut, E>(
+pub async fn try_socket_addr_candidates<T, F, Fut, E>(
     candidates: &[SocketAddr],
     context: &str,
     mut attempt: F,

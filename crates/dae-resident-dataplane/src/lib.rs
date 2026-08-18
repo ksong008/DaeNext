@@ -52,7 +52,6 @@ mod memory_bench;
 mod ownership_bench;
 mod plan;
 mod probe;
-mod resolver;
 mod runtime_owner;
 mod stream_io;
 mod subscription_fetch;
@@ -79,11 +78,6 @@ pub use self::memory_bench::{
 };
 pub use self::ownership_bench::{
     ResidentProxyOwnershipBenchmarkFixture, resident_proxy_ownership_benchmark_fixture,
-};
-pub(crate) use self::resolver::{
-    ResolvedHostAddrs, TcpCandidateRacePolicy, authority_from_host_port,
-    resolve_host_addrs_with_bootstrap_dns_ttl, resolve_host_addrs_with_configured_fallback_dns_ttl,
-    resolve_socket_addr_candidates, try_socket_addr_candidates, try_tcp_socket_addr_candidates,
 };
 pub(crate) use self::stream_io::{
     AsyncPrefixedStream, CursorBytes, HttpHeadRead, HttpHeadReadError, HttpHeadReadOptions,
@@ -117,6 +111,11 @@ pub(crate) use dae_resident_core::*;
 pub(crate) use dae_resident_plan::{
     display_name_from_link, execution_link_hash, graph_id_from_link_hash, link_hash,
     redacted_link_source,
+};
+pub(crate) use dae_resident_transport::{
+    ResolvedHostAddrs, TcpCandidateRacePolicy, authority_from_host_port,
+    resolve_host_addrs_with_bootstrap_dns_ttl, resolve_host_addrs_with_configured_fallback_dns_ttl,
+    resolve_socket_addr_candidates, try_socket_addr_candidates, try_tcp_socket_addr_candidates,
 };
 
 #[path = "runtime/defaults.rs"]

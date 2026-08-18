@@ -919,9 +919,12 @@ name = "dae-resident-transport"
 version = "3.1.0"
 dependencies = [
  "bytes",
+ "dae-dns",
  "dae-resident-core",
  "dae-runtime-control",
+ "fastrand",
  "futures-util",
+ "getrandom 0.3.4",
  "quinn",
  "quinn-boring",
  "serde_json",

@@ -9,18 +9,14 @@ use super::candidate_error::SocketCandidateAttemptError;
 use super::candidates::SOCKET_CANDIDATE_ERROR_DETAIL_LIMIT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TcpCandidateRacePolicy {
+pub struct TcpCandidateRacePolicy {
     attempt_delay: Duration,
     deadline: Duration,
     max_in_flight: usize,
 }
 
 impl TcpCandidateRacePolicy {
-    pub(crate) const fn new(
-        attempt_delay: Duration,
-        deadline: Duration,
-        max_in_flight: usize,
-    ) -> Self {
+    pub const fn new(attempt_delay: Duration, deadline: Duration, max_in_flight: usize) -> Self {
         Self {
             attempt_delay,
             deadline,
@@ -29,7 +25,7 @@ impl TcpCandidateRacePolicy {
     }
 }
 
-pub(crate) async fn try_tcp_socket_addr_candidates<T, F, Fut, E>(
+pub async fn try_tcp_socket_addr_candidates<T, F, Fut, E>(
     candidates: &[SocketAddr],
     context: &str,
     policy: TcpCandidateRacePolicy,

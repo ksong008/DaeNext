@@ -2,6 +2,7 @@ use super::*;
 use std::net::{IpAddr, Ipv4Addr};
 
 use crate::ProxyDnsRequestContext;
+use dae_resident_transport::encode_dns_qname;
 
 const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
 
@@ -513,30 +514,6 @@ pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, S
     query.extend_from_slice(&1_u16.to_be_bytes());
     query.extend_from_slice(&1_u16.to_be_bytes());
     Ok(query)
-}
-
-pub(crate) fn encode_dns_qname(out: &mut Vec<u8>, lookup_host: &str) -> Result<(), String> {
-    let lookup_host = lookup_host.trim_end_matches('.');
-    if lookup_host.is_empty() {
-        out.push(0);
-        return Ok(());
-    }
-    for label in lookup_host.split('.') {
-        if label.is_empty() {
-            return Err(format!(
-                "invalid DNS lookup host {lookup_host}: empty label"
-            ));
-        }
-        if label.len() > 63 {
-            return Err(format!(
-                "invalid DNS lookup host {lookup_host}: label exceeds 63 bytes"
-            ));
-        }
-        out.push(label.len() as u8);
-        out.extend_from_slice(label.as_bytes());
-    }
-    out.push(0);
-    Ok(())
 }
 
 pub(crate) fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {

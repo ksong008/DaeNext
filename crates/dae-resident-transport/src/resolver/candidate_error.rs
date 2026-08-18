@@ -4,7 +4,7 @@ use std::io;
 use std::net::SocketAddr;
 
 #[derive(Debug)]
-pub(crate) struct SocketAddressResolutionError {
+pub struct SocketAddressResolutionError {
     context: Box<str>,
     authority: Box<str>,
     kind: SocketAddressResolutionErrorKind,
@@ -86,7 +86,7 @@ impl Error for SocketAddressResolutionError {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum SocketCandidateAttemptError {
+pub enum SocketCandidateAttemptError {
     Empty {
         context: Box<str>,
     },
@@ -105,7 +105,7 @@ pub(crate) enum SocketCandidateAttemptError {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SocketCandidateFailure {
+pub struct SocketCandidateFailure {
     candidate: SocketAddr,
     detail: String,
 }

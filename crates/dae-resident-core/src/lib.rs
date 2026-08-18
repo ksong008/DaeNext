@@ -4,6 +4,7 @@ mod active_generation_slot;
 mod generation_identity;
 mod generation_lifecycle;
 mod metrics;
+mod network_defaults;
 mod payload_admission;
 mod relay_deadline;
 mod resource_profile;
@@ -22,6 +23,10 @@ pub use generation_lifecycle::{ResidentGenerationLifecycle, ResidentGenerationSt
 pub use metrics::{
     ProxiedDoh3CleanupMetricObservation, ResidentDataplaneMetrics, ResidentTcpConnectionGuard,
     ResidentTrafficCounters, ResidentUdpActivityGuard, UdpIngressMetricObservation,
+};
+pub use network_defaults::{
+    RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY,
+    RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT, RESIDENT_UDP_RESPONSE_TIMEOUT,
 };
 pub use payload_admission::{
     ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
