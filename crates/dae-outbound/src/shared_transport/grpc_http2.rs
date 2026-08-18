@@ -150,8 +150,6 @@ pub fn read_grpc_http2_request(
     let data = read_http2_frame(stream)?;
     validate_frame(&data, HTTP2_FRAME_DATA, 0, 1, "request data")?;
 
-    // A-13: 语义验证（HPACK 解码后比较），拒绝"原始字节相等"造成的
-    // 合法 Huffman/索引/顺序变体误拒。
     let service_name = options.service_name_or_default();
     let decoded = crate::shared_transport::hpack_decode::decode_header_block(&headers.payload)?;
     let expected: &[(&str, &str)] = &[
@@ -262,7 +260,6 @@ pub fn read_grpc_http2_response(
         1,
         "response headers",
     )?;
-    // A-13: 语义验证。
     let decoded = crate::shared_transport::hpack_decode::decode_header_block(&headers.payload)?;
     let expected: &[(&str, &str)] = &[
         (":status", "200"),
@@ -430,8 +427,6 @@ fn push_hpack_literal_new_name(out: &mut Vec<u8>, name: &[u8], value: &[u8]) {
     push_hpack_string(out, value);
 }
 
-// F-10: 复用共享 HPACK encoder（shared_transport/hpack.rs），消除
-// 与 xHTTP 的重复实现漂移。
 fn push_hpack_string(out: &mut Vec<u8>, value: &[u8]) {
     crate::shared_transport::hpack::push_hpack_string(out, value);
 }

@@ -106,8 +106,6 @@ impl AsyncV2rayPluginMuxPayloadState {
         }
     }
 
-    /// A-14: 注入握手同批预读的 leftover 字节（服务端首帧），
-    /// 在进入正常读循环前先解码入 mux 缓冲。
     pub(super) fn inject_leftover(&mut self, leftover: Vec<u8>) -> Result<(), String> {
         if leftover.is_empty() {
             return Ok(());

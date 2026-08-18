@@ -112,9 +112,7 @@ pub fn read_xhttp_http2_request(
         1,
         "xhttp request headers",
     )?;
-    // A-13: 语义验证（HPACK 解码后比较）。
     let decoded = crate::shared_transport::hpack_decode::decode_header_block(&headers.payload)?;
-    // 与 xhttp_request_headers_payload 实际编码一致。
     let expected: &[(&str, &str)] = &[
         (":method", "POST"),
         (":scheme", "https"),
@@ -196,7 +194,6 @@ pub fn read_xhttp_http2_response(
         1,
         "xhttp response headers",
     )?;
-    // A-13: 语义验证。
     let decoded = crate::shared_transport::hpack_decode::decode_header_block(&headers.payload)?;
     let expected: &[(&str, &str)] = &[
         (":status", "200"),

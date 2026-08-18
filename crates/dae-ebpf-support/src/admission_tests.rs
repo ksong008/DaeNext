@@ -34,11 +34,9 @@ fn report_only_native_backend_admission_requires_command_backend() {
 }
 
 #[test]
-fn completed_a3_native_backend_admission_selects_tcx_without_automatic_enable() {
-    let report = native_backend_admission_report(
-        NativeBackendAdmissionEvidence::completed_a3_local(),
-        false,
-    );
+fn verified_local_native_backend_admission_selects_tcx_without_automatic_enable() {
+    let report =
+        native_backend_admission_report(NativeBackendAdmissionEvidence::verified_local(), false);
     assert!(!report.report_only);
     assert!(report.admitted);
     assert!(!report.automatic_enable_allowed);
@@ -50,7 +48,7 @@ fn completed_a3_native_backend_admission_selects_tcx_without_automatic_enable() 
 
 #[test]
 fn native_backend_admission_allows_tcx_optional_tc_netlink() {
-    let mut evidence = NativeBackendAdmissionEvidence::completed_a3_local();
+    let mut evidence = NativeBackendAdmissionEvidence::verified_local();
     evidence.tcx_optional_smoke = OptionalAdmissionEvidence::NotRequired;
     let report = native_backend_admission_report(evidence, false);
     assert!(report.admitted);
@@ -63,7 +61,7 @@ fn native_backend_admission_allows_tcx_optional_tc_netlink() {
 
 #[test]
 fn native_backend_admission_requires_native_object_default() {
-    let mut evidence = NativeBackendAdmissionEvidence::completed_a3_local();
+    let mut evidence = NativeBackendAdmissionEvidence::verified_local();
     evidence.native_ebpf_object_default = false;
     let report = native_backend_admission_report(evidence, false);
     assert!(!report.admitted);

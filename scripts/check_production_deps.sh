@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Phase 0 / N-01 dependency gate: 生产（normal）依赖树禁止引入
-# rustls / tokio-rustls / aws-lc-* / rcgen。
-# 用法：scripts/check_production_deps.sh [--all-features]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

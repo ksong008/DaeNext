@@ -145,8 +145,6 @@ pub fn simpleobfs_http_exchange(
     ))
 }
 
-/// F-12: HTTP/1 请求构造字段必须拒绝控制字符（CR/LF 及其余 CTL），
-/// 防止链接配置注入额外请求行/头。
 pub(crate) fn validate_http_field(value: &str, context: &str) -> Result<(), OutboundError> {
     if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return Err(OutboundError::BadSharedTransport(format!(
@@ -470,7 +468,7 @@ fn report(
 }
 
 #[cfg(test)]
-mod f12_http_ctl_tests {
+mod http_control_character_tests {
     use super::{HttpUpgradeOptions, http_upgrade_request, validate_http_field};
 
     #[test]

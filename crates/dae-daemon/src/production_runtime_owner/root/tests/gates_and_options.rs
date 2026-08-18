@@ -86,7 +86,7 @@ pub(super) fn production_runtime_owner_native_ebpf_requested_requires_compiled_l
     let options = ProductionRuntimeOwnerOptions {
         native_ebpf_requested: true,
         native_ebpf_backend: AttachBackend::TcNetlink,
-        native_ebpf_completed_a3_admission: true,
+        native_ebpf_local_admission: true,
         ..ProductionRuntimeOwnerOptions::default()
     };
     let decision = native_ebpf::native_backend_runtime_decision_for_options(&options);

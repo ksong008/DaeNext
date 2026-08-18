@@ -98,12 +98,12 @@ pub(crate) fn native_backend_runtime_decision_for_options(
     options: &ProductionRuntimeOwnerOptions,
 ) -> NativeBackendRuntimeDecision {
     let admission = native_backend_admission_report(
-        if options.native_ebpf_completed_a3_admission {
-            NativeBackendAdmissionEvidence::completed_a3_local()
+        if options.native_ebpf_local_admission {
+            NativeBackendAdmissionEvidence::verified_local()
         } else {
             NativeBackendAdmissionEvidence::report_only()
         },
-        !options.native_ebpf_completed_a3_admission,
+        !options.native_ebpf_local_admission,
     );
     native_backend_runtime_decision(NativeBackendRuntimeRequest {
         native_backend_requested: options.native_ebpf_requested,

@@ -69,7 +69,6 @@ pub fn meek_http_request(
     options: &MeekRoundTripOptions,
     body: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
-    // F-12: 拒绝 CTL，防止 host/path 注入额外请求行/头。
     super::dataplane::validate_http_field(&options.host, "meek HTTP host")?;
     super::dataplane::validate_http_field(&options.path, "meek HTTP path")?;
     Ok(format!(

@@ -61,7 +61,6 @@ impl Merger {
     fn read_entry(&mut self, entry: &Path) -> Result<(), ConfigError> {
         let canonical = canonical_or_normalized(entry);
         if self.visited.contains(&canonical) {
-            // 分型：当前 include 栈上再次出现 = 循环；否则 = 重复包含。
             if self.include_stack.contains(&canonical) {
                 return Err(ConfigError::Merge(
                     "circular include is not allowed".to_owned(),
@@ -79,9 +78,6 @@ impl Merger {
             )));
         }
 
-        // F-07: 打开后验证（fd 级路径解析），消除"检查与 open 分离"的
-        // symlink/rename TOCTOU——即使检查后被换成 symlink，打开后基于
-        // 已打开 fd 的路径校验仍会拒绝越界文件。
         let file = open_verified_in_sub_dir(entry, &self.entry_dir).map_err(|err| {
             ConfigError::Merge(format!(
                 "failed to safely open config file {}: {err}",
@@ -550,7 +546,6 @@ routing {
         let err = merge_config_file(duplicate.path("entry.dae"))
             .unwrap_err()
             .to_string();
-        // 分型：同一 include 语句内重复 = duplicate（非循环）。
         assert!(
             err.contains("duplicate include is not allowed"),
             "err = {err}"

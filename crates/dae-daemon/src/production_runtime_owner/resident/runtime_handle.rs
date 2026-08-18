@@ -418,8 +418,6 @@ impl ResidentProductionRuntime {
                 Some("fail" | "partial" | "timed_out")
             )
         });
-        // N-03: evidence writer join 失败必须反映到顶层 status；"skipped"
-        // （无 writer）是合法可选路径，不视为失败。
         let evidence_ok = evidence_phase_ok(evidence_status);
         let mut cleanup_report = json!({
             "status": if binding_cleanup_ok && loaded_map_cleaned && leftovers_after_cleanup.is_empty() && !sys_fs_bpf_dae_mutated && !cleanup_command_timed_out && !cleanup_step_failed && evidence_ok {
@@ -469,7 +467,6 @@ impl ResidentProductionRuntime {
                 "cleanup_phase_timings".to_owned(),
                 json!(cleanup_phase_timings),
             );
-            // N-03: cleanup report 写失败同样必须反映到顶层 status。
             if write_status == "fail" {
                 map.insert("status".to_owned(), json!("fail"));
                 map.insert("cleanup_report_write_failed".to_owned(), json!(true));
@@ -502,8 +499,6 @@ impl Drop for ResidentProductionRuntime {
     }
 }
 
-/// N-03: evidence writer 阶段的聚合判据。"pass" 与可选路径 "skipped"
-/// 均不阻塞顶层 pass；任何 "fail" 必须使顶层 status 失败。
 fn evidence_phase_ok(status: &str) -> bool {
     matches!(status, "pass" | "skipped")
 }

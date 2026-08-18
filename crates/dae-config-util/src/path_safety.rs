@@ -45,9 +45,6 @@ pub fn ensure_file_in_sub_dir(
     Ok(())
 }
 
-/// F-07: 打开后验证的安全 include 打开——先预检，再打开，最后基于
-/// **已打开 fd** 解析实际路径并校验仍在目录内（`File::canonicalize`
-/// 走 /proc/self/fd，不重解析路径名，天然免疫 symlink/rename TOCTOU）。
 pub fn open_verified_in_sub_dir(
     file_path: impl AsRef<Path>,
     dir: impl AsRef<Path>,
@@ -72,7 +69,6 @@ pub fn open_verified_in_sub_dir(
     Ok(file)
 }
 
-/// 基于已打开 fd 解析实际路径（/proc/self/fd 链接），不重解析路径名。
 #[cfg(unix)]
 fn fd_real_path(file: &std::fs::File) -> Option<std::path::PathBuf> {
     use std::os::unix::io::AsRawFd;
@@ -235,13 +231,16 @@ mod tests {
 }
 
 #[cfg(test)]
-mod f07_tests {
+mod path_verification_tests {
     use super::open_verified_in_sub_dir;
     use std::fs;
     use std::path::PathBuf;
 
     fn test_root() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("dae-config-util-f07-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "dae-config-util-path-verification-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
@@ -265,8 +264,6 @@ mod f07_tests {
     #[cfg(unix)]
     #[test]
     fn open_verified_rejects_symlink_escape() {
-        // F-07 回归：目录内 symlink 指向目录外文件——打开后基于 fd 的
-        // 路径校验必须拒绝（此前"检查后 open"的 TOCTOU 会放行）。
         let root = test_root();
         let dir = root.join("config");
         fs::create_dir_all(&dir).unwrap();

@@ -49,7 +49,6 @@ pub(super) enum VlessStandardUdpUnderlay {
         tls_underlay: &'static str,
     },
     HttpUpgradePlain {
-        // A-14: trait object 以便注入握手 leftover（PrefixedStream 包装）。
         stream: Box<dyn AsyncReadWrite + Unpin + Send>,
     },
     HttpUpgradeTls {
@@ -731,7 +730,6 @@ async fn websocket_handshake_async<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    // A-14: 返回 leftover（握手同批预读字节）。
     let options = HttpUpgradeOptions::new(host, path);
     let handshake = websocket_client_handshake(&options)
         .map_err(|err| format!("build {label} handshake: {err}"))?;
@@ -757,7 +755,6 @@ async fn httpupgrade_handshake_async<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    // A-14: 返回 leftover（握手同批预读字节），调用方注入后续读侧。
     let options = HttpUpgradeOptions::new(host, path);
     let request =
         http_upgrade_request(&options).map_err(|err| format!("build {label} handshake: {err}"))?;
@@ -769,11 +766,9 @@ where
     Ok(leftover)
 }
 
-/// A-14: AsyncRead+AsyncWrite 组合 trait，用于 trait object 包装注入。
 pub(super) trait AsyncReadWrite: AsyncRead + AsyncWrite {}
 impl<T: AsyncRead + AsyncWrite> AsyncReadWrite for T {}
 
-/// A-14: 先吐握手 leftover、再转发 inner 的读写流包装。
 struct PrefixedStream<S> {
     prefix: Vec<u8>,
     consumed: usize,
@@ -838,7 +833,6 @@ async fn read_http_head_from_async<S>(
 where
     S: AsyncRead + Unpin,
 {
-    // A-14: 返回 (head, leftover)，保留握手同批预读字节。
     let mut response = Vec::new();
     let mut buf = [0_u8; 512];
     loop {

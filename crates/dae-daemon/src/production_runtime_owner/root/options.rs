@@ -56,7 +56,7 @@ pub struct ProductionRuntimeOwnerOptions {
     pub execute_reload_runtime_parity: bool,
     pub native_ebpf_requested: bool,
     pub native_ebpf_backend: AttachBackend,
-    pub native_ebpf_completed_a3_admission: bool,
+    pub native_ebpf_local_admission: bool,
     pub native_ebpf_embedded_object: bool,
 }
 
@@ -96,7 +96,7 @@ impl Default for ProductionRuntimeOwnerOptions {
             execute_reload_runtime_parity: false,
             native_ebpf_requested: false,
             native_ebpf_backend: AttachBackend::Auto,
-            native_ebpf_completed_a3_admission: false,
+            native_ebpf_local_admission: false,
             native_ebpf_embedded_object: false,
         }
     }

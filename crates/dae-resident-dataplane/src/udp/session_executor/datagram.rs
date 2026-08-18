@@ -107,8 +107,6 @@ impl DatagramRelay {
         self.response_buffer_reclaimed = false;
         match socket.try_recv_from(&mut self.response_buf) {
             Ok((read, from)) => {
-                // A-11: SOCKS5 UDP 无认证，回包来源必须与所选 relay
-                // 候选一致；非预期来源视为注入，丢弃（下次轮询再收）。
                 if from != self.remote_candidates[self.selected_index] {
                     return Ok(None);
                 }
@@ -144,7 +142,6 @@ impl DatagramRelay {
                 .recv_from(&mut self.response_buf)
                 .await
                 .map_err(|err| format!("receive {label} UDP datagram: {err}"))?;
-            // A-11: 丢弃非预期来源的报文并继续等待真实 relay 响应。
             if from != self.remote_candidates[self.selected_index] {
                 continue;
             }

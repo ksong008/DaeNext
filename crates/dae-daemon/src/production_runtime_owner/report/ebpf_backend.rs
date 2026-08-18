@@ -5,12 +5,12 @@ pub(super) fn ebpf_backend_capability_json(
     options: &ProductionRuntimeOwnerOptions,
 ) -> Value {
     let native_admission = native_backend_admission_report(
-        if options.native_ebpf_completed_a3_admission {
-            NativeBackendAdmissionEvidence::completed_a3_local()
+        if options.native_ebpf_local_admission {
+            NativeBackendAdmissionEvidence::verified_local()
         } else {
             NativeBackendAdmissionEvidence::report_only()
         },
-        !options.native_ebpf_completed_a3_admission,
+        !options.native_ebpf_local_admission,
     );
     let native_runtime_decision = native_backend_runtime_decision_for_options(options);
 

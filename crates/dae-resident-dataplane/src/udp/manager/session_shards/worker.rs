@@ -29,8 +29,6 @@ pub(super) async fn run_resident_udp_session_shard(
     let mut retired_sessions = UdpSessionReaper::new(context.cleanup_queue_depth);
     let mut retired_joined = 0_usize;
     let mut next_actor_id = 0_u64;
-    // F-17b: 周期 reconcile——cleanup 通知在队列满时会丢失，已结束的
-    // session actor 必须仍能被回收（handle 结束即可安全 retire）。
     let mut reconcile_interval = time::interval(Duration::from_secs(1));
     reconcile_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
@@ -480,9 +478,6 @@ fn retire_direct_session(
     }
 }
 
-/// F-17b: 周期 reconcile——回收已结束但 cleanup 通知丢失的 proxy session。
-/// 已结束的 handle 加入 reaper 后 join 立即完成；reaper 满时直接 drop
-/// （已结束 handle 的 drop 不产生泄漏）。
 fn reconcile_finished_proxy_sessions(
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
     retired_sessions: &mut UdpSessionReaper,

@@ -1,19 +1,9 @@
-//! A-13: 受限 HPACK 解码器（语义头验证用）。
-//!
-//! gRPC/xHTTP 的 HTTP/2 请求/响应头验证此前对 header block 做**原始字节
-//! 相等**比较：合法对端使用 Huffman 编码、不同静态表索引或合法顺序时
-//! 会被拒绝，导致互操作失败。本模块把 header block 解码为语义
-//! `(name, value)` 列表（支持完整 RFC 7541 Huffman 解码），验证改为
-//! 语义比较。解码器覆盖 RFC 7541 的 indexed、三种 literal 和动态表
-//! size update，并对输入、字段数、解码字节和动态表设置独立预算。
-
 use std::collections::VecDeque;
 
 use crate::error::OutboundError;
 
 include!("huffman_table.rs");
 
-/// RFC 7541 静态表（前 61 项，仅 name 或 name+value）。
 const STATIC_TABLE: [(&str, Option<&str>); 61] = [
     (":authority", None),
     (":method", Some("GET")),
@@ -460,9 +450,7 @@ mod huffman_tests {
     use super::decode_huffman;
     use crate::shared_transport::hpack_decode::HUFFMAN_TABLE;
 
-    /// 用规范编码器（RFC 7541 表）编码样本串，验证解码往返。
     fn huffman_encode(input: &[u8]) -> Vec<u8> {
-        // 累积位流：MSB-first
         let mut bits: u64 = 0;
         let mut bit_count: u32 = 0;
         let mut out = Vec::new();
@@ -501,8 +489,6 @@ mod huffman_tests {
     }
 }
 
-/// A-13: 语义头匹配——目标头必须出现且值一致（名称大小写不敏感，
-/// 值精确比较）。用于替换"原始 HPACK 字节相等"验证。
 pub(crate) fn semantic_headers_match(decoded: &[HpackHeader], expected: &[(&str, &str)]) -> bool {
     expected.iter().all(|(name, value)| {
         let mut values = decoded
@@ -553,8 +539,6 @@ mod semantic_tests {
 
     #[test]
     fn huffman_encoded_literal_decodes_to_same_semantics() {
-        // 用 Huffman 编码的 "test: hello" 字面量头（literal new name，
-        // name 与 value 均启用 Huffman 位），解码后语义与明文一致。
         use super::super::hpack_decode::HUFFMAN_TABLE;
         fn huffman_encode(input: &[u8]) -> (Vec<u8>, u8) {
             let mut bits: u64 = 0;

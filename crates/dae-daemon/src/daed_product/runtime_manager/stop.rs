@@ -48,10 +48,6 @@ impl ProductRuntimeManager {
         self.prepare_stop()?.commit_and_wait(cleanup_mode)
     }
 
-    /// A-08: apply 失败回滚专用——**不获取 stop gate**。调用方已持有
-    /// apply gate，再取同一把 gate 必然超时自锁（30s），且 stop_epoch
-    /// 语义在 rollback 上下文不适用（正在被回滚的就是本 apply）。
-    /// 语义等价于 was_running=false 的 stop：丢弃候选 runtime 并复位状态。
     pub(in crate::daed_product) fn discard_runtime_without_stop_gate(
         &self,
         cleanup_mode: &str,
@@ -87,8 +83,6 @@ impl ProductRuntimeManager {
     }
 }
 
-/// A-08: 复位 ProductRuntimeState 的运行时字段（take_runtime 与
-/// discard_runtime_without_stop_gate 共用）。
 fn reset_runtime_state(
     inner: &mut ProductRuntimeState,
     cleanup_mode: &str,

@@ -15,8 +15,6 @@ pub(crate) struct AsyncWebSocketPayloadState {
 }
 
 impl AsyncWebSocketPayloadState {
-    /// A-14: 注入握手同批预读的 leftover 字节（服务端首帧），
-    /// 在进入正常读循环前先解码入 pending。
     pub(crate) fn inject_leftover(&mut self, leftover: Vec<u8>) -> Result<(), String> {
         if leftover.is_empty() {
             return Ok(());
@@ -116,8 +114,6 @@ impl AsyncWebSocketPayloadChannelState {
         }
     }
 
-    /// A-14: 注入握手同批预读的 leftover 字节（服务端首帧），
-    /// 在进入正常读循环前先解码入 pending。
     pub(crate) fn inject_leftover(&mut self, leftover: Vec<u8>) -> Result<(), String> {
         if leftover.is_empty() {
             return Ok(());

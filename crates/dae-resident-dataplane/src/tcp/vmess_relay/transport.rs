@@ -77,7 +77,6 @@ pub(super) async fn relay_tcp_over_vmess_stream_async(
         let mut inbound_write = inbound_write;
         let mut proxy_read = proxy_read;
         let mut buffer = [0_u8; 16 * 1024];
-        // A-14: 握手同批 leftover 是服务端首段数据，先转发给客户端。
         if !leftover.is_empty() {
             inbound_write
                 .write_all(&leftover)
@@ -200,7 +199,6 @@ pub(super) async fn relay_tcp_over_vmess_websocket_stream_async(
         let mut inbound_write = inbound_write;
         let mut proxy_read = proxy_read;
         let mut decoder = WebSocketBinaryFrameDecoder::default();
-        // A-14: 握手同批 leftover 是服务端首帧，先喂解码器。
         if !leftover.is_empty() {
             decoder
                 .extend(&leftover)

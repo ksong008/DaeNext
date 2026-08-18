@@ -153,7 +153,7 @@ pub(super) fn write_valid_config(path: &Path) {
 pub(super) fn write_missing_interface_config(path: &Path) {
     fs::write(
         path,
-        "global {\n  log_level: info\n  lan_interface: dae-missing-a4-interface\n}\n\nrouting {\n  pname(NetworkManager, systemd-resolved, dnsmasq) -> must_direct\n}\n",
+        "global {\n  log_level: info\n  lan_interface: dae-missing-test-interface\n}\n\nrouting {\n  pname(NetworkManager, systemd-resolved, dnsmasq) -> must_direct\n}\n",
     )
     .unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();

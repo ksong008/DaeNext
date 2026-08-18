@@ -42,7 +42,7 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
         json!({
             "native_backend_requested": options.native_ebpf_requested,
             "requested_backend": options.native_ebpf_backend.as_str(),
-            "completed_a3_admission": options.native_ebpf_completed_a3_admission,
+            "local_admission": options.native_ebpf_local_admission,
             "embedded_object": options.native_ebpf_embedded_object,
             "native_loader_compiled": cfg!(feature = "native-ebpf"),
             "automatic_enable_allowed": false,

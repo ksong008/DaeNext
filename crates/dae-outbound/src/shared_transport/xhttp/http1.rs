@@ -12,7 +12,6 @@ pub fn xhttp_packet_request(
     payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
     let path = xhttp_request_path(options);
-    // F-12: 拒绝 CTL，防止 host/path/mode/alpn 注入额外请求行/头。
     crate::shared_transport::dataplane::validate_http_field(&options.host, "xHTTP HTTP host")?;
     crate::shared_transport::dataplane::validate_http_field(&path, "xHTTP HTTP path")?;
     crate::shared_transport::dataplane::validate_http_field(&options.mode, "xHTTP HTTP mode")?;
