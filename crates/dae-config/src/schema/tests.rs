@@ -34,6 +34,28 @@ fn builds_schema_default_patch_golden_cases() {
     }
 }
 
+#[test]
+fn borrowed_and_owned_schema_entry_points_are_equivalent() {
+    let cases = [
+        include_str!("../../../../example.dae"),
+        "global { log_level: \"错误\\中\" }\nrouting { fallback: direct }\n",
+        "global { tproxy_port: invalid }\nrouting { fallback: direct }\n",
+        "global {}\n",
+        "routing {}\n",
+        "global { log_level: info }\nglobal { log_level: error }\nrouting {}\n",
+        "global {}\nrouting {}\nunknown {}\n",
+    ];
+
+    for input in cases {
+        let sections = parse_config(input).unwrap();
+        assert_eq!(
+            build_config(&sections),
+            build_config_owned(sections),
+            "entry points diverged for {input:?}"
+        );
+    }
+}
+
 fn project_config(config: &Config) -> Value {
     json!({
         "global": project_global(&config.global),
