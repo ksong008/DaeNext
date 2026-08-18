@@ -184,7 +184,7 @@ async fn open_xhttp_h3_connection(
             system_ca.as_deref().map(|snapshot| snapshot.identity()),
         )
     });
-    let endpoint_context = QuicEndpointOpenContext::for_proxy(
+    let endpoint_context = quic_endpoint_context_for_proxy(
         QuicEndpointProtocol::XhttpHttp3,
         QuicEndpointCallerClass::TcpData,
         generation,

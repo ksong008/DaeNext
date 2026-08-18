@@ -10,7 +10,10 @@ use super::wire::{
     read_dns_tcp_message_async, resident_dns_quic_client_config, restore_dns_response_id,
     write_dns_tcp_message_async,
 };
-use crate::{inherit_quic_endpoint_observation, wait_quic_endpoint_idle_after_close};
+use crate::{
+    inherit_quic_endpoint_observation, quic_endpoint_context_for_proxy,
+    wait_quic_endpoint_idle_after_close,
+};
 use serde_json::{Value, json};
 
 mod proxy;
@@ -506,7 +509,7 @@ pub(super) fn managed_dns_quic_endpoint_context(
 ) -> QuicEndpointOpenContext {
     let port = upstream.target.port.to_be_bytes();
     let remote = remote.to_string();
-    QuicEndpointOpenContext::for_proxy(
+    quic_endpoint_context_for_proxy(
         protocol,
         QuicEndpointCallerClass::ManagedDns,
         binding.runtime_generation(),

@@ -7,12 +7,12 @@ const DNS_TCP_FRAME_READ_CHUNK_SIZE: usize = 32 * 1024;
 const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
 
 #[derive(Default)]
-pub(crate) struct DnsTcpFrameReader {
+pub struct DnsTcpFrameReader {
     buffered: BytesMut,
 }
 
 impl DnsTcpFrameReader {
-    pub(crate) async fn read_frame<S>(&mut self, stream: &mut S) -> Result<Option<Vec<u8>>, String>
+    pub async fn read_frame<S>(&mut self, stream: &mut S) -> Result<Option<Vec<u8>>, String>
     where
         S: AsyncRead + Unpin,
     {
@@ -55,18 +55,14 @@ impl DnsTcpFrameReader {
     }
 }
 
-#[cfg(test)]
-pub(crate) async fn read_dns_tcp_payload_async<S>(stream: &mut S) -> Result<Option<Vec<u8>>, String>
+pub async fn read_dns_tcp_payload_async<S>(stream: &mut S) -> Result<Option<Vec<u8>>, String>
 where
     S: AsyncRead + Unpin,
 {
     DnsTcpFrameReader::default().read_frame(stream).await
 }
 
-pub(crate) async fn write_dns_tcp_payload_async<S>(
-    stream: &mut S,
-    payload: &[u8],
-) -> Result<(), String>
+pub async fn write_dns_tcp_payload_async<S>(stream: &mut S, payload: &[u8]) -> Result<(), String>
 where
     S: AsyncWrite + Unpin,
 {

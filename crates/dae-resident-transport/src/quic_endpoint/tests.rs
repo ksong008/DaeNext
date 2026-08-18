@@ -20,6 +20,12 @@ fn open_test_quic_endpoint(
     underlay: QuicEndpointUnderlay,
     context: QuicEndpointOpenContext,
 ) -> Result<ObservedQuicEndpoint, String> {
+    configure_quic_endpoint_admission(dae_runtime_control::OwnerResourceBudget::new(
+        std::num::NonZeroUsize::new(4096).unwrap(),
+        std::num::NonZeroUsize::new(usize::MAX / 4).unwrap(),
+    ))
+    .unwrap();
+    configure_quic_endpoint_observability_retention(128).unwrap();
     let cancellation = OwnerCancellationSignal::new();
     open_observed_quic_endpoint(
         mark,

@@ -76,7 +76,7 @@ pub(crate) async fn open_hysteria2_quic_connection_candidates_async(
             "build Hysteria2 QUIC client configuration failed",
         ))
     })?;
-    let endpoint_context = QuicEndpointOpenContext::for_proxy(
+    let endpoint_context = quic_endpoint_context_for_proxy(
         QuicEndpointProtocol::Hysteria2,
         caller,
         generation,
@@ -206,7 +206,7 @@ pub(crate) async fn open_tuic_quic_connection_candidates_async(
         session_cache,
     )
     .map_err(|err| format!("build TUIC QUIC client config: {err}"))?;
-    let endpoint_context = QuicEndpointOpenContext::for_proxy(
+    let endpoint_context = quic_endpoint_context_for_proxy(
         QuicEndpointProtocol::Tuic,
         caller,
         binding.runtime_generation(),
@@ -260,7 +260,7 @@ pub(crate) async fn open_juicity_quic_connection_candidates_async(
         session_cache,
     )
     .map_err(|err| format!("build Juicity QUIC client config: {err}"))?;
-    let endpoint_context = QuicEndpointOpenContext::for_proxy(
+    let endpoint_context = quic_endpoint_context_for_proxy(
         QuicEndpointProtocol::Juicity,
         caller,
         binding.runtime_generation(),

@@ -108,7 +108,8 @@ pub(crate) use self::transport::quic_endpoint::quic_endpoint_metrics_snapshot;
 pub(crate) use self::transport::quic_endpoint::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
     QuicEndpointOpenContext, QuicEndpointProtocol, inherit_quic_endpoint_observation,
-    scope_quic_endpoint_observation, wait_quic_endpoint_idle_after_close,
+    quic_endpoint_context_for_proxy, scope_quic_endpoint_observation,
+    wait_quic_endpoint_idle_after_close,
 };
 pub(crate) use self::udp::{
     ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,

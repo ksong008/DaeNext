@@ -187,8 +187,8 @@ mod proxy_dispatch;
 pub(super) use self::proxy_dispatch::*;
 pub(crate) use self::proxy_dispatch::{
     Hysteria2PortHoppingMetrics, Hysteria2QuicConnectionRequest, ObservedQuicEndpoint,
-    QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointOpenContext,
-    QuicEndpointProtocol, ResidentConnectedQuicEndpoint, connect_quic_endpoint_candidates_async,
+    QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointProtocol,
+    ResidentConnectedQuicEndpoint, connect_quic_endpoint_candidates_async,
     inherit_quic_endpoint_observation, open_hysteria2_quic_connection_candidates_async,
     open_juicity_quic_connection_candidates_async, open_marked_quic_endpoint_for_remote,
     open_tuic_quic_connection_candidates_async, quic_endpoint_metrics_snapshot,

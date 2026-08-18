@@ -14,25 +14,27 @@ use dae_runtime_control::OwnerAdmissionRejection;
 #[cfg(test)]
 use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
 
-pub(crate) use self::drain::{
+pub use self::drain::{
     QuicEndpointDrainReport, quic_endpoint_drain_deadlines,
     wait_quic_endpoints_idle_or_released_until, wait_quic_endpoints_idle_until,
 };
-pub(crate) use self::metrics::quic_endpoint_metrics_snapshot;
-pub(crate) use self::model::{
+pub use self::metrics::{
+    configure_quic_endpoint_observability_retention, quic_endpoint_metrics_snapshot,
+};
+pub use self::model::{
     QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointOpenContext,
     QuicEndpointProtocol, QuicEndpointUnderlay, inherit_quic_endpoint_observation,
     scope_quic_endpoint_observation,
 };
 
-pub(crate) use self::admission::QuicEndpointAdmissionContext;
+pub use self::admission::{QuicEndpointAdmissionContext, configure_quic_endpoint_admission};
 use self::charge::QuicEndpointCharge;
 use self::metrics::QuicEndpointObservation;
 use self::runtime::{EndpointDriverReleaseHandle, EndpointDriverTrackingRuntime};
 use self::socket::ObservedQuicUdpSocket;
-use crate::set_socket_mark;
+use dae_resident_core::set_socket_mark;
 
-pub(crate) struct ObservedQuicEndpoint {
+pub struct ObservedQuicEndpoint {
     endpoint: quinn::Endpoint,
     handle_lifecycle: Arc<EndpointHandleLifecycle>,
 }
@@ -105,20 +107,20 @@ impl Drop for ObservedQuicEndpoint {
 }
 
 impl ObservedQuicEndpoint {
-    pub(crate) fn mark_ready(&self) {
+    pub fn mark_ready(&self) {
         self.handle_lifecycle.observation.mark_ready();
     }
 
-    pub(crate) fn mark_failed(&self) {
+    pub fn mark_failed(&self) {
         self.handle_lifecycle.observation.mark_failed();
     }
 
-    pub(crate) fn close(&self, error_code: quinn::VarInt, reason: &[u8]) {
+    pub fn close(&self, error_code: quinn::VarInt, reason: &[u8]) {
         self.handle_lifecycle.observation.explicit_close_requested();
         self.endpoint.close(error_code, reason);
     }
 
-    pub(crate) async fn wait_idle(&self) {
+    pub async fn wait_idle(&self) {
         self.endpoint.wait_idle().await;
         self.handle_lifecycle.observation.wait_idle_completed();
     }
@@ -131,22 +133,22 @@ impl ObservedQuicEndpoint {
     }
 }
 
-pub(crate) async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
-    tokio::time::timeout(
-        crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
-        endpoint.wait_idle(),
-    )
-    .await
-    .is_ok()
+pub async fn wait_quic_endpoint_idle_after_close_for(
+    endpoint: &ObservedQuicEndpoint,
+    timeout: std::time::Duration,
+) -> bool {
+    tokio::time::timeout(timeout, endpoint.wait_idle())
+        .await
+        .is_ok()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum QuicEndpointOpenError {
+pub enum QuicEndpointOpenError {
     Admission(OwnerAdmissionRejection),
     Construction,
 }
 
-pub(crate) fn open_observed_quic_endpoint(
+pub fn open_observed_quic_endpoint(
     mark: u32,
     runtime: Option<Arc<dyn quinn::Runtime>>,
     remote: SocketAddr,
@@ -175,7 +177,7 @@ pub(crate) fn open_observed_quic_endpoint(
     )
 }
 
-pub(crate) async fn open_observed_quic_endpoint_waiting(
+pub async fn open_observed_quic_endpoint_waiting(
     mark: u32,
     runtime: Option<Arc<dyn quinn::Runtime>>,
     remote: SocketAddr,
@@ -191,9 +193,16 @@ pub(crate) async fn open_observed_quic_endpoint_waiting(
         context.protocol().uses_http3(),
     )
     .map_err(|_| QuicEndpointOpenError::Construction)?;
-    let reservation = admission::reserve_quic_endpoint_until(admission_charge, admission_context)
-        .await
-        .map_err(QuicEndpointOpenError::Admission)?;
+    let reservation =
+        match admission::reserve_quic_endpoint_until(admission_charge, admission_context).await {
+            Ok(reservation) => reservation,
+            Err(admission::ReserveQuicEndpointError::Admission(rejection)) => {
+                return Err(QuicEndpointOpenError::Admission(rejection));
+            }
+            Err(admission::ReserveQuicEndpointError::Configuration) => {
+                return Err(QuicEndpointOpenError::Construction);
+            }
+        };
     finish_open_observed_quic_endpoint(
         mark,
         runtime,

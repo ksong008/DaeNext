@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-const CENTRAL_CONSTRUCTOR: &str = "crates/dae-resident-dataplane/src/transport/quic_endpoint.rs";
+const CENTRAL_CONSTRUCTOR: &str = "crates/dae-resident-transport/src/quic_endpoint.rs";
 const PROXIED_DOH3_TEST_SERVER: &str =
     "crates/dae-resident-dataplane/src/dns/transport/h3/proxied/tests/h3_server.rs";
 const DNS_QUIC_TEST_SUPPORT: &str =
@@ -8,7 +8,7 @@ const DNS_QUIC_TEST_SUPPORT: &str =
 const XHTTP_H3_OWNER_TEST: &str = "crates/dae-resident-dataplane/src/tcp/transport_helpers/xhttp_h2/h3_transport/owner_live_tests.rs";
 const XHTTP_H3_PACKET_UP_TEST: &str = "crates/dae-resident-dataplane/src/tcp/transport_helpers/xhttp_h2/h3_transport/packet_up_tests.rs";
 const SOURCE_GATE_TEST: &str =
-    "crates/dae-resident-dataplane/src/transport/quic_endpoint/tests/source_gate.rs";
+    "crates/dae-resident-transport/src/quic_endpoint/tests/source_gate.rs";
 const EXPLICIT_NON_PRODUCTION_CONSTRUCTORS: &[&str] = &[
     PROXIED_DOH3_TEST_SERVER,
     DNS_QUIC_TEST_SUPPORT,
