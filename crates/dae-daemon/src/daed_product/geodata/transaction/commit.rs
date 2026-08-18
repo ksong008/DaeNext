@@ -13,7 +13,7 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation(
     kind: GeodataKind,
     candidate: PreparedGeodataGeneration,
 ) -> io::Result<GeodataCommitResult> {
-    let mut checkpoints = NoopGeodataTransactionCheckpoints;
+    let mut checkpoints = NoopFaultCheckpoints;
     commit_geodata_generation_with_checkpoints(
         coordinator,
         state,
@@ -30,7 +30,7 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoin
     dir: &Path,
     kind: GeodataKind,
     candidate: PreparedGeodataGeneration,
-    checkpoints: &mut dyn GeodataTransactionCheckpoints,
+    checkpoints: &mut dyn FaultCheckpoints<GeodataTransactionCheckpoint>,
 ) -> io::Result<GeodataCommitResult> {
     let PreparedGeodataGeneration {
         data_stage,
@@ -154,7 +154,7 @@ fn activate_files(
     kind: GeodataKind,
     data_stage: &Path,
     version_stage: &Path,
-    checkpoints: &mut dyn GeodataTransactionCheckpoints,
+    checkpoints: &mut dyn FaultCheckpoints<GeodataTransactionCheckpoint>,
 ) -> io::Result<()> {
     checkpoints.checkpoint(GeodataTransactionCheckpoint::RenameData)?;
     fs::rename(data_stage, dir.join(kind.file_name()))?;

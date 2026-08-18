@@ -8,7 +8,7 @@ pub(super) fn commit_runtime_generation(
     runtime_log_level: &str,
     process_transition: Option<&Value>,
     candidate: &mut PreparedRuntimeGeneration,
-    checkpoints: &mut dyn RuntimeApplyCheckpoints,
+    checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<Value, String> {
     if candidate.candidate_path.is_some() && candidate.output_path.is_some() {
         super::journal::write_runtime_apply_journal(candidate)?;
@@ -51,7 +51,7 @@ fn commit_runtime_state(
     runtime_log_level: &str,
     process_transition: Option<&Value>,
     candidate: &PreparedRuntimeGeneration,
-    checkpoints: &mut dyn RuntimeApplyCheckpoints,
+    checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<(), String> {
     let mut conn = open_state_connection(state)
         .map_err(|err| format!("open runtime state for commit: {err}"))?;

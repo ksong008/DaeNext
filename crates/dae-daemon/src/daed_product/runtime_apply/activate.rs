@@ -6,7 +6,7 @@ pub(super) fn activate_runtime_generation(
     config_content: String,
     source: &str,
     latency_seed: &[Value],
-    checkpoints: &mut dyn RuntimeApplyCheckpoints,
+    checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<Value, String> {
     checkpoints
         .checkpoint(RuntimeApplyCheckpoint::StartCandidate)

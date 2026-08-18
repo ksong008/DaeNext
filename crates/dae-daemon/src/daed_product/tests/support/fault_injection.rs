@@ -72,7 +72,7 @@ impl RuntimeFaultFixture {
     }
 }
 
-impl RuntimeApplyCheckpoints for RuntimeFaultFixture {
+impl FaultCheckpoints<RuntimeApplyCheckpoint> for RuntimeFaultFixture {
     fn checkpoint(&mut self, point: RuntimeApplyCheckpoint) -> io::Result<()> {
         let point = match point {
             RuntimeApplyCheckpoint::CreateDirectory => RuntimeFaultPoint::CreateDirectory,

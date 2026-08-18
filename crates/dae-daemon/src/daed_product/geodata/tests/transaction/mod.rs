@@ -1,9 +1,8 @@
 use super::super::file::{sha256_file, summarize_geodata_file};
 use super::super::transaction::{
-    GeodataCommitResult, GeodataJournalPhase, GeodataTransactionCheckpoint,
-    GeodataTransactionCheckpoints, GeodataUpdateJournal, PreparedGeodataGeneration,
-    RuntimeInputVersions, commit_geodata_generation_with_checkpoints, recover_geodata_transaction,
-    write_geodata_journal,
+    GeodataCommitResult, GeodataJournalPhase, GeodataTransactionCheckpoint, GeodataUpdateJournal,
+    PreparedGeodataGeneration, RuntimeInputVersions, commit_geodata_generation_with_checkpoints,
+    recover_geodata_transaction, write_geodata_journal,
 };
 use super::*;
 
@@ -60,7 +59,7 @@ impl GeodataTransactionFixture {
     fn commit(
         &self,
         external_input_version_before: Option<i64>,
-        checkpoints: &mut dyn GeodataTransactionCheckpoints,
+        checkpoints: &mut dyn FaultCheckpoints<GeodataTransactionCheckpoint>,
     ) -> io::Result<GeodataCommitResult> {
         commit_geodata_generation_with_checkpoints(
             &self.coordinator,
@@ -157,7 +156,7 @@ struct FailCheckpoint {
     point: GeodataTransactionCheckpoint,
 }
 
-impl GeodataTransactionCheckpoints for FailCheckpoint {
+impl FaultCheckpoints<GeodataTransactionCheckpoint> for FailCheckpoint {
     fn checkpoint(&mut self, point: GeodataTransactionCheckpoint) -> io::Result<()> {
         if point == self.point {
             Err(io::Error::other(format!("injected {point:?} failure")))
@@ -169,7 +168,7 @@ impl GeodataTransactionCheckpoints for FailCheckpoint {
 
 struct PassCheckpoints;
 
-impl GeodataTransactionCheckpoints for PassCheckpoints {
+impl FaultCheckpoints<GeodataTransactionCheckpoint> for PassCheckpoints {
     fn checkpoint(&mut self, _point: GeodataTransactionCheckpoint) -> io::Result<()> {
         Ok(())
     }

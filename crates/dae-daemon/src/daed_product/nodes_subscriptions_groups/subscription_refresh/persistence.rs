@@ -1,7 +1,14 @@
 use super::transaction::PersistedSubscriptionContent;
 use super::*;
+#[cfg(test)]
+use crate::daed_product::durable_commit::write_reserved_file_synced;
+use crate::daed_product::durable_commit::{
+    ValidatedLeafName, atomic_replace_synced, cleanup_matching_artifacts,
+    copy_bounded_regular_file_synced, ensure_private_directory, read_json_journal,
+    remove_file_if_exists, reserve_private_file, sync_directory, write_json_journal,
+};
 use serde::{Deserialize, Serialize};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 
 const JOURNAL_FILE: &str = ".subscription-persist.apply-journal.json";
 const JOURNAL_NEXT_FILE: &str = ".subscription-persist.apply-journal.next";
@@ -42,8 +49,7 @@ impl PreparedSubscriptionPersist {
                 "persisted subscription path has no parent",
             )
         })?;
-        fs::create_dir_all(directory)?;
-        set_private_permissions(directory, 0o700)?;
+        ensure_private_directory(directory)?;
         let target_name = leaf_name(&target)?;
         let generation = format!(
             "{}-{}-{}",
@@ -52,10 +58,9 @@ impl PreparedSubscriptionPersist {
             fastrand::u64(..)
         );
         let candidate = reserve_artifact(directory, &target_name, &generation, "candidate")?;
-        let write_result = content.copy_to(&candidate).and_then(|()| {
-            set_private_permissions(&candidate, 0o600)?;
-            File::open(&candidate)?.sync_all()
-        });
+        let write_result = content
+            .copy_to(&candidate)
+            .and_then(|()| File::open(&candidate)?.sync_all());
         if let Err(error) = write_result {
             let _ = remove_file_if_exists(&candidate);
             return Err(error);
@@ -106,10 +111,13 @@ impl PreparedSubscriptionPersist {
             .candidate
             .as_ref()
             .ok_or_else(|| io::Error::other("persisted subscription candidate is unavailable"))?;
-        fs::rename(candidate, &self.target)?;
+        atomic_replace_synced(
+            &self.directory,
+            &ValidatedLeafName::from_path(candidate)?,
+            &ValidatedLeafName::from_path(&self.target)?,
+        )?;
         self.candidate = None;
         self.activated = true;
-        sync_directory(&self.directory)?;
         Ok(())
     }
 
@@ -217,30 +225,22 @@ pub(in crate::daed_product) fn recover_subscription_persist_transaction(
 ) -> io::Result<()> {
     let directory = config_dir.join("persist.d");
     let journal_path = directory.join(JOURNAL_FILE);
-    let metadata = match fs::symlink_metadata(&journal_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return cleanup_orphan_artifacts(&directory);
-        }
-        Err(error) => return Err(error),
-    };
-    if !metadata.file_type().is_file() || metadata.len() > JOURNAL_MAX_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "subscription persist journal is not a bounded regular file",
-        ));
-    }
-    let journal: SubscriptionPersistJournal = serde_json::from_slice(&fs::read(&journal_path)?)
-        .map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("parse subscription persist journal: {error}"),
-            )
-        })?;
+    let journal: SubscriptionPersistJournal =
+        match read_json_journal(&journal_path, JOURNAL_MAX_BYTES) {
+            Ok(journal) => journal,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return cleanup_orphan_artifacts(&directory);
+            }
+            Err(error) => return Err(error),
+        };
     validate_journal(&journal)?;
-    let target = directory.join(&journal.target);
-    let candidate = directory.join(&journal.candidate);
-    let backup = journal.backup.as_ref().map(|name| directory.join(name));
+    let target = ValidatedLeafName::new(journal.target.clone())?.path_in(&directory);
+    let candidate = ValidatedLeafName::new(journal.candidate.clone())?.path_in(&directory);
+    let backup = journal
+        .backup
+        .as_ref()
+        .map(|name| ValidatedLeafName::new(name.clone()).map(|leaf| leaf.path_in(&directory)))
+        .transpose()?;
     let committed = open_state_connection(state)?
         .query_row(
             "SELECT value FROM daed_product_metadata WHERE key = ?1",
@@ -295,24 +295,14 @@ impl PersistedSubscriptionContent<'_> {
                         "persisted subscription content exceeds size limit",
                     ));
                 }
-                let mut output = OpenOptions::new().write(true).open(destination)?;
-                output.write_all(bytes)?;
-                output.sync_all()
+                write_reserved_file_synced(destination, bytes)
             }
             #[cfg(not(test))]
-            Self::StagedFile { staging, .. } => {
-                let source = File::open(staging)?;
-                let metadata = source.metadata()?;
-                if !metadata.is_file() || metadata.len() > subscription_http_body_limit() as u64 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "persisted subscription staging file is invalid or too large",
-                    ));
-                }
-                let mut output = OpenOptions::new().write(true).open(destination)?;
-                io::copy(&mut io::BufReader::new(source), &mut output)?;
-                output.sync_all()
-            }
+            Self::StagedFile { staging, .. } => copy_bounded_regular_file_synced(
+                staging,
+                destination,
+                subscription_http_body_limit() as u64,
+            ),
         }
     }
 }
@@ -325,9 +315,8 @@ fn reserve_artifact(
 ) -> io::Result<PathBuf> {
     for attempt in 0..ARTIFACT_ATTEMPTS {
         let path = directory.join(format!(".{target}.{generation}.{attempt}.{kind}"));
-        match OpenOptions::new().create_new(true).write(true).open(&path) {
+        match reserve_private_file(&path) {
             Ok(file) => {
-                set_private_permissions(&path, 0o600)?;
                 drop(file);
                 return Ok(path);
             }
@@ -342,39 +331,18 @@ fn reserve_artifact(
 }
 
 fn copy_file_synced(source: &Path, destination: &Path) -> io::Result<()> {
-    let mut source = File::open(source)?;
-    let metadata = source.metadata()?;
-    if !metadata.is_file() || metadata.len() > subscription_http_body_limit() as u64 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "existing persisted subscription file is invalid or too large",
-        ));
-    }
-    let mut destination = OpenOptions::new().write(true).open(destination)?;
-    io::copy(&mut source, &mut destination)?;
-    destination.sync_all()
+    copy_bounded_regular_file_synced(source, destination, subscription_http_body_limit() as u64)
 }
 
 fn write_journal(directory: &Path, journal: &SubscriptionPersistJournal) -> io::Result<()> {
     validate_journal(journal)?;
-    let bytes = serde_json::to_vec(journal).map_err(io::Error::other)?;
-    if bytes.len() as u64 > JOURNAL_MAX_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "subscription persist journal exceeds size limit",
-        ));
-    }
-    let next = directory.join(JOURNAL_NEXT_FILE);
-    let path = directory.join(JOURNAL_FILE);
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&next)?;
-    set_private_permissions(&next, 0o600)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    fs::rename(&next, &path)?;
-    sync_directory(directory)
+    write_json_journal(
+        directory,
+        &ValidatedLeafName::new(JOURNAL_FILE)?,
+        &ValidatedLeafName::new(JOURNAL_NEXT_FILE)?,
+        JOURNAL_MAX_BYTES,
+        journal,
+    )
 }
 
 fn validate_journal(journal: &SubscriptionPersistJournal) -> io::Result<()> {
@@ -402,7 +370,7 @@ fn validate_journal(journal: &SubscriptionPersistJournal) -> io::Result<()> {
     .into_iter()
     .flatten()
     {
-        validate_leaf(name)?;
+        ValidatedLeafName::new(name)?;
     }
     if !journal.target.ends_with(".sub")
         || !journal
@@ -426,70 +394,20 @@ fn validate_journal(journal: &SubscriptionPersistJournal) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_leaf(name: &str) -> io::Result<()> {
-    let mut components = Path::new(name).components();
-    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "subscription persist journal contains a non-leaf path",
-        ));
-    }
-    Ok(())
-}
-
 fn leaf_name(path: &Path) -> io::Result<String> {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_owned)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "non-UTF-8 subscription path"))
+    ValidatedLeafName::from_path(path).map(|leaf| leaf.to_string())
 }
 
 fn cleanup_orphan_artifacts(directory: &Path) -> io::Result<()> {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    let mut removed = false;
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
+    cleanup_matching_artifacts(directory, |name| {
         if name == JOURNAL_NEXT_FILE
             || (name.starts_with('.')
                 && (name.ends_with(".candidate") || name.ends_with(".backup")))
         {
-            remove_file_if_exists(&entry.path())?;
-            removed = true;
+            return true;
         }
-    }
-    if removed {
-        sync_directory(directory)?;
-    }
-    Ok(())
-}
-
-fn remove_file_if_exists(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-fn sync_directory(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
-}
-
-#[cfg(unix)]
-fn set_private_permissions(path: &Path, mode: u32) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-}
-
-#[cfg(not(unix))]
-fn set_private_permissions(_path: &Path, _mode: u32) -> io::Result<()> {
-    Ok(())
+        false
+    })
 }
 
 #[cfg(test)]
@@ -525,6 +443,7 @@ mod tests {
         let (fixture, config_dir) =
             interrupted_persist_fixture("subscription-persist-rollback", false);
 
+        recover_subscription_persist_transaction(fixture.state(), &config_dir).unwrap();
         recover_subscription_persist_transaction(fixture.state(), &config_dir).unwrap();
 
         assert_eq!(
@@ -565,6 +484,7 @@ mod tests {
         let (fixture, config_dir) =
             interrupted_persist_fixture("subscription-persist-commit", true);
 
+        recover_subscription_persist_transaction(fixture.state(), &config_dir).unwrap();
         recover_subscription_persist_transaction(fixture.state(), &config_dir).unwrap();
 
         assert_eq!(
