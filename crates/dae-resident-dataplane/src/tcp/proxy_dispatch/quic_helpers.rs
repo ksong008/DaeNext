@@ -100,24 +100,6 @@ async fn relay_quic_stream_download(
     }
 }
 
-pub(crate) fn open_marked_quic_endpoint_for_remote(
-    mark: u32,
-    remote: SocketAddr,
-    context: QuicEndpointOpenContext,
-    deadline: AbsoluteDeadline,
-    cancellation: &OwnerCancellationSignal,
-) -> Result<ObservedQuicEndpoint, String> {
-    open_marked_quic_endpoint_with_runtime(
-        mark,
-        quinn::default_runtime(),
-        remote,
-        quic_bind_addr_for_remote(remote),
-        QuicEndpointUnderlay::Ordinary,
-        context,
-        QuicEndpointAdmissionContext::new(deadline, cancellation),
-    )
-}
-
 pub(crate) async fn open_marked_hysteria2_quic_endpoint_for_remote(
     mark: u32,
     obfs: &ResidentHysteria2ObfsPlan,
@@ -174,26 +156,6 @@ fn quic_bind_addr_for_remote(remote: SocketAddr) -> SocketAddr {
         SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
         SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0),
     }
-}
-
-fn open_marked_quic_endpoint_with_runtime(
-    mark: u32,
-    runtime: Option<Arc<dyn quinn::Runtime>>,
-    remote: SocketAddr,
-    bind: SocketAddr,
-    underlay: QuicEndpointUnderlay,
-    context: QuicEndpointOpenContext,
-    admission_context: QuicEndpointAdmissionContext<'_>,
-) -> Result<ObservedQuicEndpoint, String> {
-    open_observed_quic_endpoint(
-        mark,
-        runtime,
-        remote,
-        bind,
-        underlay,
-        context,
-        admission_context,
-    )
 }
 
 struct Hysteria2SalamanderRuntime {

@@ -10,9 +10,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
-use dae_runtime_control::OwnerAdmissionRejection;
-#[cfg(test)]
-use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
+use dae_runtime_control::{AbsoluteDeadline, OwnerAdmissionRejection, OwnerCancellationSignal};
 
 pub use self::drain::{
     QuicEndpointDrainReport, quic_endpoint_drain_deadlines,
@@ -140,6 +138,35 @@ pub async fn wait_quic_endpoint_idle_after_close_for(
     tokio::time::timeout(timeout, endpoint.wait_idle())
         .await
         .is_ok()
+}
+
+pub fn open_marked_quic_endpoint_for_remote(
+    mark: u32,
+    remote: SocketAddr,
+    context: QuicEndpointOpenContext,
+    deadline: AbsoluteDeadline,
+    cancellation: &OwnerCancellationSignal,
+) -> Result<ObservedQuicEndpoint, String> {
+    open_observed_quic_endpoint(
+        mark,
+        quinn::default_runtime(),
+        remote,
+        quic_bind_addr_for_remote(remote),
+        QuicEndpointUnderlay::Ordinary,
+        context,
+        QuicEndpointAdmissionContext::new(deadline, cancellation),
+    )
+}
+
+fn quic_bind_addr_for_remote(remote: SocketAddr) -> SocketAddr {
+    match remote {
+        SocketAddr::V4(_) => {
+            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
+        }
+        SocketAddr::V6(_) => {
+            SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

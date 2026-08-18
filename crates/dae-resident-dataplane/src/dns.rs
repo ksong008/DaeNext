@@ -44,7 +44,6 @@ use super::plan::share_resident_proxy_groups;
 use super::plan::{ResidentProxyBinding, SharedResidentProxyGroupMap, effective_so_mark_from_dae};
 #[cfg(test)]
 use super::udp::ResidentProxyUdpBridge;
-use super::{DnsTcpFrameReader, ResolvedHostAddrs, write_dns_tcp_payload_async};
 use super::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
     QuicEndpointOpenContext, QuicEndpointProtocol, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
@@ -178,8 +177,9 @@ use dae_resident_dns::{
     run_resident_proxy_dns_tcp_connection,
 };
 pub(crate) use dae_resident_transport::{
-    ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
-    exchange_proxy_dns_framed_stream,
+    DnsTcpFrameReader, ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure,
+    ProxyDnsRequestStage, ResolvedHostAddrs, exchange_proxy_dns_framed_stream,
+    write_dns_tcp_payload_async,
 };
 
 const DNS_QTYPE_A: u16 = 1;
