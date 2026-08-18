@@ -19,6 +19,7 @@ members = [
     "crates/dae-golden",
     "crates/dae-netutil",
     "crates/dae-outbound",
+    "crates/dae-resident-core",
     "crates/dae-resident-dataplane",
     "crates/dae-routing",
     "crates/dae-sysdump",
@@ -93,6 +94,7 @@ dae-geodata = { path = "crates/dae-geodata" }
 dae-golden = { path = "crates/dae-golden" }
 dae-netutil = { path = "crates/dae-netutil" }
 dae-outbound = { path = "crates/dae-outbound" }
+dae-resident-core = { path = "crates/dae-resident-core" }
 dae-resident-dataplane = { path = "crates/dae-resident-dataplane", default-features = false }
 dae-product-identity = { path = "crates/dae-product-identity" }
 dae-routing = { path = "crates/dae-routing" }

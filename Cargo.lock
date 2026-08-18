@@ -839,6 +839,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dae-resident-core"
+version = "3.1.0"
+dependencies = [
+ "dae-datapath",
+ "libc",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "dae-resident-dataplane"
 version = "3.1.0"
 dependencies = [
@@ -857,6 +867,7 @@ dependencies = [
  "dae-geodata",
  "dae-netutil",
  "dae-outbound",
+ "dae-resident-core",
  "dae-routing",
  "dae-runtime-control",
  "dae-sniffing",
