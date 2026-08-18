@@ -39,7 +39,6 @@ mod allocator_hooks;
 mod client;
 mod control_transport_owners;
 mod direct;
-mod display;
 #[cfg(not(all(test, feature = "dns-runtime-tests")))]
 mod dns;
 #[cfg(all(test, feature = "dns-runtime-tests"))]
@@ -82,10 +81,7 @@ pub use self::memory_bench::{
 pub use self::ownership_bench::{
     ResidentProxyOwnershipBenchmarkFixture, resident_proxy_ownership_benchmark_fixture,
 };
-pub(crate) use self::stream_io::{
-    AsyncPrefixedStream, CursorBytes, HttpHeadRead, HttpHeadReadError, HttpHeadReadOptions,
-    read_http_head,
-};
+pub(crate) use self::stream_io::{AsyncPrefixedStream, HttpHeadReadOptions, read_http_head};
 pub(crate) use self::tcp::resident_dns_proxy_tcp_transport;
 #[cfg(test)]
 pub(crate) use self::transport::dns_tcp_wire::read_dns_tcp_payload_async;
@@ -117,16 +113,14 @@ pub(crate) use dae_resident_plan::{
     display_name_from_link, execution_link_hash, graph_id_from_link_hash, link_hash,
     redacted_link_source,
 };
-#[cfg(test)]
-pub(crate) use dae_resident_transport::AnyTlsFrameReader;
 pub(crate) use dae_resident_transport::{
     ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
     ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
     ProxyDnsResponseBytes,
 };
 pub(crate) use dae_resident_transport::{
-    authority_from_host_port, resolve_host_addrs_with_configured_fallback_dns_ttl,
-    resolve_socket_addr_candidates, try_socket_addr_candidates,
+    resolve_host_addrs_with_configured_fallback_dns_ttl, resolve_socket_addr_candidates,
+    try_socket_addr_candidates,
 };
 
 #[path = "runtime/defaults.rs"]
@@ -164,7 +158,6 @@ mod group_selector_summary;
 pub(crate) use self::group_selector_summary::*;
 #[path = "runtime/workers.rs"]
 mod workers;
-use self::display::*;
 use self::dns_listener::*;
 #[path = "runtime/socket_buffers.rs"]
 mod socket_buffers;
@@ -204,18 +197,20 @@ pub(crate) use self::anytls_owner::{
 mod h2_carrier_owner;
 #[path = "runtime/transport_identity.rs"]
 mod transport_identity;
+#[cfg(test)]
+pub(crate) use self::h2_carrier_owner::acquire_h2_carrier;
 pub(crate) use self::h2_carrier_owner::{
-    H2CarrierGenerationOwnerHandle, H2CarrierLease, H2CarrierResponseFuture, acquire_h2_carrier,
-    start_h2_carrier_generation_owner_on,
+    H2CarrierGenerationOwnerHandle, H2CarrierLease, start_h2_carrier_generation_owner_on,
 };
 #[cfg(test)]
 #[path = "runtime/h2_carrier_owner_live_tests.rs"]
 mod h2_carrier_owner_live_tests;
 #[path = "runtime/meek_transport_owner.rs"]
 mod meek_transport_owner;
+#[cfg(test)]
+pub(crate) use self::meek_transport_owner::acquire_meek_transport;
 pub(crate) use self::meek_transport_owner::{
-    MeekTransportGenerationOwnerHandle, acquire_meek_transport,
-    start_meek_transport_generation_owner_on,
+    MeekTransportGenerationOwnerHandle, start_meek_transport_generation_owner_on,
 };
 #[cfg(test)]
 #[path = "runtime/meek_transport_owner_live_tests.rs"]

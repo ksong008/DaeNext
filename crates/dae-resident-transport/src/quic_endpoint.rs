@@ -144,6 +144,14 @@ pub async fn wait_quic_endpoint_idle_after_close_for(
         .is_ok()
 }
 
+pub async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
+    wait_quic_endpoint_idle_after_close_for(
+        endpoint,
+        dae_resident_core::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+    )
+    .await
+}
+
 pub fn open_marked_quic_endpoint_for_remote(
     mark: u32,
     remote: SocketAddr,

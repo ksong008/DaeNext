@@ -113,6 +113,46 @@ impl dae_resident_dns::ResidentDnsProxySelector for ResidentDnsProxyGroupSelecto
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ResidentTcpProxyGroupSelector {
+    proxy_groups: SharedResidentProxyGroupMap,
+}
+
+impl ResidentTcpProxyGroupSelector {
+    pub(crate) fn shared(proxy_groups: SharedResidentProxyGroupMap) -> Arc<Self> {
+        Arc::new(Self { proxy_groups })
+    }
+}
+
+impl dae_resident_tcp::ResidentTcpProxySelector for ResidentTcpProxyGroupSelector {
+    fn proxy_count(&self) -> usize {
+        self.proxy_groups.len()
+    }
+
+    fn select_proxy(
+        &self,
+        outbound: u8,
+        network_type: NetworkType,
+        strict_ip_version: bool,
+    ) -> Result<ResidentProxyBinding, dae_resident_tcp::ResidentTcpProxySelectionError> {
+        let proxy_group = self.proxy_groups.get(&outbound).ok_or_else(|| {
+            dae_resident_tcp::ResidentTcpProxySelectionError {
+                message: format!(
+                    "resident TCP selected outbound {} but no Rust proxy plan is available; unsupported protocol must stay fail-closed until implemented",
+                    OutboundIndex(outbound)
+                ),
+                no_alive: false,
+            }
+        })?;
+        proxy_group
+            .select_proxy_for_tcp_runtime_detail(network_type, strict_ip_version)
+            .map_err(|error| dae_resident_tcp::ResidentTcpProxySelectionError {
+                message: error.message,
+                no_alive: error.no_alive,
+            })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ResidentDataUdpAvailabilityHandle {
     selector: std::sync::Weak<std::sync::RwLock<DialerGroup>>,

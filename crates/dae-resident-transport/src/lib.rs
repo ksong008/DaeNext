@@ -74,6 +74,7 @@ pub use meek_transport_owner::{
 };
 pub use owner_registries::ResidentTransportOwnerRegistries;
 pub use proxy_handshake::{http_proxy_connect_plain_async, socks5_connect_async};
+pub use quic_connections::quic_endpoint_context_for_proxy;
 pub use quic_endpoint::{
     ObservedQuicEndpoint, QuicEndpointAdmissionContext, QuicEndpointCallerClass,
     QuicEndpointDrainReport, QuicEndpointIdentityRole, QuicEndpointOpenContext,
@@ -82,8 +83,8 @@ pub use quic_endpoint::{
     inherit_quic_endpoint_observation, open_marked_quic_endpoint_for_remote,
     open_observed_quic_endpoint, open_observed_quic_endpoint_waiting,
     quic_endpoint_drain_deadlines, quic_endpoint_metrics_snapshot, scope_quic_endpoint_observation,
-    wait_quic_endpoint_idle_after_close_for, wait_quic_endpoints_idle_or_released_until,
-    wait_quic_endpoints_idle_until,
+    wait_quic_endpoint_idle_after_close, wait_quic_endpoint_idle_after_close_for,
+    wait_quic_endpoints_idle_or_released_until, wait_quic_endpoints_idle_until,
 };
 pub use quic_transport::connect_quic_endpoint_candidates_async;
 pub use resolver::{

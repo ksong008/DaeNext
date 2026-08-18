@@ -5,19 +5,13 @@ pub(crate) mod dns_tcp_wire {
 }
 
 pub(crate) mod quic_endpoint {
-    use dae_runtime_control::{OwnerGeneration, OwnerResourceBudget};
+    use dae_runtime_control::OwnerResourceBudget;
     use std::num::NonZeroUsize;
 
-    use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     #[cfg(not(test))]
     use crate::ResidentRuntimeProfileSelection;
-    use crate::plan::ResidentProxyPlan;
 
-    pub(crate) use dae_resident_transport::{
-        ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointIdentityRole,
-        QuicEndpointOpenContext, QuicEndpointProtocol, inherit_quic_endpoint_observation,
-        scope_quic_endpoint_observation,
-    };
+    pub(crate) use dae_resident_transport::{ObservedQuicEndpoint, QuicEndpointOpenContext};
 
     #[derive(Clone, Copy, Debug, Default)]
     pub(crate) struct ResidentDnsQuicEndpointPolicy;
@@ -67,31 +61,6 @@ pub(crate) mod quic_endpoint {
         })
     }
 
-    pub(crate) fn quic_endpoint_context_for_proxy(
-        protocol: QuicEndpointProtocol,
-        default_caller: QuicEndpointCallerClass,
-        default_generation: OwnerGeneration,
-        proxy: &ResidentProxyPlan,
-        role: QuicEndpointIdentityRole,
-        additional_identity: &[&[u8]],
-    ) -> QuicEndpointOpenContext {
-        let mut identity_parts = Vec::new();
-        let mut current = Some(proxy);
-        while let Some(node) = current {
-            identity_parts.push(node.graph_id.as_bytes());
-            identity_parts.push(node.graph_link_hash.as_bytes());
-            current = node.chain_parent.as_deref();
-        }
-        identity_parts.extend_from_slice(additional_identity);
-        QuicEndpointOpenContext::from_identity_parts(
-            protocol,
-            default_caller,
-            default_generation,
-            role,
-            &identity_parts,
-        )
-    }
-
     pub(crate) fn open_marked_quic_endpoint_for_remote(
         mark: u32,
         remote: std::net::SocketAddr,
@@ -109,16 +78,7 @@ pub(crate) mod quic_endpoint {
         )
     }
 
-    pub(crate) async fn wait_quic_endpoint_idle_after_close(
-        endpoint: &ObservedQuicEndpoint,
-    ) -> bool {
-        dae_resident_transport::wait_quic_endpoint_idle_after_close_for(
-            endpoint,
-            RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
-        )
-        .await
-    }
-
+    #[cfg(test)]
     pub(crate) fn quic_endpoint_metrics_snapshot(generation: u64) -> serde_json::Value {
         let _ = configure_admission();
         dae_resident_transport::quic_endpoint_metrics_snapshot(generation)

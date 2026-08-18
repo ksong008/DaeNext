@@ -1203,7 +1203,7 @@ fn resident_tcp_selection_defaults_zero_mark_to_control_plane_mark() {
         OutboundIndex::USER_DEFINED_MIN.value(),
         ResidentProxyGroupPlan::fixed_single_for_test(dummy_proxy_plan()),
     );
-    let router = ResidentTcpRouter::new_for_test(
+    let router = resident_tcp_router_for_test(
         proxies,
         fallback_matcher("direct", 0),
         TcpDialMode::Ip,
@@ -1416,7 +1416,7 @@ fn resident_tcp_selection_uses_destination_ip_family_for_proxy_group() {
     group
         .record_check_result("node_b", NetworkType::TCP6, Some(50), 4)
         .unwrap();
-    let router = ResidentTcpRouter::new_for_test(
+    let router = resident_tcp_router_for_test(
         plan.proxies.clone(),
         fallback_matcher("direct", 0),
         TcpDialMode::Ip,
@@ -1501,7 +1501,7 @@ fn resident_tcp_router_and_runtime_summary_share_group_selector_state() {
     group
         .record_check_result("node_b", NetworkType::TCP4, Some(20), 2)
         .unwrap();
-    let router = ResidentTcpRouter::new_for_test_shared(
+    let router = resident_tcp_router_for_test_shared(
         Arc::clone(&shared_groups),
         fallback_matcher("direct", 0),
         TcpDialMode::Ip,
@@ -1563,7 +1563,7 @@ fn tcp_router_for_test(
         OutboundIndex::USER_DEFINED_MIN.value(),
         ResidentProxyGroupPlan::fixed_single_for_test(dummy_proxy_plan()),
     );
-    ResidentTcpRouter::new_for_test(
+    resident_tcp_router_for_test(
         proxies,
         routing_matcher,
         dial_mode,
