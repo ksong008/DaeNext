@@ -1,51 +1,135 @@
 use super::*;
 use std::sync::atomic::AtomicU8;
 
-const GENERATION_ADMISSION_OPEN: u8 = 0;
-const GENERATION_ADMISSION_CLOSED: u8 = 1;
-const GENERATION_STOP_REQUESTED: u8 = 2;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(crate) enum ResidentGenerationState {
+    Prepared = 0,
+    Active = 1,
+    Retired = 2,
+    Draining = 3,
+    Stopped = 4,
+}
 
-#[derive(Debug, Default)]
+impl ResidentGenerationState {
+    fn from_raw(value: u8) -> Result<Self, &'static str> {
+        match value {
+            0 => Ok(Self::Prepared),
+            1 => Ok(Self::Active),
+            2 => Ok(Self::Retired),
+            3 => Ok(Self::Draining),
+            4 => Ok(Self::Stopped),
+            _ => Err("resident generation has an invalid lifecycle state"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct ResidentGenerationLifecycle {
     state: AtomicU8,
 }
 
+impl Default for ResidentGenerationLifecycle {
+    fn default() -> Self {
+        Self {
+            state: AtomicU8::new(ResidentGenerationState::Prepared as u8),
+        }
+    }
+}
+
 impl ResidentGenerationLifecycle {
-    pub(super) fn admission_is_open(&self) -> bool {
-        self.state.load(Ordering::Acquire) == GENERATION_ADMISSION_OPEN
+    pub(super) fn state(&self) -> Result<ResidentGenerationState, &'static str> {
+        ResidentGenerationState::from_raw(self.state.load(Ordering::Acquire))
     }
 
-    pub(super) fn close_admission(&self) {
+    pub(super) fn admission_is_open(&self) -> bool {
+        self.state.load(Ordering::Acquire) == ResidentGenerationState::Active as u8
+    }
+
+    pub(super) fn activate(&self) -> Result<(), &'static str> {
+        loop {
+            let current = self.state.load(Ordering::Acquire);
+            match ResidentGenerationState::from_raw(current)? {
+                ResidentGenerationState::Prepared | ResidentGenerationState::Retired => {
+                    if self
+                        .state
+                        .compare_exchange(
+                            current,
+                            ResidentGenerationState::Active as u8,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+                ResidentGenerationState::Active => return Ok(()),
+                ResidentGenerationState::Draining | ResidentGenerationState::Stopped => {
+                    return Err("a stopped resident generation cannot accept new work");
+                }
+            }
+        }
+    }
+
+    pub(super) fn retire(&self) {
         let _ = self.state.compare_exchange(
-            GENERATION_ADMISSION_OPEN,
-            GENERATION_ADMISSION_CLOSED,
+            ResidentGenerationState::Active as u8,
+            ResidentGenerationState::Retired as u8,
             Ordering::AcqRel,
             Ordering::Acquire,
         );
     }
 
-    pub(super) fn reopen_admission(&self) -> Result<(), &'static str> {
-        match self.state.compare_exchange(
-            GENERATION_ADMISSION_CLOSED,
-            GENERATION_ADMISSION_OPEN,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => Ok(()),
-            Err(GENERATION_ADMISSION_OPEN) => Ok(()),
-            Err(GENERATION_STOP_REQUESTED) => {
-                Err("a stopped resident generation cannot accept new work")
+    pub(super) fn begin_draining(&self) -> bool {
+        loop {
+            let current = self.state.load(Ordering::Acquire);
+            match ResidentGenerationState::from_raw(current) {
+                Ok(ResidentGenerationState::Draining | ResidentGenerationState::Stopped) => {
+                    return false;
+                }
+                Ok(_) => {
+                    if self
+                        .state
+                        .compare_exchange(
+                            current,
+                            ResidentGenerationState::Draining as u8,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return true;
+                    }
+                }
+                Err(_) => return false,
             }
-            Err(_) => Err("resident generation has an invalid lifecycle state"),
         }
     }
 
+    pub(super) fn stop(&self) -> bool {
+        self.state
+            .swap(ResidentGenerationState::Stopped as u8, Ordering::AcqRel)
+            != ResidentGenerationState::Stopped as u8
+    }
+
+    pub(super) fn close_admission(&self) {
+        self.retire();
+    }
+
+    pub(super) fn reopen_admission(&self) -> Result<(), &'static str> {
+        self.activate()
+    }
+
     pub(super) fn request_stop(&self) -> bool {
-        self.state.swap(GENERATION_STOP_REQUESTED, Ordering::AcqRel) != GENERATION_STOP_REQUESTED
+        self.begin_draining()
     }
 
     pub(super) fn stop_is_requested(&self) -> bool {
-        self.state.load(Ordering::Acquire) == GENERATION_STOP_REQUESTED
+        matches!(
+            self.state(),
+            Ok(ResidentGenerationState::Draining | ResidentGenerationState::Stopped)
+        )
     }
 }
 
@@ -54,24 +138,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generation_admission_can_close_and_reopen_before_stop() {
+    fn generation_moves_from_prepared_through_retired_and_can_reactivate() {
         let lifecycle = ResidentGenerationLifecycle::default();
+        assert_eq!(
+            lifecycle.state().unwrap(),
+            ResidentGenerationState::Prepared
+        );
+        assert!(!lifecycle.admission_is_open());
+
+        lifecycle.activate().unwrap();
+        assert_eq!(lifecycle.state().unwrap(), ResidentGenerationState::Active);
         assert!(lifecycle.admission_is_open());
 
         lifecycle.close_admission();
+        assert_eq!(lifecycle.state().unwrap(), ResidentGenerationState::Retired);
         assert!(!lifecycle.admission_is_open());
-        assert!(lifecycle.reopen_admission().is_ok());
-        assert!(lifecycle.admission_is_open());
+        lifecycle.reopen_admission().unwrap();
+        assert_eq!(lifecycle.state().unwrap(), ResidentGenerationState::Active);
     }
 
     #[test]
-    fn stopped_generation_cannot_reopen_admission() {
+    fn draining_and_stopped_generations_cannot_reactivate() {
         let lifecycle = ResidentGenerationLifecycle::default();
+        lifecycle.activate().unwrap();
         lifecycle.close_admission();
         assert!(lifecycle.request_stop());
         assert!(!lifecycle.request_stop());
+        assert_eq!(
+            lifecycle.state().unwrap(),
+            ResidentGenerationState::Draining
+        );
         assert!(lifecycle.stop_is_requested());
         assert!(lifecycle.reopen_admission().is_err());
-        assert!(!lifecycle.admission_is_open());
+
+        assert!(lifecycle.stop());
+        assert!(!lifecycle.stop());
+        assert_eq!(lifecycle.state().unwrap(), ResidentGenerationState::Stopped);
+        assert!(lifecycle.reopen_admission().is_err());
     }
 }

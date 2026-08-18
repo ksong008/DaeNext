@@ -163,6 +163,26 @@ pub fn start_resident_dataplane_workers(
                 );
             }
         };
+    if let Err(error) = built_generation
+        .generation
+        .dns
+        .activate_domain_routing_generation()
+        .and_then(|()| built_generation.generation.activate())
+    {
+        let cleanup = owner.shutdown();
+        return (
+            json!({
+                "status": "fail",
+                "enabled": true,
+                "error": error,
+                "cleanup": cleanup,
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
+            }),
+            None,
+        );
+    }
     let proxy = Arc::clone(&built_generation.default_proxy);
     let proxy_group = Arc::clone(&built_generation.default_group);
     let health_scheduler_report = built_generation.health_scheduler_report.clone();

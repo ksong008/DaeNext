@@ -1,5 +1,5 @@
 use super::super::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-use super::super::{ActiveGenerationSlot, ResidentDataplaneGeneration};
+use super::super::{ActiveGenerationSlot, PublicationEpoch, ResidentDataplaneGeneration};
 use super::*;
 use std::path::Path;
 
@@ -245,7 +245,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
 
 async fn wait_while_tcp_admission_is_closed(
     stop_listener: &mut crate::ResidentStopListener,
-    publication_listener: &mut tokio::sync::watch::Receiver<u64>,
+    publication_listener: &mut tokio::sync::watch::Receiver<PublicationEpoch>,
     flows: &mut tokio::task::JoinSet<()>,
     flow_shutdown: &mut ResidentTaskSetShutdown,
 ) -> bool {
@@ -316,7 +316,8 @@ mod accept_loop_tests {
     async fn closed_tcp_admission_waits_for_a_real_state_change() {
         let stop = ResidentStopSignal::shared();
         let mut stop_listener = stop.listener();
-        let (publication, mut publication_listener) = tokio::sync::watch::channel(1_u64);
+        let (publication, mut publication_listener) =
+            tokio::sync::watch::channel(PublicationEpoch::INITIAL);
         let mut flows = tokio::task::JoinSet::new();
         let mut shutdown = ResidentTaskSetShutdown::default();
 
@@ -334,7 +335,7 @@ mod accept_loop_tests {
             .is_err()
         );
 
-        publication.send_replace(2);
+        publication.send_replace(PublicationEpoch::new(2));
         assert!(
             !wait_while_tcp_admission_is_closed(
                 &mut stop_listener,

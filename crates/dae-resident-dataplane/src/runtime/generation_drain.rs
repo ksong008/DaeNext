@@ -1,7 +1,7 @@
 use super::*;
 
 trait ResidentDrainControl: std::fmt::Debug + Send + Sync {
-    fn id(&self) -> u64;
+    fn id(&self) -> LogicalGenerationId;
     fn close_admission(&self);
     fn reopen_admission(&self) -> Result<(), String>;
     fn stop_is_requested(&self) -> bool;
@@ -13,7 +13,7 @@ trait ResidentDrainControl: std::fmt::Debug + Send + Sync {
 }
 
 impl ResidentDrainControl for ResidentGenerationDrainControl {
-    fn id(&self) -> u64 {
+    fn id(&self) -> LogicalGenerationId {
         ResidentGenerationDrainControl::id(self)
     }
 
@@ -109,7 +109,7 @@ struct RetiredResidentGeneration {
 }
 
 impl RetiredResidentGeneration {
-    fn id(&self) -> u64 {
+    fn id(&self) -> LogicalGenerationId {
         self.control.id()
     }
 
@@ -184,7 +184,7 @@ impl ResidentGenerationDrain {
         self.retire_shared_at(generation, Instant::now());
     }
 
-    pub(super) fn finalize_retirement(&self, generation_id: u64) {
+    pub(super) fn finalize_retirement(&self, generation_id: LogicalGenerationId) {
         self.finalize_matching_retirements(Some(generation_id));
     }
 
@@ -192,7 +192,7 @@ impl ResidentGenerationDrain {
         self.finalize_matching_retirements(None);
     }
 
-    fn finalize_matching_retirements(&self, generation_id: Option<u64>) {
+    fn finalize_matching_retirements(&self, generation_id: Option<LogicalGenerationId>) {
         let targets = {
             let mut state = self
                 .state
@@ -219,7 +219,7 @@ impl ResidentGenerationDrain {
         self.reap(Instant::now());
     }
 
-    pub(super) fn reactivate(&self, generation_id: u64) -> Result<(), String> {
+    pub(super) fn reactivate(&self, generation_id: LogicalGenerationId) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
