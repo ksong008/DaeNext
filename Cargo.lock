@@ -845,6 +845,7 @@ dependencies = [
  "dae-datapath",
  "h2",
  "libc",
+ "serde",
  "serde_json",
  "tokio",
 ]

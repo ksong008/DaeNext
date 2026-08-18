@@ -1,9 +1,8 @@
-use super::*;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub(crate) enum ResidentGenerationState {
+pub enum ResidentGenerationState {
     Prepared = 0,
     Active = 1,
     Retired = 2,
@@ -25,7 +24,7 @@ impl ResidentGenerationState {
 }
 
 #[derive(Debug)]
-pub(super) struct ResidentGenerationLifecycle {
+pub struct ResidentGenerationLifecycle {
     state: AtomicU8,
 }
 
@@ -38,15 +37,15 @@ impl Default for ResidentGenerationLifecycle {
 }
 
 impl ResidentGenerationLifecycle {
-    pub(super) fn state(&self) -> Result<ResidentGenerationState, &'static str> {
+    pub fn state(&self) -> Result<ResidentGenerationState, &'static str> {
         ResidentGenerationState::from_raw(self.state.load(Ordering::Acquire))
     }
 
-    pub(super) fn admission_is_open(&self) -> bool {
+    pub fn admission_is_open(&self) -> bool {
         self.state.load(Ordering::Acquire) == ResidentGenerationState::Active as u8
     }
 
-    pub(super) fn activate(&self) -> Result<(), &'static str> {
+    pub fn activate(&self) -> Result<(), &'static str> {
         loop {
             let current = self.state.load(Ordering::Acquire);
             match ResidentGenerationState::from_raw(current)? {
@@ -72,7 +71,7 @@ impl ResidentGenerationLifecycle {
         }
     }
 
-    pub(super) fn retire(&self) {
+    pub fn retire(&self) {
         let _ = self.state.compare_exchange(
             ResidentGenerationState::Active as u8,
             ResidentGenerationState::Retired as u8,
@@ -81,7 +80,7 @@ impl ResidentGenerationLifecycle {
         );
     }
 
-    pub(super) fn begin_draining(&self) -> bool {
+    pub fn begin_draining(&self) -> bool {
         loop {
             let current = self.state.load(Ordering::Acquire);
             match ResidentGenerationState::from_raw(current) {
@@ -107,25 +106,25 @@ impl ResidentGenerationLifecycle {
         }
     }
 
-    pub(super) fn stop(&self) -> bool {
+    pub fn stop(&self) -> bool {
         self.state
             .swap(ResidentGenerationState::Stopped as u8, Ordering::AcqRel)
             != ResidentGenerationState::Stopped as u8
     }
 
-    pub(super) fn close_admission(&self) {
+    pub fn close_admission(&self) {
         self.retire();
     }
 
-    pub(super) fn reopen_admission(&self) -> Result<(), &'static str> {
+    pub fn reopen_admission(&self) -> Result<(), &'static str> {
         self.activate()
     }
 
-    pub(super) fn request_stop(&self) -> bool {
+    pub fn request_stop(&self) -> bool {
         self.begin_draining()
     }
 
-    pub(super) fn stop_is_requested(&self) -> bool {
+    pub fn stop_is_requested(&self) -> bool {
         matches!(
             self.state(),
             Ok(ResidentGenerationState::Draining | ResidentGenerationState::Stopped)
