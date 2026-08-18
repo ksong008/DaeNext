@@ -3,7 +3,7 @@ use bytes::Buf;
 use dae_outbound::shared_transport::test_support::{
     boring_quic_server_config, self_signed_tls_identity,
 };
-use dae_resident_plan::{ResidentEchPlan, ResidentUtlsFingerprintPlan};
+use dae_resident_model::{ResidentEchPlan, ResidentUtlsFingerprintPlan};
 use h3::server;
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;

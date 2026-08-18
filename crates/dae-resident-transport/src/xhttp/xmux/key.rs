@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 
 use sha2::{Digest, Sha256};
 
-use dae_resident_plan::{
+use dae_resident_model::{
     ResidentRealityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpQuicTlsProvider,
 };
 

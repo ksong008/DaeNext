@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use dae_outbound::shared_transport::*;
 use dae_resident_core::*;
-use dae_resident_plan::*;
+use dae_resident_model::*;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::time;

@@ -11,7 +11,7 @@ use http::{Response, StatusCode};
 
 use super::*;
 use crate::shutdown_xhttp_xmux_generation_owner;
-use dae_resident_plan::ResidentProxyProtocolPlan;
+use dae_resident_model::ResidentProxyProtocolPlan;
 
 const XHTTP_H3_OWNER_TEST_STACK_BYTES: usize = 1024 * 1024;
 

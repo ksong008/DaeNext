@@ -31,7 +31,7 @@ use dae_resident_core::{
 use dae_resident_core::{
     RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT, ResidentRuntimeProfile, ResidentStopSignal,
 };
-use dae_resident_plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
+use dae_resident_model::{ResidentProxyBinding, ResidentProxyProtocolPlan};
 
 use crate::hysteria2_failure::{Hysteria2Failure, Hysteria2FailureClass};
 use crate::hysteria2_port_hopping::Hysteria2PortHoppingMetrics;

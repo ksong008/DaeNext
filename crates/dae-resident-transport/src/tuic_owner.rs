@@ -25,7 +25,7 @@ use tokio::time;
 use dae_resident_core::{
     RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal, TuicOwnerResourceProfile,
 };
-use dae_resident_plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
+use dae_resident_model::{ResidentProxyBinding, ResidentProxyProtocolPlan};
 
 use crate::quic_connections::{
     ResidentConnectedQuicEndpoint, open_tuic_quic_connection_candidates_async,

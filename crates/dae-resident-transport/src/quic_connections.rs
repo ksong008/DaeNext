@@ -9,7 +9,7 @@ use dae_outbound::tuic::{
     TuicCongestionController, build_tuic_runtime_client_config_with_session_cache,
 };
 use dae_resident_core::Hysteria2OwnerResourceProfile;
-use dae_resident_plan::{ResidentHysteria2ObfsPlan, ResidentProxyBinding, ResidentProxyPlan};
+use dae_resident_model::{ResidentHysteria2ObfsPlan, ResidentProxyBinding, ResidentProxyPlan};
 use dae_runtime_control::OwnerGeneration;
 
 use crate::hysteria2_failure::{Hysteria2Failure, Hysteria2FailureClass};

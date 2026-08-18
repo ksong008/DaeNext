@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use dae_resident_plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
+use dae_resident_model::{ResidentProxyBinding, ResidentProxyProtocolPlan};
 
 pub fn resident_transport_binding_identity_digest(
     domain: &[u8],

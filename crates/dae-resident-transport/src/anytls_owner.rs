@@ -27,7 +27,7 @@ use dae_resident_core::{
     RESIDENT_ANYTLS_RELAY_BUFFER_SIZE, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
     SharedResidentStopSignal,
 };
-use dae_resident_plan::{ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan};
+use dae_resident_model::{ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan};
 
 const ANYTLS_OWNER_IDENTITY_DOMAIN: &[u8] = b"dae/anytls-owner/v1";
 /// Base delay for the AnyTLS acquisition retry backoff.

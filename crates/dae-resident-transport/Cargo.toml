@@ -10,7 +10,7 @@ default = []
 test-support = [
     "dae-outbound/test-support",
     "dae-resident-core/test-support",
-    "dae-resident-plan/test-support",
+    "dae-resident-model/test-support",
 ]
 test-boringssl-tls-profile = []
 test-boringssl-unbuffered-bio = []
@@ -22,7 +22,7 @@ dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-outbound.workspace = true
 dae-resident-core.workspace = true
-dae-resident-plan.workspace = true
+dae-resident-model.workspace = true
 dae-runtime-control.workspace = true
 dae-tls.workspace = true
 base64.workspace = true
@@ -56,4 +56,4 @@ url.workspace = true
 base64.workspace = true
 dae-outbound = { workspace = true, features = ["test-support"] }
 dae-resident-core = { workspace = true, features = ["test-support"] }
-dae-resident-plan = { workspace = true, features = ["test-support"] }
+dae-resident-model = { workspace = true, features = ["test-support"] }

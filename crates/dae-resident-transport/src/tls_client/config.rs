@@ -344,7 +344,7 @@ fn require_tcp_tls_session_policy(policy: &ResidentTlsPolicy) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dae_resident_plan::{
+    use dae_resident_model::{
         ResidentEchPlan, ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan,
     };
 
