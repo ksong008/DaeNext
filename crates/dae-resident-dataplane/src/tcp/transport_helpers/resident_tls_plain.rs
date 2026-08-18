@@ -8,6 +8,7 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
     client: &mut AsyncResidentTlsClient,
     stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
+    leftover: Vec<u8>,
 ) -> Result<DirectTcpRelayStats, String> {
     let (progress, activity) = resident_duplex_progress();
     let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
@@ -78,6 +79,13 @@ pub(crate) async fn relay_tcp_over_resident_tls_plain_async(
         let mut inbound_write = inbound_write;
         let mut client_read = client_read;
         let mut buffer = [0_u8; 16 * 1024];
+        // A-14: 握手同批 leftover 是服务端首段数据，先转发给客户端。
+        if !leftover.is_empty() {
+            inbound_write
+                .write_all(&leftover)
+                .await
+                .map_err(|err| format!("write proxy TLS leftover to client: {err}"))?;
+        }
         loop {
             let read = match client_read.read(&mut buffer).await {
                 Ok(0) => {

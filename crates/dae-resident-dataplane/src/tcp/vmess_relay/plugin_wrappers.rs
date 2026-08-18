@@ -11,6 +11,7 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
     salt_len: usize,
     initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
+    leftover: Vec<u8>,
 ) -> Result<DirectTcpRelayStats, String> {
     let target_metadata = ShadowsocksMetadata::parse(target)
         .map_err(|err| format!("parse Shadowsocks v2ray-plugin target: {err}"))?;
@@ -128,6 +129,9 @@ pub(crate) async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
         let mut client_read = client_read;
         let mut inbound_write = inbound_write;
         let mut mux_state = AsyncV2rayPluginMuxPayloadState::new(control_tx);
+        mux_state
+            .inject_leftover(leftover)
+            .map_err(|err| format!("Shadowsocks v2ray-plugin websocket: {err}"))?;
         let mut download_decoder = None;
         let mut response_buffer = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE]);
         loop {
@@ -189,6 +193,7 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
     inner_password: &str,
     initial_payload: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
+    leftover: Vec<u8>,
 ) -> Result<DirectTcpRelayStats, String> {
     let spec = cipher_spec(inner_cipher)
         .map_err(|err| format!("resolve Trojan inner Shadowsocks cipher: {err}"))?;
@@ -276,6 +281,9 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
         let mut client_read = client_read;
         let mut inbound_write = inbound_write;
         let mut ws_state = AsyncWebSocketPayloadChannelState::new(control_tx);
+        ws_state
+            .inject_leftover(leftover)
+            .map_err(|err| format!("Trojan inner Shadowsocks websocket: {err}"))?;
         let mut download_decoder = None;
         let mut response_buffer = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE]);
         loop {

@@ -6,6 +6,7 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
     client: &mut AsyncVlessTlsClient,
     stop: SharedResidentStopSignal,
     initial_payload_len: usize,
+    leftover: Vec<u8>,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<RelayStats, RelayError> {
     let (progress, activity) = resident_duplex_progress();
@@ -64,7 +65,27 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
         let mut stripper = VlessResponseStripper::default();
         let mut decoder = WebSocketBinaryFrameDecoder::default();
         let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
+        if !leftover.is_empty() {
+            decoder.extend(&leftover)?;
+        }
         loop {
+            while let Some(frame) = decoder.next_message()? {
+                let payload = stripper.consume(frame)?;
+                download_header_state.store(stripper.done, Ordering::Release);
+                if !payload.is_empty() {
+                    inbound_write
+                        .write_all(&payload)
+                        .await
+                        .map_err(|err| format!("write VLESS websocket payload to client: {err}"))?;
+                    download_progress.record_download(payload.len());
+                    metrics.add_download(payload.len());
+                }
+            }
+            queue_websocket_control_responses(&mut decoder, &control_tx, "VLESS websocket").await?;
+            if decoder.is_closed() {
+                let _ = inbound_write.shutdown().await;
+                return Ok(());
+            }
             let read = match client_read.read(&mut buffer).await {
                 Ok(0) => {
                     let _ = inbound_write.shutdown().await;
@@ -87,23 +108,6 @@ pub(crate) async fn relay_tcp_over_vless_websocket_tls_async(
                 }
             };
             decoder.extend(&buffer[..read])?;
-            while let Some(frame) = decoder.next_message()? {
-                let payload = stripper.consume(frame)?;
-                download_header_state.store(stripper.done, Ordering::Release);
-                if !payload.is_empty() {
-                    inbound_write
-                        .write_all(&payload)
-                        .await
-                        .map_err(|err| format!("write VLESS websocket payload to client: {err}"))?;
-                    download_progress.record_download(payload.len());
-                    metrics.add_download(payload.len());
-                }
-            }
-            queue_websocket_control_responses(&mut decoder, &control_tx, "VLESS websocket").await?;
-            if decoder.is_closed() {
-                let _ = inbound_write.shutdown().await;
-                return Ok(());
-            }
         }
     };
     let result = run_resident_duplex_relay(
@@ -133,6 +137,7 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
     client: &mut AsyncResidentTlsClient,
     stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
+    leftover: Vec<u8>,
 ) -> Result<DirectTcpRelayStats, String> {
     let (progress, activity) = resident_duplex_progress();
     let (control_tx, mut control_rx) = websocket_control_channel();
@@ -183,6 +188,12 @@ pub(crate) async fn relay_tcp_over_trojan_websocket_tls_async(
         let mut inbound_write = inbound_write;
         let mut client_read = client_read;
         let mut decoder = WebSocketBinaryFrameDecoder::default();
+        // A-14: 握手同批 leftover 是服务端首帧，先喂解码器。
+        if !leftover.is_empty() {
+            decoder
+                .extend(&leftover)
+                .map_err(|err| format!("decode Trojan websocket leftover frame: {err}"))?;
+        }
         let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
         loop {
             let read = client_read

@@ -232,7 +232,7 @@ async fn open_shadowsocks_v2ray_plugin_native_tcp_tunnel(
         return Err(NativeTcpProbeError::NotAdmitted);
     };
     let options = HttpUpgradeOptions::new(host, path);
-    native_websocket_handshake_over_resident_tls_async(&mut client, &options)
+    let leftover = native_websocket_handshake_over_resident_tls_async(&mut client, &options)
         .await
         .map_err(NativeTcpProbeError::Open)?;
 
@@ -260,6 +260,7 @@ async fn open_shadowsocks_v2ray_plugin_native_tcp_tunnel(
                 *salt_len,
                 Vec::new(),
                 &metrics,
+                leftover,
             )
             .await;
         }

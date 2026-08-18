@@ -255,11 +255,20 @@ pub fn canonical_json(raw: &str) -> Result<String, OutboundError> {
     serde_json::to_string(&value).map_err(|err| OutboundError::BadSharedTransport(err.to_string()))
 }
 
-pub fn magic_network_encode(network: &str, mark: u32, mptcp: bool) -> Vec<u8> {
+pub fn magic_network_encode(
+    network: &str,
+    mark: u32,
+    mptcp: bool,
+) -> Result<Vec<u8>, OutboundError> {
     let network_bytes = network.as_bytes();
+    if network_bytes.len() > u8::MAX as usize {
+        return Err(OutboundError::BadSharedTransport(
+            "magic-network name exceeds 255 bytes".to_owned(),
+        ));
+    }
     let mut out = Vec::with_capacity(2 + network_bytes.len() + 4 + 1);
     write_magic_network_to(network_bytes, mark, mptcp, &mut out);
-    out
+    Ok(out)
 }
 
 fn write_magic_network_to_slice(network: &str, mark: u32, mptcp: bool, out: &mut [u8]) -> usize {

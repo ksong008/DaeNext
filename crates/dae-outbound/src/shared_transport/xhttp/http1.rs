@@ -7,9 +7,17 @@ use crate::shared_transport::ir;
 
 use super::options::{XHttpLifecycleOptions, XHttpLifecycleReport};
 
-pub fn xhttp_packet_request(options: &XHttpLifecycleOptions, payload: &[u8]) -> Vec<u8> {
+pub fn xhttp_packet_request(
+    options: &XHttpLifecycleOptions,
+    payload: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
     let path = xhttp_request_path(options);
-    format!(
+    // F-12: 拒绝 CTL，防止 host/path/mode/alpn 注入额外请求行/头。
+    crate::shared_transport::dataplane::validate_http_field(&options.host, "xHTTP HTTP host")?;
+    crate::shared_transport::dataplane::validate_http_field(&path, "xHTTP HTTP path")?;
+    crate::shared_transport::dataplane::validate_http_field(&options.mode, "xHTTP HTTP mode")?;
+    crate::shared_transport::dataplane::validate_http_field(&options.alpn, "xHTTP HTTP alpn")?;
+    Ok(format!(
         "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/octet-stream\r\nX-DAE-XHTTP-Mode: {}\r\nX-DAE-XHTTP-ALPN: {}\r\nContent-Length: {}\r\n\r\n",
         options.host,
         options.mode,
@@ -19,7 +27,7 @@ pub fn xhttp_packet_request(options: &XHttpLifecycleOptions, payload: &[u8]) -> 
     .into_bytes()
     .into_iter()
     .chain(payload.iter().copied())
-    .collect()
+    .collect())
 }
 
 pub fn xhttp_packet_exchange(
@@ -31,7 +39,7 @@ pub fn xhttp_packet_exchange(
     let mut stream = TcpStream::connect(endpoint)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     set_timeout(&stream, timeout)?;
-    let request = xhttp_packet_request(options, payload);
+    let request = xhttp_packet_request(options, payload)?;
     stream
         .write_all(&request)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;

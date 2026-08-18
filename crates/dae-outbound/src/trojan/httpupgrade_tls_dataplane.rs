@@ -53,7 +53,7 @@ where
         })?;
 
     let upgrade_options = HttpUpgradeOptions::new(httpupgrade_host, httpupgrade_path);
-    let upgrade_request = http_upgrade_request(&upgrade_options);
+    let upgrade_request = http_upgrade_request(&upgrade_options)?;
     tls.write_all(&upgrade_request)
         .map_err(|err| OutboundError::BadTrojan(err.to_string()))?;
     let response = read_http_head(&mut tls)?;

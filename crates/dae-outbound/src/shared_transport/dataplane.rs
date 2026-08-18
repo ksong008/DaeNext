@@ -68,7 +68,7 @@ pub fn http_upgrade_exchange(
     let mut stream = TcpStream::connect(endpoint)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     set_timeout(&mut stream, timeout)?;
-    let request = http_upgrade_request(options);
+    let request = http_upgrade_request(options)?;
     stream
         .write_all(&request)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
@@ -97,7 +97,7 @@ pub fn websocket_exchange(
     let mut stream = TcpStream::connect(endpoint)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     set_timeout(&mut stream, timeout)?;
-    let request = websocket_handshake_request(options, DEFAULT_WS_KEY);
+    let request = websocket_handshake_request(options, DEFAULT_WS_KEY)?;
     stream
         .write_all(&request)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
@@ -127,7 +127,7 @@ pub fn simpleobfs_http_exchange(
     let mut stream = TcpStream::connect(endpoint)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     set_timeout(&mut stream, timeout)?;
-    let request = simpleobfs_http_request(options);
+    let request = simpleobfs_http_request(options)?;
     stream
         .write_all(&request)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
@@ -145,20 +145,39 @@ pub fn simpleobfs_http_exchange(
     ))
 }
 
-pub fn http_upgrade_request(options: &HttpUpgradeOptions) -> Vec<u8> {
-    format!(
+/// F-12: HTTP/1 请求构造字段必须拒绝控制字符（CR/LF 及其余 CTL），
+/// 防止链接配置注入额外请求行/头。
+pub(crate) fn validate_http_field(value: &str, context: &str) -> Result<(), OutboundError> {
+    if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "{context} contains control characters; refusing to build HTTP request"
+        )));
+    }
+    Ok(())
+}
+
+pub fn http_upgrade_request(options: &HttpUpgradeOptions) -> Result<Vec<u8>, OutboundError> {
+    validate_http_field(&options.host, "HTTP upgrade host")?;
+    validate_http_field(&options.path, "HTTP upgrade path")?;
+    Ok(format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n",
         options.path, options.host
     )
-    .into_bytes()
+    .into_bytes())
 }
 
-pub fn websocket_handshake_request(options: &HttpUpgradeOptions, key: &str) -> Vec<u8> {
-    format!(
+pub fn websocket_handshake_request(
+    options: &HttpUpgradeOptions,
+    key: &str,
+) -> Result<Vec<u8>, OutboundError> {
+    validate_http_field(&options.host, "websocket handshake host")?;
+    validate_http_field(&options.path, "websocket handshake path")?;
+    validate_http_field(key, "websocket handshake key")?;
+    Ok(format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n\r\n",
         options.path, options.host
     )
-    .into_bytes()
+    .into_bytes())
 }
 
 pub fn websocket_client_handshake_key() -> Result<String, OutboundError> {
@@ -180,7 +199,7 @@ pub fn websocket_client_handshake(
 ) -> Result<WebSocketClientHandshake, OutboundError> {
     let key = websocket_client_handshake_key()?;
     Ok(WebSocketClientHandshake {
-        request: websocket_handshake_request(options, &key),
+        request: websocket_handshake_request(options, &key)?,
         expected_accept: websocket_accept_for_key(&key),
     })
 }
@@ -254,12 +273,14 @@ pub fn websocket_client_mask_key() -> Result<[u8; 4], OutboundError> {
     Ok(mask_key)
 }
 
-pub fn simpleobfs_http_request(options: &SimpleObfsHttpOptions) -> Vec<u8> {
-    format!(
+pub fn simpleobfs_http_request(options: &SimpleObfsHttpOptions) -> Result<Vec<u8>, OutboundError> {
+    validate_http_field(&options.host, "simpleobfs HTTP host")?;
+    validate_http_field(&options.path, "simpleobfs HTTP path")?;
+    Ok(format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: curl/7.64.1\r\nAccept: */*\r\n\r\n",
         options.path, options.host
     )
-    .into_bytes()
+    .into_bytes())
 }
 
 pub fn websocket_client_binary_frame(
@@ -445,5 +466,46 @@ fn report(
         payload_len: payload.len(),
         echoed_payload,
         true_dataplane: true,
+    }
+}
+
+#[cfg(test)]
+mod f12_http_ctl_tests {
+    use super::{HttpUpgradeOptions, http_upgrade_request, validate_http_field};
+
+    #[test]
+    fn rejects_crlf_injection_in_host() {
+        let err = validate_http_field("evil.example\r\nX-Injected: 1", "host").unwrap_err();
+        assert!(err.to_string().contains("control characters"));
+    }
+
+    #[test]
+    fn rejects_crlf_injection_in_path() {
+        let options = HttpUpgradeOptions {
+            host: "example.com".to_owned(),
+            path: "/ok\r\nX-Injected: 1".to_owned(),
+        };
+        assert!(http_upgrade_request(&options).is_err());
+    }
+
+    #[test]
+    fn accepts_plain_values() {
+        let options = HttpUpgradeOptions {
+            host: "example.com".to_owned(),
+            path: "/ok".to_owned(),
+        };
+        assert!(http_upgrade_request(&options).is_ok());
+    }
+
+    #[test]
+    fn rejects_all_control_characters() {
+        for byte in 0x00_u8..=0x1f {
+            let value = format!("a{}b", char::from(byte));
+            assert!(
+                validate_http_field(&value, "field").is_err(),
+                "byte 0x{byte:02x} must be rejected"
+            );
+        }
+        assert!(validate_http_field("a\u{7f}b", "field").is_err());
     }
 }

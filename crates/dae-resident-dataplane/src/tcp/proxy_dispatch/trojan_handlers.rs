@@ -17,7 +17,7 @@ pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let ws_leftover = websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
     let initial_payload = sniff.take_payload();
     let initial_payload_len = initial_payload.len();
     let request = trojan_packet::tcp_request_header(
@@ -40,7 +40,15 @@ pub(crate) async fn handle_trojan_websocket_tls_tcp_connection_async(
     }
     drop((request, initial_payload));
 
-    match relay_tcp_over_trojan_websocket_tls_async(inbound, &mut client, stop, metrics).await {
+    match relay_tcp_over_trojan_websocket_tls_async(
+        inbound,
+        &mut client,
+        stop,
+        metrics,
+        ws_leftover,
+    )
+    .await
+    {
         Ok(mut stats) => {
             stats.client_to_direct += initial_stats.client_to_direct;
             let mut event = generic_proxy_tcp_finished_event(
@@ -103,7 +111,7 @@ pub(crate) async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let ws_leftover = websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
     let initial_payload = sniff.take_payload();
     let stats = relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
         inbound,
@@ -115,6 +123,7 @@ pub(crate) async fn handle_trojan_websocket_inner_shadowsocks_tls_tcp_connection
         inner_password,
         initial_payload,
         metrics,
+        ws_leftover,
     )
     .await;
     stats
@@ -180,7 +189,8 @@ pub(crate) async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let httpupgrade_leftover =
+        httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
     let initial_payload = sniff.take_payload();
     let initial_payload_len = initial_payload.len();
     let request = trojan_packet::tcp_request_header(
@@ -200,7 +210,15 @@ pub(crate) async fn handle_trojan_httpupgrade_tls_tcp_connection_async(
     }
     drop((request, initial_payload));
 
-    match relay_tcp_over_resident_tls_plain_async(inbound, &mut client, stop, metrics).await {
+    match relay_tcp_over_resident_tls_plain_async(
+        inbound,
+        &mut client,
+        stop,
+        metrics,
+        httpupgrade_leftover,
+    )
+    .await
+    {
         Ok(mut stats) => {
             stats.client_to_direct += initial_stats.client_to_direct;
             let mut event = generic_proxy_tcp_finished_event(
@@ -365,7 +383,9 @@ pub(crate) async fn handle_trojan_tls_tcp_connection_async(
         metrics.add_upload(initial_payload_len);
     }
     drop((request, initial_payload));
-    match relay_tcp_over_resident_tls_plain_async(inbound, &mut client, stop, metrics).await {
+    match relay_tcp_over_resident_tls_plain_async(inbound, &mut client, stop, metrics, Vec::new())
+        .await
+    {
         Ok(mut stats) => {
             stats.client_to_direct += initial_stats.client_to_direct;
             let mut event = generic_proxy_tcp_finished_event(

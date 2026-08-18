@@ -106,9 +106,16 @@ where
         initial_stats.client_to_direct += initial_payload_len;
         metrics.add_upload(initial_payload_len);
     }
-    let result =
-        relay_tcp_over_vmess_aead_async(inbound, &mut proxy, stop, session, initial_stats, metrics)
-            .await;
+    let result = relay_tcp_over_vmess_aead_async(
+        inbound,
+        &mut proxy,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+        Vec::new(),
+    )
+    .await;
     let event = match result {
         Ok(stats) => generic_proxy_tcp_finished_event(
             peer,

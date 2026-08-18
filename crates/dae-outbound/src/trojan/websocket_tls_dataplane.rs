@@ -61,7 +61,7 @@ where
         .map_err(|err| OutboundError::BadTrojan(format!("trojan-go wss tls connect: {err}")))?;
 
     let ws_options = HttpUpgradeOptions::new(ws_host, ws_path);
-    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY);
+    let handshake = websocket_handshake_request(&ws_options, DEFAULT_WS_KEY)?;
     tls.write_all(&handshake)
         .map_err(|err| OutboundError::BadTrojan(err.to_string()))?;
     let response = read_http_head(&mut tls)?;

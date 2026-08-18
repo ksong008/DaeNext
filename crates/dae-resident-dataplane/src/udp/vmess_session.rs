@@ -706,7 +706,8 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let options = HttpUpgradeOptions::new(host, path);
-    let request = http_upgrade_request(&options);
+    let request =
+        http_upgrade_request(&options).map_err(|err| format!("build {label} handshake: {err}"))?;
     write_vmess_stream_bytes(stream, &request, &format!("write {label} handshake")).await?;
     let response = read_http_head_from_async(stream, &format!("read {label} handshake")).await?;
     validate_http_status(&response, 101).map_err(|err| format!("validate {label} upgrade: {err}"))

@@ -7,6 +7,7 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
     session: VMessAeadTcpClientSessionStart,
     stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
+    leftover: Vec<u8>,
 ) -> Result<DirectTcpRelayStats, String> {
     relay_tcp_over_vmess_stream_async(
         inbound,
@@ -20,6 +21,7 @@ pub(crate) async fn relay_tcp_over_vmess_aead_async(
             idle_error: "resident VMess relay idle timeout",
             flush_upload: false,
         },
+        leftover,
     )
     .await
 }
@@ -31,6 +33,7 @@ pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
     session: VMessAeadTcpClientSessionStart,
     stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
+    leftover: Vec<u8>,
 ) -> Result<DirectTcpRelayStats, String> {
     relay_tcp_over_vmess_websocket_stream_async(
         inbound,
@@ -44,6 +47,7 @@ pub(crate) async fn relay_tcp_over_vmess_websocket_aead_async(
             idle_error: "resident VMess WebSocket relay idle timeout",
             flush_upload: false,
         },
+        leftover,
     )
     .await
 }

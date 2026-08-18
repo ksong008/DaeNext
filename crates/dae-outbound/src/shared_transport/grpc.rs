@@ -199,20 +199,22 @@ impl GrpcLifecycleCache {
     }
 }
 
-pub fn grpc_stream_preface(service_name: &str) -> Vec<u8> {
+pub fn grpc_stream_preface(service_name: &str) -> Result<Vec<u8>, OutboundError> {
     let service_name = if service_name.is_empty() {
         "GunService"
     } else {
         service_name
     };
-    format!(
+    // F-12: gRPC service name 进入请求行，拒绝 CTL 注入。
+    super::dataplane::validate_http_field(service_name, "gRPC service name")?;
+    Ok(format!(
         "POST /{service_name}/Tun HTTP/2\r\n\
          {GRPC_CONTENT_TYPE_HEADER}: {GRPC_CONTENT_TYPE_APPLICATION}\r\n\
          {GRPC_TE_HEADER}: {GRPC_TE_TRAILERS}\r\n\
          {GRPC_ENCODING_HEADER}: {GRPC_IDENTITY_ENCODING}\r\n\
          {GRPC_ACCEPT_ENCODING_HEADER}: {GRPC_IDENTITY_ENCODING}\r\n\r\n"
     )
-    .into_bytes()
+    .into_bytes())
 }
 
 pub fn grpc_hunk_frame(payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
@@ -404,7 +406,7 @@ pub fn grpc_hunk_exchange(
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     set_timeout(&stream, timeout)?;
     stream
-        .write_all(&grpc_stream_preface(&options.service_name))
+        .write_all(&grpc_stream_preface(&options.service_name)?)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
     stream
         .write_all(&grpc_hunk_frame(payload)?)

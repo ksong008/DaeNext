@@ -57,7 +57,8 @@ pub(crate) async fn meek_round_trip_async(
             dae_outbound::shared_transport::contract::MEEK_MAX_WRITE
         ));
     }
-    let request = meek_http_request(options, body);
+    let request = meek_http_request(options, body)
+        .map_err(|err| format!("build Meek polling request: {err}"))?;
     let request_header_bytes = request.len().saturating_sub(body.len());
     if request_header_bytes > resources.response_header_bytes() {
         return Err(format!(

@@ -168,11 +168,17 @@ pub(super) fn run_transport_grpc_cache_key(args: &[String]) -> RunnerOutput {
     let dialer_id = string_arg(args, "--dialer").unwrap_or("dialer-1");
     let allow_insecure = bool_arg(args, "--allow-insecure").unwrap_or(true);
     let mark = match u64_arg(args, "--mark").unwrap_or(Ok(1234)) {
-        Ok(value) => value as u32,
+        Ok(value) => match u32::try_from(value) {
+            Ok(value) => value,
+            Err(_) => return RunnerOutput::stdout_error("--mark exceeds u32 range"),
+        },
         Err(err) => return RunnerOutput::stdout_error(err),
     };
     let mptcp = bool_arg(args, "--mptcp").unwrap_or(true);
-    let magic = shared_transport::ir::magic_network_encode("tcp", mark, mptcp);
+    let magic = match shared_transport::ir::magic_network_encode("tcp", mark, mptcp) {
+        Ok(magic) => magic,
+        Err(error) => return RunnerOutput::stdout_error(error.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({

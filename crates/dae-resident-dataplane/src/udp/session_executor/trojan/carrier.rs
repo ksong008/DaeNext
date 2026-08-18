@@ -82,16 +82,21 @@ impl TrojanUdpCarrier {
                     open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
                 let options = HttpUpgradeOptions::new(&proxy.stream_host, &proxy.stream_path);
-                websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+                let ws_leftover =
+                    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
                 write_websocket_packet(
                     &mut client,
                     initial_packet,
                     "write Trojan WebSocket UDP first packet",
                 )
                 .await?;
+                let mut state = AsyncWebSocketPayloadState::default();
+                state
+                    .inject_leftover(ws_leftover)
+                    .map_err(|err| format!("Trojan WebSocket UDP: {err}"))?;
                 Ok(Self::WebSocket {
                     client,
-                    state: AsyncWebSocketPayloadState::default(),
+                    state,
                     tls_underlay,
                 })
             }
@@ -100,7 +105,14 @@ impl TrojanUdpCarrier {
                     open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
                 let tls_underlay = async_resident_tls_underlay_name(&client);
                 let options = HttpUpgradeOptions::new(&proxy.stream_host, &proxy.stream_path);
-                httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+                let httpupgrade_leftover =
+                    httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+                if !httpupgrade_leftover.is_empty() {
+                    return Err(format!(
+                        "Trojan HTTPUpgrade UDP leftover unsupported in stream carrier ({} bytes)",
+                        httpupgrade_leftover.len()
+                    ));
+                }
                 write_async_tls_plain_all(
                     &mut client,
                     initial_packet,

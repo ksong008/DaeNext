@@ -58,30 +58,38 @@ pub(super) async fn handle_vmess_proxy_tcp_connection_async(
         metrics.add_upload(initial_payload_len);
     }
 
-    relay_tcp_over_vmess_aead_async(inbound, &mut proxy, stop, session, initial_stats, metrics)
-        .await
-        .map(|stats| {
-            generic_proxy_tcp_finished_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "vmess",
-                &stats,
-                "aead-tcp-relay",
-            )
-        })
-        .or_else(|err| {
-            Ok::<Value, String>(generic_proxy_tcp_failed_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "vmess",
-                &err,
-                "aead-tcp-relay",
-            ))
-        })
+    relay_tcp_over_vmess_aead_async(
+        inbound,
+        &mut proxy,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+        Vec::new(),
+    )
+    .await
+    .map(|stats| {
+        generic_proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &stats,
+            "aead-tcp-relay",
+        )
+    })
+    .or_else(|err| {
+        Ok::<Value, String>(generic_proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &err,
+            "aead-tcp-relay",
+        ))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -119,48 +127,56 @@ pub(super) async fn handle_vmess_tls_proxy_tcp_connection_async(
         metrics.add_upload(initial_payload_len);
     }
 
-    relay_tcp_over_vmess_tls_aead_async(inbound, &mut client, stop, session, initial_stats, metrics)
-        .await
-        .map(|stats| {
-            let mut event = generic_proxy_tcp_finished_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "vmess",
-                &stats,
-                "aead-tls-tcp-relay",
-            );
-            event["tls_underlay"] = json!(tls_underlay);
-            append_proxy_tcp_execution_fields(
-                &mut event,
-                "aead-tls-tcp-relay",
-                "vmess",
-                Some(tls_underlay),
-                None,
-            );
-            event
-        })
-        .or_else(|err| {
-            let mut event = generic_proxy_tcp_failed_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "vmess",
-                &err,
-                "aead-tls-tcp-relay",
-            );
-            event["tls_underlay"] = json!(tls_underlay);
-            append_proxy_tcp_execution_fields(
-                &mut event,
-                "aead-tls-tcp-relay",
-                "vmess",
-                Some(tls_underlay),
-                None,
-            );
-            Ok::<Value, String>(event)
-        })
+    relay_tcp_over_vmess_tls_aead_async(
+        inbound,
+        &mut client,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+        Vec::new(),
+    )
+    .await
+    .map(|stats| {
+        let mut event = generic_proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &stats,
+            "aead-tls-tcp-relay",
+        );
+        event["tls_underlay"] = json!(tls_underlay);
+        append_proxy_tcp_execution_fields(
+            &mut event,
+            "aead-tls-tcp-relay",
+            "vmess",
+            Some(tls_underlay),
+            None,
+        );
+        event
+    })
+    .or_else(|err| {
+        let mut event = generic_proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &err,
+            "aead-tls-tcp-relay",
+        );
+        event["tls_underlay"] = json!(tls_underlay);
+        append_proxy_tcp_execution_fields(
+            &mut event,
+            "aead-tls-tcp-relay",
+            "vmess",
+            Some(tls_underlay),
+            None,
+        );
+        Ok::<Value, String>(event)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -178,7 +194,7 @@ pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    websocket_handshake_over_async_stream(&mut proxy, &options).await?;
+    let ws_leftover = websocket_handshake_over_async_stream(&mut proxy, &options).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
         body_security,
@@ -206,6 +222,7 @@ pub(super) async fn handle_vmess_websocket_proxy_tcp_connection_async(
         session,
         initial_stats,
         metrics,
+        ws_leftover,
     )
     .await
     .map(|stats| {
@@ -251,7 +268,7 @@ pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    httpupgrade_handshake_over_async_stream(&mut proxy, &options).await?;
+    let leftover = httpupgrade_handshake_over_async_stream(&mut proxy, &options).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
         body_security,
@@ -270,34 +287,42 @@ pub(super) async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
         metrics.add_upload(initial_payload_len);
     }
 
-    relay_tcp_over_vmess_aead_async(inbound, &mut proxy, stop, session, initial_stats, metrics)
-        .await
-        .map(|stats| {
-            let mut event = generic_proxy_tcp_finished_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "vmess",
-                &stats,
-                "wrapped-httpupgrade-aead",
-            );
-            event["stream_wrapper"] = json!("httpupgrade");
-            event
-        })
-        .or_else(|err| {
-            let mut event = generic_proxy_tcp_failed_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "vmess",
-                &err,
-                "wrapped-httpupgrade-aead",
-            );
-            event["stream_wrapper"] = json!("httpupgrade");
-            Ok::<Value, String>(event)
-        })
+    relay_tcp_over_vmess_aead_async(
+        inbound,
+        &mut proxy,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+        leftover,
+    )
+    .await
+    .map(|stats| {
+        let mut event = generic_proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &stats,
+            "wrapped-httpupgrade-aead",
+        );
+        event["stream_wrapper"] = json!("httpupgrade");
+        event
+    })
+    .or_else(|err| {
+        let mut event = generic_proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &err,
+            "wrapped-httpupgrade-aead",
+        );
+        event["stream_wrapper"] = json!("httpupgrade");
+        Ok::<Value, String>(event)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -317,7 +342,7 @@ pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let ws_leftover = websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
         body_security,
@@ -345,6 +370,7 @@ pub(super) async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
         session,
         initial_stats,
         metrics,
+        ws_leftover,
     )
     .await
     .map(|stats| {
@@ -408,7 +434,7 @@ pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let leftover = httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
         body_security,
@@ -426,50 +452,58 @@ pub(super) async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
         metrics.add_upload(initial_payload_len);
     }
 
-    relay_tcp_over_vmess_tls_aead_async(inbound, &mut client, stop, session, initial_stats, metrics)
-        .await
-        .map(|stats| {
-            let mut event = generic_proxy_tcp_finished_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "vmess",
-                &stats,
-                "wrapped-httpupgrade-aead",
-            );
-            event["tls_underlay"] = json!(tls_underlay);
-            event["stream_wrapper"] = json!("httpupgrade");
-            append_proxy_tcp_execution_fields(
-                &mut event,
-                "wrapped-httpupgrade-aead",
-                "vmess",
-                Some(tls_underlay),
-                None,
-            );
-            event
-        })
-        .or_else(|err| {
-            let mut event = generic_proxy_tcp_failed_event(
-                peer,
-                original_dst,
-                &selection,
-                sniff,
-                "vmess",
-                &err,
-                "wrapped-httpupgrade-aead",
-            );
-            event["tls_underlay"] = json!(tls_underlay);
-            event["stream_wrapper"] = json!("httpupgrade");
-            append_proxy_tcp_execution_fields(
-                &mut event,
-                "wrapped-httpupgrade-aead",
-                "vmess",
-                Some(tls_underlay),
-                None,
-            );
-            Ok::<Value, String>(event)
-        })
+    relay_tcp_over_vmess_tls_aead_async(
+        inbound,
+        &mut client,
+        stop,
+        session,
+        initial_stats,
+        metrics,
+        leftover,
+    )
+    .await
+    .map(|stats| {
+        let mut event = generic_proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &stats,
+            "wrapped-httpupgrade-aead",
+        );
+        event["tls_underlay"] = json!(tls_underlay);
+        event["stream_wrapper"] = json!("httpupgrade");
+        append_proxy_tcp_execution_fields(
+            &mut event,
+            "wrapped-httpupgrade-aead",
+            "vmess",
+            Some(tls_underlay),
+            None,
+        );
+        event
+    })
+    .or_else(|err| {
+        let mut event = generic_proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            sniff,
+            "vmess",
+            &err,
+            "wrapped-httpupgrade-aead",
+        );
+        event["tls_underlay"] = json!(tls_underlay);
+        event["stream_wrapper"] = json!("httpupgrade");
+        append_proxy_tcp_execution_fields(
+            &mut event,
+            "wrapped-httpupgrade-aead",
+            "vmess",
+            Some(tls_underlay),
+            None,
+        );
+        Ok::<Value, String>(event)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

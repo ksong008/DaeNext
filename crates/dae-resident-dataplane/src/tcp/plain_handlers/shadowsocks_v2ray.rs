@@ -18,7 +18,7 @@ pub(crate) async fn handle_shadowsocks_v2ray_plugin_tls_ws_proxy_tcp_connection_
         open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
     let tls_underlay = async_resident_tls_underlay_name(&client);
     let options = HttpUpgradeOptions::new(host, path);
-    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let ws_leftover = websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
     let initial_payload = sniff.take_payload();
     let stats = relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
         inbound,
@@ -30,6 +30,7 @@ pub(crate) async fn handle_shadowsocks_v2ray_plugin_tls_ws_proxy_tcp_connection_
         salt_len,
         initial_payload,
         metrics,
+        ws_leftover,
     )
     .await;
     stats

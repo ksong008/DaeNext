@@ -148,6 +148,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
                 stop,
                 key,
                 initial_payload,
+                Vec::new(),
                 metrics,
             )
             .await
@@ -168,6 +169,7 @@ pub(crate) async fn handle_proxy_tcp_connection_async(
             &selection.proxy.flow,
             key,
             initial_payload,
+            Vec::new(),
             metrics,
         )
         .await
@@ -352,7 +354,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     let key = selection.proxy.vless_key()?;
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let ws_leftover = websocket_handshake_over_resident_tls_async(&mut client, &options).await?;
     let initial_payload = sniff.take_payload();
     let initial_payload_len = initial_payload.len();
     let encryption = selection.proxy.vless_encryption()?;
@@ -371,7 +373,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
     )
     .map_err(|err| format!("build VLESS WebSocket TCP request: {err}"))?;
     if let Some(encryption) = encryption {
-        let logical = spawn_websocket_payload_stream(client);
+        let logical = spawn_websocket_payload_stream(client, ws_leftover);
         let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
             .await
             .map_err(|err| format!("VLESS Encryption websocket handshake: {err}"))?;
@@ -402,6 +404,7 @@ pub(crate) async fn handle_vless_websocket_tcp_connection_async(
             &mut client,
             stop,
             initial_payload_len,
+            ws_leftover,
             metrics,
         )
         .await
@@ -452,7 +455,8 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
     let key = selection.proxy.vless_key()?;
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
+    let response_prefix =
+        httpupgrade_handshake_over_resident_tls_async(&mut client, &options).await?;
     let request = packet::first_write_bytes(
         &key,
         &selection.proxy.flow,
@@ -466,7 +470,8 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
     let encryption = selection.proxy.vless_encryption()?;
     let encryption_enabled = encryption.is_some();
     if let Some(encryption) = encryption {
-        let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
+        let prefixed = AsyncPrefixedStream::new(response_prefix, client);
+        let mut encrypted = VlessEncryptedStream::handshake(prefixed, encryption)
             .await
             .map_err(|err| format!("VLESS Encryption HTTP Upgrade handshake: {err}"))?;
         encrypted
@@ -485,6 +490,7 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
                 stop,
                 key,
                 initial_payload,
+                Vec::new(),
                 metrics,
             )
             .await
@@ -510,6 +516,7 @@ pub(crate) async fn handle_vless_httpupgrade_tcp_connection_async(
             &selection.proxy.flow,
             key,
             initial_payload,
+            response_prefix,
             metrics,
         )
         .await

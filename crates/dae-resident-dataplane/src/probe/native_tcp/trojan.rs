@@ -91,9 +91,10 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
 
     match wrapper {
         ResidentStreamWrapperPlan::WebSocket => {
-            native_websocket_handshake_over_resident_tls_async(&mut client, &options)
-                .await
-                .map_err(NativeTcpProbeError::Open)?;
+            let leftover =
+                native_websocket_handshake_over_resident_tls_async(&mut client, &options)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
             native_write_websocket_binary_frame_over_resident_tls_async(
                 &mut client,
                 &request,
@@ -107,6 +108,7 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
                     &mut client,
                     relay_stop,
                     &metrics,
+                    leftover,
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -118,9 +120,10 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
             )))
         }
         ResidentStreamWrapperPlan::HttpUpgrade => {
-            native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
-                .await
-                .map_err(NativeTcpProbeError::Open)?;
+            let leftover =
+                native_httpupgrade_handshake_over_resident_tls_async(&mut client, &options)
+                    .await
+                    .map_err(NativeTcpProbeError::Open)?;
             client
                 .write_plain_all(&request, "write native Trojan HTTP Upgrade request")
                 .await
@@ -131,6 +134,7 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
                     &mut client,
                     relay_stop,
                     &metrics,
+                    leftover,
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -152,6 +156,7 @@ pub(super) async fn open_trojan_native_tcp_tunnel(
                     &mut client,
                     relay_stop,
                     &metrics,
+                    Vec::new(),
                 )
                 .await;
                 stop.store(true, Ordering::Relaxed);
@@ -177,7 +182,7 @@ async fn open_trojan_inner_shadowsocks_native_tcp_tunnel(
         .map_err(NativeTcpProbeError::Open)?;
     let options =
         HttpUpgradeOptions::new(&selection.proxy.stream_host, &selection.proxy.stream_path);
-    native_websocket_handshake_over_resident_tls_async(&mut client, &options)
+    let leftover = native_websocket_handshake_over_resident_tls_async(&mut client, &options)
         .await
         .map_err(NativeTcpProbeError::Open)?;
 
@@ -208,6 +213,7 @@ async fn open_trojan_inner_shadowsocks_native_tcp_tunnel(
             inner_password,
             Vec::new(),
             &metrics,
+            leftover,
         )
         .await;
         stop.store(true, Ordering::Relaxed);

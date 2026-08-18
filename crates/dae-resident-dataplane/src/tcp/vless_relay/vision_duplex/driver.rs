@@ -215,6 +215,7 @@ pub(super) struct VisionDuplexDriver {
     uplink_write_offset: usize,
     uplink_flush_pending: bool,
     pending_downlink: Vec<u8>,
+    outer_read_handoff_pending: bool,
     direct_downlink_len: usize,
     downlink_write_offset: usize,
     inbound_buffer: [u8; VISION_RELAY_BUFFER_SIZE],
@@ -225,7 +226,16 @@ pub(super) struct VisionDuplexDriver {
 }
 
 impl VisionDuplexDriver {
+    #[cfg(test)]
     pub(super) fn new(user_uuid: [u8; 16], initial_payload: Vec<u8>) -> Result<Self, String> {
+        Self::new_with_response_prefix(user_uuid, initial_payload, Vec::new())
+    }
+
+    pub(super) fn new_with_response_prefix(
+        user_uuid: [u8; 16],
+        initial_payload: Vec<u8>,
+        response_prefix: Vec<u8>,
+    ) -> Result<Self, String> {
         let initial_payload_len = initial_payload.len();
         if initial_payload_len > VISION_PENDING_UPLINK_LIMIT {
             return Err(pending_uplink_limit_error(initial_payload_len));
@@ -248,6 +258,7 @@ impl VisionDuplexDriver {
             uplink_write_offset: 0,
             uplink_flush_pending: false,
             pending_downlink: Vec::new(),
+            outer_read_handoff_pending: false,
             direct_downlink_len: 0,
             downlink_write_offset: 0,
             inbound_buffer: [0; VISION_RELAY_BUFFER_SIZE],
@@ -257,6 +268,12 @@ impl VisionDuplexDriver {
             proxy_write_shutdown: false,
         };
         driver.queue_uplink()?;
+        if !response_prefix.is_empty() {
+            let stripped = driver.response_stripper.consume(&response_prefix)?;
+            driver.stats.response_header_stripped = driver.response_stripper.done;
+            let payload = driver.unpadder.consume(&stripped)?;
+            driver.outer_read_handoff_pending = driver.consume_unpadded_overlay_payload(payload)?;
+        }
         Ok(driver)
     }
 
@@ -318,6 +335,12 @@ impl VisionDuplexDriver {
         Proxy: VisionProxyIo + ?Sized,
     {
         let mut progressed = false;
+
+        if self.outer_read_handoff_pending {
+            client.request_vision_outer_record_handoff();
+            self.outer_read_handoff_pending = false;
+            progressed = true;
+        }
 
         if self.poll_downlink_write(cx, inbound, metrics)? {
             progressed = true;
@@ -544,22 +567,9 @@ impl VisionDuplexDriver {
                             let stripped =
                                 self.response_stripper.consume(&self.proxy_buffer[..read])?;
                             self.stats.response_header_stripped = self.response_stripper.done;
-                            if stripped.is_empty() {
-                                self.pending_downlink.clear();
-                            } else {
-                                let payload = self.unpadder.consume(&stripped)?;
-                                self.inner_tls.observe_server_payload(&payload)?;
-                                self.stats.vision_unpadding_blocks = self.unpadder.completed_blocks;
-                                self.stats.vision_direct_command_seen =
-                                    self.unpadder.direct_command_seen;
-                                if self.unpadder.direct_command_seen
-                                    && self.downlink_state == VisionDownlinkState::Overlay
-                                {
-                                    client.request_vision_outer_record_handoff();
-                                    self.downlink_state = VisionDownlinkState::DirectPending;
-                                }
-                                self.queue_uplink()?;
-                                self.pending_downlink = payload;
+                            let payload = self.unpadder.consume(&stripped)?;
+                            if self.consume_unpadded_overlay_payload(payload)? {
+                                client.request_vision_outer_record_handoff();
                             }
                         }
                         VisionDownlinkState::DirectPass => self.direct_downlink_len = read,
@@ -615,6 +625,24 @@ impl VisionDuplexDriver {
                 }
             }
         }
+    }
+
+    fn consume_unpadded_overlay_payload(&mut self, payload: Vec<u8>) -> Result<bool, String> {
+        if payload.is_empty() {
+            self.pending_downlink.clear();
+            return Ok(false);
+        }
+        self.inner_tls.observe_server_payload(&payload)?;
+        self.stats.vision_unpadding_blocks = self.unpadder.completed_blocks;
+        self.stats.vision_direct_command_seen = self.unpadder.direct_command_seen;
+        let request_handoff = self.unpadder.direct_command_seen
+            && self.downlink_state == VisionDownlinkState::Overlay;
+        if request_handoff {
+            self.downlink_state = VisionDownlinkState::DirectPending;
+        }
+        self.queue_uplink()?;
+        self.pending_downlink = payload;
+        Ok(request_handoff)
     }
 
     fn pending_downlink_len(&self) -> usize {
