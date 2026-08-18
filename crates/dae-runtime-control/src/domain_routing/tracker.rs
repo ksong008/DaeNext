@@ -58,7 +58,7 @@ impl DomainRoutingTracker {
         }
     }
 
-    pub(super) fn plan_transition(&self, next: &Self) -> DomainRoutingSyncPlan {
+    pub fn plan_transition(&self, next: &Self) -> DomainRoutingSyncPlan {
         let mut affected = self
             .ips
             .keys()

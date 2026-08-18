@@ -68,7 +68,7 @@ impl DomainRoutingOwner {
         snapshot: DomainRoutingOwnerSnapshot,
     ) -> io::Result<DomainRoutingOwnerApplyReport> {
         self.apply_owner_snapshot_with(map_id, owner_key, snapshot, |map_id, updates, deletes| {
-            apply_domain_routing_entries(map_id, updates, deletes)
+            apply_domain_routing_state_entries_by_id(map_id, updates, deletes)
         })
     }
 
@@ -78,7 +78,7 @@ impl DomainRoutingOwner {
         event: DomainRoutingDnsEvent<'_>,
     ) -> io::Result<DomainRoutingOwnerApplyReport> {
         self.apply_dns_event_with(map_id, event, |map_id, updates, deletes| {
-            apply_domain_routing_entries(map_id, updates, deletes)
+            apply_domain_routing_state_entries_by_id(map_id, updates, deletes)
         })
     }
 
@@ -88,7 +88,7 @@ impl DomainRoutingOwner {
         events: impl IntoIterator<Item = DomainRoutingDnsEvent<'event>>,
     ) -> io::Result<DomainRoutingOwnerApplyReport> {
         self.apply_dns_events_with(map_id, events, |map_id, updates, deletes| {
-            apply_domain_routing_entries(map_id, updates, deletes)
+            apply_domain_routing_state_entries_by_id(map_id, updates, deletes)
         })
     }
 
@@ -237,7 +237,7 @@ impl DomainRoutingOwner {
         existing_keys: impl IntoIterator<Item = DomainRoutingIpKey>,
     ) -> io::Result<DomainRoutingReloadClearPlan> {
         self.prepare_reload_map_with(map_id, existing_keys, |map_id, deletes| {
-            apply_domain_routing_entries(map_id, &[], deletes)
+            apply_domain_routing_state_entries_by_id(map_id, &[], deletes)
         })
     }
 

@@ -1,5 +1,5 @@
 use super::*;
-pub(super) fn apply_domain_routing_entries(
+pub fn apply_domain_routing_state_entries_by_id(
     map_id: u32,
     updates: &[DomainRoutingStateEntry],
     deletes: &[DomainRoutingIpKey],

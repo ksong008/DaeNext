@@ -4,7 +4,8 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use crate::{
     BpfDomainRouting, BpfLpmKey, BpfMatchSet, RuntimeMapUpdateDiffReport,
-    apply_runtime_map_update_diff, delete_map_elem_bytes, open_map_fd, update_map_elem_bytes,
+    apply_runtime_map_update_diff, delete_map_elem_bytes, lookup_map_elem_bytes, open_map_fd,
+    update_map_elem_bytes,
 };
 
 const BPF_MAP_CREATE: libc::c_uint = 0;
@@ -136,24 +137,86 @@ pub fn apply_domain_routing_map_by_id(
     deletes: &[[u32; 4]],
 ) -> io::Result<DomainRoutingMapApplyReport> {
     let map = open_map_fd(map_id)?;
+    let mut snapshots = Vec::with_capacity(updates.len().saturating_add(deletes.len()));
+    for key in updates
+        .iter()
+        .map(|entry| entry.key)
+        .chain(deletes.iter().copied())
+    {
+        if snapshots
+            .iter()
+            .any(|(snapshot_key, _)| *snapshot_key == key)
+        {
+            continue;
+        }
+        let mut old_value = [0_u8; size_of::<BpfDomainRouting>()];
+        let old_value =
+            match lookup_map_elem_bytes(map.as_raw_fd(), plain_bytes(&key), &mut old_value) {
+                Ok(()) => Some(old_value),
+                Err(error) if error.raw_os_error() == Some(libc::ENOENT) => None,
+                Err(error) => return Err(error),
+            };
+        snapshots.push((key, old_value));
+    }
+
     for entry in updates {
-        update_map_elem_bytes(
+        if let Err(err) = update_map_elem_bytes(
             map.as_raw_fd(),
             plain_bytes(&entry.key),
             plain_bytes(&entry.value),
-        )?;
+        ) {
+            return Err(domain_routing_apply_error(
+                err,
+                rollback_domain_routing_snapshot(map.as_raw_fd(), &snapshots),
+            ));
+        }
     }
     for key in deletes {
         if let Err(err) = delete_map_elem_bytes(map.as_raw_fd(), plain_bytes(key))
             && err.raw_os_error() != Some(libc::ENOENT)
         {
-            return Err(err);
+            return Err(domain_routing_apply_error(
+                err,
+                rollback_domain_routing_snapshot(map.as_raw_fd(), &snapshots),
+            ));
         }
     }
     Ok(DomainRoutingMapApplyReport {
         entries_updated: updates.len(),
         entries_deleted: deletes.len(),
     })
+}
+
+fn rollback_domain_routing_snapshot(
+    map_fd: i32,
+    snapshots: &[([u32; 4], Option<[u8; size_of::<BpfDomainRouting>()]>)],
+) -> io::Result<()> {
+    let mut first_error = None;
+    for (key, old_value) in snapshots.iter().rev() {
+        let result = match old_value {
+            Some(old_value) => update_map_elem_bytes(map_fd, plain_bytes(key), old_value),
+            None => delete_map_elem_bytes(map_fd, plain_bytes(key)),
+        };
+        if let Err(error) = result
+            && error.raw_os_error() != Some(libc::ENOENT)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn domain_routing_apply_error(operation: io::Error, rollback: io::Result<()>) -> io::Error {
+    match rollback {
+        Ok(()) => operation,
+        Err(rollback) => io::Error::other(format!(
+            "domain routing map operation failed: {operation}; rollback also failed: {rollback}"
+        )),
+    }
 }
 
 pub fn apply_domain_routing_map_diff_by_id(

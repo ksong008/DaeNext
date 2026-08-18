@@ -402,7 +402,7 @@ pub fn count_map_entries_by_id(id: u32) -> io::Result<u64> {
 
 pub fn count_map_entries_by_fd(map_fd: RawFd) -> io::Result<u64> {
     let info = map_info(map_fd)?;
-    Ok(map_keys_by_fd(map_fd, info.key_size)?.len() as u64)
+    count_map_entries_by_fd_with_key_size(map_fd, info.key_size)
 }
 
 pub fn map_capacity_by_id(id: u32) -> io::Result<RuntimeMapCapacity> {
@@ -432,18 +432,42 @@ pub fn map_capacity_fast_by_fd(map_fd: RawFd) -> io::Result<RuntimeMapCapacity> 
 }
 
 fn count_map_entries_by_fd_with_key_size(map_fd: RawFd, key_size: u32) -> io::Result<u64> {
-    Ok(map_keys_by_fd(map_fd, key_size)?.len() as u64)
+    let max_keys = map_info(map_fd)
+        .map(|info| u64::from(info.max_entries))
+        .unwrap_or(u64::MAX);
+    visit_map_keys_by_fd(map_fd, key_size, max_keys, |_| Ok(()))
 }
 
-pub fn map_keys_by_fd(map_fd: RawFd, key_size: u32) -> io::Result<Vec<Vec<u8>>> {
-    if key_size == 0 {
-        return Ok(Vec::new());
+/// F-20: 流式枚举 map keys——callback 消费每个 key，不物化全部；
+/// `max_keys` 限制枚举上限，防止特权 API 误用造成 OOM。
+/// 返回实际枚举数量。key_size 与 map info 交叉校验（可查时）。
+pub fn visit_map_keys_by_fd(
+    map_fd: RawFd,
+    key_size: u32,
+    max_keys: u64,
+    mut visit: impl FnMut(&[u8]) -> io::Result<()>,
+) -> io::Result<u64> {
+    if key_size == 0 || max_keys == 0 {
+        return Ok(0);
+    }
+    // F-20: 与 map info 交叉校验，杜绝调用方传入错误尺寸导致内核
+    // 越界写 next_key 缓冲区的契约风险。
+    if let Ok(info) = map_info(map_fd)
+        && info.key_size != key_size
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "visit_map_keys_by_fd: key_size {key_size} does not match map key_size {}",
+                info.key_size
+            ),
+        ));
     }
 
     let mut current_key = vec![0_u8; key_size as usize];
     let mut next_key = vec![0_u8; key_size as usize];
     let mut has_previous_key = false;
-    let mut keys = Vec::new();
+    let mut visited = 0_u64;
 
     loop {
         let key_ptr = if has_previous_key {
@@ -474,11 +498,28 @@ pub fn map_keys_by_fd(map_fd: RawFd, key_size: u32) -> io::Result<Vec<Vec<u8>>> 
             }
             return Err(err);
         }
-        keys.push(next_key.clone());
+        visit(&next_key)?;
+        visited += 1;
+        if visited >= max_keys {
+            break;
+        }
         current_key.copy_from_slice(&next_key);
         has_previous_key = true;
     }
 
+    Ok(visited)
+}
+
+pub fn map_keys_by_fd(map_fd: RawFd, key_size: u32) -> io::Result<Vec<Vec<u8>>> {
+    let mut keys = Vec::new();
+    // F-20: 物化版兼容 API 经流式实现；上限用 map 容量（可查时）防误用。
+    let max_keys = map_info(map_fd)
+        .map(|info| u64::from(info.max_entries))
+        .unwrap_or(u64::MAX);
+    visit_map_keys_by_fd(map_fd, key_size, max_keys, |key| {
+        keys.push(key.to_vec());
+        Ok(())
+    })?;
     Ok(keys)
 }
 

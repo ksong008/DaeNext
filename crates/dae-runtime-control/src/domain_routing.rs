@@ -13,6 +13,6 @@ mod snapshot;
 mod tracker;
 use self::bitmaps::*;
 mod map_apply;
-use self::map_apply::*;
+pub use self::map_apply::*;
 mod ip_keys;
 pub use self::ip_keys::*;
