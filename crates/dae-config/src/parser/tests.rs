@@ -1,4 +1,14 @@
 use super::*;
+
+#[test]
+fn parser_rejects_oversized_input_and_literal() {
+    let oversized = " ".repeat(MAX_CONFIG_BYTES + 1);
+    assert!(parse_config(&oversized).is_err());
+
+    let literal = "a".repeat(MAX_CONFIG_TOKEN_BYTES + 1);
+    let input = format!("global {{ value: {literal} }}");
+    assert!(parse_config(&input).is_err());
+}
 use crate::ItemKind;
 use crate::ast::quote_string;
 use crate::fixtures::PARSER_AST_BASIC;

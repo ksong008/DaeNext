@@ -4,6 +4,7 @@ pub(super) struct Parser<'a> {
     pub(super) tokens: Vec<Token>,
     pub(super) pos: usize,
     section_depth: usize,
+    ast_nodes: usize,
 }
 
 /// Maximum nesting depth for sections.  `parse_section` recurses for nested
@@ -18,6 +19,7 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             section_depth: 0,
+            ast_nodes: 0,
         }
     }
 
@@ -30,6 +32,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_section(&mut self) -> Result<Section, ConfigError> {
+        self.charge_ast_node()?;
         if self.section_depth >= MAX_SECTION_DEPTH {
             return Err(self.error_here(&format!(
                 "section nesting exceeds limit of {MAX_SECTION_DEPTH}"
@@ -56,6 +59,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_item(&mut self) -> Result<Item, ConfigError> {
+        self.charge_ast_node()?;
         if self.starts_section() {
             return Ok(Item::Section(Box::new(self.parse_section()?)));
         }
@@ -83,6 +87,16 @@ impl<'a> Parser<'a> {
         }
 
         Err(self.error_here("expected item"))
+    }
+
+    fn charge_ast_node(&mut self) -> Result<(), ConfigError> {
+        if self.ast_nodes >= MAX_CONFIG_AST_NODES {
+            return Err(self.error_here(&format!(
+                "section/item count exceeds limit of {MAX_CONFIG_AST_NODES}"
+            )));
+        }
+        self.ast_nodes += 1;
+        Ok(())
     }
 
     pub(super) fn parse_declaration(&mut self) -> Result<Param, ConfigError> {

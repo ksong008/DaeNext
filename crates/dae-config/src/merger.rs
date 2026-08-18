@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-use dae_config_util::ensure_file_in_sub_dir;
+use dae_config_util::open_verified_in_sub_dir;
 
 use crate::ast::{Item, Section};
 use crate::error::ConfigError;
@@ -10,6 +10,9 @@ use crate::parser::parse_config;
 
 const MAX_MERGE_DEPTH: usize = 128;
 const MAX_MERGE_FILES: usize = 4096;
+const MAX_CONFIG_FILE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_MERGE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+const MAX_MERGE_ITEMS: usize = 512 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MergeOutput {
@@ -25,7 +28,10 @@ pub fn merge_config_file(entry: impl Into<PathBuf>) -> Result<MergeOutput, Confi
         entry_dir,
         entry_to_section_map: BTreeMap::new(),
         visited: BTreeSet::new(),
+        include_stack: Vec::new(),
         files_read: 0,
+        bytes_read: 0,
+        items_read: 0,
     };
     merger.dfs_merge(&entry, None, 0)?;
     let entries = merger.entry_to_section_map.keys().cloned().collect();
@@ -45,15 +51,24 @@ struct Merger {
     // detection so that spellings like ./x.dae, x.dae or x/../x.dae that
     // refer to the same file cannot bypass the check.
     visited: BTreeSet<PathBuf>,
+    include_stack: Vec<PathBuf>,
     files_read: usize,
+    bytes_read: usize,
+    items_read: usize,
 }
 
 impl Merger {
     fn read_entry(&mut self, entry: &Path) -> Result<(), ConfigError> {
         let canonical = canonical_or_normalized(entry);
         if self.visited.contains(&canonical) {
+            // 分型：当前 include 栈上再次出现 = 循环；否则 = 重复包含。
+            if self.include_stack.contains(&canonical) {
+                return Err(ConfigError::Merge(
+                    "circular include is not allowed".to_owned(),
+                ));
+            }
             return Err(ConfigError::Merge(
-                "circular include is not allowed".to_owned(),
+                "duplicate include is not allowed".to_owned(),
             ));
         }
 
@@ -64,16 +79,12 @@ impl Merger {
             )));
         }
 
-        ensure_file_in_sub_dir(entry, &self.entry_dir).map_err(|err| {
+        // F-07: 打开后验证（fd 级路径解析），消除"检查与 open 分离"的
+        // symlink/rename TOCTOU——即使检查后被换成 symlink，打开后基于
+        // 已打开 fd 的路径校验仍会拒绝越界文件。
+        let file = open_verified_in_sub_dir(entry, &self.entry_dir).map_err(|err| {
             ConfigError::Merge(format!(
-                "failed in checking path of config file {}: {err}",
-                entry.display()
-            ))
-        })?;
-
-        let mut file = std::fs::File::open(entry).map_err(|err| {
-            ConfigError::Merge(format!(
-                "failed to read config file {}: {err}",
+                "failed to safely open config file {}: {err}",
                 entry.display()
             ))
         })?;
@@ -83,6 +94,12 @@ impl Merger {
         if metadata.is_dir() {
             return Err(ConfigError::Merge(format!(
                 "cannot include a directory: {}",
+                entry.display()
+            )));
+        }
+        if metadata.len() > MAX_CONFIG_FILE_BYTES as u64 {
+            return Err(ConfigError::Merge(format!(
+                "config file {} exceeds byte limit {MAX_CONFIG_FILE_BYTES}",
                 entry.display()
             )));
         }
@@ -100,14 +117,39 @@ impl Merger {
         }
 
         let mut input = String::new();
-        file.read_to_string(&mut input)
+        file.take((MAX_CONFIG_FILE_BYTES + 1) as u64)
+            .read_to_string(&mut input)
             .map_err(|err| ConfigError::Merge(err.to_string()))?;
+        if input.len() > MAX_CONFIG_FILE_BYTES {
+            return Err(ConfigError::Merge(format!(
+                "config file {} exceeds byte limit {MAX_CONFIG_FILE_BYTES}",
+                entry.display()
+            )));
+        }
+        self.bytes_read = self
+            .bytes_read
+            .checked_add(input.len())
+            .ok_or_else(|| ConfigError::Merge("merged config byte count overflow".to_owned()))?;
+        if self.bytes_read > MAX_MERGE_TOTAL_BYTES {
+            return Err(ConfigError::Merge(format!(
+                "merged config exceeds total byte limit {MAX_MERGE_TOTAL_BYTES}"
+            )));
+        }
         let sections = parse_config(&input).map_err(|err| {
             ConfigError::Merge(format!(
                 "failed to parse config file {}:\n{err}",
                 entry.display()
             ))
         })?;
+        self.items_read = self
+            .items_read
+            .checked_add(count_section_nodes(&sections))
+            .ok_or_else(|| ConfigError::Merge("merged config item count overflow".to_owned()))?;
+        if self.items_read > MAX_MERGE_ITEMS {
+            return Err(ConfigError::Merge(format!(
+                "merged config exceeds section/item limit {MAX_MERGE_ITEMS}"
+            )));
+        }
         let section_map = self.convert_sections_to_map(sections);
         self.files_read += 1;
         if self.files_read > MAX_MERGE_FILES {
@@ -115,7 +157,8 @@ impl Merger {
                 "merge exceeds file count limit {MAX_MERGE_FILES}"
             )));
         }
-        self.visited.insert(canonical);
+        self.visited.insert(canonical.clone());
+        self.include_stack.push(canonical);
         self.entry_to_section_map
             .insert(entry.to_path_buf(), section_map);
         Ok(())
@@ -198,6 +241,7 @@ impl Merger {
                 father_section_map.entry(section).or_default().extend(items);
             }
         }
+        self.include_stack.pop();
         Ok(())
     }
 
@@ -218,6 +262,23 @@ impl Merger {
             .map(|(name, items)| Section { name, items })
             .collect()
     }
+}
+
+fn count_section_nodes(sections: &[Section]) -> usize {
+    fn count_items(items: &[Item]) -> usize {
+        items.iter().fold(0_usize, |count, item| {
+            count.saturating_add(1).saturating_add(match item {
+                Item::Section(section) => count_items(&section.items),
+                _ => 0,
+            })
+        })
+    }
+
+    sections.iter().fold(0_usize, |count, section| {
+        count
+            .saturating_add(1)
+            .saturating_add(count_items(&section.items))
+    })
 }
 
 fn parent_or_dot(path: &Path) -> &Path {
@@ -489,7 +550,11 @@ routing {
         let err = merge_config_file(duplicate.path("entry.dae"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("circular include is not allowed"));
+        // 分型：同一 include 语句内重复 = duplicate（非循环）。
+        assert!(
+            err.contains("duplicate include is not allowed"),
+            "err = {err}"
+        );
 
         let suffix = TempTree::new();
         suffix.write_mode("entry.conf", "global {}\nrouting {}\n", 0o640);

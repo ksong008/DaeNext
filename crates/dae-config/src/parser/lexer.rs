@@ -71,6 +71,22 @@ impl<'a> Lexer<'a> {
                 b'\'' | b'"' => TokenKind::Literal(self.read_quoted()?),
                 _ => TokenKind::Literal(self.read_bare()?),
             };
+            if let TokenKind::Literal(value) = &token
+                && value.len() > MAX_CONFIG_TOKEN_BYTES
+            {
+                return Err(parse_error(
+                    self.input,
+                    offset,
+                    &format!("literal exceeds byte limit of {MAX_CONFIG_TOKEN_BYTES}"),
+                ));
+            }
+            if tokens.len() >= MAX_CONFIG_TOKENS {
+                return Err(parse_error(
+                    self.input,
+                    offset,
+                    &format!("token count exceeds limit of {MAX_CONFIG_TOKENS}"),
+                ));
+            }
             tokens.push(Token {
                 kind: token,
                 offset,

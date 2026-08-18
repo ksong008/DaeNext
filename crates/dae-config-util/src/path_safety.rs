@@ -45,6 +45,45 @@ pub fn ensure_file_in_sub_dir(
     Ok(())
 }
 
+/// F-07: 打开后验证的安全 include 打开——先预检，再打开，最后基于
+/// **已打开 fd** 解析实际路径并校验仍在目录内（`File::canonicalize`
+/// 走 /proc/self/fd，不重解析路径名，天然免疫 symlink/rename TOCTOU）。
+pub fn open_verified_in_sub_dir(
+    file_path: impl AsRef<Path>,
+    dir: impl AsRef<Path>,
+) -> std::io::Result<std::fs::File> {
+    use std::io::{Error, ErrorKind};
+    ensure_file_in_sub_dir(file_path.as_ref(), dir.as_ref())
+        .map_err(|err| Error::new(ErrorKind::PermissionDenied, err.to_string()))?;
+    let file = std::fs::File::open(file_path.as_ref())?;
+    let real_dir = std::fs::canonicalize(dir.as_ref())
+        .map_err(|err| Error::new(ErrorKind::PermissionDenied, format!("{err}")))?;
+    let real_file = fd_real_path(&file).ok_or_else(|| {
+        Error::new(
+            ErrorKind::PermissionDenied,
+            format!(
+                "cannot resolve opened file {} via /proc/self/fd",
+                file_path.as_ref().display()
+            ),
+        )
+    })?;
+    ensure_path_in_sub_dir(&real_file, &real_dir)
+        .map_err(|err| Error::new(ErrorKind::PermissionDenied, err.to_string()))?;
+    Ok(file)
+}
+
+/// 基于已打开 fd 解析实际路径（/proc/self/fd 链接），不重解析路径名。
+#[cfg(unix)]
+fn fd_real_path(file: &std::fs::File) -> Option<std::path::PathBuf> {
+    use std::os::unix::io::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+#[cfg(not(unix))]
+fn fd_real_path(_file: &std::fs::File) -> Option<std::path::PathBuf> {
+    None
+}
+
 fn ensure_path_in_sub_dir(path: &Path, dir: &Path) -> Result<(), PathSafetyError> {
     let rel = relative_path(path, dir);
     let escaped = rel == Path::new("..")
@@ -192,5 +231,53 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.base);
         }
+    }
+}
+
+#[cfg(test)]
+mod f07_tests {
+    use super::open_verified_in_sub_dir;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn test_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("dae-config-util-f07-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn open_verified_accepts_in_scope_file() {
+        let root = test_root();
+        let dir = root.join("config");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("good.dae");
+        fs::write(&file, b"content").unwrap();
+        let mut opened = open_verified_in_sub_dir(&file, &dir).unwrap();
+        use std::io::Read;
+        let mut text = String::new();
+        opened.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "content");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_verified_rejects_symlink_escape() {
+        // F-07 回归：目录内 symlink 指向目录外文件——打开后基于 fd 的
+        // 路径校验必须拒绝（此前"检查后 open"的 TOCTOU 会放行）。
+        let root = test_root();
+        let dir = root.join("config");
+        fs::create_dir_all(&dir).unwrap();
+        let secret = root.join("secret.dae");
+        fs::write(&secret, b"secret").unwrap();
+        let link = dir.join("evil.dae");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        assert!(
+            open_verified_in_sub_dir(&link, &dir).is_err(),
+            "symlink escape must be rejected"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

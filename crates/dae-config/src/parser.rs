@@ -14,3 +14,8 @@ mod error;
 use self::error::*;
 #[cfg(test)]
 mod tests;
+
+const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CONFIG_TOKENS: usize = 512 * 1024;
+const MAX_CONFIG_TOKEN_BYTES: usize = 1024 * 1024;
+const MAX_CONFIG_AST_NODES: usize = 256 * 1024;
