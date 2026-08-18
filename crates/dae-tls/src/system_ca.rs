@@ -199,7 +199,11 @@ fn cached_system_ca_snapshot(
         return snapshot.clone();
     }
     let snapshot = load().map(Arc::new);
-    *cache = Some(snapshot.clone());
+    // F-13: 只缓存成功值；加载错误不缓存——瞬时不可读的 CA bundle
+    // 在下次调用时自动重试，不会让所有后续 TLS 建连持续失败。
+    if snapshot.is_ok() {
+        *cache = Some(snapshot.clone());
+    }
     snapshot
 }
 
