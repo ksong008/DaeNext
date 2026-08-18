@@ -224,39 +224,42 @@ fn capacity_pressure_evicts_the_oldest_generation_and_keeps_publication_admitted
 }
 
 #[test]
-fn committed_publication_hard_stops_retired_generation() {
+fn committed_publication_keeps_owned_retired_generation_draining() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
     drain.retire_shared_at(generation.clone(), now);
 
-    drain.finalize_retirements();
+    drain.commit_retirements();
 
-    assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
-    assert!(generation.control.lifecycle.stop_is_requested());
-    assert!(generation.control.flow_stop.load(Ordering::Acquire));
-    assert!(generation.control.udp_stop.load(Ordering::Acquire));
+    assert_eq!(stop_requests.load(Ordering::Relaxed), 0);
+    assert!(!generation.control.lifecycle.stop_is_requested());
+    assert!(!generation.control.flow_stop.load(Ordering::Acquire));
+    assert!(!generation.control.udp_stop.load(Ordering::Acquire));
     assert_eq!(drain.snapshot()["retired"], 1);
-    assert_eq!(drain.snapshot()["finalizationForcedTotal"], 1);
+    assert_eq!(drain.snapshot()["finalizationForcedTotal"], 0);
 }
 
 #[test]
-fn committed_publication_detaches_unowned_generation_immediately() {
+fn committed_publication_detaches_heavy_state_without_stopping_owned_flows() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
+    let flow_owner = Arc::clone(&generation.control);
     drain.retire_shared_at(generation.clone(), now);
     drop(generation);
 
-    drain.finalize_retirements();
+    drain.commit_retirements();
 
     assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
+    assert!(!flow_owner.flow_stop.load(Ordering::Acquire));
+    assert!(!flow_owner.udp_stop.load(Ordering::Acquire));
     let snapshot = drain.snapshot();
-    assert_eq!(snapshot["retired"], 0);
+    assert_eq!(snapshot["retired"], 1);
     assert_eq!(snapshot["detachedTotal"], 1);
-    assert_eq!(snapshot["releasedTotal"], 1);
+    assert_eq!(snapshot["releasedTotal"], 0);
     assert_eq!(snapshot["naturalTotal"], 0);
-    assert_eq!(snapshot["finalizationForcedTotal"], 1);
+    assert_eq!(snapshot["finalizationForcedTotal"], 0);
 }
 
 #[test]
@@ -267,11 +270,11 @@ fn committed_publication_does_not_stop_the_active_generation() {
     let (active, active_stop_requests) = TestGeneration::new(2);
     drain.retire_shared_at(retired.clone(), now);
 
-    drain.finalize_retirements();
+    drain.commit_retirements();
 
-    assert_eq!(retired_stop_requests.load(Ordering::Relaxed), 1);
-    assert!(retired.control.flow_stop.load(Ordering::Acquire));
-    assert!(retired.control.udp_stop.load(Ordering::Acquire));
+    assert_eq!(retired_stop_requests.load(Ordering::Relaxed), 0);
+    assert!(!retired.control.flow_stop.load(Ordering::Acquire));
+    assert!(!retired.control.udp_stop.load(Ordering::Acquire));
     assert_eq!(active_stop_requests.load(Ordering::Relaxed), 0);
     assert!(active.control.lifecycle.admission_is_open());
     assert!(!active.control.flow_stop.load(Ordering::Acquire));

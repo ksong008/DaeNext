@@ -85,12 +85,12 @@ impl ProductRuntimeManager {
         }
     }
 
-    pub(in crate::daed_product) fn finalize_runtime_generation_publication(&self) {
+    pub(in crate::daed_product) fn commit_runtime_generation_publication(&self) {
         let Ok(inner) = self.inner.lock() else {
             return;
         };
         if let Some(ProductRuntimeInstance::Resident(runtime)) = inner.runtime.as_ref() {
-            runtime.finalize_generation_publication();
+            runtime.commit_generation_publication();
         }
     }
 

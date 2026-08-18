@@ -158,7 +158,7 @@ pub(in crate::daed_product) fn apply_runtime_generation(
             drop(snapshot);
             candidate.discard_rollback_state();
             runtime.publish_process_transition(process_transition);
-            runtime.finalize_runtime_generation_publication();
+            runtime.commit_runtime_generation_publication();
             record_apply_success(runtime, &generation);
             Ok((runtime_report, materialized_report))
         }

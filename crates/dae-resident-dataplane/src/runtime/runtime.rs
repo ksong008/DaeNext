@@ -267,7 +267,7 @@ impl ResidentDataplaneRuntime {
         }))
     }
 
-    pub fn finalize_generation_publication(&self) {
-        self.generation_drain.finalize_retirements();
+    pub fn commit_generation_publication(&self) {
+        self.generation_drain.commit_retirements();
     }
 }
