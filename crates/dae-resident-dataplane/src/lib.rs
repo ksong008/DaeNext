@@ -12,11 +12,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use dae_config::Config;
 use dae_ebpf_support::LiveLoadedTproxyListenSocketMap;
 use dae_outbound::{
-    NetworkType, SourceShapeRegistryRow, canonical_link_without_display_name,
-    source_shape_registry_contract, source_shape_registry_rows,
+    NetworkType, SourceShapeRegistryRow, source_shape_registry_contract, source_shape_registry_rows,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 pub(crate) const PRODUCTION_NETNS: &str = "daens";
 
@@ -116,6 +114,10 @@ pub(crate) use self::udp::{
     probe_resident_proxy_dns_udp_with_forwarder_async,
 };
 pub(crate) use dae_resident_core::*;
+pub(crate) use dae_resident_plan::{
+    display_name_from_link, execution_link_hash, graph_id_from_link_hash, link_hash,
+    redacted_link_source,
+};
 
 #[path = "runtime/defaults.rs"]
 mod defaults;

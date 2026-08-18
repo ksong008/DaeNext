@@ -6,21 +6,21 @@ use super::{
 use super::{ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentUdpChainAdmission {
+pub enum ResidentUdpChainAdmission {
     NotChained,
     ParentStream,
     Unsupported(&'static str),
 }
 
 impl ResidentUdpChainAdmission {
-    pub(crate) const fn status(self) -> &'static str {
+    pub const fn status(self) -> &'static str {
         match self {
             Self::NotChained | Self::ParentStream => "admitted",
             Self::Unsupported(_) => "fail-closed",
         }
     }
 
-    pub(crate) const fn carrier(self) -> &'static str {
+    pub const fn carrier(self) -> &'static str {
         match self {
             Self::NotChained => "direct-child",
             Self::ParentStream => "parent-connect-stream",
@@ -28,7 +28,7 @@ impl ResidentUdpChainAdmission {
         }
     }
 
-    pub(crate) const fn unsupported_reason(self) -> Option<&'static str> {
+    pub const fn unsupported_reason(self) -> Option<&'static str> {
         match self {
             Self::Unsupported(reason) => Some(reason),
             Self::NotChained | Self::ParentStream => None,
@@ -36,7 +36,7 @@ impl ResidentUdpChainAdmission {
     }
 }
 
-pub(crate) fn resident_udp_chain_admission(proxy: &ResidentProxyPlan) -> ResidentUdpChainAdmission {
+pub fn resident_udp_chain_admission(proxy: &ResidentProxyPlan) -> ResidentUdpChainAdmission {
     if proxy.chain_parent.is_none() {
         return ResidentUdpChainAdmission::NotChained;
     }

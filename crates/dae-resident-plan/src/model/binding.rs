@@ -5,14 +5,14 @@ use dae_runtime_control::OwnerGeneration;
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentProxyBindingScope {
+pub enum ResidentProxyBindingScope {
     Configuration,
     Resident,
     ControlPlane,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentSocketMarkPolicy {
+pub enum ResidentSocketMarkPolicy {
     Configured,
     RouteOverride(u32),
     ControlFallback(u32),
@@ -42,19 +42,19 @@ impl ResidentSocketMarkPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentXhttpReusePolicy {
+pub enum ResidentXhttpReusePolicy {
     Configured,
     NoPersistentReuse,
 }
 
 impl ResidentXhttpReusePolicy {
-    pub(crate) const fn allows_persistent_reuse(self) -> bool {
+    pub const fn allows_persistent_reuse(self) -> bool {
         matches!(self, Self::Configured)
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct ResidentProxyBinding {
+pub struct ResidentProxyBinding {
     plan: Arc<ResidentProxyPlan>,
     execution: ResidentExecutionPlan,
     scope: ResidentProxyBindingScope,
@@ -63,7 +63,7 @@ pub(crate) struct ResidentProxyBinding {
 }
 
 impl ResidentProxyBinding {
-    pub(crate) fn configuration(plan: Arc<ResidentProxyPlan>) -> Result<Self, String> {
+    pub fn configuration(plan: Arc<ResidentProxyPlan>) -> Result<Self, String> {
         Self::new(
             plan,
             ResidentProxyBindingScope::Configuration,
@@ -71,8 +71,8 @@ impl ResidentProxyBinding {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn resident(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn resident(
         plan: Arc<ResidentProxyPlan>,
         generation: OwnerGeneration,
     ) -> Result<Self, String> {
@@ -82,7 +82,7 @@ impl ResidentProxyBinding {
         Self::new(plan, ResidentProxyBindingScope::Resident, generation)
     }
 
-    pub(crate) fn control_plane(plan: Arc<ResidentProxyPlan>) -> Result<Self, String> {
+    pub fn control_plane(plan: Arc<ResidentProxyPlan>) -> Result<Self, String> {
         Self::new(
             plan,
             ResidentProxyBindingScope::ControlPlane,
@@ -107,10 +107,7 @@ impl ResidentProxyBinding {
         })
     }
 
-    pub(crate) fn bind_resident_generation(
-        &mut self,
-        generation: OwnerGeneration,
-    ) -> Result<(), String> {
+    pub fn bind_resident_generation(&mut self, generation: OwnerGeneration) -> Result<(), String> {
         if generation.get() == 0 {
             return Err("resident proxy binding generation must be nonzero".to_owned());
         }
@@ -119,38 +116,38 @@ impl ResidentProxyBinding {
         Ok(())
     }
 
-    pub(crate) fn bind_control_plane(&mut self) {
+    pub fn bind_control_plane(&mut self) {
         self.execution = self
             .execution
             .with_runtime_generation(OwnerGeneration::new(0));
         self.scope = ResidentProxyBindingScope::ControlPlane;
     }
 
-    pub(crate) fn with_route_socket_mark(mut self, mark: u32) -> Self {
+    pub fn with_route_socket_mark(mut self, mark: u32) -> Self {
         if mark != 0 && self.plan.mark != mark {
             self.socket_mark = ResidentSocketMarkPolicy::RouteOverride(mark);
         }
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_control_socket_mark(mut self, mark: u32) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_control_socket_mark(mut self, mark: u32) -> Self {
         self.apply_control_socket_mark(mark);
         self
     }
 
-    pub(crate) fn apply_control_socket_mark(&mut self, mark: u32) {
+    pub fn apply_control_socket_mark(&mut self, mark: u32) {
         if mark != 0 {
             self.socket_mark = ResidentSocketMarkPolicy::ControlFallback(mark);
         }
     }
 
-    pub(crate) fn without_persistent_xhttp_reuse(mut self) -> Self {
+    pub fn without_persistent_xhttp_reuse(mut self) -> Self {
         self.xhttp_reuse = ResidentXhttpReusePolicy::NoPersistentReuse;
         self
     }
 
-    pub(crate) fn chain_parent(&self) -> Result<Option<Self>, String> {
+    pub fn chain_parent(&self) -> Result<Option<Self>, String> {
         self.plan
             .chain_parent
             .as_ref()
@@ -169,48 +166,48 @@ impl ResidentProxyBinding {
             .transpose()
     }
 
-    pub(crate) fn plan(&self) -> &ResidentProxyPlan {
+    pub fn plan(&self) -> &ResidentProxyPlan {
         &self.plan
     }
 
-    pub(crate) fn shared_plan(&self) -> &Arc<ResidentProxyPlan> {
+    pub fn shared_plan(&self) -> &Arc<ResidentProxyPlan> {
         &self.plan
     }
 
-    pub(crate) fn into_shared_plan(self) -> Arc<ResidentProxyPlan> {
+    pub fn into_shared_plan(self) -> Arc<ResidentProxyPlan> {
         self.plan
     }
 
-    pub(crate) const fn execution(&self) -> ResidentExecutionPlan {
+    pub const fn execution(&self) -> ResidentExecutionPlan {
         self.execution
     }
 
-    #[cfg(test)]
-    pub(crate) const fn scope(&self) -> ResidentProxyBindingScope {
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn scope(&self) -> ResidentProxyBindingScope {
         self.scope
     }
 
-    pub(crate) const fn runtime_generation(&self) -> OwnerGeneration {
+    pub const fn runtime_generation(&self) -> OwnerGeneration {
         self.execution.runtime_generation()
     }
 
-    pub(crate) fn effective_socket_mark(&self) -> u32 {
+    pub fn effective_socket_mark(&self) -> u32 {
         self.socket_mark.effective_mark(self.plan.mark)
     }
 
-    #[cfg(test)]
-    pub(crate) const fn xhttp_reuse_policy(&self) -> ResidentXhttpReusePolicy {
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn xhttp_reuse_policy(&self) -> ResidentXhttpReusePolicy {
         self.xhttp_reuse
     }
 
-    pub(crate) fn persistent_xhttp_xmux(&self) -> Option<&ResidentXhttpXmuxPlan> {
+    pub fn persistent_xhttp_xmux(&self) -> Option<&ResidentXhttpXmuxPlan> {
         self.xhttp_reuse
             .allows_persistent_reuse()
             .then_some(self.plan.xhttp_xmux.as_ref())
             .flatten()
     }
 
-    pub(crate) fn persistent_xhttp_download_xmux(&self) -> Option<&ResidentXhttpXmuxPlan> {
+    pub fn persistent_xhttp_download_xmux(&self) -> Option<&ResidentXhttpXmuxPlan> {
         self.xhttp_reuse
             .allows_persistent_reuse()
             .then(|| {
@@ -245,6 +242,3 @@ impl std::ops::Deref for ResidentProxyBinding {
         self.plan()
     }
 }
-
-#[cfg(test)]
-mod tests;

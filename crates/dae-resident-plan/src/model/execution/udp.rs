@@ -2,13 +2,13 @@ use super::super::*;
 use super::UdpPacketSemantics;
 
 mod agreement;
-pub(crate) use agreement::{
+pub use agreement::{
     RESIDENT_UDP_CLEANUP_OWNER, RESIDENT_UDP_CLEANUP_POLICY, ResidentUdpExecutionAgreement,
     ResidentUdpExecutionDisposition, ResidentUdpSourceContract, ResidentUdpWireIdentityContract,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentStreamPacketTransport {
+pub enum ResidentStreamPacketTransport {
     PlainTcp,
     TlsTcp,
     TcpHttpHeaderPlain,
@@ -25,7 +25,7 @@ pub(crate) enum ResidentStreamPacketTransport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentUdpPolicyClosedReason {
+pub enum ResidentUdpPolicyClosedReason {
     HttpConnect,
     PluginWrapper,
     ShadowsocksR,
@@ -39,7 +39,7 @@ pub(crate) enum ResidentUdpPolicyClosedReason {
 }
 
 impl ResidentUdpPolicyClosedReason {
-    pub(crate) fn executor_label(self) -> &'static str {
+    pub fn executor_label(self) -> &'static str {
         match self {
             Self::HttpConnect => "http-connect-udp-protocol-closed",
             Self::PluginWrapper => "plugin-udp-policy-closed",
@@ -54,7 +54,7 @@ impl ResidentUdpPolicyClosedReason {
         }
     }
 
-    pub(crate) fn reason(self) -> &'static str {
+    pub fn reason(self) -> &'static str {
         match self {
             Self::HttpConnect => "HTTP CONNECT has no UDP relay semantics in resident dataplane",
             Self::PluginWrapper => {
@@ -83,7 +83,7 @@ impl ResidentUdpPolicyClosedReason {
         }
     }
 
-    pub(crate) fn packet_semantics(self) -> UdpPacketSemantics {
+    pub fn packet_semantics(self) -> UdpPacketSemantics {
         match self {
             Self::PluginWrapper => UdpPacketSemantics::PluginUdpPolicyClosed,
             Self::ShadowsocksR => UdpPacketSemantics::LegacyUdpFailClosed,
@@ -94,7 +94,7 @@ impl ResidentUdpPolicyClosedReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentUdpExecutorFactory {
+pub enum ResidentUdpExecutorFactory {
     Socks5Associate,
     ShadowsocksAead,
     Shadowsocks2022,
@@ -110,11 +110,11 @@ pub(crate) enum ResidentUdpExecutorFactory {
 }
 
 impl ResidentUdpExecutorFactory {
-    pub(crate) const fn agreement(self) -> ResidentUdpExecutionAgreement {
+    pub const fn agreement(self) -> ResidentUdpExecutionAgreement {
         ResidentUdpExecutionAgreement::new(self)
     }
 
-    pub(crate) const fn source_contract(self) -> ResidentUdpSourceContract {
+    pub const fn source_contract(self) -> ResidentUdpSourceContract {
         use ResidentUdpWireIdentityContract as Wire;
         match self {
             Self::Socks5Associate
@@ -139,7 +139,7 @@ impl ResidentUdpExecutorFactory {
         }
     }
 
-    pub(crate) fn uses_request_scoped_exchange(self) -> bool {
+    pub fn uses_request_scoped_exchange(self) -> bool {
         match self {
             Self::JuicityStreamPacket => true,
             Self::Socks5Associate
@@ -312,7 +312,7 @@ impl ResidentUdpExecutorFactory {
         }
     }
 
-    pub(crate) fn executor_label(self) -> &'static str {
+    pub fn executor_label(self) -> &'static str {
         match self {
             Self::Socks5Associate => "resident-socks5-udp-associate",
             Self::ShadowsocksAead => "resident-shadowsocks-aead-datagram",
@@ -334,7 +334,7 @@ impl ResidentUdpExecutorFactory {
         }
     }
 
-    pub(crate) fn packet_semantics(self) -> UdpPacketSemantics {
+    pub fn packet_semantics(self) -> UdpPacketSemantics {
         match self {
             Self::Socks5Associate => UdpPacketSemantics::UdpAssociate,
             Self::ShadowsocksAead => UdpPacketSemantics::DatagramAead,
@@ -356,11 +356,11 @@ impl ResidentUdpExecutorFactory {
         }
     }
 
-    pub(crate) fn policy_closed(self) -> bool {
+    pub fn policy_closed(self) -> bool {
         matches!(self, Self::PolicyClosed(_))
     }
 
-    pub(crate) fn policy_closed_reason(self) -> Option<&'static str> {
+    pub fn policy_closed_reason(self) -> Option<&'static str> {
         match self {
             Self::PolicyClosed(reason) => Some(reason.reason()),
             _ => None,

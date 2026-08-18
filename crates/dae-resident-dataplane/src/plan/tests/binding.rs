@@ -1,6 +1,7 @@
 use super::*;
 use crate::plan::{build_resident_dataplane_plan, build_resident_proxy_plan_for_node};
 use crate::transport_identity::resident_transport_binding_identity_digest;
+use dae_runtime_control::OwnerGeneration;
 
 const BINDING_IDENTITY_TEST_DOMAIN: &[u8] = b"dae/binding-identity-test/v1";
 

@@ -1,10 +1,74 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResidentTlsProvider {
+    RealityFingerprintBoring,
+    FingerprintAwareBoring,
+}
+
+impl ResidentTlsProvider {
+    pub const fn evidence_label(self) -> &'static str {
+        match self {
+            Self::RealityFingerprintBoring => "reality-boringssl",
+            Self::FingerprintAwareBoring => "boringssl",
+        }
+    }
+
+    pub fn from_proxy(proxy: &ResidentProxyPlan) -> Result<Self, String> {
+        if proxy.ech.is_some() {
+            if proxy.reality.is_some() {
+                return Err("ECH and Reality cannot share one TLS underlay".to_owned());
+            }
+            return match proxy.execution_plan().security {
+                ResidentSecurityUnderlayPlan::StandardTls
+                | ResidentSecurityUnderlayPlan::InsecureTls
+                | ResidentSecurityUnderlayPlan::FragmentedTls
+                | ResidentSecurityUnderlayPlan::FingerprintAwareTls => {
+                    Ok(Self::FingerprintAwareBoring)
+                }
+                other => Err(format!(
+                    "resident ECH factory cannot open security underlay {} for protocol {}",
+                    other.graph_label(),
+                    proxy.protocol
+                )),
+            };
+        }
+        match proxy.execution_plan().security {
+            ResidentSecurityUnderlayPlan::StandardTls
+            | ResidentSecurityUnderlayPlan::InsecureTls
+            | ResidentSecurityUnderlayPlan::FragmentedTls
+            | ResidentSecurityUnderlayPlan::FingerprintAwareTls => Ok(Self::FingerprintAwareBoring),
+            ResidentSecurityUnderlayPlan::RealityFingerprint
+            | ResidentSecurityUnderlayPlan::RealityBoring => Ok(Self::RealityFingerprintBoring),
+            other => Err(format!(
+                "resident TLS factory cannot open security underlay {} for protocol {}",
+                other.graph_label(),
+                proxy.protocol
+            )),
+        }
+    }
+
+    pub fn from_xhttp_endpoint(endpoint: &ResidentXhttpEndpointPlan) -> Result<Self, String> {
+        if endpoint.ech.is_some() {
+            if endpoint.reality.is_some() {
+                return Err(
+                    "xHTTP endpoint ECH and Reality cannot share one TLS underlay".to_owned(),
+                );
+            }
+            return Ok(Self::FingerprintAwareBoring);
+        }
+        if endpoint.reality.is_some() {
+            return Ok(Self::RealityFingerprintBoring);
+        }
+        Ok(Self::FingerprintAwareBoring)
+    }
+}
+
 /// Provider-independent certificate/authentication policy consumed by the
 /// resident TLS factory. Keeping this separate from BoringSSL configuration
 /// objects keeps every transport on the same typed intent.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentPeerVerificationPolicy {
+pub enum ResidentPeerVerificationPolicy {
     SystemRoots,
     ExplicitInsecure,
     Reality {
@@ -14,7 +78,7 @@ pub(crate) enum ResidentPeerVerificationPolicy {
 }
 
 impl ResidentPeerVerificationPolicy {
-    pub(crate) const fn evidence_label(&self) -> &'static str {
+    pub const fn evidence_label(&self) -> &'static str {
         match self {
             Self::SystemRoots => "system-roots",
             Self::ExplicitInsecure => "explicit-insecure",
@@ -22,11 +86,11 @@ impl ResidentPeerVerificationPolicy {
         }
     }
 
-    pub(crate) const fn allow_insecure(&self) -> bool {
+    pub const fn allow_insecure(&self) -> bool {
         matches!(self, Self::ExplicitInsecure)
     }
 
-    pub(crate) fn reality_material(&self) -> Option<(&[u8; 32], &[u8])> {
+    pub fn reality_material(&self) -> Option<(&[u8; 32], &[u8])> {
         match self {
             Self::Reality {
                 public_key,
@@ -38,7 +102,7 @@ impl ResidentPeerVerificationPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentTlsSessionPolicy {
+pub enum ResidentTlsSessionPolicy {
     /// Preserve the provider's current TLS session-cache behavior. Application
     /// data is never sent as TLS early data on the resident TCP path.
     ProviderManagedNoEarlyData,
@@ -51,13 +115,13 @@ pub(crate) enum ResidentTlsSessionPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentTlsSessionCacheScope {
+pub enum ResidentTlsSessionCacheScope {
     ProviderConfig,
     ReloadGeneration,
 }
 
 impl ResidentTlsSessionCacheScope {
-    pub(crate) const fn evidence_label(self) -> &'static str {
+    pub const fn evidence_label(self) -> &'static str {
         match self {
             Self::ProviderConfig => "provider-config",
             Self::ReloadGeneration => "reload-generation",
@@ -66,18 +130,18 @@ impl ResidentTlsSessionCacheScope {
 }
 
 impl ResidentTlsSessionPolicy {
-    pub(crate) const fn resumption_label(self) -> &'static str {
+    pub const fn resumption_label(self) -> &'static str {
         match self {
             Self::ProviderManagedNoEarlyData => "provider-managed",
             Self::QuicManaged { .. } => "quic-session-cache",
         }
     }
 
-    pub(crate) const fn zero_rtt_admitted(self) -> bool {
+    pub const fn zero_rtt_admitted(self) -> bool {
         matches!(self, Self::QuicManaged { zero_rtt: true, .. })
     }
 
-    pub(crate) const fn cache_scope_label(self) -> &'static str {
+    pub const fn cache_scope_label(self) -> &'static str {
         match self {
             Self::ProviderManagedNoEarlyData => "provider-config",
             Self::QuicManaged { cache_scope, .. } => cache_scope.evidence_label(),
@@ -89,15 +153,15 @@ impl ResidentTlsSessionPolicy {
 /// so BoringSSL transport shapes cannot diverge in SNI, ALPN, verification,
 /// Reality authentication, resumption, or 0-RTT intent.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentTlsPolicy {
-    pub(crate) server_name: String,
-    pub(crate) alpn: Vec<String>,
-    pub(crate) verification: ResidentPeerVerificationPolicy,
-    pub(crate) session: ResidentTlsSessionPolicy,
+pub struct ResidentTlsPolicy {
+    pub server_name: String,
+    pub alpn: Vec<String>,
+    pub verification: ResidentPeerVerificationPolicy,
+    pub session: ResidentTlsSessionPolicy,
 }
 
 impl ResidentTlsPolicy {
-    pub(crate) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
+    pub fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
         Self {
             server_name: proxy.server_name.clone(),
             alpn: proxy.alpn.clone(),
@@ -106,7 +170,7 @@ impl ResidentTlsPolicy {
         }
     }
 
-    pub(crate) fn from_xhttp_endpoint(endpoint: &ResidentXhttpEndpointPlan) -> Self {
+    pub fn from_xhttp_endpoint(endpoint: &ResidentXhttpEndpointPlan) -> Self {
         Self {
             server_name: endpoint.server_name.clone(),
             alpn: endpoint.alpn.clone(),
@@ -133,22 +197,20 @@ fn verification_policy(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentTlsFactorySelection {
-    pub(crate) provider: ResidentTlsProvider,
-    pub(crate) policy: ResidentTlsPolicy,
+pub struct ResidentTlsFactorySelection {
+    pub provider: ResidentTlsProvider,
+    pub policy: ResidentTlsPolicy,
 }
 
 impl ResidentTlsFactorySelection {
-    pub(crate) fn from_proxy(proxy: &ResidentProxyPlan) -> Result<Self, String> {
+    pub fn from_proxy(proxy: &ResidentProxyPlan) -> Result<Self, String> {
         Ok(Self {
             provider: ResidentTlsProvider::from_proxy(proxy)?,
             policy: ResidentTlsPolicy::from_proxy(proxy),
         })
     }
 
-    pub(crate) fn from_xhttp_endpoint(
-        endpoint: &ResidentXhttpEndpointPlan,
-    ) -> Result<Self, String> {
+    pub fn from_xhttp_endpoint(endpoint: &ResidentXhttpEndpointPlan) -> Result<Self, String> {
         Ok(Self {
             provider: ResidentTlsProvider::from_xhttp_endpoint(endpoint)?,
             policy: ResidentTlsPolicy::from_xhttp_endpoint(endpoint),
@@ -159,7 +221,7 @@ impl ResidentTlsFactorySelection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::{ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan};
+    use crate::{ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan};
 
     #[test]
     fn ordinary_tls_factory_keeps_typed_system_root_policy() {

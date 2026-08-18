@@ -14,7 +14,7 @@ test-boringssl-tls-profile = ["test-boringssl-tcp-tls"]
 test-boringssl-unbuffered-bio = ["test-boringssl-tcp-tls"]
 test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
 test-anytls-legacy-frame-reader = []
-test-support = []
+test-support = ["dae-resident-plan/test-support"]
 
 [dependencies]
 dae-config.workspace = true
@@ -27,6 +27,7 @@ dae-geodata.workspace = true
 dae-netutil.workspace = true
 dae-outbound.workspace = true
 dae-resident-core.workspace = true
+dae-resident-plan.workspace = true
 dae-resident-transport.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
@@ -65,3 +66,4 @@ url.workspace = true
 dae-datapath = { workspace = true, features = ["test-support"] }
 dae-outbound = { workspace = true, features = ["test-support"] }
 dae-resident-core = { workspace = true, features = ["test-support"] }
+dae-resident-plan = { workspace = true, features = ["test-support"] }

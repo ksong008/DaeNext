@@ -27,7 +27,7 @@ use tokio::time;
 use super::direct::{DirectTcpConnection, open_direct_tcp_connection_async};
 use super::plan::{
     ResidentProtocolShape, ResidentProxyBinding, ResidentProxyPlan, ResidentRealityUnderlayPlan,
-    ResidentSecurityUnderlayPlan, ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
+    ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
 };
 use super::resolver::{
     TcpCandidateRacePolicy, authority_from_host_port, try_tcp_socket_addr_candidates,
@@ -39,8 +39,10 @@ use super::{
 
 mod types;
 pub(super) use self::types::*;
-mod policy;
-pub(super) use self::policy::*;
+pub(super) use super::plan::{
+    ResidentPeerVerificationPolicy, ResidentTlsFactorySelection, ResidentTlsPolicy,
+    ResidentTlsProvider, ResidentTlsSessionPolicy,
+};
 mod boring_session;
 use self::boring_session::*;
 mod boring_tls_profile;

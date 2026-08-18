@@ -2,8 +2,8 @@ use super::super::UdpPacketSemantics;
 use super::ResidentUdpExecutorFactory;
 use serde_json::{Value, json};
 
-pub(crate) const RESIDENT_UDP_CLEANUP_OWNER: &str = "resident-udp-runtime-generation";
-pub(crate) const RESIDENT_UDP_CLEANUP_POLICY: &str = "cancel-and-drain-on-generation-stop";
+pub const RESIDENT_UDP_CLEANUP_OWNER: &str = "resident-udp-runtime-generation";
+pub const RESIDENT_UDP_CLEANUP_POLICY: &str = "cancel-and-drain-on-generation-stop";
 
 const MANAGED_TRAFFIC_SESSION_SCOPE: &str =
     "graph-outbound-peer-original-destination-packet-semantics";
@@ -17,7 +17,7 @@ const FIXED_TARGET_COMPATIBILITY: &str = "strict-fixed-target";
 const POLICY_CLOSED: &str = "not-applicable-policy-closed";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentUdpWireIdentityContract {
+pub enum ResidentUdpWireIdentityContract {
     DecodedSource,
     DecodedSourceAndProtocolSession,
     SessionBoundTarget,
@@ -26,7 +26,7 @@ pub(crate) enum ResidentUdpWireIdentityContract {
 }
 
 impl ResidentUdpWireIdentityContract {
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::DecodedSource => "decoded-wire-source",
             Self::DecodedSourceAndProtocolSession => "decoded-wire-source-and-protocol-session",
@@ -38,7 +38,7 @@ impl ResidentUdpWireIdentityContract {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentUdpSourceContract {
+pub struct ResidentUdpSourceContract {
     traffic_session_scope: &'static str,
     probe_session_scope: &'static str,
     wire_identity: ResidentUdpWireIdentityContract,
@@ -50,7 +50,7 @@ pub(crate) struct ResidentUdpSourceContract {
 }
 
 impl ResidentUdpSourceContract {
-    pub(crate) const fn fixed_target(wire_identity: ResidentUdpWireIdentityContract) -> Self {
+    pub const fn fixed_target(wire_identity: ResidentUdpWireIdentityContract) -> Self {
         Self {
             traffic_session_scope: MANAGED_TRAFFIC_SESSION_SCOPE,
             probe_session_scope: MANAGED_PROBE_SESSION_SCOPE,
@@ -63,7 +63,7 @@ impl ResidentUdpSourceContract {
         }
     }
 
-    pub(crate) const fn direct() -> Self {
+    pub const fn direct() -> Self {
         Self {
             traffic_session_scope: "peer-original-destination-mark",
             probe_session_scope: "probe-original-destination-mark",
@@ -76,11 +76,11 @@ impl ResidentUdpSourceContract {
         }
     }
 
-    pub(crate) const fn managed_dns() -> Self {
+    pub const fn managed_dns() -> Self {
         Self::fixed_target(ResidentUdpWireIdentityContract::SessionBoundTarget)
     }
 
-    pub(crate) const fn policy_closed() -> Self {
+    pub const fn policy_closed() -> Self {
         Self {
             traffic_session_scope: POLICY_CLOSED,
             probe_session_scope: POLICY_CLOSED,
@@ -93,19 +93,19 @@ impl ResidentUdpSourceContract {
         }
     }
 
-    pub(crate) const fn wire_identity(self) -> ResidentUdpWireIdentityContract {
+    pub const fn wire_identity(self) -> ResidentUdpWireIdentityContract {
         self.wire_identity
     }
 
-    pub(crate) const fn multi_target_mode(self) -> &'static str {
+    pub const fn multi_target_mode(self) -> &'static str {
         self.multi_target_mode
     }
 
-    pub(crate) const fn compatibility_mode(self) -> &'static str {
+    pub const fn compatibility_mode(self) -> &'static str {
         self.compatibility_mode
     }
 
-    pub(crate) fn json(self) -> Value {
+    pub fn json(self) -> Value {
         json!({
             "schemaVersion": 1,
             "trafficSessionScope": self.traffic_session_scope,
@@ -121,13 +121,13 @@ impl ResidentUdpSourceContract {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentUdpExecutionDisposition {
+pub enum ResidentUdpExecutionDisposition {
     PacketRelay,
     PolicyClosed,
 }
 
 impl ResidentUdpExecutionDisposition {
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::PacketRelay => "packet-relay",
             Self::PolicyClosed => "policy-closed-negative-path",
@@ -136,7 +136,7 @@ impl ResidentUdpExecutionDisposition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentUdpExecutionAgreement {
+pub struct ResidentUdpExecutionAgreement {
     factory: ResidentUdpExecutorFactory,
 }
 
@@ -145,7 +145,7 @@ impl ResidentUdpExecutionAgreement {
         Self { factory }
     }
 
-    pub(crate) fn disposition(self) -> ResidentUdpExecutionDisposition {
+    pub fn disposition(self) -> ResidentUdpExecutionDisposition {
         if self.factory.policy_closed() {
             ResidentUdpExecutionDisposition::PolicyClosed
         } else {
@@ -153,27 +153,27 @@ impl ResidentUdpExecutionAgreement {
         }
     }
 
-    pub(crate) fn executor_label(self) -> &'static str {
+    pub fn executor_label(self) -> &'static str {
         self.factory.executor_label()
     }
 
-    pub(crate) fn packet_semantics(self) -> UdpPacketSemantics {
+    pub fn packet_semantics(self) -> UdpPacketSemantics {
         self.factory.packet_semantics()
     }
 
-    pub(crate) const fn source_contract(self) -> ResidentUdpSourceContract {
+    pub const fn source_contract(self) -> ResidentUdpSourceContract {
         self.factory.source_contract()
     }
 
-    pub(crate) fn policy_closed(self) -> bool {
+    pub fn policy_closed(self) -> bool {
         self.disposition() == ResidentUdpExecutionDisposition::PolicyClosed
     }
 
-    pub(crate) fn unsupported_reason(self) -> Option<&'static str> {
+    pub fn unsupported_reason(self) -> Option<&'static str> {
         self.factory.policy_closed_reason()
     }
 
-    pub(crate) fn component_status(self) -> &'static str {
+    pub fn component_status(self) -> &'static str {
         if self.policy_closed() {
             "fail-closed"
         } else {
@@ -181,11 +181,11 @@ impl ResidentUdpExecutionAgreement {
         }
     }
 
-    pub(crate) fn negative_path_ready(self) -> bool {
+    pub fn negative_path_ready(self) -> bool {
         self.policy_closed()
     }
 
-    pub(crate) fn admit_packet_relay(self, consumer: &str) -> Result<(), String> {
+    pub fn admit_packet_relay(self, consumer: &str) -> Result<(), String> {
         match self.unsupported_reason() {
             None => Ok(()),
             Some(reason) => Err(format!(

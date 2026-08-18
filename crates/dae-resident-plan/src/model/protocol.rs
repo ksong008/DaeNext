@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Debug)]
-pub(crate) enum ResidentProxyProtocolPlan {
+pub enum ResidentProxyProtocolPlan {
     VlessVisionTcpTls {
         key: [u8; 16],
         encryption: Option<dae_outbound::vless::VlessEncryptionClient>,
@@ -108,39 +108,39 @@ pub(crate) enum ResidentProxyProtocolPlan {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentProtocolExecutorContract {
-    pub(crate) tcp_executor: &'static str,
-    pub(crate) udp_executor: &'static str,
-    pub(crate) packet_semantics: &'static str,
-    pub(crate) udp_policy_closed: bool,
+pub struct ResidentProtocolExecutorContract {
+    pub tcp_executor: &'static str,
+    pub udp_executor: &'static str,
+    pub packet_semantics: &'static str,
+    pub udp_policy_closed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentHysteria2ObfsPlan {
-    pub(crate) mode: String,
-    pub(crate) password: String,
+pub struct ResidentHysteria2ObfsPlan {
+    pub mode: String,
+    pub password: String,
 }
 
 impl ResidentHysteria2ObfsPlan {
-    pub(crate) fn none() -> Self {
+    pub fn none() -> Self {
         Self {
             mode: String::new(),
             password: String::new(),
         }
     }
 
-    pub(crate) fn salamander(password: String) -> Self {
+    pub fn salamander(password: String) -> Self {
         Self {
             mode: "salamander".to_owned(),
             password,
         }
     }
 
-    pub(crate) fn is_salamander(&self) -> bool {
+    pub fn is_salamander(&self) -> bool {
         self.mode == "salamander"
     }
 
-    pub(crate) fn udp_packet_overhead(&self) -> usize {
+    pub fn udp_packet_overhead(&self) -> usize {
         if self.is_salamander() {
             dae_outbound::hysteria2::HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD
         } else {
@@ -150,8 +150,8 @@ impl ResidentHysteria2ObfsPlan {
 }
 
 impl ResidentProxyProtocolPlan {
-    #[cfg(test)]
-    pub(crate) fn executor_contract(&self) -> ResidentProtocolExecutorContract {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn executor_contract(&self) -> ResidentProtocolExecutorContract {
         match self {
             Self::VlessVisionTcpTls { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-vless-vision-tcp",

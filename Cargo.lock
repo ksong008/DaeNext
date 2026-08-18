@@ -869,6 +869,7 @@ dependencies = [
  "dae-netutil",
  "dae-outbound",
  "dae-resident-core",
+ "dae-resident-plan",
  "dae-resident-transport",
  "dae-routing",
  "dae-runtime-control",
@@ -895,6 +896,19 @@ dependencies = [
  "tls-parser",
  "tokio",
  "tokio-boring",
+ "url",
+]
+
+[[package]]
+name = "dae-resident-plan"
+version = "3.1.0"
+dependencies = [
+ "dae-outbound",
+ "dae-resident-core",
+ "dae-runtime-control",
+ "fastrand",
+ "serde_json",
+ "sha2",
  "url",
 ]
 

@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentStreamWrapperPlan {
+pub enum ResidentStreamWrapperPlan {
     None,
     TcpHttpHeader,
     HttpTransport,
@@ -63,7 +63,7 @@ impl ResidentStreamWrapperPlan {
         }
     }
 
-    pub(crate) fn graph_label(self) -> &'static str {
+    pub fn graph_label(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::TcpHttpHeader => "tcp-http-header",

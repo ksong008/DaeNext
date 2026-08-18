@@ -1,7 +1,7 @@
 use super::super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentProtocolShape {
+pub enum ResidentProtocolShape {
     VlessStandard,
     VlessVision,
     VlessMux,
@@ -24,7 +24,7 @@ pub(crate) enum ResidentProtocolShape {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentTcpRuntimeDispatch {
+pub enum ResidentTcpRuntimeDispatch {
     Vless,
     FrameTls,
     Quic,
@@ -33,7 +33,7 @@ pub(crate) enum ResidentTcpRuntimeDispatch {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentTcpProbeDispatch {
+pub enum ResidentTcpProbeDispatch {
     Basic,
     Vless,
     Vmess,
@@ -43,9 +43,9 @@ pub(crate) enum ResidentTcpProbeDispatch {
     Quic,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ResidentTcpRuntimeDispatch {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Vless => "vless",
             Self::FrameTls => "frame-tls",
@@ -56,9 +56,9 @@ impl ResidentTcpRuntimeDispatch {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ResidentTcpProbeDispatch {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Basic => "basic",
             Self::Vless => "vless",
@@ -153,7 +153,7 @@ impl ResidentProtocolShape {
         }
     }
 
-    pub(crate) fn runtime_dispatch(self) -> ResidentTcpRuntimeDispatch {
+    pub fn runtime_dispatch(self) -> ResidentTcpRuntimeDispatch {
         match self {
             Self::VlessStandard | Self::VlessVision | Self::VlessMux => {
                 ResidentTcpRuntimeDispatch::Vless
@@ -166,7 +166,7 @@ impl ResidentProtocolShape {
         }
     }
 
-    pub(crate) fn probe_dispatch(self) -> ResidentTcpProbeDispatch {
+    pub fn probe_dispatch(self) -> ResidentTcpProbeDispatch {
         match self {
             Self::Socks5 | Self::HttpProxy => ResidentTcpProbeDispatch::Basic,
             Self::VlessStandard | Self::VlessVision | Self::VlessMux => {
