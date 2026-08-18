@@ -98,8 +98,7 @@ pub(crate) use self::transport::quic_endpoint::{
     wait_quic_endpoint_idle_after_close,
 };
 pub(crate) use self::udp::{
-    ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge, open_resident_proxy_udp_bridge_async,
-    probe_resident_proxy_dns_udp_with_forwarder_async,
+    probe_resident_proxy_dns_udp_with_forwarder_async, resident_dns_proxy_udp_transport,
 };
 pub(crate) use dae_resident_core::*;
 pub(crate) use dae_resident_plan::{

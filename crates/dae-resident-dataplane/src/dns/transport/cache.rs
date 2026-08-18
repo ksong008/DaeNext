@@ -227,12 +227,7 @@ impl ResidentDnsForwarderCache {
                     upstream: upstream.clone(),
                     remote: target,
                     binding,
-                    owners: ResidentTransportOwnerRegistries::new(
-                        self.hysteria2_owner_registry.clone(),
-                        self.tuic_owner_registry.clone(),
-                        self.juicity_owner_registry.clone(),
-                    )
-                    .with_anytls(self.anytls_owner_registry.clone()),
+                    proxy_udp_transport: Arc::clone(&self.proxy_udp_transport),
                     bridge: None,
                     endpoint: None,
                     connection: None,
@@ -279,12 +274,7 @@ impl ResidentDnsForwarderCache {
                     upstream: upstream.clone(),
                     remote: target,
                     binding,
-                    owners: ResidentTransportOwnerRegistries::new(
-                        self.hysteria2_owner_registry.clone(),
-                        self.tuic_owner_registry.clone(),
-                        self.juicity_owner_registry.clone(),
-                    )
-                    .with_anytls(self.anytls_owner_registry.clone()),
+                    proxy_udp_transport: Arc::clone(&self.proxy_udp_transport),
                     metrics: Arc::clone(&self.metrics),
                     bridge: None,
                     endpoint: None,
@@ -391,7 +381,7 @@ impl ResidentDnsForwarderCache {
         target: SocketAddr,
         binding: ResidentProxyBinding,
         selection: &ResidentDnsUpstreamSelection,
-    ) -> Result<Arc<ResidentProxyDnsUdpForwarder>, String> {
+    ) -> Result<Arc<dyn ResidentDnsProxyUdpForwarder>, String> {
         binding
             .execution()
             .udp
@@ -412,22 +402,7 @@ impl ResidentDnsForwarderCache {
         self.get_or_insert_forwarder_lazy(
             key,
             "proxied UDP",
-            || {
-                ResidentProxyDnsUdpForwarder::new_with_optional_transport_owner(
-                    binding,
-                    target,
-                    self.udp_runtime.clone(),
-                    Arc::clone(&self.metrics),
-                    Arc::clone(&self.udp_executor),
-                    ResidentTransportOwnerRegistries::new(
-                        self.hysteria2_owner_registry.clone(),
-                        self.tuic_owner_registry.clone(),
-                        self.juicity_owner_registry.clone(),
-                    )
-                    .with_anytls(self.anytls_owner_registry.clone()),
-                )
-                .map(Arc::new)
-            },
+            || self.proxy_udp_transport.open_forwarder(binding, target),
             |kind| match kind {
                 ResidentDnsForwarderEntryKind::ProxyUdp(forwarder) => Some(Arc::clone(forwarder)),
                 _ => None,
@@ -618,7 +593,7 @@ impl ResidentDnsForwarderCache {
         )
     }
 
-    fn get_or_insert_forwarder_lazy<T, Build, Extract, Wrap>(
+    fn get_or_insert_forwarder_lazy<T: ?Sized, Build, Extract, Wrap>(
         &self,
         key: ResidentDnsForwarderKey,
         kind_name: &str,
@@ -634,7 +609,7 @@ impl ResidentDnsForwarderCache {
         self.get_or_insert_forwarder_lazy_in(&self.state, key, kind_name, build, extract, wrap)
     }
 
-    fn get_or_insert_forwarder_lazy_in<T, Build, Extract, Wrap>(
+    fn get_or_insert_forwarder_lazy_in<T: ?Sized, Build, Extract, Wrap>(
         &self,
         cache_state: &Mutex<ResidentDnsForwarderCacheState>,
         key: ResidentDnsForwarderKey,

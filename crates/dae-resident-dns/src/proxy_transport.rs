@@ -1,12 +1,56 @@
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use dae_resident_core::{ResidentDataplaneMetrics, ResidentOwnedTaskShutdownCompletion};
 use dae_resident_plan::ResidentProxyBinding;
 use dae_resident_transport::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
 use tokio::net::TcpStream;
 use tokio::time::Instant;
+
+pub struct ResidentDnsTransportOwnerObservation {
+    metrics: Arc<ResidentDataplaneMetrics>,
+    charged_bytes: usize,
+    evicted: AtomicBool,
+    released: AtomicBool,
+}
+
+impl ResidentDnsTransportOwnerObservation {
+    pub fn new(metrics: Arc<ResidentDataplaneMetrics>, charged_bytes: usize) -> Arc<Self> {
+        metrics.dns_transport_owner_opened(charged_bytes);
+        Arc::new(Self {
+            metrics,
+            charged_bytes,
+            evicted: AtomicBool::new(false),
+            released: AtomicBool::new(false),
+        })
+    }
+
+    pub fn mark_evicted(&self) {
+        if !self.evicted.swap(true, Ordering::AcqRel) {
+            self.metrics.dns_transport_owner_evicted();
+        }
+    }
+
+    pub fn release(&self) {
+        if !self.released.swap(true, Ordering::AcqRel) {
+            self.metrics.dns_transport_owner_released(
+                self.charged_bytes,
+                self.evicted.load(Ordering::Acquire),
+            );
+        }
+    }
+}
+
+impl Drop for ResidentDnsTransportOwnerObservation {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
 
 pub type ResidentDnsProxyFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -34,6 +78,46 @@ pub trait ResidentDnsProxyTcpTransport: Send + Sync {
         &self,
         request: ResidentDnsProxyTcpOpenRequest,
     ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyTcpSession>, ProxyDnsRequestError>>;
+}
+
+pub trait ResidentDnsProxyUdpForwarder: Send + Sync {
+    fn exchange<'a>(
+        &'a self,
+        payload: &'a [u8],
+        context: ProxyDnsRequestContext,
+    ) -> ResidentDnsProxyFuture<'a, Result<Vec<u8>, ProxyDnsRequestError>>;
+
+    fn shutdown(&self, deadline: Instant) -> ResidentDnsProxyFuture<'_, serde_json::Value>;
+
+    fn owner_observation(&self) -> Arc<ResidentDnsTransportOwnerObservation>;
+
+    fn actor_count(&self) -> usize;
+}
+
+pub trait ResidentDnsProxyUdpBridge: Send {
+    fn local_addr(&self) -> SocketAddr;
+
+    fn last_error(&self) -> Option<String>;
+
+    fn shutdown_and_join_until(
+        self: Box<Self>,
+        deadline: Instant,
+    ) -> ResidentDnsProxyFuture<'static, Result<ResidentOwnedTaskShutdownCompletion, String>>;
+}
+
+pub trait ResidentDnsProxyUdpTransport: Send + Sync {
+    fn open_forwarder(
+        &self,
+        binding: ResidentProxyBinding,
+        original_dst: SocketAddr,
+    ) -> Result<Arc<dyn ResidentDnsProxyUdpForwarder>, String>;
+
+    fn open_bridge(
+        &self,
+        binding: ResidentProxyBinding,
+        original_dst: SocketAddr,
+        owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
+    ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyUdpBridge>, String>>;
 }
 
 #[allow(clippy::too_many_arguments)]
