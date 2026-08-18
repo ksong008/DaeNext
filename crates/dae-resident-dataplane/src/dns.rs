@@ -191,7 +191,7 @@ pub(in crate::dns) use self::upstream_model::{
 };
 pub(super) use self::upstream_router::ResidentDnsUpstreamRouter;
 pub(in crate::dns) use self::upstream_router::ResidentDnsUpstreamSelection;
-pub(crate) use crate::transport::dns_request::{
+pub(crate) use dae_resident_transport::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
     exchange_proxy_dns_framed_stream,
 };

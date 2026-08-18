@@ -4,7 +4,7 @@ use super::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
 
-pub(crate) async fn exchange_proxy_dns_framed_stream<S>(
+pub async fn exchange_proxy_dns_framed_stream<S>(
     stream: &mut S,
     payload: &[u8],
     response_limit: usize,
