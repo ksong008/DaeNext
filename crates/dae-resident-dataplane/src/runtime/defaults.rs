@@ -1,6 +1,5 @@
 use super::*;
 pub(crate) const VLESS_RESPONSE_VERSION: u8 = 0;
-pub(crate) const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
 pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 // A half-closed upload must keep draining a response across at least one
 // ordinary Internet RTT. Download activity refreshes this idle window; it is
@@ -15,8 +14,6 @@ pub(crate) const RESIDENT_TCP_HEALTH_PROBE_TIMEOUT_MS_DEFAULT: usize = 4_000;
 #[cfg(test)]
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT: Duration =
     Duration::from_millis(RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT as u64);
-pub(crate) const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
-pub(crate) const RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE: Duration = Duration::from_millis(1_500);
 pub(crate) const RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE: Duration = Duration::from_millis(250);
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "RESIDENT_TCP_FLOW_STACK_BYTES";
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_LEGACY_ENV: &str =

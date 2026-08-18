@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 pub const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
+pub const RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE: Duration = Duration::from_millis(1_500);
+pub const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
 pub const RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 pub const RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT: usize = 2;
 pub const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);

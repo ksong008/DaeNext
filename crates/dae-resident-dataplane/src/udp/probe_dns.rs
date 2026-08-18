@@ -11,9 +11,9 @@ mod shutdown;
 #[cfg(test)]
 mod test_observation;
 #[cfg(test)]
-pub(crate) use self::test_observation::ResidentProxyUdpBridgeTestObservation;
+pub use self::test_observation::ResidentProxyUdpBridgeTestObservation;
 
-pub(crate) struct ResidentProxyUdpBridge {
+pub struct ResidentProxyUdpBridge {
     local_addr: SocketAddr,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
@@ -21,16 +21,16 @@ pub(crate) struct ResidentProxyUdpBridge {
 }
 
 impl ResidentProxyUdpBridge {
-    pub(crate) fn local_addr(&self) -> SocketAddr {
+    pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
-    pub(crate) fn last_error(&self) -> Option<String> {
+    pub fn last_error(&self) -> Option<String> {
         self.last_error.lock().ok().and_then(|error| error.clone())
     }
 
     #[cfg(test)]
-    pub(crate) async fn shutdown(mut self) {
+    pub async fn shutdown(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -46,7 +46,7 @@ impl ResidentProxyUdpBridge {
     }
 
     #[cfg(test)]
-    pub(crate) async fn shutdown_and_join(mut self) -> Result<(), String> {
+    pub async fn shutdown_and_join(mut self) -> Result<(), String> {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -57,7 +57,7 @@ impl ResidentProxyUdpBridge {
         Ok(())
     }
 
-    pub(crate) async fn shutdown_and_join_until(
+    pub async fn shutdown_and_join_until(
         mut self,
         deadline: time::Instant,
     ) -> Result<ResidentOwnedTaskShutdownCompletion, String> {
@@ -101,7 +101,7 @@ impl ResidentDnsProxyUdpBridge for ResidentProxyUdpBridge {
     }
 }
 
-pub(crate) async fn open_resident_proxy_udp_bridge_async(
+pub async fn open_resident_proxy_udp_bridge_async(
     binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
@@ -140,7 +140,7 @@ pub(crate) async fn open_resident_proxy_udp_bridge_async(
 }
 
 #[cfg(test)]
-pub(crate) async fn open_resident_proxy_udp_bridge_with_test_observation_async(
+pub async fn open_resident_proxy_udp_bridge_with_test_observation_async(
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
     observation: Arc<ResidentProxyUdpBridgeTestObservation>,
@@ -357,11 +357,11 @@ fn record_resident_proxy_udp_bridge_error(last_error: &Arc<Mutex<Option<String>>
 #[path = "probe_dns/shutdown_tests.rs"]
 mod shutdown_tests;
 
-pub(crate) const RESIDENT_UDP_PROBE_PUBLIC_ERROR: &str =
+pub const RESIDENT_UDP_PROBE_PUBLIC_ERROR: &str =
     "resident UDP probe failed; protected detail redacted";
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn probe_resident_proxy_udp_async(
+pub async fn probe_resident_proxy_udp_async(
     binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     payload: &[u8],
@@ -492,7 +492,7 @@ async fn wait_for_udp_probe_response(
 }
 
 #[cfg(test)]
-pub(crate) async fn probe_resident_proxy_dns_udp_with_forwarder_async(
+pub async fn probe_resident_proxy_dns_udp_with_forwarder_async(
     forwarder: Arc<dyn dae_resident_dns::ResidentDnsProxyUdpForwarder>,
     lookup_host: &str,
 ) -> Result<(), String> {
@@ -516,7 +516,7 @@ fn take_udp_response_for_fixed_target(
 }
 
 #[cfg(test)]
-pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
+pub fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
     let mut query = Vec::with_capacity(64);
     query.extend_from_slice(&id.to_be_bytes());
     query.extend_from_slice(&0x0100_u16.to_be_bytes());
@@ -531,7 +531,7 @@ pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, S
 }
 
 #[cfg(test)]
-pub(crate) fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {
+pub fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {
     if response.len() < 12 {
         return Err(format!("DNS response too short: {} bytes", response.len()));
     }
@@ -583,7 +583,7 @@ pub(crate) fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Resul
 }
 
 #[cfg(test)]
-pub(crate) fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
+pub fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
     let mut jumps = 0_usize;
     loop {
         if *offset >= packet.len() {

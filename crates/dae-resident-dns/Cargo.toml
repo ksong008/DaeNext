@@ -8,9 +8,13 @@ repository.workspace = true
 [features]
 default = []
 test-support = []
+test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send"]
+dns-runtime-tests = []
 
 [dependencies]
 dae-config.workspace = true
+dae-core-types.workspace = true
+dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-outbound.workspace = true
 dae-resident-core.workspace = true
@@ -18,6 +22,24 @@ dae-resident-plan.workspace = true
 dae-resident-transport.workspace = true
 dae-routing.workspace = true
 dae-runtime-control.workspace = true
+dae-tls.workspace = true
+boring.workspace = true
+bytes.workspace = true
 fastrand.workspace = true
+futures-util.workspace = true
+h2.workspace = true
+h3.workspace = true
+h3-quinn.workspace = true
+http.workspace = true
+quinn.workspace = true
+quinn-boring.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+sha2.workspace = true
+socket2.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio-boring.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+dae-datapath = { workspace = true, features = ["test-support"] }
+dae-outbound = { workspace = true, features = ["test-support"] }

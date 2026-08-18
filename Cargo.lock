@@ -906,7 +906,11 @@ dependencies = [
 name = "dae-resident-dns"
 version = "3.1.0"
 dependencies = [
+ "boring 5.1.0",
+ "bytes",
  "dae-config",
+ "dae-core-types",
+ "dae-datapath",
  "dae-dns",
  "dae-outbound",
  "dae-resident-core",
@@ -914,9 +918,21 @@ dependencies = [
  "dae-resident-transport",
  "dae-routing",
  "dae-runtime-control",
+ "dae-tls",
  "fastrand",
+ "futures-util",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http",
+ "quinn",
+ "quinn-boring",
  "serde_json",
+ "sha2",
+ "socket2",
  "tokio",
+ "tokio-boring",
+ "url",
 ]
 
 [[package]]
