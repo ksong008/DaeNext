@@ -30,7 +30,7 @@ use dae_resident_core::{
     RESIDENT_CONNECT_TIMEOUT, RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY,
     RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT,
 };
-use dae_resident_plan::{
+use dae_resident_model::{
     ResidentProtocolShape, ResidentProxyBinding, ResidentProxyPlan, ResidentRealityUnderlayPlan,
     ResidentUtlsFingerprintPlan, ResidentXhttpEndpointPlan,
 };
@@ -41,7 +41,7 @@ pub use self::types::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, ResidentTlsConfigCacheClearReport,
     clear_resident_tls_config_caches,
 };
-pub(super) use dae_resident_plan::{
+pub(super) use dae_resident_model::{
     ResidentPeerVerificationPolicy, ResidentTlsFactorySelection, ResidentTlsPolicy,
     ResidentTlsProvider, ResidentTlsSessionPolicy,
 };

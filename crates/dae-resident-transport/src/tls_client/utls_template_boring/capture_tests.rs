@@ -4,7 +4,7 @@ use dae_outbound::shared_transport::{
     parse_utls_client_hello_record, parse_utls_client_hello_record_hex,
     resolve_utls_runtime_template, utls_fingerprint_default_alpn_protocols,
 };
-use dae_resident_plan::{
+use dae_resident_model::{
     ResidentProxyProtocolPlan, ResidentRealityUnderlayPlan, ResidentXhttpMode,
     ResidentXhttpSettingsPlan,
 };

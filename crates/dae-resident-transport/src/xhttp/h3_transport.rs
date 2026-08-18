@@ -9,7 +9,7 @@ use dae_runtime_control::OwnerGeneration;
 use sha2::{Digest, Sha256};
 
 use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-use dae_resident_plan::ResidentXhttpQuicTlsProvider;
+use dae_resident_model::ResidentXhttpQuicTlsProvider;
 
 pub struct XhttpH3Connection {
     endpoint: Arc<std::sync::Mutex<Option<ObservedQuicEndpoint>>>,

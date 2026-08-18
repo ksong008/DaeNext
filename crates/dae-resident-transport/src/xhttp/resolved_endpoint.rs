@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use crate::{RESIDENT_CONNECT_TIMEOUT, authority_from_host_port, resolve_socket_addr_candidates};
-use dae_resident_plan::ResidentXhttpEndpointPlan;
+use dae_resident_model::ResidentXhttpEndpointPlan;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum XhttpAddressFamily {

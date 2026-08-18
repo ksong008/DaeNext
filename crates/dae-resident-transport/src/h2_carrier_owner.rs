@@ -23,7 +23,7 @@ use crate::{
 use dae_resident_core::{
     H2CarrierOwnerResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal,
 };
-use dae_resident_plan::{
+use dae_resident_model::{
     ResidentProtocolShape, ResidentProxyBinding, ResidentSecurityUnderlayPlan,
     ResidentStreamWrapperPlan,
 };

@@ -21,7 +21,7 @@ use dae_outbound::hysteria2::build_hysteria2_runtime_client_config_with_udp_over
 #[cfg(test)]
 use dae_resident_core::{Hysteria2OwnerResourceProfile, ResidentRuntimeProfile};
 use dae_resident_core::{QuicCandidateRaceResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE};
-use dae_resident_plan::{ResidentHysteria2ObfsPlan, ResidentProxyPlan};
+use dae_resident_model::{ResidentHysteria2ObfsPlan, ResidentProxyPlan};
 use dae_runtime_control::{AbsoluteDeadline, OwnerCancellationSignal};
 use quinn::udp;
 use tokio::time;

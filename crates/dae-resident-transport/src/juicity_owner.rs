@@ -14,7 +14,7 @@ use tokio::time;
 use dae_resident_core::{
     JuicityOwnerResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal,
 };
-use dae_resident_plan::{ResidentProxyBinding, ResidentProxyProtocolPlan};
+use dae_resident_model::{ResidentProxyBinding, ResidentProxyProtocolPlan};
 
 use crate::quic_connections::{
     ResidentConnectedQuicEndpoint, open_juicity_quic_connection_candidates_async,

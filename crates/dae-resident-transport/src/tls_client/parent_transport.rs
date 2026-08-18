@@ -1,6 +1,6 @@
 use super::*;
 use crate::{http_proxy_connect_plain_async, socks5_connect_async};
-use dae_resident_plan::{
+use dae_resident_model::{
     ResidentProxyProtocolPlan, ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan,
 };
 

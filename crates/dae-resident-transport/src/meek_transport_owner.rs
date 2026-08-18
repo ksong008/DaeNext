@@ -15,7 +15,7 @@ use crate::{AsyncResidentTlsClient, open_async_resident_tls_client_with_binding}
 use dae_resident_core::{
     MeekTransportResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal,
 };
-use dae_resident_plan::ResidentProxyBinding;
+use dae_resident_model::ResidentProxyBinding;
 
 const MEEK_TRANSPORT_IDENTITY_DOMAIN: &[u8] = b"dae/meek-transport-owner/v1";
 
@@ -917,7 +917,7 @@ mod tests {
         let requirements = include_str!(
             "../../dae-resident-dataplane/src/control_transport_owners/requirements.rs"
         );
-        let model = include_str!("../../dae-resident-plan/src/model.rs");
+        let model = include_str!("../../dae-resident-model/src/model.rs");
         let production = owner
             .split_once("#[cfg(test)]\nmod tests")
             .map_or(owner, |(production, _)| production);

@@ -34,7 +34,7 @@ use dae_resident_core::{
     RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal, VLESS_RESPONSE_VERSION,
     VlessMuxOwnerResourceProfile,
 };
-use dae_resident_plan::{ResidentProtocolShape, ResidentProxyBinding, ResidentStreamWrapperPlan};
+use dae_resident_model::{ResidentProtocolShape, ResidentProxyBinding, ResidentStreamWrapperPlan};
 
 const VLESS_MUX_TRANSPORT_IDENTITY_DOMAIN: &[u8] = b"dae/vless-mux-transport-owner/v1";
 
@@ -1897,7 +1897,7 @@ mod tests {
         let requirements = include_str!(
             "../../dae-resident-dataplane/src/control_transport_owners/requirements.rs"
         );
-        let model = include_str!("../../dae-resident-plan/src/model.rs");
+        let model = include_str!("../../dae-resident-model/src/model.rs");
         let production = owner
             .split_once("#[cfg(test)]\nmod tests")
             .map_or(owner, |(production, _)| production);

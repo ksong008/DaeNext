@@ -1,6 +1,6 @@
 use super::super::resolved_endpoint::XhttpResolvedEndpointIdentity;
 use super::*;
-use dae_resident_plan::ResidentRealityUnderlayPlan;
+use dae_resident_model::ResidentRealityUnderlayPlan;
 use std::sync::Arc;
 
 pub fn download_test_plan(runtime_generation: u64) -> ResidentXhttpXmuxPlan {

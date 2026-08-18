@@ -2,7 +2,7 @@ use bytes::Bytes;
 use std::time::Instant;
 
 use dae_resident_core::RESIDENT_CONNECT_TIMEOUT;
-use dae_resident_plan::ResidentProxyBinding;
+use dae_resident_model::ResidentProxyBinding;
 use tokio::time;
 
 use crate::{
@@ -91,7 +91,7 @@ pub async fn open_h2_body_stream_with_deferred_response(
     Ok((send_stream, response, lease))
 }
 
-fn h2_body_authority(proxy: &dae_resident_plan::ResidentProxyPlan) -> String {
+fn h2_body_authority(proxy: &dae_resident_model::ResidentProxyPlan) -> String {
     if proxy.stream_host.is_empty() {
         proxy.server_name.clone()
     } else {
