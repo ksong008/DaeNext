@@ -1,115 +1,74 @@
 use super::*;
-use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use crate::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
+use dae_resident_dns::{
+    ResidentDnsProxyFuture, ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession,
+    ResidentDnsProxyTcpTransport,
+};
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn exchange_resident_proxy_dns_tcp_stream_async<F, Fut>(
-    binding: ResidentProxyBinding,
-    target: &str,
-    dial_ip: bool,
-    sniff_payload: Vec<u8>,
-    sniff_domain: String,
-    context: ProxyDnsRequestContext,
+pub(crate) fn resident_dns_proxy_tcp_transport(
     owners: ResidentTransportOwnerRegistries,
-    exchange: F,
-) -> Result<Vec<u8>, ProxyDnsRequestError>
-where
-    F: FnOnce(TokioTcpStream) -> Fut,
-    Fut: std::future::Future<Output = Result<Vec<u8>, ProxyDnsRequestError>>,
-{
-    let (client, mut handler) = open_resident_proxy_dns_tcp_stream_async(
-        binding,
-        target,
-        dial_ip,
-        sniff_payload,
-        sniff_domain,
-        context,
-        owners,
-    )
-    .await?;
+) -> Arc<dyn ResidentDnsProxyTcpTransport> {
+    Arc::new(ResidentDataplaneDnsProxyTcpTransport { owners })
+}
 
-    let response_result = exchange(client).await;
-    handler.stop();
-    let handler_result = join_proxy_dns_handler(
-        handler.handle_mut(),
-        context.deadline(),
-        response_result.is_err(),
-    )
-    .await;
-    match response_result {
-        Ok(response) => match handler_result {
-            Ok(_) => Ok(response),
-            Err(error) => Err(ProxyDnsRequestError::new(
-                ProxyDnsRequestStage::Cleanup,
-                ProxyDnsRequestFailure::Network,
-                error,
-            )),
-        },
-        Err(response_error) => {
-            let handler_detail = match handler_result {
-                Ok(event) => format!("handler_event={}", sanitize_probe_event(event)),
-                Err(error) => format!("handler_error={error}"),
-            };
-            Err(ProxyDnsRequestError::new(
-                response_error.stage(),
-                response_error.failure(),
-                format!("{response_error}; {handler_detail}"),
-            ))
-        }
+struct ResidentDataplaneDnsProxyTcpTransport {
+    owners: ResidentTransportOwnerRegistries,
+}
+
+struct ResidentDataplaneDnsProxyTcpSession {
+    stream: Option<TokioTcpStream>,
+    handler: Option<ResidentProxyTcpHandlerGuard>,
+}
+
+impl ResidentDnsProxyTcpTransport for ResidentDataplaneDnsProxyTcpTransport {
+    fn open(
+        &self,
+        request: ResidentDnsProxyTcpOpenRequest,
+    ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyTcpSession>, ProxyDnsRequestError>>
+    {
+        let owners = self.owners.clone();
+        Box::pin(async move {
+            let (stream, handler) = open_resident_proxy_dns_tcp_stream_async(
+                request.binding,
+                &request.target,
+                request.dial_ip,
+                request.sniff_payload,
+                request.sniff_domain,
+                request.context,
+                owners,
+            )
+            .await?;
+            Ok(Box::new(ResidentDataplaneDnsProxyTcpSession {
+                stream: Some(stream),
+                handler: Some(handler),
+            }) as Box<dyn ResidentDnsProxyTcpSession>)
+        })
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_resident_proxy_dns_tcp_connection_async<F, Fut>(
-    binding: ResidentProxyBinding,
-    target: &str,
-    dial_ip: bool,
-    sniff_payload: Vec<u8>,
-    sniff_domain: String,
-    context: ProxyDnsRequestContext,
-    owners: ResidentTransportOwnerRegistries,
-    run: F,
-) -> Result<(), ProxyDnsRequestError>
-where
-    F: FnOnce(TokioTcpStream) -> Fut,
-    Fut: std::future::Future<Output = Result<(), ProxyDnsRequestError>>,
-{
-    let (client, mut handler) = open_resident_proxy_dns_tcp_stream_async(
-        binding,
-        target,
-        dial_ip,
-        sniff_payload,
-        sniff_domain,
-        context,
-        owners,
-    )
-    .await?;
-    let run_result = run(client).await;
-    handler.stop();
-    let cleanup_deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-    let handler_result =
-        join_proxy_dns_handler(handler.handle_mut(), cleanup_deadline, run_result.is_err()).await;
-    match run_result {
-        Ok(()) => handler_result.map(|_| ()).map_err(|error| {
-            ProxyDnsRequestError::new(
-                ProxyDnsRequestStage::Cleanup,
-                ProxyDnsRequestFailure::Network,
-                error,
-            )
-        }),
-        Err(run_error) => {
-            let handler_detail = match handler_result {
-                Ok(event) => format!("handler_event={}", sanitize_probe_event(event)),
-                Err(error) => format!("handler_error={error}"),
-            };
-            Err(ProxyDnsRequestError::new(
-                run_error.stage(),
-                run_error.failure(),
-                format!("{run_error}; {handler_detail}"),
-            ))
-        }
+impl ResidentDnsProxyTcpSession for ResidentDataplaneDnsProxyTcpSession {
+    fn take_stream(&mut self) -> Option<TokioTcpStream> {
+        self.stream.take()
+    }
+
+    fn finish(
+        mut self: Box<Self>,
+        deadline: time::Instant,
+        exchange_failed: bool,
+    ) -> ResidentDnsProxyFuture<'static, Result<String, String>> {
+        let Some(mut handler) = self.handler.take() else {
+            return Box::pin(async {
+                Err("proxy DNS TCP session handler is unavailable".to_owned())
+            });
+        };
+        handler.stop();
+        Box::pin(async move {
+            join_proxy_dns_handler(handler.handle_mut(), deadline, exchange_failed)
+                .await
+                .map(sanitize_probe_event)
+        })
     }
 }
 

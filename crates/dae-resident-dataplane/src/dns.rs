@@ -49,10 +49,9 @@ use super::{
     RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics, ResidentDnsResourceProfile,
     ResidentDnsUdpRuntimeConfig, ResidentProxyDnsUdpForwarder, ResidentProxyUdpBridge,
     ResidentTransportOwnerRegistries, SharedResidentStopSignal, TuicOwnerRegistryHandle,
-    apply_resident_udp_socket_buffer_tuning, exchange_resident_proxy_dns_tcp_stream_async,
-    open_marked_quic_endpoint_for_remote, open_resident_proxy_udp_bridge_async,
-    probe_resident_proxy_dns_udp_with_forwarder_async, run_resident_proxy_dns_tcp_connection_async,
-    scope_quic_endpoint_observation, set_socket_mark,
+    apply_resident_udp_socket_buffer_tuning, open_marked_quic_endpoint_for_remote,
+    open_resident_proxy_udp_bridge_async, probe_resident_proxy_dns_udp_with_forwarder_async,
+    resident_dns_proxy_tcp_transport, scope_quic_endpoint_observation, set_socket_mark,
 };
 use super::{DnsTcpFrameReader, ResolvedHostAddrs, write_dns_tcp_payload_async};
 
@@ -173,8 +172,9 @@ pub(super) use dae_resident_dns::{
 };
 use dae_resident_dns::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
-    ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache,
-    ResidentDnsRuntimeCacheSnapshot, build_reject_response,
+    ResidentDnsProxyTcpTransport, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
+    ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot, build_reject_response,
+    exchange_resident_proxy_dns_tcp_stream, run_resident_proxy_dns_tcp_connection,
 };
 pub(crate) use dae_resident_transport::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
@@ -366,11 +366,13 @@ impl ResidentDnsPlan {
         executor: tokio::runtime::Handle,
         transport_owners: ResidentTransportOwnerRegistries,
     ) -> Self {
+        let proxy_tcp_transport = resident_dns_proxy_tcp_transport(transport_owners.clone());
         self.forwarders = Arc::new(ResidentDnsForwarderCache::new_with_transport_owner(
             runtime,
             metrics,
             executor,
             transport_owners,
+            proxy_tcp_transport,
         ));
         self
     }

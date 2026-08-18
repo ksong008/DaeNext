@@ -84,8 +84,7 @@ pub(crate) use self::stream_io::{
     read_http_head,
 };
 pub(crate) use self::tcp::{
-    exchange_resident_proxy_dns_tcp_stream_async, open_marked_quic_endpoint_for_remote,
-    run_resident_proxy_dns_tcp_connection_async,
+    open_marked_quic_endpoint_for_remote, resident_dns_proxy_tcp_transport,
 };
 #[cfg(test)]
 pub(crate) use self::transport::dns_tcp_wire::read_dns_tcp_payload_async;

@@ -592,19 +592,20 @@ impl ResidentDnsTcpForwarder {
                 .await?;
                 tokio::spawn(registration.run(stream))
             }
-            ResidentDnsTcpConnectionKind::Proxy { binding, owners } => {
+            ResidentDnsTcpConnectionKind::Proxy { binding, transport } => {
                 let binding = binding.clone();
-                let owners = owners.clone();
+                let transport = Arc::clone(transport);
                 let target = self.target.to_string();
                 tokio::spawn(async move {
-                    run_resident_proxy_dns_tcp_connection_async(
+                    run_resident_proxy_dns_tcp_connection(
+                        transport.as_ref(),
                         binding,
-                        &target,
+                        target,
                         true,
                         Vec::new(),
                         String::new(),
                         context,
-                        owners,
+                        time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
                         |stream| async move {
                             registration.run(stream).await.map_err(|error| {
                                 ProxyDnsRequestError::new(
@@ -1264,7 +1265,9 @@ mod tests {
             mark: 0,
             connection_kind: ResidentDnsTcpConnectionKind::Proxy {
                 binding: dns_proxy_binding(socks5_dns_proxy(relay.address()), 1),
-                owners: ResidentTransportOwnerRegistries::default(),
+                transport: resident_dns_proxy_tcp_transport(
+                    ResidentTransportOwnerRegistries::default(),
+                ),
             },
             connection_limit: 2,
             request_limit: 1,
