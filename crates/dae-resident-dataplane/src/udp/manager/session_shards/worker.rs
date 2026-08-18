@@ -29,6 +29,10 @@ pub(super) async fn run_resident_udp_session_shard(
     let mut retired_sessions = UdpSessionReaper::new(context.cleanup_queue_depth);
     let mut retired_joined = 0_usize;
     let mut next_actor_id = 0_u64;
+    // F-17b: 周期 reconcile——cleanup 通知在队列满时会丢失，已结束的
+    // session actor 必须仍能被回收（handle 结束即可安全 retire）。
+    let mut reconcile_interval = time::interval(Duration::from_secs(1));
+    reconcile_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
     let shutdown_deadline = loop {
         tokio::select! {
@@ -57,6 +61,10 @@ pub(super) async fn run_resident_udp_session_shard(
                     &mut direct_sessions,
                     &mut retired_sessions,
                 );
+            }
+            _ = reconcile_interval.tick() => {
+                reconcile_finished_proxy_sessions(&mut proxy_sessions, &mut retired_sessions);
+                reconcile_finished_direct_sessions(&mut direct_sessions, &mut retired_sessions);
             }
             packet = receiver.recv(), if retired_sessions.has_capacity() => {
                 let Some(packet) = packet else {
@@ -469,6 +477,45 @@ fn retire_direct_session(
         retired_sessions
             .retire(entry.session.handle)
             .expect("UDP session reaper capacity is reserved before packet dispatch");
+    }
+}
+
+/// F-17b: 周期 reconcile——回收已结束但 cleanup 通知丢失的 proxy session。
+/// 已结束的 handle 加入 reaper 后 join 立即完成；reaper 满时直接 drop
+/// （已结束 handle 的 drop 不产生泄漏）。
+fn reconcile_finished_proxy_sessions(
+    sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
+    retired_sessions: &mut UdpSessionReaper,
+) {
+    let finished: Vec<UdpSessionKey> = sessions
+        .iter()
+        .filter(|(_, entry)| entry.session.handle.is_finished())
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in finished {
+        if let Some(entry) = sessions.remove(&key)
+            && let Err(handle) = retired_sessions.retire(entry.session.handle)
+        {
+            drop(handle);
+        }
+    }
+}
+
+fn reconcile_finished_direct_sessions(
+    sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
+    retired_sessions: &mut UdpSessionReaper,
+) {
+    let finished: Vec<UdpDirectSessionKey> = sessions
+        .iter()
+        .filter(|(_, entry)| entry.session.handle.is_finished())
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in finished {
+        if let Some(entry) = sessions.remove(&key)
+            && let Err(handle) = retired_sessions.retire(entry.session.handle)
+        {
+            drop(handle);
+        }
     }
 }
 

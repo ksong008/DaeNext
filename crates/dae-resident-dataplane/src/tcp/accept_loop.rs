@@ -125,17 +125,67 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                     (reserved_generation, permit)
                 } else {
                     drop(permit);
-                    let permit = loop {
+                    // A-02: publication-aware retry——等待准入期间持续监听
+                    // publication 变化；连续 A→B→C reload 时把等待目标切到
+                    // 最新代，绝不给已退役代发放连接。
+                    let mut accepted_publication = accepted_publication;
+                    let mut accepted_generation = accepted_generation;
+                    let (generation, permit) = loop {
+                        if !accepted_generation.admission_is_open() {
+                            tokio::select! {
+                                _ = stop_listener.cancelled() => break 'accept,
+                                _ = publication_listener.changed() => {
+                                    let (latest_publication, latest_generation) =
+                                        active_generation.load_versioned();
+                                    accepted_publication = latest_publication;
+                                    accepted_generation = latest_generation;
+                                    continue;
+                                }
+                                completed = flows.join_next(), if !flows.is_empty() => {
+                                    if let Some(completed) = completed {
+                                        record_resident_task_completion(&mut flow_shutdown, completed);
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
                         tokio::select! {
                             _ = stop_listener.cancelled() => break 'accept,
+                            _ = publication_listener.changed() => {
+                                let (latest_publication, latest_generation) =
+                                    active_generation.load_versioned();
+                                if latest_publication != accepted_publication {
+                                    accepted_publication = latest_publication;
+                                    accepted_generation = latest_generation;
+                                }
+                            }
                             completed = flows.join_next(), if !flows.is_empty() => {
                                 if let Some(completed) = completed {
                                     record_resident_task_completion(&mut flow_shutdown, completed);
                                 }
                             }
                             permit = accepted_generation.tcp_admission.acquire() => match permit {
-                                Ok(permit) => break permit,
+                                Ok(permit) => {
+                                    let (latest_publication, latest_generation) =
+                                        active_generation.load_versioned();
+                                    if latest_publication != accepted_publication
+                                        || !accepted_generation.admission_is_open()
+                                    {
+                                        drop(permit);
+                                        accepted_publication = latest_publication;
+                                        accepted_generation = latest_generation;
+                                        continue;
+                                    }
+                                    break (accepted_generation, permit);
+                                }
                                 Err(err) => {
+                                    let (latest_publication, latest_generation) =
+                                        active_generation.load_versioned();
+                                    if latest_publication != accepted_publication {
+                                        accepted_publication = latest_publication;
+                                        accepted_generation = latest_generation;
+                                        continue;
+                                    }
                                     append_event(
                                         &event_file,
                                         &event_lock,
@@ -150,7 +200,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                             }
                         }
                     };
-                    (accepted_generation, permit)
+                    (generation, permit)
                 };
                 spawn_async_tcp_flow(
                     &mut flows,

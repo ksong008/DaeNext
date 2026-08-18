@@ -845,6 +845,9 @@ fn retire_idle_udp_generations(
     }
     pins.retain(|key, pin| {
         let runtime = generations.get(&pin.generation);
+        if runtime.is_some_and(|runtime| runtime.drain_control.udp_stop_is_requested()) {
+            return false;
+        }
         udp_generation_pin_is_required(
             pin.generation == active_id,
             pin.route.is_some(),
