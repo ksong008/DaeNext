@@ -10,7 +10,7 @@ use super::route::{
     refresh_dns_upstream_targets, resolved_upstream_targets, select_dns_upstream_targets,
 };
 use super::wire::{doh_request_target, restore_dns_response_id};
-use crate::inherit_quic_endpoint_observation;
+use dae_resident_transport::inherit_quic_endpoint_observation;
 use serde_json::{Value, json};
 
 mod proxied;

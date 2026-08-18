@@ -27,6 +27,8 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio::time;
 
+#[cfg(test)]
+use super::ResidentRuntimeResourceConfig;
 use super::direct::open_direct_tcp_connection_async;
 #[cfg(test)]
 use super::geodata::GeodataResolver as ResidentGeodataStore;
@@ -506,12 +508,13 @@ impl ResidentDnsPlan {
     }
 }
 
-pub(super) fn build_resident_dns_plan(
+pub(super) fn build_resident_dns_plan_with_refresh_interval(
     config: &Config,
     geodata: &dyn ResidentDnsGeodata,
+    refresh_interval: std::time::Duration,
 ) -> Result<ResidentDnsPlan, String> {
     let so_mark_from_dae = effective_so_mark_from_dae(config.global.so_mark_from_dae);
-    let upstreams = parse_dns_upstreams(config)?;
+    let upstreams = parse_dns_upstreams(config, refresh_interval)?;
     let (target_refresh_owner, target_refresh_handle) =
         ResidentDnsTargetRefreshOwner::new(ResidentDnsResourceProfile::selected());
     upstreams.install_target_refresh(target_refresh_handle);
@@ -539,6 +542,18 @@ pub(super) fn build_resident_dns_plan(
         upstream_router: None,
         target_refresh_owner: Some(target_refresh_owner),
     })
+}
+
+#[cfg(test)]
+pub(super) fn build_resident_dns_plan(
+    config: &Config,
+    geodata: &dyn ResidentDnsGeodata,
+) -> Result<ResidentDnsPlan, String> {
+    build_resident_dns_plan_with_refresh_interval(
+        config,
+        geodata,
+        ResidentRuntimeResourceConfig::from_config(config).dns_upstream_refresh_interval(),
+    )
 }
 
 fn parse_ipversion_prefer(value: i32) -> Result<Option<u16>, String> {

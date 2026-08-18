@@ -9,7 +9,8 @@ use super::{
     ResidentDnsUdpActorRegistration, ResidentDnsUdpMultiplexHandle, open_connected_dns_udp_socket,
     start_udp_multiplex_actor,
 };
-use crate::{ResidentDataplaneMetrics, ResidentDnsUdpRuntimeConfig};
+use dae_resident_core::ResidentDataplaneMetrics;
+use dae_resident_dns::ResidentDnsUdpRuntimeConfig;
 
 mod lifecycle;
 mod pool;

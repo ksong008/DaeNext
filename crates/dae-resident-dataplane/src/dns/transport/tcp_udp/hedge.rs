@@ -1,9 +1,9 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::ResidentDnsTcpUdpHedgeProfile;
+use dae_resident_core::ResidentDnsTcpUdpHedgeProfile;
 #[cfg(test)]
-use crate::{ResidentDnsResourceProfile, ResidentRuntimeProfile};
+use dae_resident_core::{ResidentDnsResourceProfile, ResidentRuntimeProfile};
 
 const DNS_TCP_UDP_HEDGE_ENTRY_COUNT: usize = (u8::MAX as usize) + 1;
 const DNS_TCP_UDP_HEDGE_SMOOTHING_SHIFT: u32 = 3;

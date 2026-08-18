@@ -1,5 +1,5 @@
 use super::*;
-use crate::ResidentOwnedTaskShutdownCompletion;
+use dae_resident_core::ResidentOwnedTaskShutdownCompletion;
 use serde_json::{Value, json};
 
 pub(super) async fn forward_dns_quic_to_proxy_async(
