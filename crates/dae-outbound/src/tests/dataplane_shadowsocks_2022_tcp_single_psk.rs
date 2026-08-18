@@ -101,7 +101,7 @@ fn ss2022_client_stream_encoder_roundtrips_large_initial_payload() {
         &client_salt,
         target,
         &payload,
-        1_765_000_188,
+        shadowsocks::ss2022_tcp_unix_timestamp_now(),
     )
     .unwrap();
     let request = shadowsocks::read_ss2022_tcp_client_request_from_stream(

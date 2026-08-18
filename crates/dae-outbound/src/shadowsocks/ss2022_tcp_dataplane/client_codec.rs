@@ -1,4 +1,7 @@
 use super::*;
+/// F-08: SS2022 请求时间戳可接受的最大偏差（秒）。
+pub(crate) const SS2022_TIMESTAMP_TOLERANCE_SECS: i64 = 90;
+
 pub(super) fn encode_client_initial_with_timestamp(
     conf: &CipherConf2022,
     psk: &[u8],
@@ -86,6 +89,30 @@ pub(super) fn decode_client_request_after_salt_with_psks<S>(
 where
     S: Read,
 {
+    decode_client_request_after_salt_with_psks_and_freshness(
+        stream,
+        conf,
+        psk_list,
+        request_salt,
+        expected_payload_len,
+        unix_timestamp_now() as i64,
+        SS2022_TIMESTAMP_TOLERANCE_SECS,
+    )
+}
+
+/// F-08: 服务端请求解码含 timestamp freshness 校验（重放窗口收窄）。
+pub(super) fn decode_client_request_after_salt_with_psks_and_freshness<S>(
+    stream: &mut S,
+    conf: &CipherConf2022,
+    psk_list: &[Vec<u8>],
+    request_salt: &[u8],
+    expected_payload_len: usize,
+    now_unix: i64,
+    tolerance_secs: i64,
+) -> Result<Ss2022TcpClientRequest, OutboundError>
+where
+    S: Read,
+{
     let upsk = psk_list.last().ok_or_else(|| {
         OutboundError::BadShadowsocks("SS2022 PSK list cannot be empty".to_owned())
     })?;
@@ -113,6 +140,13 @@ where
         fixed_header[7],
         fixed_header[8],
     ]);
+    // F-08: freshness 校验——超出容差的重放请求直接拒绝。
+    let timestamp_diff = (now_unix as i128 - timestamp as i128).unsigned_abs();
+    if timestamp_diff > tolerance_secs as u128 {
+        return Err(OutboundError::BadShadowsocks(format!(
+            "SS2022 request timestamp out of tolerance: |now - ts| = {timestamp_diff}s > {tolerance_secs}s"
+        )));
+    }
     let var_header_len = u16::from_be_bytes([fixed_header[9], fixed_header[10]]) as usize;
     let var_header = read_encrypted_exact(stream, &mut codec, var_header_len)?;
     let (target, consumed) = Socks5Address::decode(&var_header)?;

@@ -67,6 +67,7 @@ pub use ss2022_udp_dataplane::{
     Ss2022UdpCodec, Ss2022UdpDecodedPacket, Ss2022UdpEncodedPacket, Ss2022UdpReplayMetricsSnapshot,
     Ss2022UdpReplayPolicy, Ss2022UdpReplayTracker,
     decode_client_packet as decode_ss2022_udp_client_packet,
+    decode_client_packet_with_replay as decode_ss2022_udp_client_packet_with_replay,
     encode_server_packet as encode_ss2022_udp_server_packet,
     unix_timestamp_now as ss2022_udp_unix_timestamp_now,
 };

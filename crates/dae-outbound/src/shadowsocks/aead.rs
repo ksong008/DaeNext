@@ -26,6 +26,21 @@ pub const NONCE_LEN: usize = 12;
 pub const MAX_CHUNK_LEN: usize = 0x3fff;
 pub const SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE: usize = 2 + TAG_LEN + MAX_CHUNK_LEN + TAG_LEN;
 pub const SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE: usize = MAX_CHUNK_LEN + TAG_LEN;
+
+/// F-16: 对端（已认证的）chunk 长度必须受协议上限约束，且任何后续
+/// `+ TAG_LEN` 运算不得溢出。u16 载荷 + 固定 tag 在 `payload_len <=
+/// MAX_CHUNK_LEN` 时不会溢出 usize；此处仍用 checked 表达契约。
+fn checked_chunk_len(payload_len: usize) -> Result<usize, OutboundError> {
+    if payload_len > MAX_CHUNK_LEN {
+        return Err(OutboundError::BadShadowsocks(format!(
+            "decrypted chunk length {payload_len} exceeds protocol maximum {MAX_CHUNK_LEN}"
+        )));
+    }
+    payload_len
+        .checked_add(TAG_LEN)
+        .ok_or_else(|| OutboundError::BadShadowsocks("chunk length overflow".to_owned()))?;
+    Ok(payload_len)
+}
 const SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES: usize = 4;
 const SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET: usize =
     SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * (2 + TAG_LEN * 2);
@@ -249,6 +264,9 @@ where
         ));
     }
     let payload_len = u16::from_be_bytes([len_plain[0], len_plain[1]]) as usize;
+    // F-16: 长度已认证，但仍必须受协议上限约束；防止恶意/失陷对端用
+    // 合法认证长度驱动超出预算的分配。
+    let payload_len = checked_chunk_len(payload_len)?;
     let mut encrypted_payload = vec![0_u8; payload_len + TAG_LEN];
     stream
         .read_exact(&mut encrypted_payload)
@@ -277,6 +295,9 @@ where
         ));
     }
     let payload_len = u16::from_be_bytes([encrypted_len[0], encrypted_len[1]]) as usize;
+    // F-16: 认证后的长度必须受协议上限约束；否则可对固定大小 buffer 构造
+    // 越界切片（panic）或超预算读取。checked 语义见 checked_chunk_len。
+    let payload_len = checked_chunk_len(payload_len)?;
     stream
         .read_exact(&mut buffer[..payload_len + TAG_LEN])
         .await
