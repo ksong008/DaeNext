@@ -267,7 +267,8 @@
     "flow_none_canonical_empty": true,
     "grpc_default_service_name": "GunService",
     "reality_allowed_for_vless": true,
-    "shared_transport_deferred_to_item": 113,
+    "production_data_plane_owner": "dae-resident-dataplane",
+    "standalone_smoke_surface": "test-support-only",
     "vision_flow": "xtls-rprx-vision",
     "vision_requires_tls_or_reality_hook": true,
     "xhttp_mode_auto_export_omitted": true

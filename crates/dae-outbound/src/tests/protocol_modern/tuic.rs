@@ -125,7 +125,7 @@ pub(super) fn tuic_rust_native_matches_nativelden_fixture() {
     );
 
     let underlay = &fixture["underlay_contract"];
-    let tcp = crate::tuic::link::underlay_contract("tcp", 1234, true);
+    let tcp = crate::tuic::link::underlay_contract("tcp", 1234, true).unwrap();
     assert_eq!(
         tcp.underlay_network,
         underlay["tcp_request"]["underlay_network"]
@@ -140,7 +140,7 @@ pub(super) fn tuic_rust_native_matches_nativelden_fixture() {
         STANDARD.encode(&tcp.underlay_encoded),
         underlay["tcp_request"]["underlay_b64"].as_str().unwrap()
     );
-    let udp = crate::tuic::link::underlay_contract("udp", 1234, true);
+    let udp = crate::tuic::link::underlay_contract("udp", 1234, true).unwrap();
     assert_eq!(
         udp.underlay_network,
         underlay["udp_request"]["underlay_network"]
@@ -156,7 +156,11 @@ pub(super) fn tuic_rust_native_matches_nativelden_fixture() {
         underlay["udp_request"]["underlay_b64"].as_str().unwrap()
     );
     assert_eq!(
-        crate::tuic::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
-        underlay["true_quic_data_plane_deferred"].as_u64().unwrap() as u16
+        crate::tuic::contract::PRODUCTION_DATA_PLANE_OWNER,
+        underlay["production_data_plane_owner"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::tuic::contract::STANDALONE_SMOKE_SURFACE,
+        underlay["standalone_smoke_surface"].as_str().unwrap()
     );
 }

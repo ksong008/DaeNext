@@ -3,6 +3,14 @@ use std::sync::{Arc, atomic::Ordering};
 use dae_outbound::{
     shared_transport::HttpUpgradeOptions, vmess::aead_tcp_client_session_start_with_security,
 };
+use dae_resident_transport::{
+    httpupgrade_handshake_over_async_stream as native_httpupgrade_handshake_over_async_stream,
+    httpupgrade_handshake_over_resident_tls_async as native_httpupgrade_handshake_over_resident_tls_async,
+    websocket_handshake_over_async_stream as native_websocket_handshake_over_async_stream,
+    websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async,
+    write_websocket_binary_frame_over_resident_tls_async as native_write_websocket_binary_frame_over_resident_tls_async,
+    write_websocket_binary_frame_to_async_stream as native_write_websocket_binary_frame_to_async_stream,
+};
 use tokio::io::AsyncWriteExt;
 
 use super::super::super::ResidentStopSignal;
@@ -16,16 +24,11 @@ use super::super::super::plan::{
 use super::super::super::{
     ResidentDataplaneMetrics,
     tcp::{
-        native_httpupgrade_handshake_over_async_stream,
-        native_httpupgrade_handshake_over_resident_tls_async,
-        native_websocket_handshake_over_async_stream,
-        native_websocket_handshake_over_resident_tls_async,
-        native_write_websocket_binary_frame_over_resident_tls_async,
-        native_write_websocket_binary_frame_to_async_stream, open_grpc_h2_stream,
-        open_h2_body_stream, open_plain_proxy_tcp_stream_async, open_vmess_http_header_stream,
-        relay_tcp_over_vmess_aead_async, relay_tcp_over_vmess_grpc_h2,
-        relay_tcp_over_vmess_h2_body, relay_tcp_over_vmess_tls_aead_async,
-        relay_tcp_over_vmess_websocket_aead_async, relay_tcp_over_vmess_websocket_tls_aead_async,
+        open_grpc_h2_stream, open_h2_body_stream, open_plain_proxy_tcp_stream_async,
+        open_vmess_http_header_stream, relay_tcp_over_vmess_aead_async,
+        relay_tcp_over_vmess_grpc_h2, relay_tcp_over_vmess_h2_body,
+        relay_tcp_over_vmess_tls_aead_async, relay_tcp_over_vmess_websocket_aead_async,
+        relay_tcp_over_vmess_websocket_tls_aead_async,
     },
 };
 use super::errors::NativeTcpProbeError;

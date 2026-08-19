@@ -1,46 +1,5 @@
 use super::*;
 
-pub(super) fn reject_naked_param(param: &Param) -> Result<(), String> {
-    if param.key.is_empty() {
-        return Err(format!(
-            "unsupported text without a key: {}",
-            param.to_config_string(true, false)
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn reject_function_value(param: &Param) -> Result<(), String> {
-    if !param.and_functions.is_empty() {
-        return Err(format!(
-            "failed to parse \"{}\": value \"{}\" cannot be convert to string",
-            param.key, param.val
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn decode_param<T>(param: &Param, value_type: &str) -> Result<T, String>
-where
-    T: FuzzyDecode,
-{
-    reject_function_value(param)?;
-    fuzzy_decode::<T>(&param.val).ok_or_else(|| {
-        format!(
-            "failed to parse \"{}\": value \"{}\" cannot be convert to {}",
-            param.key, param.val, value_type
-        )
-    })
-}
-
-pub(super) fn dynamic_from_param(param: &Param) -> DynamicFunctionValue {
-    if param.and_functions.is_empty() {
-        DynamicFunctionValue::String(param.val.clone())
-    } else {
-        DynamicFunctionValue::FunctionList(param.and_functions.clone())
-    }
-}
-
 pub(super) fn push_csv(target: &mut Vec<String>, set: &mut bool, value: &str) {
     if !*set {
         target.clear();
@@ -69,19 +28,4 @@ pub(super) fn parse_default_duration(value: &str) -> ConfigDuration {
             panic!("invalid hard-coded duration default {value}")
         }
     })
-}
-
-pub(super) fn unexpected_item_error(section: &Section, item: &Item) -> String {
-    match item {
-        Item::RoutingRule(rule) => format!(
-            "cannot use routing rule in this context: {}",
-            rule.to_config_string(false, true, false)
-        ),
-        _ => format!(
-            "unexpected type {:?} in section {}: {}",
-            item.kind(),
-            section.name,
-            item.to_config_string(false, false)
-        ),
-    }
 }

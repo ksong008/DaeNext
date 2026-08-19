@@ -8,14 +8,14 @@ use tokio::sync::Notify;
 use tokio::time;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentProxyUdpBridgeTestSnapshot {
-    pub(crate) socket_live: usize,
-    pub(crate) task_live: usize,
-    pub(crate) execution_future_live: usize,
-    pub(crate) execution_future_cancelled: usize,
+pub struct ResidentProxyUdpBridgeTestSnapshot {
+    pub socket_live: usize,
+    pub task_live: usize,
+    pub execution_future_live: usize,
+    pub execution_future_cancelled: usize,
 }
 
-pub(crate) struct ResidentProxyUdpBridgeTestObservation {
+pub struct ResidentProxyUdpBridgeTestObservation {
     stall_execution: AtomicBool,
     socket_live: AtomicUsize,
     task_live: AtomicUsize,
@@ -25,7 +25,7 @@ pub(crate) struct ResidentProxyUdpBridgeTestObservation {
 }
 
 impl ResidentProxyUdpBridgeTestObservation {
-    pub(crate) fn stalled_execution() -> Arc<Self> {
+    pub fn stalled_execution() -> Arc<Self> {
         Arc::new(Self {
             stall_execution: AtomicBool::new(true),
             socket_live: AtomicUsize::new(0),
@@ -36,7 +36,7 @@ impl ResidentProxyUdpBridgeTestObservation {
         })
     }
 
-    pub(crate) fn snapshot(&self) -> ResidentProxyUdpBridgeTestSnapshot {
+    pub fn snapshot(&self) -> ResidentProxyUdpBridgeTestSnapshot {
         ResidentProxyUdpBridgeTestSnapshot {
             socket_live: self.socket_live.load(Ordering::Acquire),
             task_live: self.task_live.load(Ordering::Acquire),
@@ -45,7 +45,7 @@ impl ResidentProxyUdpBridgeTestObservation {
         }
     }
 
-    pub(crate) async fn wait_execution_started(&self, deadline: time::Instant) -> bool {
+    pub async fn wait_execution_started(&self, deadline: time::Instant) -> bool {
         loop {
             if self.execution_future_live.load(Ordering::Acquire) != 0 {
                 return true;

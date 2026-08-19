@@ -86,9 +86,9 @@ impl ResidentProductionRuntime {
             .restore_generation(Arc::clone(&snapshot.generation))
     }
 
-    pub(crate) fn finalize_generation_publication(&self) {
+    pub(crate) fn commit_generation_publication(&self) {
         if let Some(dataplane) = self.dataplane.as_ref() {
-            dataplane.finalize_generation_publication();
+            dataplane.commit_generation_publication();
         }
     }
 

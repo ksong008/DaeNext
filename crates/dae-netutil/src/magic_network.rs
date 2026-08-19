@@ -2,6 +2,13 @@ use std::fmt;
 use std::str;
 
 pub const MAGIC_NETWORK_TYPE: u8 = 0;
+const MAGIC_NETWORK_FRAME_OVERHEAD: usize = 2 + 4 + 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MagicNetworkEncoding {
+    PlainWhenEligible,
+    Framed,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MagicNetwork {
@@ -21,6 +28,7 @@ pub enum MagicNetworkError {
     UnknownEncoding,
     NetworkTooLong { len: usize },
     MarkTooBig,
+    OutputTooSmall { needed: usize, available: usize },
 }
 
 impl fmt::Display for MagicNetworkError {
@@ -29,6 +37,9 @@ impl fmt::Display for MagicNetworkError {
             Self::UnknownEncoding => f.write_str("unknown magic network encoding"),
             Self::NetworkTooLong { len } => write!(f, "network too long: {len}"),
             Self::MarkTooBig => f.write_str("mark is too big"),
+            Self::OutputTooSmall { needed, available } => {
+                write!(f, "output too small: need {needed} bytes, have {available}")
+            }
         }
     }
 }
@@ -40,9 +51,36 @@ pub fn encode_magic_network(
     mark: u32,
     mptcp: bool,
 ) -> Result<Vec<u8>, MagicNetworkError> {
+    encode_magic_network_with_encoding(
+        network,
+        mark,
+        mptcp,
+        MagicNetworkEncoding::PlainWhenEligible,
+    )
+}
+
+pub fn encode_magic_network_with_encoding(
+    network: impl AsRef<[u8]>,
+    mark: u32,
+    mptcp: bool,
+    encoding: MagicNetworkEncoding,
+) -> Result<Vec<u8>, MagicNetworkError> {
     let network_bytes = network.as_ref();
-    if mark == 0 && !mptcp && is_plaintext_eligible(network_bytes) {
-        return Ok(network_bytes.to_vec());
+    let encoded_len = magic_network_encoded_len(network_bytes, mark, mptcp, encoding)?;
+    let mut encoded = Vec::with_capacity(encoded_len);
+    write_magic_network_to_vec(network_bytes, mark, mptcp, encoding, &mut encoded)?;
+    Ok(encoded)
+}
+
+pub fn magic_network_encoded_len(
+    network: impl AsRef<[u8]>,
+    mark: u32,
+    mptcp: bool,
+    encoding: MagicNetworkEncoding,
+) -> Result<usize, MagicNetworkError> {
+    let network_bytes = network.as_ref();
+    if uses_plaintext_encoding(network_bytes, mark, mptcp, encoding) {
+        return Ok(network_bytes.len());
     }
 
     if network_bytes.len() > u8::MAX as usize {
@@ -50,14 +88,57 @@ pub fn encode_magic_network(
             len: network_bytes.len(),
         });
     }
+    Ok(MAGIC_NETWORK_FRAME_OVERHEAD + network_bytes.len())
+}
 
-    let mut encoded = Vec::with_capacity(2 + network_bytes.len() + 4 + 1);
-    encoded.push(MAGIC_NETWORK_TYPE);
-    encoded.push(network_bytes.len() as u8);
-    encoded.extend_from_slice(network_bytes);
-    encoded.extend_from_slice(&mark.to_be_bytes());
-    encoded.push(u8::from(mptcp));
-    Ok(encoded)
+pub fn write_magic_network_to_vec(
+    network: impl AsRef<[u8]>,
+    mark: u32,
+    mptcp: bool,
+    encoding: MagicNetworkEncoding,
+    output: &mut Vec<u8>,
+) -> Result<usize, MagicNetworkError> {
+    let network_bytes = network.as_ref();
+    let encoded_len = magic_network_encoded_len(network_bytes, mark, mptcp, encoding)?;
+    output.reserve(encoded_len);
+    if uses_plaintext_encoding(network_bytes, mark, mptcp, encoding) {
+        output.extend_from_slice(network_bytes);
+    } else {
+        output.push(MAGIC_NETWORK_TYPE);
+        output.push(network_bytes.len() as u8);
+        output.extend_from_slice(network_bytes);
+        output.extend_from_slice(&mark.to_be_bytes());
+        output.push(u8::from(mptcp));
+    }
+    Ok(encoded_len)
+}
+
+pub fn write_magic_network_to_slice(
+    network: impl AsRef<[u8]>,
+    mark: u32,
+    mptcp: bool,
+    encoding: MagicNetworkEncoding,
+    output: &mut [u8],
+) -> Result<usize, MagicNetworkError> {
+    let network_bytes = network.as_ref();
+    let encoded_len = magic_network_encoded_len(network_bytes, mark, mptcp, encoding)?;
+    if output.len() < encoded_len {
+        return Err(MagicNetworkError::OutputTooSmall {
+            needed: encoded_len,
+            available: output.len(),
+        });
+    }
+    if uses_plaintext_encoding(network_bytes, mark, mptcp, encoding) {
+        output[..encoded_len].copy_from_slice(network_bytes);
+    } else {
+        output[0] = MAGIC_NETWORK_TYPE;
+        output[1] = network_bytes.len() as u8;
+        output[2..2 + network_bytes.len()].copy_from_slice(network_bytes);
+        let mark_offset = 2 + network_bytes.len();
+        output[mark_offset..mark_offset + 4].copy_from_slice(&mark.to_be_bytes());
+        output[mark_offset + 4] = u8::from(mptcp);
+    }
+    Ok(encoded_len)
 }
 
 pub fn parse_magic_network(input: &[u8]) -> Result<MagicNetwork, MagicNetworkError> {
@@ -134,6 +215,18 @@ fn is_plaintext_eligible(network: &[u8]) -> bool {
         .any(|byte| *byte < 0x20 || (0x7F..=0x9F).contains(byte))
 }
 
+fn uses_plaintext_encoding(
+    network: &[u8],
+    mark: u32,
+    mptcp: bool,
+    encoding: MagicNetworkEncoding,
+) -> bool {
+    encoding == MagicNetworkEncoding::PlainWhenEligible
+        && mark == 0
+        && !mptcp
+        && is_plaintext_eligible(network)
+}
+
 fn starts_with_printable_rune(input: &[u8]) -> bool {
     let Some(ch) = first_utf8_char(input) else {
         return false;
@@ -195,6 +288,112 @@ mod tests {
             assert_eq!(parsed.mark, want["parsed"]["mark"].as_u64().unwrap() as u32);
             assert_eq!(parsed.mptcp, want["parsed"]["mptcp"].as_bool().unwrap());
         }
+    }
+
+    #[test]
+    fn explicit_encoding_modes_keep_plain_and_framed_golden_vectors() {
+        let plain = encode_magic_network_with_encoding(
+            "tcp",
+            0,
+            false,
+            MagicNetworkEncoding::PlainWhenEligible,
+        )
+        .unwrap();
+        assert_eq!(plain, b"tcp");
+
+        let framed =
+            encode_magic_network_with_encoding("tcp", 0, false, MagicNetworkEncoding::Framed)
+                .unwrap();
+        assert_eq!(hex_encode(&framed), "00037463700000000000");
+        assert_eq!(
+            parse_magic_network(&framed).unwrap(),
+            MagicNetwork {
+                network: b"tcp".to_vec(),
+                mark: 0,
+                mptcp: false,
+            }
+        );
+    }
+
+    #[test]
+    fn length_vec_and_slice_apis_emit_identical_framed_bytes() {
+        let expected = encode_magic_network_with_encoding(
+            b"udp\xff".as_slice(),
+            u32::MAX,
+            true,
+            MagicNetworkEncoding::Framed,
+        )
+        .unwrap();
+        let len = magic_network_encoded_len(
+            b"udp\xff".as_slice(),
+            u32::MAX,
+            true,
+            MagicNetworkEncoding::Framed,
+        )
+        .unwrap();
+        assert_eq!(len, expected.len());
+
+        let mut appended = b"prefix".to_vec();
+        let written = write_magic_network_to_vec(
+            b"udp\xff".as_slice(),
+            u32::MAX,
+            true,
+            MagicNetworkEncoding::Framed,
+            &mut appended,
+        )
+        .unwrap();
+        assert_eq!(written, len);
+        assert_eq!(&appended[b"prefix".len()..], expected);
+
+        let mut slice = vec![0xa5; len + 1];
+        let written = write_magic_network_to_slice(
+            b"udp\xff".as_slice(),
+            u32::MAX,
+            true,
+            MagicNetworkEncoding::Framed,
+            &mut slice,
+        )
+        .unwrap();
+        assert_eq!(written, len);
+        assert_eq!(&slice[..len], expected);
+        assert_eq!(slice[len], 0xa5);
+    }
+
+    #[test]
+    fn framed_length_and_output_capacity_are_bounded_explicitly() {
+        let max_network = vec![b'x'; u8::MAX as usize];
+        assert_eq!(
+            magic_network_encoded_len(&max_network, 0, false, MagicNetworkEncoding::Framed,)
+                .unwrap(),
+            max_network.len() + MAGIC_NETWORK_FRAME_OVERHEAD
+        );
+
+        let oversized = vec![b'x'; u8::MAX as usize + 1];
+        assert_eq!(
+            magic_network_encoded_len(&oversized, 0, false, MagicNetworkEncoding::Framed,),
+            Err(MagicNetworkError::NetworkTooLong {
+                len: oversized.len()
+            })
+        );
+        assert_eq!(
+            magic_network_encoded_len(
+                &oversized,
+                0,
+                false,
+                MagicNetworkEncoding::PlainWhenEligible,
+            )
+            .unwrap(),
+            oversized.len()
+        );
+
+        let mut short = [0_u8; 9];
+        assert_eq!(
+            write_magic_network_to_slice("tcp", 0, false, MagicNetworkEncoding::Framed, &mut short,),
+            Err(MagicNetworkError::OutputTooSmall {
+                needed: 10,
+                available: 9,
+            })
+        );
     }
 
     #[test]

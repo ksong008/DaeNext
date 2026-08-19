@@ -152,11 +152,11 @@ pub(super) fn runtime_runner_outbound_juicity_commands_match_fixture() {
             .unwrap()
     );
     assert_eq!(
-        smoke_json["transport_data_plane_deferred_to_item"]
-            .as_u64()
-            .unwrap(),
-        fixture["underlay_contract"]["true_quic_data_plane_deferred"]
-            .as_u64()
-            .unwrap()
+        smoke_json["production_data_plane_owner"],
+        fixture["underlay_contract"]["production_data_plane_owner"]
+    );
+    assert_eq!(
+        smoke_json["standalone_smoke_surface"],
+        fixture["underlay_contract"]["standalone_smoke_surface"]
     );
 }

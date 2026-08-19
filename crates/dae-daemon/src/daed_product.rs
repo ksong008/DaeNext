@@ -908,6 +908,8 @@ mod pprof_runtime;
 use self::pprof_runtime::*;
 mod runtime_reconcile;
 use self::runtime_reconcile::*;
+mod durable_commit;
+use self::durable_commit::*;
 mod runtime_apply;
 use self::runtime_apply::*;
 mod logs;

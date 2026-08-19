@@ -33,6 +33,7 @@ allocator-jemalloc = [
     "dep:tikv-jemalloc-ctl",
     "dep:tikv-jemalloc-sys",
 ]
+benchmark-support = ["dae-resident-dataplane/benchmark-support"]
 # Diagnostic-only compile switches used by the transparent-UDP four-quadrant
 # A/B. Production builds leave both unset and use bounded syscall batching.
 test-scalar-udp-recv = [

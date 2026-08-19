@@ -17,10 +17,10 @@ fn runtime_runner_outbound_vmess_commands_match_fixture() {
         fixture["rust_adapter_mode"].as_str().unwrap()
     );
     assert_eq!(
-        contract_json["transport_contract"]["shared_transport_deferred_to_item"]
-            .as_u64()
+        contract_json["transport_contract"]["production_data_plane_owner"]
+            .as_str()
             .unwrap(),
-        113
+        "dae-resident-dataplane"
     );
 
     let link_case = fixture["link_parser"]
@@ -106,10 +106,12 @@ fn runtime_runner_outbound_vmess_commands_match_fixture() {
         metadata_case["addr_hex"].as_str().unwrap()
     );
     assert_eq!(
-        smoke_json["transport_data_plane_deferred_to_item"]
-            .as_u64()
-            .unwrap(),
-        113
+        smoke_json["production_data_plane_owner"].as_str().unwrap(),
+        "dae-resident-dataplane"
+    );
+    assert_eq!(
+        smoke_json["standalone_smoke_surface"].as_str().unwrap(),
+        "test-support-only"
     );
 
     let bad_aid = &fixture["unsupported"]["non_aead_alter_id_error"];
@@ -227,10 +229,12 @@ fn runtime_runner_outbound_vless_commands_match_fixture() {
     let smoke_json: Value = serde_json::from_str(&smoke.stdout).unwrap();
     assert!(smoke_json["ok"].as_bool().unwrap());
     assert_eq!(
-        smoke_json["transport_data_plane_deferred_to_item"]
-            .as_u64()
-            .unwrap(),
-        113
+        smoke_json["production_data_plane_owner"].as_str().unwrap(),
+        "dae-resident-dataplane"
+    );
+    assert_eq!(
+        smoke_json["standalone_smoke_surface"].as_str().unwrap(),
+        "test-support-only"
     );
 
     let bad = run_with_args([

@@ -141,7 +141,8 @@
     "tcp_underlay_drops_mptcp": true,
     "tcp_underlay_preserves_mark": true,
     "tcp_underlay_uses_udp": true,
-    "true_quic_data_plane_deferred": 113,
+    "production_data_plane_owner": "dae-resident-dataplane",
+    "standalone_smoke_surface": "test-support-only",
     "udp_request": {
       "input_b64": "AAN1ZHAAAATSAQ==",
       "input_mark": 1234,

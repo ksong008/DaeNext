@@ -6,15 +6,28 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["test-boringssl-tcp-tls", "test-boringssl-quic"]
+default = ["test-boringssl-tcp-tls", "test-boringssl-quic", "dns-runtime-tests"]
+benchmark-support = []
+dns-runtime-tests = []
 test-scalar-udp-recv = ["dae-datapath/test-scalar-udp-recv"]
-test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send"]
+test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send", "dae-resident-dns/test-scalar-udp-send"]
 test-boringssl-tcp-tls = []
-test-boringssl-tls-profile = ["test-boringssl-tcp-tls"]
-test-boringssl-unbuffered-bio = ["test-boringssl-tcp-tls"]
+test-boringssl-tls-profile = [
+    "test-boringssl-tcp-tls",
+    "dae-resident-transport/test-boringssl-tls-profile",
+]
+test-boringssl-unbuffered-bio = [
+    "test-boringssl-tcp-tls",
+    "dae-resident-transport/test-boringssl-unbuffered-bio",
+]
 test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
-test-anytls-legacy-frame-reader = []
-test-support = []
+test-anytls-legacy-frame-reader = ["dae-resident-transport/test-anytls-legacy-frame-reader"]
+test-support = [
+    "dae-resident-dns/test-support",
+    "dae-resident-plan/test-support",
+    "dae-resident-tcp/test-support",
+    "dae-resident-udp/test-support",
+]
 
 [dependencies]
 dae-config.workspace = true
@@ -26,6 +39,12 @@ dae-ebpf-support.workspace = true
 dae-geodata.workspace = true
 dae-netutil.workspace = true
 dae-outbound.workspace = true
+dae-resident-core.workspace = true
+dae-resident-dns.workspace = true
+dae-resident-plan.workspace = true
+dae-resident-tcp.workspace = true
+dae-resident-transport.workspace = true
+dae-resident-udp.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
 dae-tls.workspace = true
@@ -62,3 +81,9 @@ url.workspace = true
 [dev-dependencies]
 dae-datapath = { workspace = true, features = ["test-support"] }
 dae-outbound = { workspace = true, features = ["test-support"] }
+dae-resident-core = { workspace = true, features = ["test-support"] }
+dae-resident-dns = { workspace = true, features = ["test-support"] }
+dae-resident-plan = { workspace = true, features = ["test-support"] }
+dae-resident-tcp = { workspace = true, features = ["test-support"] }
+dae-resident-transport = { workspace = true, features = ["test-support"] }
+dae-resident-udp = { workspace = true, features = ["test-support"] }

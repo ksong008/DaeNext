@@ -215,8 +215,8 @@ impl ResidentProductRuntimeSlot {
         })
     }
 
-    pub(super) fn finalize_generation_publication(&self) {
-        let _ = self.with_runtime(ResidentProductionRuntime::finalize_generation_publication);
+    pub(super) fn commit_generation_publication(&self) {
+        let _ = self.with_runtime(ResidentProductionRuntime::commit_generation_publication);
     }
 
     pub(super) fn owns_generation_snapshot(

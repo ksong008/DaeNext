@@ -1,6 +1,11 @@
 use std::sync::{Arc, atomic::Ordering};
 
 use dae_outbound::{shared_transport::HttpUpgradeOptions, trojan::packet as trojan_packet};
+use dae_resident_transport::{
+    httpupgrade_handshake_over_resident_tls_async as native_httpupgrade_handshake_over_resident_tls_async,
+    websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async,
+    write_websocket_binary_frame_over_resident_tls_async as native_write_websocket_binary_frame_over_resident_tls_async,
+};
 
 use super::super::super::ResidentStopSignal;
 
@@ -11,10 +16,7 @@ use super::super::super::plan::{
 use super::super::super::{
     ResidentDataplaneMetrics,
     tcp::{
-        native_httpupgrade_handshake_over_resident_tls_async,
-        native_websocket_handshake_over_resident_tls_async,
-        native_write_websocket_binary_frame_over_resident_tls_async, open_grpc_h2_stream,
-        relay_tcp_over_grpc_h2, relay_tcp_over_resident_tls_plain_async,
+        open_grpc_h2_stream, relay_tcp_over_grpc_h2, relay_tcp_over_resident_tls_plain_async,
         relay_tcp_over_trojan_websocket_inner_shadowsocks_tls,
         relay_tcp_over_trojan_websocket_tls_async,
     },

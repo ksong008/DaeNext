@@ -44,6 +44,7 @@ pub(crate) use dae_resident_dataplane::facade::{
     resident_runtime_defaults_contract, resident_tcp_latency_probe_timeout_from_config,
     run_resident_manual_latency_probe_helper, run_resident_manual_latency_probe_helper_streaming,
 };
+#[cfg(feature = "benchmark-support")]
 pub use dae_resident_dataplane::facade::{
     ResidentProxyOwnershipBenchmarkFixture, ResidentTcpSelectionBenchmarkFixture,
     resident_proxy_ownership_benchmark_fixture, resident_tcp_selection_benchmark_fixture,

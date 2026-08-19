@@ -1,5 +1,8 @@
-use super::files::{remove_file_if_exists, sync_directory};
 use super::*;
+use crate::daed_product::durable_commit::{
+    ValidatedLeafName, read_json_journal, remove_file_if_exists, remove_leaf_if_exists_synced,
+    sync_directory, write_json_journal,
+};
 use serde::{Deserialize, Serialize};
 
 const GEODATA_JOURNAL_FORMAT_VERSION: u32 = 1;
@@ -111,16 +114,11 @@ pub(super) fn read_geodata_journal(
     kind: GeodataKind,
 ) -> io::Result<Option<GeodataUpdateJournal>> {
     let path = geodata_journal_path(dir, kind);
-    let metadata = match fs::metadata(&path) {
-        Ok(metadata) => metadata,
+    let journal: GeodataUpdateJournal = match read_json_journal(&path, GEODATA_JOURNAL_MAX_BYTES) {
+        Ok(journal) => journal,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    if metadata.len() > GEODATA_JOURNAL_MAX_BYTES {
-        return Err(invalid_journal("geodata journal exceeds size limit"));
-    }
-    let journal: GeodataUpdateJournal = serde_json::from_slice(&fs::read(&path)?)
-        .map_err(|error| invalid_journal(format!("parse geodata update journal: {error}")))?;
     journal.validate(kind)?;
     Ok(Some(journal))
 }
@@ -131,31 +129,17 @@ pub(in crate::daed_product::geodata) fn write_geodata_journal(
     journal: &GeodataUpdateJournal,
 ) -> io::Result<()> {
     journal.validate(kind)?;
-    let path = geodata_journal_path(dir, kind);
-    let next = geodata_journal_next_path(dir, kind);
-    let bytes = serde_json::to_vec(journal).map_err(io::Error::other)?;
-    if bytes.len() as u64 > GEODATA_JOURNAL_MAX_BYTES {
-        return Err(invalid_journal("geodata journal exceeds size limit"));
-    }
-    let write_result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&next)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        fs::rename(&next, &path)?;
-        sync_directory(dir)
-    })();
-    if write_result.is_err() {
-        let _ = remove_file_if_exists(&next);
-    }
-    write_result
+    write_json_journal(
+        dir,
+        &geodata_journal_leaf(kind)?,
+        &geodata_journal_next_leaf(kind)?,
+        GEODATA_JOURNAL_MAX_BYTES,
+        journal,
+    )
 }
 
 pub(super) fn remove_geodata_journal_durable(dir: &Path, kind: GeodataKind) -> io::Result<()> {
-    remove_file_if_exists(&geodata_journal_path(dir, kind))?;
+    remove_leaf_if_exists_synced(dir, &geodata_journal_leaf(kind)?)?;
     remove_file_if_exists(&geodata_journal_next_path(dir, kind))?;
     sync_directory(dir)
 }
@@ -173,24 +157,26 @@ fn geodata_journal_next_path(dir: &Path, kind: GeodataKind) -> PathBuf {
 }
 
 fn artifact_file_name(path: &Path) -> io::Result<String> {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_owned)
-        .ok_or_else(|| invalid_journal("geodata transaction artifact has no UTF-8 filename"))
+    ValidatedLeafName::from_path(path).map(|leaf| leaf.to_string())
 }
 
 fn validate_artifact_name(name: &str, kind: GeodataKind, purpose: &str) -> io::Result<()> {
-    let path = Path::new(name);
-    let mut components = path.components();
-    let single_normal_component =
-        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+    ValidatedLeafName::new(name)?;
     let expected_prefix = format!(".{}.{}.tmp.", kind.file_name(), purpose);
-    if !single_normal_component || !name.starts_with(&expected_prefix) {
+    if !name.starts_with(&expected_prefix) {
         return Err(invalid_journal(format!(
             "invalid geodata transaction artifact name: {name}"
         )));
     }
     Ok(())
+}
+
+fn geodata_journal_leaf(kind: GeodataKind) -> io::Result<ValidatedLeafName> {
+    ValidatedLeafName::new(format!(".{}.update-journal.json", kind.file_name()))
+}
+
+fn geodata_journal_next_leaf(kind: GeodataKind) -> io::Result<ValidatedLeafName> {
+    ValidatedLeafName::new(format!(".{}.update-journal.next", kind.file_name()))
 }
 
 fn invalid_journal(message: impl Into<String>) -> io::Error {

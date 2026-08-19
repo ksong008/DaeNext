@@ -1,7 +1,9 @@
 use super::*;
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::dns::ProxyDnsRequestContext;
+use dae_resident_dns::{ResidentDnsProxyFuture, ResidentDnsProxyUdpBridge};
+#[cfg(test)]
+use dae_resident_transport::encode_dns_qname;
 
 const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
 
@@ -9,32 +11,26 @@ mod shutdown;
 #[cfg(test)]
 mod test_observation;
 #[cfg(test)]
-pub(crate) use self::test_observation::ResidentProxyUdpBridgeTestObservation;
+pub use self::test_observation::ResidentProxyUdpBridgeTestObservation;
 
-pub(crate) struct ResidentProxyUdpBridge {
+pub struct ResidentProxyUdpBridge {
     local_addr: SocketAddr,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
     last_error: Arc<Mutex<Option<String>>>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentProxyUdpBridgeShutdownCompletion {
-    Joined,
-    Aborted,
-}
-
 impl ResidentProxyUdpBridge {
-    pub(crate) fn local_addr(&self) -> SocketAddr {
+    pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
-    pub(crate) fn last_error(&self) -> Option<String> {
+    pub fn last_error(&self) -> Option<String> {
         self.last_error.lock().ok().and_then(|error| error.clone())
     }
 
     #[cfg(test)]
-    pub(crate) async fn shutdown(mut self) {
+    pub async fn shutdown(mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -50,7 +46,7 @@ impl ResidentProxyUdpBridge {
     }
 
     #[cfg(test)]
-    pub(crate) async fn shutdown_and_join(mut self) -> Result<(), String> {
+    pub async fn shutdown_and_join(mut self) -> Result<(), String> {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -61,15 +57,15 @@ impl ResidentProxyUdpBridge {
         Ok(())
     }
 
-    pub(crate) async fn shutdown_and_join_until(
+    pub async fn shutdown_and_join_until(
         mut self,
         deadline: time::Instant,
-    ) -> Result<ResidentProxyUdpBridgeShutdownCompletion, String> {
+    ) -> Result<ResidentOwnedTaskShutdownCompletion, String> {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
         let Some(task) = self.task.take() else {
-            return Ok(ResidentProxyUdpBridgeShutdownCompletion::Joined);
+            return Ok(ResidentOwnedTaskShutdownCompletion::Joined);
         };
         shutdown::join_bridge_task_until(task, deadline).await
     }
@@ -86,7 +82,26 @@ impl Drop for ResidentProxyUdpBridge {
     }
 }
 
-pub(crate) async fn open_resident_proxy_udp_bridge_async(
+impl ResidentDnsProxyUdpBridge for ResidentProxyUdpBridge {
+    fn local_addr(&self) -> SocketAddr {
+        ResidentProxyUdpBridge::local_addr(self)
+    }
+
+    fn last_error(&self) -> Option<String> {
+        ResidentProxyUdpBridge::last_error(self)
+    }
+
+    fn shutdown_and_join_until(
+        self: Box<Self>,
+        deadline: time::Instant,
+    ) -> ResidentDnsProxyFuture<'static, Result<ResidentOwnedTaskShutdownCompletion, String>> {
+        Box::pin(
+            async move { ResidentProxyUdpBridge::shutdown_and_join_until(*self, deadline).await },
+        )
+    }
+}
+
+pub async fn open_resident_proxy_udp_bridge_async(
     binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
@@ -125,7 +140,7 @@ pub(crate) async fn open_resident_proxy_udp_bridge_async(
 }
 
 #[cfg(test)]
-pub(crate) async fn open_resident_proxy_udp_bridge_with_test_observation_async(
+pub async fn open_resident_proxy_udp_bridge_with_test_observation_async(
     proxy: Arc<ResidentProxyPlan>,
     original_dst: SocketAddr,
     observation: Arc<ResidentProxyUdpBridgeTestObservation>,
@@ -342,11 +357,11 @@ fn record_resident_proxy_udp_bridge_error(last_error: &Arc<Mutex<Option<String>>
 #[path = "probe_dns/shutdown_tests.rs"]
 mod shutdown_tests;
 
-pub(crate) const RESIDENT_UDP_PROBE_PUBLIC_ERROR: &str =
+pub const RESIDENT_UDP_PROBE_PUBLIC_ERROR: &str =
     "resident UDP probe failed; protected detail redacted";
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn probe_resident_proxy_udp_async(
+pub async fn probe_resident_proxy_udp_async(
     binding: ResidentProxyBinding,
     original_dst: SocketAddr,
     payload: &[u8],
@@ -391,9 +406,8 @@ pub(crate) async fn probe_resident_proxy_udp_async(
         juicity_owner_registry,
         anytls_owner_registry,
     );
-    let dns = ResidentDnsPlan::asis(binding.effective_socket_mark());
     let mut exchange = executor
-        .execute(&dns, &binding, original_dst, payload)
+        .execute_proxy_packet(&binding, original_dst, payload)
         .await
         .map(|(_, response)| response);
     if let Ok(response) = &exchange
@@ -476,20 +490,13 @@ async fn wait_for_udp_probe_response(
         .map(|(_, response)| response)
 }
 
-pub(crate) async fn probe_resident_proxy_dns_udp_with_forwarder_async(
-    forwarder: Arc<ResidentProxyDnsUdpForwarder>,
+#[cfg(test)]
+pub async fn probe_resident_proxy_dns_udp_with_forwarder_async(
+    forwarder: Arc<dyn dae_resident_dns::ResidentDnsProxyUdpForwarder>,
     lookup_host: &str,
 ) -> Result<(), String> {
-    let id = fastrand::u16(0..=u16::MAX);
-    let query = build_dns_a_query(id, lookup_host)?;
-    let response = forwarder
-        .exchange_with_context(
-            &query,
-            ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT),
-        )
+    dae_resident_dns::probe_resident_proxy_dns_udp_with_forwarder_async(forwarder, lookup_host)
         .await
-        .map_err(|error| error.to_string())?;
-    dns_a_response_has_answer(id, &response)
 }
 
 fn take_udp_response_for_fixed_target(
@@ -507,7 +514,8 @@ fn take_udp_response_for_fixed_target(
         })
 }
 
-pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
+#[cfg(test)]
+pub fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, String> {
     let mut query = Vec::with_capacity(64);
     query.extend_from_slice(&id.to_be_bytes());
     query.extend_from_slice(&0x0100_u16.to_be_bytes());
@@ -521,31 +529,8 @@ pub(crate) fn build_dns_a_query(id: u16, lookup_host: &str) -> Result<Vec<u8>, S
     Ok(query)
 }
 
-pub(crate) fn encode_dns_qname(out: &mut Vec<u8>, lookup_host: &str) -> Result<(), String> {
-    let lookup_host = lookup_host.trim_end_matches('.');
-    if lookup_host.is_empty() {
-        out.push(0);
-        return Ok(());
-    }
-    for label in lookup_host.split('.') {
-        if label.is_empty() {
-            return Err(format!(
-                "invalid DNS lookup host {lookup_host}: empty label"
-            ));
-        }
-        if label.len() > 63 {
-            return Err(format!(
-                "invalid DNS lookup host {lookup_host}: label exceeds 63 bytes"
-            ));
-        }
-        out.push(label.len() as u8);
-        out.extend_from_slice(label.as_bytes());
-    }
-    out.push(0);
-    Ok(())
-}
-
-pub(crate) fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {
+#[cfg(test)]
+pub fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Result<(), String> {
     if response.len() < 12 {
         return Err(format!("DNS response too short: {} bytes", response.len()));
     }
@@ -596,7 +581,8 @@ pub(crate) fn dns_a_response_has_answer(query_id: u16, response: &[u8]) -> Resul
     Err("DNS response has no A answer records".to_owned())
 }
 
-pub(crate) fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
+#[cfg(test)]
+pub fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
     let mut jumps = 0_usize;
     loop {
         if *offset >= packet.len() {

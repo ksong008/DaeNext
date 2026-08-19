@@ -142,7 +142,7 @@ pub(super) fn juicity_rust_native_matches_nativelden_fixture() {
     );
 
     let underlay = &fixture["underlay_contract"];
-    let tcp = crate::juicity::link::underlay_contract("tcp", 1234, true);
+    let tcp = crate::juicity::link::underlay_contract("tcp", 1234, true).unwrap();
     assert_eq!(
         tcp.underlay_network,
         underlay["tcp_request"]["underlay_network"]
@@ -157,7 +157,7 @@ pub(super) fn juicity_rust_native_matches_nativelden_fixture() {
         STANDARD.encode(&tcp.underlay_encoded),
         underlay["tcp_request"]["underlay_b64"].as_str().unwrap()
     );
-    let udp = crate::juicity::link::underlay_contract("udp", 1234, true);
+    let udp = crate::juicity::link::underlay_contract("udp", 1234, true).unwrap();
     assert_eq!(
         udp.underlay_network,
         underlay["udp_request"]["underlay_network"]
@@ -177,7 +177,11 @@ pub(super) fn juicity_rust_native_matches_nativelden_fixture() {
         underlay["udp_nonzero_port_packet_conn"].as_str().unwrap()
     );
     assert_eq!(
-        crate::juicity::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
-        underlay["true_quic_data_plane_deferred"].as_u64().unwrap() as u16
+        crate::juicity::contract::PRODUCTION_DATA_PLANE_OWNER,
+        underlay["production_data_plane_owner"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::juicity::contract::STANDALONE_SMOKE_SURFACE,
+        underlay["standalone_smoke_surface"].as_str().unwrap()
     );
 }

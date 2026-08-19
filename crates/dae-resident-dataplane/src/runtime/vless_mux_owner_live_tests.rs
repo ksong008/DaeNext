@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use boring::ssl::SslAcceptor;
 use dae_outbound::shared_transport::mux::{
@@ -8,11 +10,19 @@ use dae_outbound::shared_transport::mux::{
     mux_data_frame, mux_new_frame,
 };
 use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
+use dae_resident_core::{
+    RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT, ResidentRuntimeProfile, ResidentStopSignal,
+    SharedResidentStopSignal,
+};
+use dae_resident_plan as plan;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time;
 
 use super::vless_mux_owner::VlessMuxLogicalStream;
+use super::vless_mux_owner::{
+    start_vless_mux_generation_owner, start_vless_mux_generation_owner_for_test,
+};
 use super::*;
 
 static NEXT_VLESS_MUX_TEST_GENERATION: AtomicU64 = AtomicU64::new(110_000);

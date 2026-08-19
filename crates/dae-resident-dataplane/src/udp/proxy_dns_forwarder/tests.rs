@@ -1,7 +1,7 @@
 use super::*;
 use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+use crate::ResidentUdpPayloadAdmission;
 use crate::plan::ResidentXhttpSettingsPlan;
-use crate::udp::ResidentUdpPayloadAdmission;
 use dae_dns::DnsPacketView;
 use dae_outbound::shadowsocks::{decode_udp_packet, encode_udp_packet};
 use std::{

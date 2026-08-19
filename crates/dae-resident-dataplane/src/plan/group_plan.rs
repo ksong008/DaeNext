@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use dae_resident_udp::ResidentDataUdpAvailabilityHandle;
+
 use super::*;
 
 const RESIDENT_GROUP_RESUSCITATION_MIN_INTERVAL: Duration = Duration::from_secs(1);
@@ -70,31 +72,86 @@ pub(crate) type ResidentProxyGroupHandle = Arc<ResidentProxyGroupPlan>;
 pub(crate) type ResidentProxyGroupHandleMap = BTreeMap<u8, ResidentProxyGroupHandle>;
 pub(crate) type SharedResidentProxyGroupMap = Arc<ResidentProxyGroupHandleMap>;
 
-#[derive(Clone)]
-pub(crate) struct ResidentDataUdpAvailabilityHandle {
-    selector: std::sync::Weak<std::sync::RwLock<DialerGroup>>,
-    health_bootstrap: ResidentGroupHealthBootstrap,
-    observation: Arc<ResidentDataUdpObservation>,
-    candidate_index: usize,
-    enabled: bool,
+#[derive(Clone, Debug)]
+pub(crate) struct ResidentDnsProxyGroupSelector {
+    proxy_groups: SharedResidentProxyGroupMap,
 }
 
-impl ResidentDataUdpAvailabilityHandle {
-    pub(crate) fn record(&self, network_type: NetworkType, checked_at_unix: i64) {
-        if !self.enabled
-            || !self
-                .observation
-                .should_publish(network_type, checked_at_unix)
-        {
-            return;
-        }
-        if let Some(selector) = self.selector.upgrade()
-            && let Ok(mut selector) = selector.write()
-        {
-            selector.record_available_traffic(self.candidate_index, network_type, checked_at_unix);
-        }
-        self.health_bootstrap
-            .observe(self.candidate_index, HealthState::Alive);
+impl ResidentDnsProxyGroupSelector {
+    pub(crate) fn shared(proxy_groups: SharedResidentProxyGroupMap) -> Arc<Self> {
+        Arc::new(Self { proxy_groups })
+    }
+}
+
+impl dae_resident_dns::ResidentDnsProxySelector for ResidentDnsProxyGroupSelector {
+    fn select(
+        &self,
+        outbound: u8,
+        network_type: NetworkType,
+    ) -> Result<
+        dae_resident_dns::ResidentDnsProxySelection,
+        dae_resident_dns::ResidentDnsProxySelectionError,
+    > {
+        let proxy_group = self.proxy_groups.get(&outbound).ok_or_else(|| {
+            dae_resident_dns::ResidentDnsProxySelectionError {
+                message: format!(
+                    "DNS upstream selected outbound {} but no Rust proxy plan is available",
+                    OutboundIndex(outbound)
+                ),
+                no_alive: false,
+            }
+        })?;
+        proxy_group
+            .select_proxy_for_dns_upstream_candidate_detail(network_type)
+            .map(|selection| dae_resident_dns::ResidentDnsProxySelection {
+                binding: selection.proxy,
+                network_type: selection.network_type,
+                latency_ms: selection.latency_ms,
+            })
+            .map_err(|error| dae_resident_dns::ResidentDnsProxySelectionError {
+                message: error.message,
+                no_alive: error.no_alive,
+            })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResidentTcpProxyGroupSelector {
+    proxy_groups: SharedResidentProxyGroupMap,
+}
+
+impl ResidentTcpProxyGroupSelector {
+    pub(crate) fn shared(proxy_groups: SharedResidentProxyGroupMap) -> Arc<Self> {
+        Arc::new(Self { proxy_groups })
+    }
+}
+
+impl dae_resident_tcp::ResidentTcpProxySelector for ResidentTcpProxyGroupSelector {
+    fn proxy_count(&self) -> usize {
+        self.proxy_groups.len()
+    }
+
+    fn select_proxy(
+        &self,
+        outbound: u8,
+        network_type: NetworkType,
+        strict_ip_version: bool,
+    ) -> Result<ResidentProxyBinding, dae_resident_tcp::ResidentTcpProxySelectionError> {
+        let proxy_group = self.proxy_groups.get(&outbound).ok_or_else(|| {
+            dae_resident_tcp::ResidentTcpProxySelectionError {
+                message: format!(
+                    "resident TCP selected outbound {} but no Rust proxy plan is available; unsupported protocol must stay fail-closed until implemented",
+                    OutboundIndex(outbound)
+                ),
+                no_alive: false,
+            }
+        })?;
+        proxy_group
+            .select_proxy_for_tcp_runtime_detail(network_type, strict_ip_version)
+            .map_err(|error| dae_resident_tcp::ResidentTcpProxySelectionError {
+                message: error.message,
+                no_alive: error.no_alive,
+            })
     }
 }
 
@@ -615,6 +672,7 @@ impl ResidentProxyGroupPlan {
         self.select_proxy_for_tcp_network(NetworkType::TCP4)
     }
 
+    #[cfg(any(test, feature = "benchmark-support"))]
     pub(crate) fn select_proxy_for_tcp_network(
         &self,
         network_type: NetworkType,
@@ -705,13 +763,27 @@ impl ResidentProxyGroupPlan {
                 self.group_name
             ));
         };
-        Ok(ResidentDataUdpAvailabilityHandle {
-            selector: Arc::downgrade(&self.selector),
-            health_bootstrap: self.health_bootstrap.clone(),
-            observation: Arc::clone(&self.candidates[candidate_index].data_udp_observation),
-            candidate_index,
-            enabled: self.group_policy.needs_alive_state(),
-        })
+        let selector = Arc::downgrade(&self.selector);
+        let health_bootstrap = self.health_bootstrap.clone();
+        let observation = Arc::clone(&self.candidates[candidate_index].data_udp_observation);
+        let enabled = self.group_policy.needs_alive_state();
+        Ok(ResidentDataUdpAvailabilityHandle::new(
+            move |network_type, checked_at_unix| {
+                if !enabled || !observation.should_publish(network_type, checked_at_unix) {
+                    return;
+                }
+                if let Some(selector) = selector.upgrade()
+                    && let Ok(mut selector) = selector.write()
+                {
+                    selector.record_available_traffic(
+                        candidate_index,
+                        network_type,
+                        checked_at_unix,
+                    );
+                }
+                health_bootstrap.observe(candidate_index, HealthState::Alive);
+            },
+        ))
     }
 
     #[cfg(test)]
@@ -757,6 +829,7 @@ impl ResidentProxyGroupPlan {
         }
     }
 
+    #[cfg(any(test, feature = "benchmark-support"))]
     pub(crate) fn select_candidate(
         &self,
         network_type: NetworkType,
@@ -766,6 +839,7 @@ impl ResidentProxyGroupPlan {
             .map(|selected| selected.candidate)
     }
 
+    #[cfg(any(test, feature = "benchmark-support"))]
     fn select_candidate_with_selection(
         &self,
         network_type: NetworkType,

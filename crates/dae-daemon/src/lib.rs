@@ -61,9 +61,12 @@ pub use production_dataplane_harness::{
     ProductionDataplaneHarnessOptions, production_dataplane_harness_report,
 };
 pub use production_runtime_owner::{
-    ProductionRuntimeOwnerOptions, ResidentProxyOwnershipBenchmarkFixture,
-    ResidentTcpSelectionBenchmarkFixture, daemon_runtime_native_owner_summary_json,
+    ProductionRuntimeOwnerOptions, daemon_runtime_native_owner_summary_json,
     datapath_outbound_ebpf_deep_area_summary_json, production_runtime_owner_report,
+};
+#[cfg(feature = "benchmark-support")]
+pub use production_runtime_owner::{
+    ResidentProxyOwnershipBenchmarkFixture, ResidentTcpSelectionBenchmarkFixture,
     resident_proxy_ownership_benchmark_fixture, resident_tcp_selection_benchmark_fixture,
 };
 pub use reload_owner_benchmark::{

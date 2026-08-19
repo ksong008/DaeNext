@@ -13,8 +13,10 @@ pub struct TuicUnderlayAdmissionContract {
 }
 
 pub fn admission_contract(mark: u32, mptcp: bool) -> TuicUnderlayAdmissionContract {
-    let tcp_request = underlay_contract("tcp", mark, mptcp);
-    let udp_request = underlay_contract("udp", mark, mptcp);
+    let tcp_request = underlay_contract("tcp", mark, mptcp)
+        .expect("fixed TUIC TCP network fits MagicNetwork framing");
+    let udp_request = underlay_contract("udp", mark, mptcp)
+        .expect("fixed TUIC UDP network fits MagicNetwork framing");
     TuicUnderlayAdmissionContract {
         tcp_underlay_uses_udp: tcp_request.underlay_network == "udp",
         tcp_underlay_preserves_mark: tcp_request.underlay_mark == mark,

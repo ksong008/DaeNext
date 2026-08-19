@@ -24,18 +24,6 @@ pub(super) enum GeodataTransactionCheckpoint {
     CleanupCommitted,
 }
 
-pub(super) trait GeodataTransactionCheckpoints {
-    fn checkpoint(&mut self, point: GeodataTransactionCheckpoint) -> io::Result<()>;
-}
-
-pub(super) struct NoopGeodataTransactionCheckpoints;
-
-impl GeodataTransactionCheckpoints for NoopGeodataTransactionCheckpoints {
-    fn checkpoint(&mut self, _point: GeodataTransactionCheckpoint) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 #[derive(Debug)]
 pub(super) struct GeodataCommitResult {
     pub(super) status: Value,

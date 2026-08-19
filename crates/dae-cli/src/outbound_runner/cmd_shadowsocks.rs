@@ -29,7 +29,8 @@ pub(super) fn run_shadowsocks_contract() -> RunnerOutput {
                 "simple_obfs_aliases": shadowsocks::contract::SIMPLE_OBFS_ALIASES,
                 "default_simple_obfs_host": shadowsocks::contract::SIMPLE_OBFS_DEFAULT_HOST,
                 "path_without_slash_behavior": shadowsocks::contract::SIP003_PATH_WITHOUT_SLASH_BEHAVIOR,
-                "transport_native_data_plane_deferred_to_item": shadowsocks::contract::TRANSPORT_NATIVE_DATA_PLANE_DEFERRED_TO_ITEM,
+                "production_data_plane_owner": shadowsocks::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": shadowsocks::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -204,7 +205,8 @@ pub(super) fn run_shadowsocks_smoke(args: &[String]) -> RunnerOutput {
             "metadata_authority": metadata.0.authority(),
             "ss2022_psk": psk,
             "replay_duplicate_rejected": replay_ok,
-            "transport_data_plane_deferred_to_item": shadowsocks::contract::TRANSPORT_NATIVE_DATA_PLANE_DEFERRED_TO_ITEM,
+            "production_data_plane_owner": shadowsocks::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": shadowsocks::contract::STANDALONE_SMOKE_SURFACE,
         })
     ))
 }

@@ -1,0 +1,634 @@
+use super::*;
+
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_vless_h2_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: TcpProxySelection,
+    stop: SharedResidentStopSignal,
+    sniff: &mut TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let key = selection.proxy.vless_key()?;
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    let initial_chunks = vless_h2_initial_data_chunks(
+        &key,
+        &selection.proxy.flow,
+        &selection.route.dial_target,
+        initial_payload,
+    )?;
+    let (mut h2_send, response_task, carrier_lease) =
+        open_h2_body_stream_with_deferred_response(&selection.proxy, initial_chunks, "VLESS H2")
+            .await?;
+    let tls_underlay = carrier_lease.tls_underlay();
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
+    }
+
+    let result = relay_tcp_over_deferred_h2_body(
+        inbound,
+        &mut h2_send,
+        response_task,
+        stop,
+        initial_stats,
+        metrics,
+        true,
+        "VLESS H2",
+    )
+    .await;
+    result
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &stats,
+                "async-proxy-h2-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("h2");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-h2-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &err,
+                "async-proxy-h2-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("h2");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-h2-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+fn vless_h2_initial_data_chunks(
+    key: &[u8; 16],
+    flow: &str,
+    dial_target: &str,
+    sniff_payload: Vec<u8>,
+) -> Result<Vec<Bytes>, String> {
+    let request = packet::first_write_bytes(key, flow, "tcp", dial_target, false, &[])
+        .map_err(|err| format!("build VLESS H2 TCP request: {err}"))?;
+    let mut chunks = vec![Bytes::from(request)];
+    if !sniff_payload.is_empty() {
+        chunks.push(Bytes::from(sniff_payload));
+    }
+    Ok(chunks)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_vless_grpc_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: TcpProxySelection,
+    stop: SharedResidentStopSignal,
+    sniff: &mut TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let key = selection.proxy.vless_key()?;
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    let encryption = selection.proxy.vless_encryption()?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        if encryption.is_some() {
+            &[]
+        } else {
+            &initial_payload
+        },
+    )
+    .map_err(|err| format!("build VLESS gRPC TCP request: {err}"))?;
+    let (mut h2_send, mut h2_recv, carrier_lease) = open_grpc_h2_stream(
+        &selection.proxy,
+        if encryption.is_some() { &[] } else { &request },
+    )
+    .await?;
+    let tls_underlay = carrier_lease.tls_underlay();
+    if let Some(encryption) = encryption {
+        let logical = spawn_grpc_h2_payload_stream(h2_send, h2_recv, carrier_lease);
+        let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+            .await
+            .map_err(|err| format!("VLESS Encryption gRPC handshake: {err}"))?;
+        encrypted
+            .write_all(&request)
+            .await
+            .map_err(|err| format!("write VLESS encrypted gRPC request: {err}"))?;
+        encrypted
+            .flush()
+            .await
+            .map_err(|err| format!("flush VLESS encrypted gRPC request: {err}"))?;
+        drop(request);
+        return relay_tcp_over_vless_plain_async(
+            inbound,
+            &mut encrypted,
+            stop,
+            initial_payload,
+            metrics,
+        )
+        .await
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &DirectTcpRelayStats {
+                    client_to_direct: stats.client_to_proxy,
+                    direct_to_client: stats.proxy_to_client,
+                },
+                "async-proxy-grpc-encrypted-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            event["vless_encryption"] = json!(true);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-grpc-encrypted-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &err.message,
+                "async-proxy-grpc-encrypted-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            event["vless_encryption"] = json!(true);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-grpc-encrypted-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        });
+    }
+    drop((request, initial_payload));
+    let mut initial_stats = DirectTcpRelayStats::default();
+    if initial_payload_len != 0 {
+        initial_stats.client_to_direct += initial_payload_len;
+        metrics.add_upload(initial_payload_len);
+    }
+
+    let result = relay_tcp_over_grpc_h2(
+        inbound,
+        &mut h2_send,
+        &mut h2_recv,
+        stop,
+        initial_stats,
+        metrics,
+        true,
+    )
+    .await;
+    result
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &stats,
+                "async-proxy-grpc-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-grpc-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &err,
+                "async-proxy-grpc-tls",
+            );
+            event["tls_underlay"] = json!(tls_underlay);
+            event["stream_wrapper"] = json!("grpc");
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                "async-proxy-grpc-tls",
+                "vless",
+                Some(tls_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_vless_xhttp_h2_tcp_connection_async(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: TcpProxySelection,
+    stop: SharedResidentStopSignal,
+    sniff: &mut TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let key = selection.proxy.vless_key()?;
+    let initial_payload = sniff.take_payload();
+    let initial_payload_len = initial_payload.len();
+    let encryption = selection.proxy.vless_encryption()?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        if encryption.is_some() {
+            &[]
+        } else {
+            &initial_payload
+        },
+    )
+    .map_err(|err| format!("build VLESS xHTTP TCP request: {err}"))?;
+
+    let mut initial_stats = DirectTcpRelayStats::default();
+    initial_stats.client_to_direct += initial_payload_len;
+    if encryption.is_none() && initial_payload_len != 0 {
+        metrics.add_upload(initial_payload_len);
+    }
+    let xhttp_mode = selection.proxy.xhttp_mode;
+    let (result, upload_underlay, upload_http_version, download_separate) = match xhttp_mode {
+        ResidentXhttpMode::PacketUp => {
+            let XhttpPacketUpParts {
+                session_id,
+                mut upload,
+                mut download,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            } = open_xhttp_packet_up_parts(&selection.proxy, selection.mptcp).await?;
+            if let Some(encryption) = encryption.clone() {
+                let encrypted_executor = encrypted_xhttp_executor_label(upload_http_version);
+                let logical = spawn_xhttp_packet_up_payload_stream(XhttpPacketUpParts {
+                    session_id,
+                    upload,
+                    download,
+                    upload_underlay,
+                    upload_http_version,
+                    download_separate,
+                });
+                let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+                    .await
+                    .map_err(|err| format!("VLESS Encryption xHTTP packet-up handshake: {err}"))?;
+                encrypted.write_all(&request).await.map_err(|err| {
+                    format!("write VLESS encrypted xHTTP packet-up request: {err}")
+                })?;
+                encrypted.flush().await.map_err(|err| {
+                    format!("flush VLESS encrypted xHTTP packet-up request: {err}")
+                })?;
+                drop(request);
+                return relay_tcp_over_vless_plain_async(
+                    inbound,
+                    &mut encrypted,
+                    stop,
+                    initial_payload,
+                    metrics,
+                )
+                .await
+                .map(|stats| {
+                    let mut event = generic_proxy_tcp_finished_event(
+                        peer,
+                        original_dst,
+                        &selection,
+                        sniff,
+                        "vless",
+                        &DirectTcpRelayStats {
+                            client_to_direct: stats.client_to_proxy,
+                            direct_to_client: stats.proxy_to_client,
+                        },
+                        encrypted_executor,
+                    );
+                    event["tls_underlay"] = json!(upload_underlay);
+                    event["stream_wrapper"] = json!("xhttp");
+                    event["xhttp_mode"] = json!(xhttp_mode.as_str());
+                    event["xhttp_alpn"] = json!(upload_http_version.alpn_label());
+                    event["xhttp_download_separate"] = json!(download_separate);
+                    event["vless_encryption"] = json!(true);
+                    append_proxy_tcp_execution_fields(
+                        &mut event,
+                        encrypted_executor,
+                        "vless",
+                        Some(upload_underlay),
+                        None,
+                    );
+                    event
+                })
+                .or_else(|err| {
+                    let mut event = generic_proxy_tcp_failed_event(
+                        peer,
+                        original_dst,
+                        &selection,
+                        sniff,
+                        "vless",
+                        &err.message,
+                        encrypted_executor,
+                    );
+                    event["tls_underlay"] = json!(upload_underlay);
+                    event["stream_wrapper"] = json!("xhttp");
+                    event["xhttp_mode"] = json!(xhttp_mode.as_str());
+                    event["xhttp_alpn"] = json!(upload_http_version.alpn_label());
+                    event["xhttp_download_separate"] = json!(download_separate);
+                    event["vless_encryption"] = json!(true);
+                    append_proxy_tcp_execution_fields(
+                        &mut event,
+                        encrypted_executor,
+                        "vless",
+                        Some(upload_underlay),
+                        None,
+                    );
+                    Ok::<Value, String>(event)
+                });
+            }
+            let result = async {
+                let mut seq = 0_u64;
+                send_xhttp_packet_up_request(&mut upload, &session_id, seq, Bytes::from(request))
+                    .await?;
+                seq = seq.saturating_add(1);
+                relay_tcp_over_xhttp_packet_up(
+                    inbound,
+                    &mut upload,
+                    &mut download,
+                    &session_id,
+                    seq,
+                    stop,
+                    initial_stats,
+                    metrics,
+                )
+                .await
+            }
+            .await;
+            close_xhttp_download_client(download).await;
+            close_xhttp_upload_client(upload).await;
+            (
+                result,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            )
+        }
+        ResidentXhttpMode::StreamUp | ResidentXhttpMode::StreamOne => {
+            let XhttpStreamParts {
+                session_id,
+                mut upload,
+                mut download,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            } = open_xhttp_stream_parts(&selection.proxy, selection.mptcp, Bytes::new()).await?;
+            if let Some(encryption) = encryption.clone() {
+                let encrypted_executor = encrypted_xhttp_executor_label(upload_http_version);
+                let logical = spawn_xhttp_stream_payload_stream(XhttpStreamParts {
+                    session_id,
+                    upload,
+                    download,
+                    upload_underlay,
+                    upload_http_version,
+                    download_separate,
+                });
+                let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
+                    .await
+                    .map_err(|err| format!("VLESS Encryption xHTTP stream handshake: {err}"))?;
+                encrypted
+                    .write_all(&request)
+                    .await
+                    .map_err(|err| format!("write VLESS encrypted xHTTP request: {err}"))?;
+                encrypted
+                    .flush()
+                    .await
+                    .map_err(|err| format!("flush VLESS encrypted xHTTP request: {err}"))?;
+                drop(request);
+                return relay_tcp_over_vless_plain_async(
+                    inbound,
+                    &mut encrypted,
+                    stop,
+                    initial_payload,
+                    metrics,
+                )
+                .await
+                .map(|stats| {
+                    let mut event = generic_proxy_tcp_finished_event(
+                        peer,
+                        original_dst,
+                        &selection,
+                        sniff,
+                        "vless",
+                        &DirectTcpRelayStats {
+                            client_to_direct: stats.client_to_proxy,
+                            direct_to_client: stats.proxy_to_client,
+                        },
+                        encrypted_executor,
+                    );
+                    event["tls_underlay"] = json!(upload_underlay);
+                    event["stream_wrapper"] = json!("xhttp");
+                    event["xhttp_mode"] = json!(xhttp_mode.as_str());
+                    event["xhttp_alpn"] = json!(upload_http_version.alpn_label());
+                    event["xhttp_download_separate"] = json!(download_separate);
+                    event["vless_encryption"] = json!(true);
+                    append_proxy_tcp_execution_fields(
+                        &mut event,
+                        encrypted_executor,
+                        "vless",
+                        Some(upload_underlay),
+                        None,
+                    );
+                    event
+                })
+                .or_else(|err| {
+                    let mut event = generic_proxy_tcp_failed_event(
+                        peer,
+                        original_dst,
+                        &selection,
+                        sniff,
+                        "vless",
+                        &err.message,
+                        encrypted_executor,
+                    );
+                    event["tls_underlay"] = json!(upload_underlay);
+                    event["stream_wrapper"] = json!("xhttp");
+                    event["xhttp_mode"] = json!(xhttp_mode.as_str());
+                    event["xhttp_alpn"] = json!(upload_http_version.alpn_label());
+                    event["xhttp_download_separate"] = json!(download_separate);
+                    event["vless_encryption"] = json!(true);
+                    append_proxy_tcp_execution_fields(
+                        &mut event,
+                        encrypted_executor,
+                        "vless",
+                        Some(upload_underlay),
+                        None,
+                    );
+                    Ok::<Value, String>(event)
+                });
+            }
+            // The stream-up transport is opened with an empty body so that
+            // the upload and download HTTP streams can be established before
+            // the VLESS request is written.  For the plain VLESS shape the
+            // request (including the sniffed initial payload) must then be
+            // sent on the upload stream explicitly.  Omitting this write
+            // makes Xray interpret the first application bytes as the VLESS
+            // UUID and close the connection immediately.
+            write_plain_vless_xhttp_stream_request(&mut upload, request).await?;
+            let result = relay_tcp_over_xhttp_stream(
+                inbound,
+                &mut upload,
+                &mut download,
+                stop,
+                initial_stats,
+                metrics,
+            )
+            .await;
+            close_xhttp_download_client(download).await;
+            close_xhttp_stream_upload_client(upload).await;
+            (
+                result,
+                upload_underlay,
+                upload_http_version,
+                download_separate,
+            )
+        }
+    };
+    let executor_label = match upload_http_version {
+        ResidentXhttpHttpVersion::H1 => "async-proxy-xhttp-h1-tls",
+        ResidentXhttpHttpVersion::H2 => "async-proxy-xhttp-h2-tls",
+        ResidentXhttpHttpVersion::H3 => "async-proxy-xhttp-h3-tls",
+    };
+    let xhttp_alpn = upload_http_version.alpn_label();
+
+    result
+        .map(|stats| {
+            let mut event = generic_proxy_tcp_finished_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &stats,
+                executor_label,
+            );
+            event["tls_underlay"] = json!(upload_underlay);
+            event["stream_wrapper"] = json!("xhttp");
+            event["xhttp_mode"] = json!(xhttp_mode.as_str());
+            event["xhttp_alpn"] = json!(xhttp_alpn);
+            event["xhttp_download_separate"] = json!(download_separate);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                executor_label,
+                "vless",
+                Some(upload_underlay),
+                None,
+            );
+            event
+        })
+        .or_else(|err| {
+            let mut event = generic_proxy_tcp_failed_event(
+                peer,
+                original_dst,
+                &selection,
+                sniff,
+                "vless",
+                &err,
+                executor_label,
+            );
+            event["tls_underlay"] = json!(upload_underlay);
+            event["stream_wrapper"] = json!("xhttp");
+            event["xhttp_mode"] = json!(xhttp_mode.as_str());
+            event["xhttp_alpn"] = json!(xhttp_alpn);
+            event["xhttp_download_separate"] = json!(download_separate);
+            append_proxy_tcp_execution_fields(
+                &mut event,
+                executor_label,
+                "vless",
+                Some(upload_underlay),
+                None,
+            );
+            Ok::<Value, String>(event)
+        })
+}
+
+async fn write_plain_vless_xhttp_stream_request(
+    upload: &mut XhttpStreamUploadClient,
+    request: Vec<u8>,
+) -> Result<(), String> {
+    send_xhttp_stream_data(upload, Bytes::from(request), false)
+        .await
+        .map_err(|err| format!("write VLESS plain xHTTP stream request: {err}"))
+}
+
+fn encrypted_xhttp_executor_label(version: ResidentXhttpHttpVersion) -> &'static str {
+    match version {
+        ResidentXhttpHttpVersion::H1 => "async-proxy-xhttp-h1-encrypted",
+        ResidentXhttpHttpVersion::H2 => "async-proxy-xhttp-h2-encrypted",
+        ResidentXhttpHttpVersion::H3 => "async-proxy-xhttp-h3-encrypted",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vless_h2_initial_payload_is_not_coalesced_with_request_header() {
+        let key = [7_u8; 16];
+        let sniff = b"TLS-client-hello";
+        let chunks =
+            vless_h2_initial_data_chunks(&key, "", "203.0.113.10:443", sniff.to_vec()).unwrap();
+        let coalesced =
+            packet::first_write_bytes(&key, "", "tcp", "203.0.113.10:443", false, sniff).unwrap();
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].as_ref(), sniff);
+        assert!(coalesced.starts_with(chunks[0].as_ref()));
+        assert_eq!(&coalesced[chunks[0].len()..], sniff);
+    }
+}

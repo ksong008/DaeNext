@@ -121,10 +121,10 @@ pub(in crate::udp) mod tests {
         proxy.protocol = "http-proxy";
         let original_dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 53));
         let mut executor = UdpSessionExecutor::new_proxy_packet(&proxy);
-        let dns = ResidentDnsPlan::asis(proxy.mark);
         let binding = udp_test_binding(&proxy);
+        let _dns = ResidentDnsDispatcher::asis(proxy.mark);
         let err = executor
-            .execute(&dns, &binding, original_dst, &[0xde, 0xad])
+            .execute_proxy_packet(&binding, original_dst, &[0xde, 0xad])
             .await
             .unwrap_err();
         executor.shutdown().await;
@@ -897,12 +897,12 @@ pub(in crate::udp) mod tests {
     #[test]
     fn resident_udp_production_sources_do_not_reintroduce_per_packet_fallback_labels() {
         let sources = [
-            include_str!("descriptors.rs"),
+            include_str!("../../../dae-resident-udp/src/udp/descriptors.rs"),
             include_str!("manager.rs"),
-            include_str!("packet_handler.rs"),
+            include_str!("../../../dae-resident-udp/src/udp/packet_handler.rs"),
             include_str!("probe_dns.rs"),
-            include_str!("session_actor.rs"),
-            include_str!("session_executor.rs"),
+            include_str!("../../../dae-resident-udp/src/udp/session_actor.rs"),
+            include_str!("../../../dae-resident-udp/src/udp/session_executor.rs"),
             include_str!("worker.rs"),
         ];
         let forbidden = [
@@ -952,22 +952,23 @@ pub(in crate::udp) mod tests {
     }
 
     fn udp_executor_shape(executor: &UdpSessionExecutor) -> UdpExecutorShape {
-        match executor {
-            UdpSessionExecutor::Dns => UdpExecutorShape::Dns,
-            UdpSessionExecutor::ShadowsocksAead(_) => UdpExecutorShape::ShadowsocksAead,
-            UdpSessionExecutor::Shadowsocks2022(_) => UdpExecutorShape::Shadowsocks2022,
-            UdpSessionExecutor::Socks5(_) => UdpExecutorShape::Socks5,
-            UdpSessionExecutor::VlessVision(_) => UdpExecutorShape::VlessVision,
-            UdpSessionExecutor::VlessStandard(_) => UdpExecutorShape::VlessStandard,
-            UdpSessionExecutor::VlessXhttpH2(_) => UdpExecutorShape::VlessXhttpH2,
-            UdpSessionExecutor::VlessXhttpH3(_) => UdpExecutorShape::VlessXhttpH3,
-            UdpSessionExecutor::Trojan(_) => UdpExecutorShape::Trojan,
-            UdpSessionExecutor::VmessAead(_) => UdpExecutorShape::VmessAead,
-            UdpSessionExecutor::AnyTls(_) => UdpExecutorShape::AnyTls,
-            UdpSessionExecutor::Hysteria2(_) => UdpExecutorShape::Hysteria2,
-            UdpSessionExecutor::Tuic(_) => UdpExecutorShape::Tuic,
-            UdpSessionExecutor::Juicity(_) => UdpExecutorShape::Juicity,
-            UdpSessionExecutor::FailClosed { .. } => UdpExecutorShape::FailClosed,
+        match executor.test_shape() {
+            "dns" => UdpExecutorShape::Dns,
+            "shadowsocks-aead" => UdpExecutorShape::ShadowsocksAead,
+            "shadowsocks-2022" => UdpExecutorShape::Shadowsocks2022,
+            "socks5" => UdpExecutorShape::Socks5,
+            "vless-vision" => UdpExecutorShape::VlessVision,
+            "vless-standard" => UdpExecutorShape::VlessStandard,
+            "vless-xhttp-h2" => UdpExecutorShape::VlessXhttpH2,
+            "vless-xhttp-h3" => UdpExecutorShape::VlessXhttpH3,
+            "trojan" => UdpExecutorShape::Trojan,
+            "vmess-aead" => UdpExecutorShape::VmessAead,
+            "anytls" => UdpExecutorShape::AnyTls,
+            "hysteria2" => UdpExecutorShape::Hysteria2,
+            "tuic" => UdpExecutorShape::Tuic,
+            "juicity" => UdpExecutorShape::Juicity,
+            "fail-closed" => UdpExecutorShape::FailClosed,
+            shape => panic!("unexpected UDP executor test shape {shape}"),
         }
     }
 

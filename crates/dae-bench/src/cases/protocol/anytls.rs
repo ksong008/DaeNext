@@ -38,7 +38,8 @@ pub(super) fn bench_anytls_underlay(iters: u64, warmup: u64) -> Result<Measureme
     Ok(measure(
         || {
             let contract =
-                dae_outbound::anytls::link::underlay_contract(black_box("udp"), 1234, true);
+                dae_outbound::anytls::link::underlay_contract(black_box("udp"), 1234, true)
+                    .expect("fixed AnyTLS network fits MagicNetwork framing");
             black_box(contract.underlay_encoded.len() as u64 ^ contract.same_encoded_value as u64)
         },
         iters,

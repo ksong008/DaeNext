@@ -2,7 +2,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use dae_dns::DnsCacheKey;
-use dae_netutil::{encode_magic_network, parse_magic_network};
+use dae_netutil::{MagicNetworkEncoding, encode_magic_network_with_encoding, parse_magic_network};
 use dae_outbound::policy::parse_policy;
 use dae_outbound::{Annotation, Dialer, DialerGroup, NetworkType};
 use dae_routing::{Query, RoutingMatcher};
@@ -313,7 +313,12 @@ fn run_magic_network(args: &[String]) -> RunnerOutput {
         Some(mptcp) => mptcp,
         None => return RunnerOutput::usage("bad userspace magic-network --mptcp"),
     };
-    let encoded = match encode_magic_network(network, mark, mptcp) {
+    let encoded = match encode_magic_network_with_encoding(
+        network,
+        mark,
+        mptcp,
+        MagicNetworkEncoding::PlainWhenEligible,
+    ) {
         Ok(encoded) => encoded,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
     };

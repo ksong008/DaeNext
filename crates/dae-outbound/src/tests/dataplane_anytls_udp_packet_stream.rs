@@ -42,7 +42,7 @@ fn case_anytls_udp_packet_stream_uses_magic_domain_and_tcp_underlay() {
         anytls::link::frame(anytls::contract::CMD_PSH, 1, &stream_target_addr).unwrap();
     let psh_first = anytls::link::frame(anytls::contract::CMD_PSH, 1, &first_write).unwrap();
     let psh_next = anytls::link::frame(anytls::contract::CMD_PSH, 1, &next_write).unwrap();
-    let underlay = anytls::link::underlay_contract("udp", 1234, true);
+    let underlay = anytls::link::underlay_contract("udp", 1234, true).unwrap();
 
     assert_eq!(session_target, "sp.v2.udp-over-tcp.arpa:5353");
     assert_eq!(
