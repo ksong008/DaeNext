@@ -67,7 +67,7 @@ async fn deadline_shutdown_joins_a_graceful_executor_task() {
         .await
         .unwrap();
 
-    assert_eq!(completion, ResidentProxyUdpBridgeShutdownCompletion::Joined);
+    assert_eq!(completion, ResidentOwnedTaskShutdownCompletion::Joined);
 }
 
 #[tokio::test]
@@ -103,9 +103,6 @@ async fn deadline_shutdown_aborts_and_joins_a_stalled_executor_task() {
         .await
         .unwrap();
 
-    assert_eq!(
-        completion,
-        ResidentProxyUdpBridgeShutdownCompletion::Aborted
-    );
+    assert_eq!(completion, ResidentOwnedTaskShutdownCompletion::Aborted);
     assert!(dropped.load(Ordering::Acquire));
 }

@@ -185,7 +185,8 @@
     "tcp_underlay_uses_udp": true,
     "transport_packet_conn_cipher_info": "juicity reused info",
     "transport_packet_conn_uses_auth": true,
-    "true_quic_data_plane_deferred": 113,
+    "production_data_plane_owner": "dae-resident-dataplane",
+    "standalone_smoke_surface": "test-support-only",
     "udp_nonzero_port_packet_conn": "stream_packet_conn",
     "udp_port_zero_packet_conn": "transport_packet_conn",
     "udp_request": {

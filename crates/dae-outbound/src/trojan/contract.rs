@@ -18,4 +18,5 @@ pub const DEFAULT_TROJAN_TLS_BEFORE_TROJANC: bool = true;
 pub const TROJAN_GRPC_CONTAINS_TLS: bool = true;
 pub const TROJAN_GRPC_NO_OUTER_TLS: bool = true;
 pub const TROJAN_SS_INNER_LAYER: bool = true;
-pub const SHARED_TRANSPORT_DEFERRED_TO_ITEM: u16 = 113;
+pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
+pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";

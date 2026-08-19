@@ -14,6 +14,7 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) runtime_shards: usize,
     pub(crate) runtime_worker_threads: usize,
     pub(crate) worker_stack_bytes: usize,
+    pub(crate) socket_buffer_bytes: usize,
     pub(crate) dispatch_queue_depth: usize,
     pub(crate) ingress_drain_budget: usize,
     pub(crate) ingress_syscall_batch_limit: usize,
@@ -32,25 +33,6 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) dns_udp_shard_idle_timeout: Duration,
     pub(crate) dns_proxy_udp_actor_limit: usize,
     pub(crate) shutdown_timeout: Duration,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResidentDnsUdpRuntimeConfig {
-    pub(crate) generation: u64,
-    pub(crate) direct_shards: usize,
-    pub(crate) proxy_actor_limit: usize,
-    pub(crate) actor_worker_threads: usize,
-    pub(crate) worker_stack_bytes: usize,
-    pub(crate) queue_depth: usize,
-    pub(crate) pending_limit: usize,
-    pub(crate) inflight_window: usize,
-    pub(crate) send_batch_limit: usize,
-    pub(crate) attempts: usize,
-    pub(crate) attempt_timeout: Duration,
-    pub(crate) shard_idle_timeout: Duration,
-    pub(crate) actor_idle_timeout: Option<Duration>,
-    pub(crate) shutdown_timeout: Duration,
-    pub(crate) payload_admission: ResidentUdpPayloadAdmission,
 }
 
 impl ResidentUdpRuntimeConfig {
@@ -84,6 +66,7 @@ impl ResidentUdpRuntimeConfig {
             runtime_shards,
             runtime_worker_threads,
             worker_stack_bytes: resources.tcp_flow_stack_bytes.value(),
+            socket_buffer_bytes: resources.udp_socket_buffer_bytes.value(),
             dispatch_queue_depth,
             ingress_drain_budget: session_queue_depth,
             ingress_syscall_batch_limit: runtime_profile.udp_syscall_batch_limit(),
@@ -158,6 +141,7 @@ impl ResidentUdpRuntimeConfig {
             worker_stack_bytes: self
                 .worker_stack_bytes
                 .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
+            socket_buffer_bytes: self.socket_buffer_bytes,
             queue_depth: self.dns_udp_forwarder_queue_depth,
             pending_limit: self.dns_udp_forwarder_pending_limit,
             inflight_window: self
@@ -166,7 +150,9 @@ impl ResidentUdpRuntimeConfig {
                 .max(1),
             send_batch_limit: self.ingress_syscall_batch_limit,
             attempts: self.dns_udp_forwarder_attempts,
-            attempt_timeout: resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts),
+            attempt_timeout: ResidentDnsUdpRuntimeConfig::attempt_timeout_for(
+                self.dns_udp_forwarder_attempts,
+            ),
             shard_idle_timeout: self.dns_udp_shard_idle_timeout,
             actor_idle_timeout: None,
             shutdown_timeout: self.shutdown_timeout,
@@ -228,7 +214,7 @@ impl ResidentUdpRuntimeConfig {
                 "inflightWindow": self.dns_udp_forwarder_inflight_window,
                 "sendBatchLimit": dns_udp.send_batch_limit,
                 "attempts": self.dns_udp_forwarder_attempts,
-                "attemptTimeoutMs": resident_dns_udp_attempt_timeout(self.dns_udp_forwarder_attempts).as_millis(),
+                "attemptTimeoutMs": ResidentDnsUdpRuntimeConfig::attempt_timeout_for(self.dns_udp_forwarder_attempts).as_millis(),
                 "shardIdleTimeoutMs": dns_udp.shard_idle_timeout.as_millis(),
             },
             "deadlines": {
@@ -240,85 +226,6 @@ impl ResidentUdpRuntimeConfig {
             },
         })
     }
-}
-
-impl ResidentDnsUdpRuntimeConfig {
-    pub(crate) fn standalone() -> Self {
-        let available_parallelism = std::thread::available_parallelism()
-            .map(|parallelism| parallelism.get())
-            .unwrap_or(1);
-        let profile = ResidentRuntimeProfile::Balanced;
-        let requested_shards = profile.udp_runtime_shards_default(available_parallelism);
-        let (direct_shards, actor_worker_threads) =
-            resident_udp_runtime_topology(requested_shards, available_parallelism);
-        Self {
-            generation: 0,
-            direct_shards,
-            proxy_actor_limit: profile.dns_proxy_udp_actors_default(),
-            actor_worker_threads: actor_worker_threads.max(1),
-            worker_stack_bytes: RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT
-                .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
-            queue_depth: profile.dns_udp_forwarder_queue_depth_default(),
-            pending_limit: profile.dns_udp_forwarder_pending_limit_default(),
-            inflight_window: profile.dns_udp_forwarder_inflight_window_default(),
-            send_batch_limit: profile.udp_syscall_batch_limit(),
-            attempts: profile.dns_udp_forwarder_attempts_default(),
-            attempt_timeout: resident_dns_udp_attempt_timeout(
-                profile.dns_udp_forwarder_attempts_default(),
-            ),
-            shard_idle_timeout: profile.dns_udp_shard_idle_timeout(),
-            actor_idle_timeout: None,
-            shutdown_timeout: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
-            payload_admission: ResidentUdpPayloadAdmission::new(
-                0,
-                profile.udp_queued_payload_bytes_default(),
-            ),
-        }
-    }
-
-    pub(crate) fn actor_partition(&self, actor_index: usize, actor_count: usize) -> Self {
-        let actor_count = actor_count.max(1);
-        let actor_index = actor_index.min(actor_count - 1);
-        let mut partition = self.clone();
-        partition.queue_depth = partitioned_resource(self.queue_depth, actor_index, actor_count);
-        partition.pending_limit =
-            partitioned_resource(self.pending_limit, actor_index, actor_count);
-        partition.inflight_window =
-            partitioned_resource(self.inflight_window, actor_index, actor_count)
-                .min(partition.pending_limit);
-        partition
-    }
-}
-
-fn partitioned_resource(total: usize, index: usize, partitions: usize) -> usize {
-    let partitions = partitions.max(1).min(total.max(1));
-    let index = index.min(partitions - 1);
-    let base = total.max(1) / partitions;
-    let remainder = total.max(1) % partitions;
-    base.saturating_add(usize::from(index < remainder)).max(1)
-}
-
-fn resident_dns_udp_attempt_timeout(attempts: usize) -> Duration {
-    let divisor = (attempts.max(1) as u128).saturating_add(1);
-    let millis = RESIDENT_UDP_RESPONSE_TIMEOUT
-        .as_millis()
-        .saturating_div(divisor)
-        .max(1);
-    Duration::from_millis(millis.min(u128::from(u64::MAX)) as u64)
-}
-
-fn resident_udp_runtime_topology(
-    requested_shards: usize,
-    available_parallelism: usize,
-) -> (usize, usize) {
-    let available_parallelism = available_parallelism.max(1);
-    let runtime_shards = requested_shards.max(1).min(available_parallelism);
-    let worker_threads = if runtime_shards > 1 {
-        runtime_shards.min(available_parallelism.saturating_sub(1))
-    } else {
-        0
-    };
-    (runtime_shards, worker_threads)
 }
 
 #[cfg(test)]
@@ -338,6 +245,7 @@ mod tests {
             runtime_shards: 4,
             runtime_worker_threads: 3,
             worker_stack_bytes: 512 * 1024,
+            socket_buffer_bytes: 4 * 1024 * 1024,
             dispatch_queue_depth: 512,
             ingress_drain_budget: 128,
             ingress_syscall_batch_limit: 16,
@@ -446,6 +354,7 @@ mod tests {
             runtime_shards: 3,
             runtime_worker_threads: 2,
             worker_stack_bytes: 768 * 1024,
+            socket_buffer_bytes: 4 * 1024 * 1024,
             dispatch_queue_depth: 96,
             ingress_drain_budget: 16,
             ingress_syscall_batch_limit: 8,

@@ -3,8 +3,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use dae_outbound::NetworkType;
 
+use crate::ResidentUdpPayloadAdmission;
 use crate::plan::{RESIDENT_CONTROL_PLANE_SO_MARK, ResidentXhttpSettingsPlan};
-use crate::udp::ResidentUdpPayloadAdmission;
 
 use super::*;
 

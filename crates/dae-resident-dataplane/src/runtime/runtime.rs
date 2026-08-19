@@ -8,6 +8,7 @@ pub struct ResidentDataplaneRuntime {
     pub(super) routing_tuple_map_id: Option<u32>,
     pub(super) domain_routing_map_id: Option<u32>,
     pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingGenerationFence>,
+    pub(super) generation_gate: Arc<GenerationGate>,
 }
 
 impl std::fmt::Debug for ResidentDataplaneRuntime {
@@ -54,7 +55,9 @@ impl ResidentDataplaneRuntime {
             .groups
             .iter()
             .flat_map(|group| group.health_state_snapshots())
-            .map(|snapshot| resident_latency_snapshot_json(snapshot, generation.reload_generation))
+            .map(|snapshot| {
+                resident_latency_snapshot_json(snapshot, generation.reload_generation.get())
+            })
             .collect()
     }
 
@@ -76,7 +79,7 @@ impl ResidentDataplaneRuntime {
     pub fn shutdown(&mut self, steps: &mut Vec<Value>) {
         self.quiesce_workloads();
         let generation = self.active_generation.load();
-        let reload_generation = generation.reload_generation;
+        let reload_generation = generation.reload_generation.get();
         drop(generation);
         let workload = self
             .workload_shutdown
@@ -211,8 +214,13 @@ impl ResidentDataplaneRuntime {
             latency_seed,
             dns_reload_snapshot,
         })?;
-        let next_id = built.generation.id;
-        let previous = self.active_generation.publish(built.generation);
+        built.generation.activate()?;
+        built.generation.dns.activate_domain_routing_generation()?;
+        let next_id = built.generation.token().logical();
+        let next_token = built.generation.token();
+        let previous = self.generation_gate.switch(next_token, || {
+            Ok::<_, String>(self.active_generation.publish(built.generation))
+        })?;
         let previous_id = previous.id;
         self.generation_drain.retire(previous);
         Ok(json!({
@@ -242,13 +250,15 @@ impl ResidentDataplaneRuntime {
                 "activeGeneration": generation.id,
             }));
         }
-        if active.reload_generation != generation.reload_generation {
+        if active.token().physical() != generation.token().physical() {
             return Err("resident generation belongs to a different physical runtime".to_owned());
         }
-        generation.dns.activate_domain_routing_generation()?;
         self.generation_drain.reactivate(generation.id)?;
+        generation.dns.activate_domain_routing_generation()?;
         let restored_id = generation.id;
-        let displaced = self.active_generation.publish(generation);
+        let displaced = self.generation_gate.switch(generation.token(), || {
+            Ok::<_, String>(self.active_generation.publish(generation))
+        })?;
         let displaced_id = displaced.id;
         self.generation_drain.retire(displaced);
         self.generation_drain.finalize_retirement(displaced_id);
@@ -263,7 +273,7 @@ impl ResidentDataplaneRuntime {
         }))
     }
 
-    pub fn finalize_generation_publication(&self) {
-        self.generation_drain.finalize_retirements();
+    pub fn commit_generation_publication(&self) {
+        self.generation_drain.commit_retirements();
     }
 }

@@ -217,7 +217,8 @@
   "rust_adapter_mode": "rust-native",
   "transport_contract": {
     "default_trojan_tls_before_trojanc": true,
-    "shared_transport_deferred_to_item": 113,
+    "production_data_plane_owner": "dae-resident-dataplane",
+    "standalone_smoke_surface": "test-support-only",
     "trojan_grpc_contains_tls": true,
     "trojan_grpc_no_outer_tls": true,
     "trojan_ss_inner_layer": true

@@ -49,7 +49,8 @@ pub(super) fn run_tuic_contract() -> RunnerOutput {
                 "tcp_underlay_preserves_mark": tuic::contract::TCP_UNDERLAY_PRESERVES_MARK,
                 "tcp_underlay_drops_mptcp": tuic::contract::TCP_UNDERLAY_DROPS_MPTCP,
                 "udp_underlay_uses_original": tuic::contract::UDP_UNDERLAY_USES_ORIGINAL,
-                "true_quic_data_plane_deferred": tuic::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
+                "production_data_plane_owner": tuic::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": tuic::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -105,7 +106,10 @@ pub(super) fn run_tuic_underlay(args: &[String]) -> RunnerOutput {
         Err(err) => return RunnerOutput::stdout_error(err),
     };
     let mptcp = bool_arg(args, "--mptcp").unwrap_or(false);
-    let contract = tuic::link::underlay_contract(network, mark, mptcp);
+    let contract = match tuic::link::underlay_contract(network, mark, mptcp) {
+        Ok(contract) => contract,
+        Err(error) => return RunnerOutput::stdout_error(error.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
@@ -133,7 +137,8 @@ pub(super) fn run_tuic_smoke(args: &[String]) -> RunnerOutput {
     if let Err(err) = parsed.validate_uuid() {
         return RunnerOutput::stdout_error(err.to_string());
     }
-    let tcp_underlay = tuic::link::underlay_contract("tcp", 1234, true);
+    let tcp_underlay = tuic::link::underlay_contract("tcp", 1234, true)
+        .expect("fixed TUIC TCP network fits MagicNetwork framing");
     let udp_relay_mode = match TuicUdpRelayMode::from_config(&parsed.udp_relay_mode) {
         Ok(mode) => mode,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
@@ -155,7 +160,8 @@ pub(super) fn run_tuic_smoke(args: &[String]) -> RunnerOutput {
                 "underlay_mark": tcp_underlay.underlay_mark,
                 "underlay_mptcp": tcp_underlay.underlay_mptcp,
             },
-            "transport_data_plane_deferred_to_item": tuic::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
+            "production_data_plane_owner": tuic::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": tuic::contract::STANDALONE_SMOKE_SURFACE,
         })
     ))
 }

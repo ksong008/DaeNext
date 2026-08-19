@@ -109,7 +109,11 @@ pub(super) fn apply_prepared_subscription_refresh_report(
     if let Some(persisted) = persisted.as_ref() {
         persisted.record_generation(&tx)?;
     }
-    if let Err(error) = tx.commit().map_err(sqlite_io_error) {
+    let commit_result = match persisted.as_mut() {
+        Some(persisted) => persisted.commit_database(|| tx.commit().map_err(sqlite_io_error)),
+        None => tx.commit().map_err(sqlite_io_error),
+    };
+    if let Err(error) = commit_result {
         return match persisted {
             Some(persisted) => match persisted.rollback() {
                 Ok(()) => Err(error),

@@ -92,9 +92,11 @@ pub(super) fn runtime_runner_outbound_hysteria2_commands_match_fixture() {
     assert!(smoke_json["ok"].as_bool().unwrap());
     assert_eq!(smoke_json["underlay_network"].as_str().unwrap(), "udp");
     assert_eq!(
-        smoke_json["transport_data_plane_deferred_to_item"]
-            .as_u64()
-            .unwrap(),
-        113
+        smoke_json["production_data_plane_owner"].as_str().unwrap(),
+        "dae-resident-dataplane"
+    );
+    assert_eq!(
+        smoke_json["standalone_smoke_surface"].as_str().unwrap(),
+        "test-support-only"
     );
 }

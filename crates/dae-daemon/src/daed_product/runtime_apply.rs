@@ -55,18 +55,6 @@ pub(in crate::daed_product) enum RuntimeApplyCheckpoint {
     Rollback,
 }
 
-pub(in crate::daed_product) trait RuntimeApplyCheckpoints {
-    fn checkpoint(&mut self, point: RuntimeApplyCheckpoint) -> io::Result<()>;
-}
-
-pub(super) struct NoopRuntimeApplyCheckpoints;
-
-impl RuntimeApplyCheckpoints for NoopRuntimeApplyCheckpoints {
-    fn checkpoint(&mut self, _point: RuntimeApplyCheckpoint) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 pub(in crate::daed_product) fn apply_runtime_generation(
     runtime: &ProductRuntimeManager,
     state: &Path,
@@ -74,7 +62,7 @@ pub(in crate::daed_product) fn apply_runtime_generation(
     source: &str,
     prepared: PreparedRuntimeReload,
     latency_seed: &[Value],
-    checkpoints: &mut dyn RuntimeApplyCheckpoints,
+    checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<(Value, Value), String> {
     let runtime_log_level = runtime_log_level_for_config(&prepared.config);
     let process_transition = prepared.process_transition.clone();
@@ -170,7 +158,7 @@ pub(in crate::daed_product) fn apply_runtime_generation(
             drop(snapshot);
             candidate.discard_rollback_state();
             runtime.publish_process_transition(process_transition);
-            runtime.finalize_runtime_generation_publication();
+            runtime.commit_runtime_generation_publication();
             record_apply_success(runtime, &generation);
             Ok((runtime_report, materialized_report))
         }

@@ -13,9 +13,8 @@ use dae_outbound::{
     FilterParam, HealthState, NetworkType, OutboundError, SelectionPolicy,
     http_proxy::{HttpProxyLink, HttpScheme},
     hysteria2::{
-        HYSTERIA2_MIN_PORT_HOP_INTERVAL, Hysteria2CongestionConfig, Hysteria2Link,
-        build_port_hop_schedule, parse_hysteria2_bandwidth,
-        server_contract as hysteria2_server_contract,
+        HYSTERIA2_MIN_PORT_HOP_INTERVAL, Hysteria2Link, build_port_hop_schedule,
+        parse_hysteria2_bandwidth, server_contract as hysteria2_server_contract,
     },
     juicity::JuicityLink,
     parse_link_chain,
@@ -25,10 +24,10 @@ use dae_outbound::{
         ShadowsocksLink, ShadowsocksRLink, cipher_spec, shadowsocksr_stream_cipher_supported,
     },
     shared_transport::{
-        DEFAULT_UTLS_FINGERPRINT, EchConfigList, GrpcMode, MeekRoundTripOptions, Mldsa65VerifyKey,
-        TlsFragmentOptions, UTLS_ALPN_H2, UTLS_ALPN_HTTP_1_1, UtlsFingerprint, ir,
-        parse_optional_ech_config_list, parse_optional_mldsa65_verify_key,
-        resolve_utls_client_hello_id, utls_fingerprint_default_alpn_protocols,
+        DEFAULT_UTLS_FINGERPRINT, GrpcMode, MeekRoundTripOptions, TlsFragmentOptions, UTLS_ALPN_H2,
+        UTLS_ALPN_HTTP_1_1, UtlsFingerprint, ir, parse_optional_ech_config_list,
+        parse_optional_mldsa65_verify_key, resolve_utls_client_hello_id,
+        utls_fingerprint_default_alpn_protocols,
     },
     trojan::{TrojanLink, TrojanTransportType},
     tuic::TuicLink,
@@ -44,21 +43,16 @@ use url::Url;
 use super::RESIDENT_TCP_LATENCY_PROBE_TIMEOUT;
 use super::geodata::GeodataResolver as ResidentGeodataStore;
 use super::{
-    dns::{ResidentDnsPlan, build_resident_dns_plan},
+    ResidentRuntimeResourceConfig,
+    dns::{ResidentDnsPlan, build_resident_dns_plan_with_refresh_interval},
     execution_link_hash, link_hash, redacted_link_source, resident_tcp_health_probe_timeout,
     resident_tcp_latency_probe_timeout_from_config,
     resolve_host_addrs_with_configured_fallback_dns_ttl,
 };
+#[cfg(test)]
+use dae_outbound::{hysteria2::Hysteria2CongestionConfig, shared_transport::Mldsa65VerifyKey};
 
-mod executable_graph;
-
-use executable_graph::{ResidentExecutableGraphDescriptor, resident_graph_identity};
-
-mod udp_chain;
-pub(super) use self::udp_chain::*;
-
-mod model;
-pub(super) use self::model::*;
+pub(crate) use dae_resident_plan::*;
 mod transport_defaults;
 use self::transport_defaults::*;
 mod group_plan;
@@ -70,14 +64,16 @@ use self::group_health_bootstrap::*;
 mod health_target;
 pub(super) use self::health_target::*;
 mod dataplane_builder;
+#[cfg(any(test, feature = "benchmark-support"))]
+pub(crate) use self::dataplane_builder::ResidentDataplanePlan;
 #[cfg(test)]
 pub(crate) use self::dataplane_builder::build_resident_manual_probe_plans;
-pub(crate) use self::dataplane_builder::{
-    ResidentDataplanePlan, ResidentProtocolOwnerSpecs, build_resident_dataplane_plan,
-    build_resident_manual_probe_plans_for_helper,
-};
 pub use self::dataplane_builder::{
     ResidentPreparedDataplane, build_resident_prepared_dataplane_with_geodata,
+};
+pub(crate) use self::dataplane_builder::{
+    ResidentProtocolOwnerSpecs, build_resident_dataplane_plan,
+    build_resident_manual_probe_plans_for_helper,
 };
 mod group_selector;
 use self::group_selector::*;

@@ -49,7 +49,8 @@ pub(super) fn run_juicity_contract() -> RunnerOutput {
                 "udp_nonzero_port_packet_conn": juicity::contract::UDP_NONZERO_PORT_PACKET_CONN,
                 "transport_packet_conn_uses_auth": juicity::contract::TRANSPORT_PACKET_CONN_USES_AUTH,
                 "transport_packet_conn_cipher_info": juicity::contract::TRANSPORT_PACKET_CONN_CIPHER_INFO,
-                "true_quic_data_plane_deferred": juicity::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
+                "production_data_plane_owner": juicity::contract::PRODUCTION_DATA_PLANE_OWNER,
+                "standalone_smoke_surface": juicity::contract::STANDALONE_SMOKE_SURFACE,
             },
         })
     ))
@@ -134,7 +135,10 @@ pub(super) fn run_juicity_underlay(args: &[String]) -> RunnerOutput {
         Err(err) => return RunnerOutput::stdout_error(err),
     };
     let mptcp = bool_arg(args, "--mptcp").unwrap_or(false);
-    let contract = juicity::link::underlay_contract(network, mark, mptcp);
+    let contract = match juicity::link::underlay_contract(network, mark, mptcp) {
+        Ok(contract) => contract,
+        Err(error) => return RunnerOutput::stdout_error(error.to_string()),
+    };
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
@@ -166,7 +170,8 @@ pub(super) fn run_juicity_smoke(args: &[String]) -> RunnerOutput {
         Ok(pin) => pin,
         Err(err) => return RunnerOutput::stdout_error(err.to_string()),
     };
-    let tcp_underlay = juicity::link::underlay_contract("tcp", 1234, true);
+    let tcp_underlay = juicity::link::underlay_contract("tcp", 1234, true)
+        .expect("fixed Juicity TCP network fits MagicNetwork framing");
     RunnerOutput::ok(format!(
         "{}\n",
         json!({
@@ -187,7 +192,8 @@ pub(super) fn run_juicity_smoke(args: &[String]) -> RunnerOutput {
                 "underlay_mark": tcp_underlay.underlay_mark,
                 "underlay_mptcp": tcp_underlay.underlay_mptcp,
             },
-            "transport_data_plane_deferred_to_item": juicity::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
+            "production_data_plane_owner": juicity::contract::PRODUCTION_DATA_PLANE_OWNER,
+            "standalone_smoke_surface": juicity::contract::STANDALONE_SMOKE_SURFACE,
         })
     ))
 }

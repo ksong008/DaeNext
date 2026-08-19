@@ -1,16 +1,7 @@
 use super::*;
-pub(crate) const VLESS_RESPONSE_VERSION: u8 = 0;
-pub(crate) const RESIDENT_IDLE_SLEEP: Duration = Duration::from_millis(5);
-pub(crate) const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 // A half-closed upload must keep draining a response across at least one
 // ordinary Internet RTT. Download activity refreshes this idle window; it is
 // not a fixed delay added to every completed flow.
-pub(crate) const RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT: Duration = Duration::from_secs(1);
-pub(crate) const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
-    Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
-pub(crate) const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-pub(crate) const RESIDENT_TCP_CANDIDATE_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
-pub(crate) const RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT: usize = 2;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT: usize = 10_000;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MIN: usize = 500;
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_MAX: usize = 30_000;
@@ -18,14 +9,9 @@ pub(crate) const RESIDENT_TCP_HEALTH_PROBE_TIMEOUT_MS_DEFAULT: usize = 4_000;
 #[cfg(test)]
 pub(crate) const RESIDENT_TCP_LATENCY_PROBE_TIMEOUT: Duration =
     Duration::from_millis(RESIDENT_TCP_LATENCY_PROBE_TIMEOUT_MS_DEFAULT as u64);
-pub(crate) const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
-pub(crate) const RESIDENT_RUNTIME_TASK_JOIN_GRACE: Duration = Duration::from_secs(2);
-pub(crate) const RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE: Duration = Duration::from_millis(1_500);
-pub(crate) const RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE: Duration = Duration::from_millis(250);
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_ENV: &str = "RESIDENT_TCP_FLOW_STACK_BYTES";
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_LEGACY_ENV: &str =
     "DAE_RESIDENT_TCP_FLOW_STACK_BYTES";
-pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MIN: usize = 512 * 1024;
 pub(crate) const RESIDENT_TCP_FLOW_STACK_BYTES_MAX: usize = 8 * 1024 * 1024;
 // Native VLESS Encryption performs ML-KEM-768 key generation/decapsulation on
@@ -54,10 +40,6 @@ pub(crate) const RESIDENT_UDP_RUNTIME_SHARDS_MAX: usize = 64;
 pub(crate) const RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_ENV: &str = "RESIDENT_UDP_DISPATCH_QUEUE_DEPTH";
 pub(crate) const RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MIN: usize = 16;
 pub(crate) const RESIDENT_UDP_DISPATCH_QUEUE_DEPTH_MAX: usize = 65_536;
-pub(crate) const RESIDENT_UDP_SOCKET_BUFFER_BYTES_ENV: &str = "RESIDENT_UDP_SOCKET_BUFFER_BYTES";
-pub(crate) const RESIDENT_UDP_SOCKET_BUFFER_BYTES_DEFAULT: usize = 512 * 1024;
-pub(crate) const RESIDENT_UDP_SOCKET_BUFFER_BYTES_MIN: usize = 64 * 1024;
-pub(crate) const RESIDENT_UDP_SOCKET_BUFFER_BYTES_MAX: usize = 8 * 1024 * 1024;
 pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_ENV: &str =
     "RESIDENT_DNS_FAST_PATH_CONCURRENCY";
 pub(crate) const RESIDENT_DNS_FAST_PATH_CONCURRENCY_MIN: usize = 16;
@@ -97,20 +79,6 @@ pub(crate) const RESIDENT_MANUAL_LATENCY_PROBE_CONCURRENCY_MAX: usize = 128;
 pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_DEFAULT: usize = 1;
 pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_MIN: usize = 1;
 pub(crate) const RESIDENT_HEALTH_CHECK_CONCURRENCY_MAX: usize = 128;
-pub(crate) const VISION_COMMAND_CONTINUE: u8 = 0;
-pub(crate) const VISION_COMMAND_END: u8 = 1;
-pub(crate) const VISION_COMMAND_DIRECT: u8 = 2;
-pub(crate) const TLS_RECORD_HEADER_LEN: usize = 5;
-pub(crate) const TLS_RECORD_MAX_PAYLOAD_LEN: usize = 16 * 1024 + 2048;
-// AnyTLS PSH frames carry a u16-sized payload.  A 32 KiB relay chunk stays
-// within that wire bound while halving the task wakeups and bounded duplex
-// copies compared with the previous 16 KiB chunk.
-pub(crate) const RESIDENT_ANYTLS_RELAY_BUFFER_SIZE: usize = 32 * 1024;
-pub(crate) const XUDP_MUX_TARGET: &str = "v1.mux.cool:666";
-pub(crate) const XUDP_COMMAND_NEW: u8 = 1;
-pub(crate) const XUDP_COMMAND_KEEP: u8 = 2;
-pub(crate) const XUDP_OPTION_DATA: u8 = 1;
-pub(crate) const XUDP_NETWORK_UDP: u8 = 2;
 static RESIDENT_RUNTIME_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_resident_runtime_generation() -> u64 {
@@ -274,18 +242,6 @@ pub fn resident_runtime_defaults_contract() -> Value {
             },
         },
     })
-}
-
-pub(crate) fn resident_dns_upstream_refresh_interval() -> Duration {
-    let seconds = std::env::var(RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_ENV)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_DEFAULT)
-        .clamp(
-            RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MIN,
-            RESIDENT_DNS_UPSTREAM_REFRESH_SECONDS_MAX,
-        );
-    Duration::from_secs(seconds as u64)
 }
 
 pub(crate) fn resident_manual_latency_probe_concurrency_default() -> usize {

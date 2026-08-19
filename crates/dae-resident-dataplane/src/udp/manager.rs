@@ -82,7 +82,7 @@ const UDP_GENERATION_PIN_MAX_ENTRIES: usize = 4096;
 #[derive(Clone)]
 pub(crate) struct ResidentUdpGenerationPlan {
     router: Arc<ResidentUdpRouter>,
-    dns: Arc<ResidentDnsPlan>,
+    dns: ResidentDnsDispatcher,
     runtime_config: ResidentUdpRuntimeConfig,
     hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
@@ -99,7 +99,7 @@ impl ResidentUdpGenerationPlan {
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         so_mark_from_dae: u32,
-        dns: Arc<ResidentDnsPlan>,
+        dns: ResidentDnsDispatcher,
         runtime_config: ResidentUdpRuntimeConfig,
         health_resuscitation: ResidentHealthResuscitationHandle,
         hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
@@ -181,7 +181,7 @@ impl ResidentUdpGenerationRuntime {
         );
         let udp_reply = reply_dispatcher.handle();
         let dns_runtime = ResidentUdpDnsRuntime::start(
-            Arc::clone(&plan.dns),
+            plan.dns.clone(),
             udp_reply.clone(),
             Arc::clone(&generation.metrics),
             config.dns_fast_path_concurrency,
@@ -202,8 +202,8 @@ impl ResidentUdpGenerationRuntime {
         let session_shard_handle = session_shards.handle();
         generation.drain_control.register_udp_runtime();
         Self {
-            generation_id: generation.id,
-            reload_generation: generation.reload_generation,
+            generation_id: generation.id.get(),
+            reload_generation: generation.reload_generation.get(),
             drain_control: Arc::clone(&generation.drain_control),
             router: Some(Arc::clone(&plan.router)),
             runtime_config: config,
@@ -452,7 +452,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
     let mut retired_component_shutdown_forced = 0_u64;
     let mut retired_component_shutdown_degraded = 0_u64;
     generations.insert(
-        initial_generation.id,
+        initial_generation.id.get(),
         ResidentUdpGenerationRuntime::start(
             initial_generation.as_ref(),
             &event_file,
@@ -506,13 +506,13 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             let pinned_generation = pin_key.and_then(|key| {
                                 pins.get(&key)
                                     .filter(|pin| pin.expires_at > now)
-                                    .filter(|pin| udp_generation_pin_is_eligible(pin, active.id))
+                                    .filter(|pin| udp_generation_pin_is_eligible(pin, active.id.get()))
                                     .map(|pin| pin.generation)
                             });
                             if let (Some(pin_key), Some(generation_id)) =
                                 (pin_key, pinned_generation)
                             {
-                                if generation_id == active.id {
+                                if generation_id == active.id.get() {
                                     generations.entry(generation_id).or_insert_with(|| {
                                         ResidentUdpGenerationRuntime::start(
                                             active.as_ref(),
@@ -573,7 +573,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 continue;
                             }
 
-                            let generation_id = active.id;
+                            let generation_id = active.id.get();
                             generations.entry(generation_id).or_insert_with(|| {
                                 ResidentUdpGenerationRuntime::start(
                                         active.as_ref(),
@@ -833,7 +833,7 @@ fn retire_idle_udp_generations(
     component_shutdowns: &mut JoinSet<Value>,
 ) {
     let now = Instant::now();
-    let active_id = active_generation.load().id;
+    let active_id = active_generation.load().id.get();
     pins.retain(|_, pin| pin.expires_at > now && udp_generation_pin_is_eligible(pin, active_id));
     for (generation_id, runtime) in generations.iter_mut() {
         if *generation_id != active_id

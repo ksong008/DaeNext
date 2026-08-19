@@ -80,10 +80,12 @@ pub(super) fn hysteria2_rust_native_matches_nativelden_fixture() {
         underlay["preserve_mark"].as_bool().unwrap()
     );
     assert_eq!(
-        crate::hysteria2::contract::TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM,
-        underlay["true_quic_data_plane_deferred_item"]
-            .as_u64()
-            .unwrap() as u16
+        crate::hysteria2::contract::PRODUCTION_DATA_PLANE_OWNER,
+        underlay["production_data_plane_owner"].as_str().unwrap()
+    );
+    assert_eq!(
+        crate::hysteria2::contract::STANDALONE_SMOKE_SURFACE,
+        underlay["standalone_smoke_surface"].as_str().unwrap()
     );
 }
 

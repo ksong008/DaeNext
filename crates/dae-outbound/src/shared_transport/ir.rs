@@ -1,4 +1,8 @@
 use base64::{Engine as _, engine::general_purpose};
+use dae_netutil::{
+    MagicNetworkEncoding, MagicNetworkError, encode_magic_network_with_encoding,
+    write_magic_network_to_slice,
+};
 use serde_json::Value;
 
 use crate::error::OutboundError;
@@ -100,7 +104,14 @@ pub fn grpc_cache_key(
     mptcp: bool,
 ) -> String {
     let mut magic_raw = [0_u8; 10];
-    let magic_raw_len = write_magic_network_to_slice("tcp", mark, mptcp, &mut magic_raw);
+    let magic_raw_len = write_magic_network_to_slice(
+        "tcp",
+        mark,
+        mptcp,
+        MagicNetworkEncoding::Framed,
+        &mut magic_raw,
+    )
+    .expect("fixed gRPC magic-network buffer is large enough");
     let magic = String::from_utf8_lossy(&magic_raw[..magic_raw_len]);
     let allow_insecure = if allow_insecure { "true" } else { "false" };
     let mut out = String::with_capacity(
@@ -132,7 +143,14 @@ pub fn grpc_cache_key_lossless(
     mptcp: bool,
 ) -> String {
     let mut magic_raw = [0_u8; 10];
-    let magic_raw_len = write_magic_network_to_slice("tcp", mark, mptcp, &mut magic_raw);
+    let magic_raw_len = write_magic_network_to_slice(
+        "tcp",
+        mark,
+        mptcp,
+        MagicNetworkEncoding::Framed,
+        &mut magic_raw,
+    )
+    .expect("fixed gRPC magic-network buffer is large enough");
     let mut magic_encoded = [0_u8; 16];
     let magic_len = general_purpose::URL_SAFE_NO_PAD
         .encode_slice(&magic_raw[..magic_raw_len], &mut magic_encoded)
@@ -260,35 +278,18 @@ pub fn magic_network_encode(
     mark: u32,
     mptcp: bool,
 ) -> Result<Vec<u8>, OutboundError> {
-    let network_bytes = network.as_bytes();
-    if network_bytes.len() > u8::MAX as usize {
-        return Err(OutboundError::BadSharedTransport(
-            "magic-network name exceeds 255 bytes".to_owned(),
-        ));
-    }
-    let mut out = Vec::with_capacity(2 + network_bytes.len() + 4 + 1);
-    write_magic_network_to(network_bytes, mark, mptcp, &mut out);
-    Ok(out)
+    encode_magic_network_with_encoding(network, mark, mptcp, MagicNetworkEncoding::Framed)
+        .map_err(map_magic_network_error)
 }
 
-fn write_magic_network_to_slice(network: &str, mark: u32, mptcp: bool, out: &mut [u8]) -> usize {
-    let network_bytes = network.as_bytes();
-    let needed = 2 + network_bytes.len() + 4 + 1;
-    out[0] = 0;
-    out[1] = network_bytes.len() as u8;
-    out[2..2 + network_bytes.len()].copy_from_slice(network_bytes);
-    let mark_offset = 2 + network_bytes.len();
-    out[mark_offset..mark_offset + 4].copy_from_slice(&mark.to_be_bytes());
-    out[mark_offset + 4] = u8::from(mptcp);
-    needed
-}
-
-fn write_magic_network_to(network_bytes: &[u8], mark: u32, mptcp: bool, out: &mut Vec<u8>) {
-    out.push(0);
-    out.push(network_bytes.len() as u8);
-    out.extend_from_slice(network_bytes);
-    out.extend_from_slice(&mark.to_be_bytes());
-    out.push(u8::from(mptcp));
+fn map_magic_network_error(error: MagicNetworkError) -> OutboundError {
+    let message = match error {
+        MagicNetworkError::NetworkTooLong { .. } => {
+            "magic-network name exceeds 255 bytes".to_owned()
+        }
+        other => format!("magic-network encode: {other}"),
+    };
+    OutboundError::BadSharedTransport(message)
 }
 
 fn xhttp_mode_ref_ok(normalized: &'static str) -> XHttpModeRefResult {

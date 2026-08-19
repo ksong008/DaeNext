@@ -1,4 +1,8 @@
 use super::*;
+use crate::daed_product::durable_commit::{
+    cleanup_matching_artifacts, copy_regular_file_synced, write_reserved_file_synced,
+};
+pub(super) use crate::daed_product::durable_commit::{remove_file_if_exists, sync_directory};
 
 const GEODATA_INTERNAL_ARTIFACT_PURPOSES: [&str; 4] =
     ["download", "version", "data-backup", "version-backup"];
@@ -16,15 +20,7 @@ pub(super) fn write_version_stage(
         ));
     }
     let path = coordinator.reserve_staging_path(dir, kind, "version")?;
-    let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(&path)?;
-        file.write_all(version.as_bytes())?;
-        file.write_all(b"\n")?;
-        file.sync_all()
-    })();
+    let result = write_reserved_file_synced(&path, format!("{version}\n").as_bytes());
     if let Err(error) = result {
         let _ = remove_file_if_exists(&path);
         return Err(error);
@@ -53,20 +49,7 @@ pub(super) fn backup_live_file(
 }
 
 pub(super) fn copy_file_durable(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::copy(source, destination)?;
-    fs::File::open(destination)?.sync_all()
-}
-
-pub(super) fn sync_directory(path: &Path) -> io::Result<()> {
-    fs::File::open(path)?.sync_all()
-}
-
-pub(super) fn remove_file_if_exists(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
+    copy_regular_file_synced(source, destination)
 }
 
 pub(super) fn remove_paths_best_effort(paths: impl IntoIterator<Item = PathBuf>) {
@@ -76,22 +59,9 @@ pub(super) fn remove_paths_best_effort(paths: impl IntoIterator<Item = PathBuf>)
 }
 
 pub(super) fn cleanup_orphaned_internal_artifacts(dir: &Path, kind: GeodataKind) -> io::Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    for entry in entries {
-        let entry = entry?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let internal = GEODATA_INTERNAL_ARTIFACT_PURPOSES
+    cleanup_matching_artifacts(dir, |name| {
+        GEODATA_INTERNAL_ARTIFACT_PURPOSES
             .iter()
-            .any(|purpose| name.starts_with(&format!(".{}.{}.tmp.", kind.file_name(), purpose)));
-        if internal && entry.file_type()?.is_file() {
-            remove_file_if_exists(&entry.path())?;
-        }
-    }
-    Ok(())
+            .any(|purpose| name.starts_with(&format!(".{}.{}.tmp.", kind.file_name(), purpose)))
+    })
 }

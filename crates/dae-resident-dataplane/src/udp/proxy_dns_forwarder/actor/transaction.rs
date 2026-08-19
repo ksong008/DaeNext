@@ -1,7 +1,7 @@
 use dae_dns::DnsPacketView;
 
 use super::*;
-use crate::dns::{
+use crate::{
     ProxyDnsPendingRequestBytes, ProxyDnsRequestContext, ProxyDnsRequestError,
     ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage, ProxyDnsResponseBytes,
 };

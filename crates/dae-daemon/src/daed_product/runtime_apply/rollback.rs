@@ -1,6 +1,6 @@
 use super::prepare::{PreparedRuntimeGeneration, RuntimeDatabaseSnapshot, sync_directory};
 use super::*;
-use std::fs::OpenOptions;
+use crate::daed_product::durable_commit::create_synced_file;
 
 pub(super) fn rollback_runtime_generation(
     runtime: &ProductRuntimeManager,
@@ -9,7 +9,7 @@ pub(super) fn rollback_runtime_generation(
     snapshot: &ProductRuntimeApplySnapshot,
     candidate: &mut PreparedRuntimeGeneration,
     latency_seed: &[Value],
-    checkpoints: &mut dyn RuntimeApplyCheckpoints,
+    checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<(), String> {
     checkpoints
         .checkpoint(RuntimeApplyCheckpoint::Rollback)
@@ -116,6 +116,15 @@ fn restore_runtime_database(
 fn restore_previous_materialization(
     candidate: &mut PreparedRuntimeGeneration,
 ) -> Result<(), String> {
+    if let Some(mut transaction) = candidate.transaction.take() {
+        transaction
+            .rollback()
+            .map_err(|error| format!("rollback runtime materialization transaction: {error}"))?;
+        candidate.candidate_path = None;
+        candidate.journal_path = None;
+        candidate.backup_path = None;
+        return Ok(());
+    }
     if let Some(candidate_path) = candidate.candidate_path.take() {
         match fs::remove_file(&candidate_path) {
             Ok(()) => {}
@@ -137,31 +146,9 @@ fn restore_previous_materialization(
     if let Some(previous) = candidate.previous_content.as_ref() {
         let rollback_path =
             parent.join(format!(".generated.dae.{}.rollback", candidate.generation));
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&rollback_path)
-            .map_err(|err| {
-                format!(
-                    "create rollback materialization {}: {err}",
-                    path_string(&rollback_path)
-                )
-            })?;
-        file.write_all(previous).map_err(|err| {
+        create_synced_file(&rollback_path, previous).map_err(|err| {
             format!(
-                "write rollback materialization {}: {err}",
-                path_string(&rollback_path)
-            )
-        })?;
-        set_private_runtime_file_permissions(&rollback_path).map_err(|err| {
-            format!(
-                "set rollback materialization permissions {}: {err}",
-                path_string(&rollback_path)
-            )
-        })?;
-        file.sync_all().map_err(|err| {
-            format!(
-                "sync rollback materialization {}: {err}",
+                "create rollback materialization {}: {err}",
                 path_string(&rollback_path)
             )
         })?;

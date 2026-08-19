@@ -14,4 +14,5 @@ pub const PRESERVE_MPTCP_FIELD_EVEN_FOR_UDP: bool = true;
 pub const ROUTE_CACHE_KEY_IS_UNDERLAY_NETWORK: bool = true;
 pub const PORT_HOPPING_DETECTS_DASH_OR_COMMA: bool = true;
 pub const UDP_HOP_INTERVAL_FROM_EXTRA_OPTION: bool = true;
-pub const TRUE_QUIC_DATA_PLANE_DEFERRED_ITEM: u16 = 113;
+pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
+pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";

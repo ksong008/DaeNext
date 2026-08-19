@@ -111,7 +111,11 @@ pub(crate) fn build_resident_dataplane_plan_with_geodata(
     };
     let tcp_dial_mode = parse_tcp_dial_mode(config)?;
     let sniffing_timeout = tcp_sniffing_timeout(config, tcp_dial_mode);
-    let dns = build_resident_dns_plan(config, geodata)?;
+    let dns = build_resident_dns_plan_with_refresh_interval(
+        config,
+        geodata,
+        ResidentRuntimeResourceConfig::from_config(config).dns_upstream_refresh_interval(),
+    )?;
     Ok(ResidentDataplanePlan {
         enabled: true,
         unsupported_reason: None,

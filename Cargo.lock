@@ -710,6 +710,7 @@ dependencies = [
  "base64",
  "dae-ebpf-support",
  "dae-golden",
+ "dae-netutil",
  "libc",
  "serde_json",
 ]
@@ -804,6 +805,7 @@ dependencies = [
  "chacha20poly1305",
  "dae-core-types",
  "dae-golden",
+ "dae-netutil",
  "dae-tls",
  "fastrand",
  "foreign-types",
@@ -837,6 +839,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dae-resident-core"
+version = "3.1.0"
+dependencies = [
+ "arc-swap",
+ "dae-datapath",
+ "dae-outbound",
+ "h2",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "dae-resident-dataplane"
 version = "3.1.0"
 dependencies = [
@@ -855,9 +871,202 @@ dependencies = [
  "dae-geodata",
  "dae-netutil",
  "dae-outbound",
+ "dae-resident-core",
+ "dae-resident-dns",
+ "dae-resident-plan",
+ "dae-resident-tcp",
+ "dae-resident-transport",
+ "dae-resident-udp",
  "dae-routing",
  "dae-runtime-control",
  "dae-sniffing",
+ "dae-tls",
+ "fastrand",
+ "flate2",
+ "foreign-types",
+ "futures-util",
+ "getrandom 0.3.4",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http",
+ "libc",
+ "quinn",
+ "quinn-boring",
+ "quinn-udp",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2",
+ "tls-parser",
+ "tokio",
+ "tokio-boring",
+ "url",
+]
+
+[[package]]
+name = "dae-resident-dns"
+version = "3.1.0"
+dependencies = [
+ "boring 5.1.0",
+ "bytes",
+ "dae-config",
+ "dae-core-types",
+ "dae-datapath",
+ "dae-dns",
+ "dae-outbound",
+ "dae-resident-core",
+ "dae-resident-plan",
+ "dae-resident-transport",
+ "dae-routing",
+ "dae-runtime-control",
+ "dae-tls",
+ "fastrand",
+ "futures-util",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http",
+ "quinn",
+ "quinn-boring",
+ "serde_json",
+ "sha2",
+ "socket2",
+ "tokio",
+ "tokio-boring",
+ "url",
+]
+
+[[package]]
+name = "dae-resident-model"
+version = "3.1.0"
+dependencies = [
+ "dae-outbound",
+ "dae-resident-core",
+ "dae-runtime-control",
+ "fastrand",
+ "serde_json",
+ "sha2",
+ "url",
+]
+
+[[package]]
+name = "dae-resident-plan"
+version = "3.1.0"
+dependencies = [
+ "dae-resident-model",
+]
+
+[[package]]
+name = "dae-resident-tcp"
+version = "3.1.0"
+dependencies = [
+ "base64",
+ "blake2",
+ "boring 5.1.0",
+ "boring-sys 5.1.0",
+ "brotli",
+ "bytes",
+ "dae-core-types",
+ "dae-datapath",
+ "dae-dns",
+ "dae-ebpf-support",
+ "dae-netutil",
+ "dae-outbound",
+ "dae-resident-core",
+ "dae-resident-dns",
+ "dae-resident-plan",
+ "dae-resident-transport",
+ "dae-routing",
+ "dae-runtime-control",
+ "dae-sniffing",
+ "dae-tls",
+ "fastrand",
+ "flate2",
+ "foreign-types",
+ "futures-util",
+ "getrandom 0.3.4",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http",
+ "libc",
+ "quinn",
+ "quinn-boring",
+ "quinn-udp",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2",
+ "tls-parser",
+ "tokio",
+ "tokio-boring",
+ "url",
+]
+
+[[package]]
+name = "dae-resident-transport"
+version = "3.1.0"
+dependencies = [
+ "base64",
+ "blake2",
+ "boring 5.1.0",
+ "boring-sys 5.1.0",
+ "brotli",
+ "bytes",
+ "dae-datapath",
+ "dae-dns",
+ "dae-outbound",
+ "dae-resident-core",
+ "dae-resident-model",
+ "dae-runtime-control",
+ "dae-tls",
+ "fastrand",
+ "foreign-types",
+ "futures-util",
+ "getrandom 0.3.4",
+ "h2",
+ "h3",
+ "h3-quinn",
+ "http",
+ "libc",
+ "quinn",
+ "quinn-boring",
+ "quinn-udp",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tls-parser",
+ "tokio",
+ "tokio-boring",
+ "url",
+]
+
+[[package]]
+name = "dae-resident-udp"
+version = "3.1.0"
+dependencies = [
+ "base64",
+ "blake2",
+ "boring 5.1.0",
+ "boring-sys 5.1.0",
+ "brotli",
+ "bytes",
+ "dae-core-types",
+ "dae-datapath",
+ "dae-dns",
+ "dae-ebpf-support",
+ "dae-netutil",
+ "dae-outbound",
+ "dae-resident-core",
+ "dae-resident-dns",
+ "dae-resident-plan",
+ "dae-resident-transport",
+ "dae-routing",
+ "dae-runtime-control",
  "dae-tls",
  "fastrand",
  "flate2",

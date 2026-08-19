@@ -389,6 +389,30 @@ pub(crate) fn expand_resident_dns_response_ip_params_with_resolver(
     Ok(expanded)
 }
 
+impl dae_resident_dns::ResidentDnsGeodata for GeodataResolver {
+    fn expand_request_qname_rules(
+        &self,
+        rules: &[RoutingRule],
+    ) -> Result<Vec<RoutingRule>, String> {
+        expand_resident_dns_request_qname_rules_with_resolver(rules, self)
+    }
+
+    fn expand_response_qname_rules(
+        &self,
+        rules: &[RoutingRule],
+    ) -> Result<Vec<RoutingRule>, String> {
+        expand_resident_dns_response_qname_rules_with_resolver(rules, self)
+    }
+
+    fn expand_response_ip_params(&self, params: &[Param]) -> Result<Vec<Param>, String> {
+        expand_resident_dns_response_ip_params_with_resolver(params, self)
+    }
+
+    fn shared_domain_set(&self, key: &str, values: Vec<String>) -> Result<SharedDomainSet, String> {
+        GeodataResolver::shared_domain_set(self, key, values)
+    }
+}
+
 pub(crate) fn load_geoip_params(
     resolver: &GeodataResolver,
     filename: &str,

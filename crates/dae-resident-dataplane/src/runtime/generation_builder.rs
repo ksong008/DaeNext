@@ -51,6 +51,7 @@ pub(super) fn build_resident_dataplane_generation(
             .unwrap_or_else(|| "resident dataplane generation is disabled".to_owned()));
     }
     let reload_generation = owner.physical_generation();
+    let physical_runtime_id = PhysicalRuntimeId::new(reload_generation);
     let mut resource_config = ResidentRuntimeResourceConfig::from_config(&config);
     let process_resources = owner.resource_config();
     resource_config.tcp_flow_stack_bytes = process_resources.tcp_flow_stack_bytes.clone();
@@ -132,39 +133,60 @@ pub(super) fn build_resident_dataplane_generation(
         resident_health_resuscitation_channel(Arc::clone(&metrics));
     let udp_proxy_groups = Arc::clone(&proxy_groups);
     let generation_id = next_resident_dataplane_generation_id();
+    let generation_token = GenerationToken::new(physical_runtime_id, generation_id);
     let dns_domain_routing = domain_routing_map_id.map(|map_id| {
         Arc::new(dns::ResidentDnsDomainRouting::new_for_generation(
             map_id,
-            generation_id,
+            generation_token,
             routing_matcher.clone(),
             Arc::clone(&domain_routing_fence),
         ))
     });
     let dns_upstream_router = Arc::new(dns::ResidentDnsUpstreamRouter::new(
         routing_matcher.clone(),
-        Arc::clone(&udp_proxy_groups),
+        crate::plan::ResidentDnsProxyGroupSelector::shared(Arc::clone(&udp_proxy_groups)),
         so_mark_from_dae,
-        Some(health_resuscitation.clone()),
+        Some(Arc::new(health_resuscitation.clone())),
     ));
-    let dns =
-        Arc::new(
-            dns_plan
-                .with_udp_runtime_resources_and_transport_owner(
-                    udp_runtime_config.dns_udp_runtime_config(),
-                    Arc::clone(&metrics),
-                    owner.data_plane_handle(),
-                    ResidentTransportOwnerRegistries::new(
-                        Some(owner.hysteria2_owner_registry().ok_or_else(|| {
-                            "Hysteria2 owner registry was not installed".to_owned()
-                        })?),
-                        owner.tuic_owner_registry(),
-                        owner.juicity_owner_registry(),
-                    )
-                    .with_anytls(owner.anytls_owner_registry()),
-                )
-                .with_domain_routing(dns_domain_routing.clone())
-                .with_upstream_routing(Some(dns_upstream_router)),
-        );
+    let dns_udp_runtime = udp_runtime_config.dns_udp_runtime_config();
+    let dns_udp_executor = Arc::new(dns::ResidentDnsUdpActorExecutor::new_on(
+        dns_udp_runtime.clone(),
+        Arc::clone(&metrics),
+        owner.data_plane_handle(),
+    ));
+    let dns_transport_owners = ResidentTransportOwnerRegistries::new(
+        Some(
+            owner
+                .hysteria2_owner_registry()
+                .ok_or_else(|| "Hysteria2 owner registry was not installed".to_owned())?,
+        ),
+        owner.tuic_owner_registry(),
+        owner.juicity_owner_registry(),
+    )
+    .with_anytls(owner.anytls_owner_registry());
+    let dns_proxy_tcp_transport = resident_dns_proxy_tcp_transport(dns_transport_owners.clone());
+    let dns_proxy_udp_transport = resident_dns_proxy_udp_transport(
+        dns_udp_runtime.clone(),
+        Arc::clone(&metrics),
+        Arc::clone(&dns_udp_executor),
+        dns_transport_owners,
+    );
+    let dns = Arc::new(
+        dns_plan
+            .with_udp_runtime_resources_and_transports(
+                dns_udp_runtime,
+                Arc::clone(&metrics),
+                owner.data_plane_handle(),
+                dns_udp_executor,
+                dae_resident_dns::ResidentDnsTransportPorts::new(
+                    dns_proxy_tcp_transport,
+                    dns_proxy_udp_transport,
+                    Arc::new(crate::transport::quic_endpoint::ResidentDnsQuicEndpointPolicy),
+                ),
+            )
+            .with_domain_routing(dns_domain_routing.clone())
+            .with_upstream_routing(Some(dns_upstream_router)),
+    );
     let dns_reload_restore = match dns_reload_snapshot {
         Some(snapshot) => dns
             .restore_reload_snapshot(snapshot)
@@ -177,15 +199,15 @@ pub(super) fn build_resident_dataplane_generation(
     };
     let dns_reload_handle = dns.reload_handle();
     let tcp_router = Arc::new(ResidentTcpRouter::new(
-        Arc::clone(&proxy_groups),
+        plan::ResidentTcpProxyGroupSelector::shared(Arc::clone(&proxy_groups)),
         routing_tuple_map_id,
         routing_matcher.clone(),
-        Arc::clone(&dns),
+        tcp::ResidentTcpDnsResolverPort::shared(dns::ResidentDnsResolver::new(Arc::clone(&dns))),
         tcp_dial_mode,
         sniffing_timeout,
         so_mark_from_dae,
         config.global.mptcp,
-        health_resuscitation.clone(),
+        Arc::new(health_resuscitation.clone()),
         owner
             .hysteria2_owner_registry()
             .ok_or_else(|| "Hysteria2 owner registry was not installed".to_owned())?,
@@ -223,7 +245,7 @@ pub(super) fn build_resident_dataplane_generation(
         routing_matcher,
         tcp_dial_mode,
         so_mark_from_dae,
-        Arc::clone(&dns),
+        dns::ResidentDnsDispatcher::new(Arc::clone(&dns)),
         udp_runtime_config.clone(),
         health_resuscitation,
         owner
@@ -239,7 +261,7 @@ pub(super) fn build_resident_dataplane_generation(
     let generation = Arc::new(ResidentDataplaneGeneration {
         _lifetime: ResidentDataplaneGenerationLifetime::register(),
         id: generation_id,
-        reload_generation,
+        reload_generation: physical_runtime_id,
         tcp_router,
         tcp_admission: tcp::ResidentTcpAdmission::new(
             tcp_runtime_config.connection_limit(),
@@ -292,8 +314,6 @@ pub(super) fn build_resident_dataplane_generation(
     } else {
         drop(health_resuscitation_rx);
     }
-
-    dns.activate_domain_routing_generation()?;
 
     Ok(BuiltResidentDataplaneGeneration {
         generation,

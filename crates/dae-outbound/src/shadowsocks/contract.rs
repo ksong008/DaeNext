@@ -20,4 +20,5 @@ pub const LIVE_SMOKE_REQUIRED: &[&str] = &[
 pub const SIMPLE_OBFS_ALIASES: &[&str] = &["obfs-local", "simpleobfs"];
 pub const SIMPLE_OBFS_DEFAULT_HOST: &str = "cloudflare.com";
 pub const SIP003_PATH_WITHOUT_SLASH_BEHAVIOR: &str = "append-trailing-slash";
-pub const TRANSPORT_NATIVE_DATA_PLANE_DEFERRED_TO_ITEM: u16 = 113;
+pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
+pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";

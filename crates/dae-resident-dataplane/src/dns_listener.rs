@@ -13,13 +13,10 @@ use tokio::net::{
 use tokio::sync::Semaphore;
 use tokio::time;
 
-#[cfg(test)]
-use super::dns::read_dns_tcp_payload_async;
 use super::dns::{
-    DNS_MAX_UDP_MESSAGE_SIZE, DnsTcpFrameReader, ResidentDnsPlan, ResidentDnsQueryResult,
-    ResidentDnsTraceSummary, ResidentDnsTransportTrace, build_dns_server_failure_response,
-    fit_dns_response_to_udp_request, handle_resident_dns_local_trace_async,
-    write_dns_tcp_payload_async,
+    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsPlan, ResidentDnsQueryResult, ResidentDnsTraceSummary,
+    ResidentDnsTransportTrace, build_dns_server_failure_response, fit_dns_response_to_udp_request,
+    handle_resident_dns_local_trace_async,
 };
 #[cfg(test)]
 use super::dns::{
@@ -171,60 +168,84 @@ pub(super) async fn run_resident_dns_bind_listener_async(
     let resources = listener.resources;
     let mut tasks = tokio::task::JoinSet::new();
     if let Some(socket) = listener.udp_socket.take() {
-        let local_addr = listener.udp_local_addr.expect("udp local addr was read");
-        match TokioUdpSocket::from_std(socket) {
-            Ok(socket) => {
-                tasks.spawn(run_resident_dns_udp_bind_listener_async(
-                    socket,
-                    configured.clone(),
-                    local_addr,
-                    active_generation.clone(),
-                    Arc::clone(&stop),
-                    event_file.clone(),
-                    Arc::clone(&event_lock),
-                    resources,
-                    executor_worker_threads,
-                ));
+        if let Some(local_addr) = listener.udp_local_addr {
+            match TokioUdpSocket::from_std(socket) {
+                Ok(socket) => {
+                    tasks.spawn(run_resident_dns_udp_bind_listener_async(
+                        socket,
+                        configured.clone(),
+                        local_addr,
+                        active_generation.clone(),
+                        Arc::clone(&stop),
+                        event_file.clone(),
+                        Arc::clone(&event_lock),
+                        resources,
+                        executor_worker_threads,
+                    ));
+                }
+                Err(err) => append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({
+                        "event": "dns_bind_listener_start_failed",
+                        "configured": configured,
+                        "local_addr": local_addr.to_string(),
+                        "network": "udp",
+                        "error": format!("adopt async resident DNS UDP listener: {err}"),
+                    }),
+                ),
             }
-            Err(err) => append_event(
+        } else {
+            append_event(
                 &event_file,
                 &event_lock,
                 json!({
                     "event": "dns_bind_listener_start_failed",
                     "configured": configured,
-                    "local_addr": local_addr.to_string(),
                     "network": "udp",
-                    "error": format!("adopt async resident DNS UDP listener: {err}"),
+                    "error": "resident DNS UDP listener local address is unavailable",
                 }),
-            ),
+            );
         }
     }
     if let Some(tcp_listener) = listener.tcp_listener.take() {
-        let local_addr = listener.tcp_local_addr.expect("tcp local addr was read");
-        match TokioTcpListener::from_std(tcp_listener) {
-            Ok(tcp_listener) => {
-                tasks.spawn(run_resident_dns_tcp_bind_listener_async(
-                    tcp_listener,
-                    configured.clone(),
-                    local_addr,
-                    active_generation,
-                    Arc::clone(&stop),
-                    event_file.clone(),
-                    Arc::clone(&event_lock),
-                    resources,
-                ));
+        if let Some(local_addr) = listener.tcp_local_addr {
+            match TokioTcpListener::from_std(tcp_listener) {
+                Ok(tcp_listener) => {
+                    tasks.spawn(run_resident_dns_tcp_bind_listener_async(
+                        tcp_listener,
+                        configured.clone(),
+                        local_addr,
+                        active_generation,
+                        Arc::clone(&stop),
+                        event_file.clone(),
+                        Arc::clone(&event_lock),
+                        resources,
+                    ));
+                }
+                Err(err) => append_event(
+                    &event_file,
+                    &event_lock,
+                    json!({
+                        "event": "dns_bind_listener_start_failed",
+                        "configured": configured,
+                        "local_addr": local_addr.to_string(),
+                        "network": "tcp",
+                        "error": format!("adopt async resident DNS TCP listener: {err}"),
+                    }),
+                ),
             }
-            Err(err) => append_event(
+        } else {
+            append_event(
                 &event_file,
                 &event_lock,
                 json!({
                     "event": "dns_bind_listener_start_failed",
                     "configured": configured,
-                    "local_addr": local_addr.to_string(),
                     "network": "tcp",
-                    "error": format!("adopt async resident DNS TCP listener: {err}"),
+                    "error": "resident DNS TCP listener local address is unavailable",
                 }),
-            ),
+            );
         }
     }
     if tasks.is_empty() {
@@ -240,10 +261,34 @@ pub(super) async fn run_resident_dns_bind_listener_async(
         return;
     }
     let mut stop_listener = stop.listener();
+    let mut completed_joined = 0_usize;
+    let mut completed_cancelled = 0_usize;
+    let mut completed_panicked = 0_usize;
     while !tasks.is_empty() && !stop.load(Ordering::Relaxed) {
         tokio::select! {
             _ = stop_listener.cancelled() => break,
-            _ = tasks.join_next() => {}
+            result = tasks.join_next() => {
+                let Some(result) = result else {
+                    break;
+                };
+                completed_joined = completed_joined.saturating_add(1);
+                if let Err(error) = result {
+                    completed_cancelled = completed_cancelled
+                        .saturating_add(usize::from(error.is_cancelled()));
+                    completed_panicked = completed_panicked
+                        .saturating_add(usize::from(error.is_panic()));
+                    append_event(
+                        &event_file,
+                        &event_lock,
+                        json!({
+                            "event": "dns_bind_listener_task_failed",
+                            "cancelled": error.is_cancelled(),
+                            "panicked": error.is_panic(),
+                            "error": error.to_string(),
+                        }),
+                    );
+                }
+            }
         }
     }
     let shutdown =
@@ -253,9 +298,9 @@ pub(super) async fn run_resident_dns_bind_listener_async(
         &event_lock,
         json!({
             "event": "dns_bind_runtime_stopped",
-            "tasksJoined": shutdown.joined,
-            "tasksCancelled": shutdown.cancelled,
-            "tasksPanicked": shutdown.panicked,
+            "tasksJoined": completed_joined.saturating_add(shutdown.joined),
+            "tasksCancelled": completed_cancelled.saturating_add(shutdown.cancelled),
+            "tasksPanicked": completed_panicked.saturating_add(shutdown.panicked),
             "tasksForced": shutdown.forced,
             "tasksPending": tasks.len(),
         }),

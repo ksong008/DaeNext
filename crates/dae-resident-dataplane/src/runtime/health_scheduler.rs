@@ -49,6 +49,12 @@ impl ResidentHealthResuscitationHandle {
     }
 }
 
+impl ResidentHealthResuscitation for ResidentHealthResuscitationHandle {
+    fn trigger(&self, outbound: u8, network_type: NetworkType) {
+        self.trigger(outbound, network_type);
+    }
+}
+
 pub(crate) fn resident_health_resuscitation_channel(
     metrics: Arc<ResidentDataplaneMetrics>,
 ) -> (

@@ -13,7 +13,7 @@ dae-config.workspace = true
 dae-config-util.workspace = true
 dae-runtime-control.workspace = true
 dae-core-types.workspace = true
-dae-daemon = { workspace = true, features = ["native-ebpf", "product-api"] }
+dae-daemon = { workspace = true, features = ["benchmark-support", "native-ebpf", "product-api"] }
 dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-ebpf-support.workspace = true
