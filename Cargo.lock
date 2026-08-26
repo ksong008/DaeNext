@@ -668,7 +668,14 @@ dependencies = [
  "dae-geodata",
  "dae-netutil",
  "dae-outbound",
+ "dae-product-control",
+ "dae-product-core",
+ "dae-product-geodata",
+ "dae-product-http",
  "dae-product-identity",
+ "dae-product-persistence",
+ "dae-product-runtime",
+ "dae-product-subscription",
  "dae-resident-dataplane",
  "dae-routing",
  "dae-runtime-control",
@@ -832,10 +839,105 @@ dependencies = [
 ]
 
 [[package]]
+name = "dae-product-control"
+version = "3.1.0"
+dependencies = [
+ "argon2",
+ "dae-product-core",
+ "dae-product-http",
+ "libc",
+ "serde_json",
+ "sha2",
+ "socket2",
+ "tokio",
+]
+
+[[package]]
+name = "dae-product-core"
+version = "3.1.0"
+dependencies = [
+ "dae-config",
+ "serde_json",
+]
+
+[[package]]
+name = "dae-product-geodata"
+version = "3.1.0"
+dependencies = [
+ "dae-geodata",
+ "dae-product-core",
+ "dae-product-persistence",
+ "fastrand",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
+]
+
+[[package]]
+name = "dae-product-http"
+version = "3.1.0"
+dependencies = [
+ "dae-product-core",
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "dae-product-identity"
 version = "3.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "dae-product-persistence"
+version = "3.1.0"
+dependencies = [
+ "dae-config",
+ "dae-product-core",
+ "fastrand",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "dae-product-runtime"
+version = "3.1.0"
+dependencies = [
+ "dae-config",
+ "dae-product-core",
+ "dae-product-persistence",
+ "fastrand",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dae-product-subscription"
+version = "3.1.0"
+dependencies = [
+ "base64",
+ "brotli",
+ "dae-outbound",
+ "dae-product-core",
+ "dae-product-persistence",
+ "dae-tls",
+ "fastrand",
+ "flate2",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
 ]
 
 [[package]]
