@@ -1,28 +1,5 @@
 use super::*;
 
-static RUNTIME_APPLY_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Clone, Debug, Default)]
-pub(in crate::daed_product) struct RuntimeApplyState {
-    generation: Option<String>,
-    phase: Option<String>,
-    rollback_result: Option<String>,
-    reconciliation_required: bool,
-    updated_at: Option<String>,
-}
-
-impl RuntimeApplyState {
-    pub(super) fn summary(&self) -> Value {
-        json!({
-            "generationId": self.generation,
-            "phase": self.phase,
-            "rollbackResult": self.rollback_result,
-            "reconciliationRequired": self.reconciliation_required,
-            "updatedAt": self.updated_at,
-        })
-    }
-}
-
 #[derive(Clone)]
 pub(in crate::daed_product) struct ProductRuntimeApplySnapshot {
     was_running: bool,
@@ -34,20 +11,10 @@ pub(in crate::daed_product) struct ProductRuntimeApplySnapshot {
 
 impl ProductRuntimeManager {
     pub(in crate::daed_product) fn begin_apply_generation(&self) -> String {
-        let sequence = RUNTIME_APPLY_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let generation = format!("{}-{timestamp}-{sequence}", std::process::id());
         if let Ok(mut inner) = self.inner.lock() {
-            inner.apply.generation = Some(generation.clone());
-            inner.apply.phase = Some("prepare".to_owned());
-            inner.apply.rollback_result = None;
-            inner.apply.reconciliation_required = false;
-            inner.apply.updated_at = Some(now_text());
+            return inner.apply.begin();
         }
-        generation
+        RuntimeApplyState::default().begin()
     }
 
     pub(in crate::daed_product) fn set_apply_generation_phase(
@@ -55,11 +22,8 @@ impl ProductRuntimeManager {
         generation: &str,
         phase: &str,
     ) {
-        if let Ok(mut inner) = self.inner.lock()
-            && inner.apply.generation.as_deref() == Some(generation)
-        {
-            inner.apply.phase = Some(phase.to_owned());
-            inner.apply.updated_at = Some(now_text());
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.apply.set_phase(generation, phase);
         }
     }
 
@@ -71,12 +35,13 @@ impl ProductRuntimeManager {
         reconciliation_required: bool,
     ) {
         if let Ok(mut inner) = self.inner.lock()
-            && inner.apply.generation.as_deref() == Some(generation)
+            && inner.apply.finish(
+                generation,
+                phase,
+                failure.map(|(_, rollback)| rollback),
+                reconciliation_required,
+            )
         {
-            inner.apply.phase = Some(phase.to_owned());
-            inner.apply.rollback_result = failure.map(|(_, rollback)| rollback.to_owned());
-            inner.apply.reconciliation_required = reconciliation_required;
-            inner.apply.updated_at = Some(now_text());
             if phase == "committed" && failure.is_none() {
                 inner.active_generation = Some(generation.to_owned());
             }

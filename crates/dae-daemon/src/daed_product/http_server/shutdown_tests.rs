@@ -110,24 +110,10 @@ fn product_shutdown_interrupts_an_active_http_body_read() {
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
-    while fixture
-        .app
-        .http_metrics
-        .active_connections
-        .load(Ordering::Relaxed)
-        == 0
-        && Instant::now() < deadline
-    {
+    while fixture.app.http_metrics.active_connection_count() == 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(
-        fixture
-            .app
-            .http_metrics
-            .active_connections
-            .load(Ordering::Relaxed),
-        1
-    );
+    assert_eq!(fixture.app.http_metrics.active_connection_count(), 1);
     let shutdown_started = Instant::now();
     assert!(fixture.shutdown.request(libc::SIGTERM));
     finish_test_product_server(fixture);

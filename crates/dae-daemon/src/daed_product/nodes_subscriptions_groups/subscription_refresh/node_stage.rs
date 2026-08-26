@@ -1,33 +1,8 @@
 use super::*;
-
-#[derive(Clone, Debug)]
-pub(super) struct PreparedSubscriptionNode {
-    pub(super) stored_link: String,
-    pub(super) parsed: ParsedNodeLink,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct RejectedSubscriptionNode {
-    pub(super) link: String,
-    pub(super) reason: String,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(super) struct PreparedSubscriptionNodes {
-    pub(super) admitted: Vec<PreparedSubscriptionNode>,
-    pub(super) invalid: Vec<RejectedSubscriptionNode>,
-    pub(super) not_admitted: Vec<RejectedSubscriptionNode>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct PreparedSubscriptionRefresh {
-    pub(super) content_kind: content::SubscriptionContentKind,
-    pub(super) source_node_count: usize,
-    pub(super) invalid_source_count: usize,
-    pub(super) empty: bool,
-    pub(super) nodes: PreparedSubscriptionNodes,
-    pub(super) persist_content: bool,
-}
+pub(super) use dae_product_subscription::{
+    PreparedSubscriptionNode, PreparedSubscriptionNodes, PreparedSubscriptionRefresh,
+    RejectedSubscriptionNode,
+};
 
 pub(super) fn prepare_subscription_refresh(
     content: &content::SubscriptionContentReport,

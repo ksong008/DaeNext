@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use super::runtime_snapshots::runtime_link_hash;
-use super::storage::runtime_latency_snapshot_link_hash;
+use dae_product_subscription::runtime_latency_snapshot_link_hash;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct LatencyProbeSeenLinks {

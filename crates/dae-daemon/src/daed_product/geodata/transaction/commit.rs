@@ -2,9 +2,11 @@ use super::external_input::ensure_runtime_input_versions_bumped;
 use super::files::{
     backup_live_file, remove_paths_best_effort, sync_directory, write_version_stage,
 };
-use super::journal::{GeodataJournalPhase, GeodataUpdateJournal, write_geodata_journal};
-use super::recovery::{finalize_committed_geodata_journal, rollback_geodata_journal};
 use super::*;
+use dae_product_geodata::{
+    GeodataJournalPhase, GeodataUpdateJournal, finalize_committed_geodata_journal,
+    rollback_geodata_journal, write_geodata_journal,
+};
 
 pub(in crate::daed_product::geodata) fn commit_geodata_generation(
     coordinator: &ProductGeodataUpdateCoordinator,
@@ -50,7 +52,7 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoin
             return Err(error);
         }
     };
-    let status = match super::super::status::geodata_resource_status_from_staged_parts(
+    let status = match dae_product_geodata::geodata_resource_status_from_staged_parts(
         &data_stage,
         kind,
         summary,

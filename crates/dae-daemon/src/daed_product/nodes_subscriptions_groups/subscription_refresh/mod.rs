@@ -1,13 +1,22 @@
 use super::*;
 
-mod content;
-mod fetch_error;
+mod content {
+    #[cfg(test)]
+    pub(crate) use dae_product_subscription::subscription_links_from_content;
+    pub(in crate::daed_product) use dae_product_subscription::{
+        SubscriptionContentReport, parse_subscription_content,
+    };
+}
+#[cfg(not(test))]
+use dae_product_subscription::PersistedSubscriptionContent;
+use dae_product_subscription::{SubscriptionSourceIdentity, fetch_error};
 mod helper;
 mod http;
 mod node_stage;
 mod node_sync;
-mod outcome;
-mod persistence;
+mod outcome {
+    pub(in crate::daed_product) use dae_product_subscription::SubscriptionRefreshOutcome;
+}
 mod source;
 mod transaction;
 
@@ -26,19 +35,10 @@ pub(crate) use self::node_sync::replace_subscription_nodes;
 #[cfg(test)]
 pub(crate) use self::source::fetch_subscription_content;
 
-const SUBSCRIPTION_HTTP_HEADER_LIMIT: usize = 128 * 1024;
-const SUBSCRIPTION_MAX_BYTES: usize = 8 * 1024 * 1024;
+const SUBSCRIPTION_MAX_BYTES: usize = dae_product_subscription::SUBSCRIPTION_MAX_BYTES;
 
+pub(in crate::daed_product) use dae_product_subscription::recover_subscription_persist_transaction;
 pub(in crate::daed_product) use helper::run_subscription_prepare_helper_command;
-pub(in crate::daed_product) use persistence::recover_subscription_persist_transaction;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct SubscriptionSourceIdentity {
-    id: i64,
-    link: String,
-    tag: Option<String>,
-    use_proxy: bool,
-}
 
 pub(crate) fn refresh_subscription_from_remote(
     control_runtime: &ProductControlRuntime,
@@ -148,12 +148,7 @@ fn refresh_subscription_from_remote_inner(
             let persist = persist_path
                 .as_deref()
                 .zip(prepared.persist_staging.as_deref())
-                .map(
-                    |(path, staging)| transaction::PersistedSubscriptionContent::StagedFile {
-                        path,
-                        staging,
-                    },
-                );
+                .map(|(path, staging)| PersistedSubscriptionContent::StagedFile { path, staging });
             match transaction::apply_prepared_subscription_refresh_report(
                 state,
                 &source,
