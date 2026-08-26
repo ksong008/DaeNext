@@ -89,6 +89,13 @@
         "dae-netutil",
         "dae-outbound",
         "dae-product-identity",
+        "dae-product-geodata",
+        "dae-product-core",
+        "dae-product-control",
+        "dae-product-http",
+        "dae-product-persistence",
+        "dae-product-runtime",
+        "dae-product-subscription",
         "dae-resident-dataplane",
         "dae-routing",
         "dae-runtime-control",
@@ -99,6 +106,7 @@
       "dev": [
         "dae-datapath",
         "dae-outbound",
+        "dae-product-persistence",
         "dae-resident-dataplane"
       ]
     },
@@ -165,6 +173,48 @@
     "dae-product-identity": {
       "layer": "foundation",
       "normal": [],
+      "build": [],
+      "dev": []
+    },
+    "dae-product-geodata": {
+      "layer": "product",
+      "normal": ["dae-geodata", "dae-product-core", "dae-product-persistence"],
+      "build": [],
+      "dev": []
+    },
+    "dae-product-core": {
+      "layer": "product",
+      "normal": ["dae-config"],
+      "build": [],
+      "dev": []
+    },
+    "dae-product-control": {
+      "layer": "product",
+      "normal": ["dae-product-core", "dae-product-http"],
+      "build": [],
+      "dev": []
+    },
+    "dae-product-http": {
+      "layer": "product",
+      "normal": ["dae-product-core"],
+      "build": [],
+      "dev": []
+    },
+    "dae-product-persistence": {
+      "layer": "product",
+      "normal": ["dae-config", "dae-product-core"],
+      "build": [],
+      "dev": []
+    },
+    "dae-product-runtime": {
+      "layer": "product",
+      "normal": ["dae-config", "dae-product-core", "dae-product-persistence"],
+      "build": [],
+      "dev": []
+    },
+    "dae-product-subscription": {
+      "layer": "product",
+      "normal": ["dae-outbound", "dae-product-core", "dae-product-persistence", "dae-tls"],
       "build": [],
       "dev": []
     },
