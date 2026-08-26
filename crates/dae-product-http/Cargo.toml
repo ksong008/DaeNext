@@ -1,0 +1,11 @@
+[package]
+name = "dae-product-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dae-product-core.workspace = true
+libc.workspace = true
+serde_json.workspace = true

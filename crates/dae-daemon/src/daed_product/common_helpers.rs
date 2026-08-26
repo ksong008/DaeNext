@@ -16,32 +16,11 @@ pub(super) fn integer_array(body: &Value, key: &str) -> Vec<i64> {
 }
 
 pub(super) fn now_text() -> String {
-    iso8601_utc(unix_now())
+    dae_product_core::product_now_text()
 }
 
 pub(super) fn iso8601_utc(timestamp: u64) -> String {
-    let seconds = timestamp as i64;
-    let days = seconds.div_euclid(86_400);
-    let rem = seconds.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(days);
-    let hour = rem / 3_600;
-    let minute = (rem % 3_600) / 60;
-    let second = rem % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
-pub(super) fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-    let year = y + if month <= 2 { 1 } else { 0 };
-    (year, month, day)
+    dae_product_core::product_iso8601_utc(timestamp)
 }
 
 pub(super) fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {

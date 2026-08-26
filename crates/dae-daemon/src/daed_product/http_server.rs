@@ -1,10 +1,5 @@
 use super::*;
 
-mod job_queue;
-mod listener_readiness;
-use job_queue::{ProductHttpJobQueue, ProductHttpQueueReceiveError, ProductHttpQueueSendError};
-use listener_readiness::{LISTENER_SHUTDOWN_CHECK_INTERVAL, wait_for_listener_readiness};
-
 pub(super) fn serve_forever(
     listen: &str,
     app: Arc<AppState>,

@@ -1,15 +1,27 @@
 mod config_snapshot;
 mod helper;
-mod job_state;
 mod jobs;
-mod nodes;
-mod persistence;
 mod runtime_snapshots;
 mod seen;
 mod standalone;
-mod storage;
 
 use config_snapshot::ManualProbeConfigSnapshot;
+#[cfg(test)]
+pub(crate) use dae_product_subscription::{
+    LatencyJobAdmissionKind, runtime_node_latency_results_for_nodes, store_node_latency_result,
+};
+pub(crate) use dae_product_subscription::{
+    LatencyJobCancelError, LatencyJobCancellation, LatencyJobManager, cancel_node_latency_job_value,
+};
+pub(crate) use dae_product_subscription::{
+    LatencyProbeNode, current_latency_probe_nodes, latency_probe_link_chunks,
+    latency_probe_nodes_for_ids, latency_probe_nodes_for_links, latency_probe_unique_link_count,
+    latency_probe_unique_links,
+};
+pub(crate) use dae_product_subscription::{
+    NodeLatencyWrite, RuntimeNodeLatencyIndex, native_probe_missing_results,
+    runtime_latency_snapshot_link_hash, stored_successful_node_latency_seed_snapshots,
+};
 #[cfg(test)]
 pub(crate) use helper::latency_probe_helper_timeout;
 pub(crate) use helper::{
@@ -19,33 +31,16 @@ pub(crate) use helper::{
     run_latency_probe_helper_streaming,
 };
 #[cfg(test)]
-pub(crate) use job_state::LatencyJobAdmissionKind;
-pub(crate) use job_state::{
-    LatencyJobCancelError, LatencyJobCancellation, LatencyJobManager, cancel_node_latency_job_value,
-};
-#[cfg(test)]
 pub(crate) use jobs::node_latency_results_for_runtime_snapshots_only;
 pub(crate) use jobs::{
     add_node_latency_job_value, current_node_latency_job_value, enqueue_node_latency_job,
     list_stored_node_latencies_value,
 };
-pub(crate) use nodes::{
-    LatencyProbeNode, current_latency_probe_nodes, latency_probe_link_chunks,
-    latency_probe_nodes_for_ids, latency_probe_nodes_for_links, latency_probe_unique_link_count,
-    latency_probe_unique_links,
-};
 #[cfg(test)]
 pub(crate) use runtime_snapshots::fake_runtime_tcp_latency_snapshot;
 pub(crate) use runtime_snapshots::{
-    fake_runtime_probe_node_latencies, node_name_from_link, runtime_execution_identity,
-    runtime_link_hash, runtime_link_identity_value, runtime_redacted_link_source,
+    fake_runtime_probe_node_latencies, node_name_from_link, runtime_link_hash,
+    runtime_link_identity_value, runtime_redacted_link_source,
 };
 pub(crate) use seen::LatencyProbeSeenLinks;
 use standalone::StandaloneManualProbeJob;
-#[cfg(test)]
-pub(crate) use storage::runtime_node_latency_results_for_nodes;
-pub(crate) use storage::{
-    NodeLatencyWrite, RuntimeNodeLatencyIndex, native_probe_missing_results,
-    runtime_latency_snapshot_link_hash, store_node_latency_result,
-    stored_successful_node_latency_seed_snapshots,
-};

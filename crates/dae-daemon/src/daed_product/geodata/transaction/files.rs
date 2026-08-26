@@ -1,11 +1,6 @@
 use super::*;
-use crate::daed_product::durable_commit::{
-    cleanup_matching_artifacts, copy_regular_file_synced, write_reserved_file_synced,
-};
-pub(super) use crate::daed_product::durable_commit::{remove_file_if_exists, sync_directory};
-
-const GEODATA_INTERNAL_ARTIFACT_PURPOSES: [&str; 4] =
-    ["download", "version", "data-backup", "version-backup"];
+use dae_product_persistence::{copy_regular_file_synced, write_reserved_file_synced};
+pub(super) use dae_product_persistence::{remove_file_if_exists, sync_directory};
 
 pub(super) fn write_version_stage(
     coordinator: &ProductGeodataUpdateCoordinator,
@@ -13,7 +8,7 @@ pub(super) fn write_version_stage(
     kind: GeodataKind,
     version: &str,
 ) -> io::Result<PathBuf> {
-    if !super::super::status::is_valid_geodata_release_version(version) {
+    if !dae_product_geodata::is_valid_geodata_release_version(version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("invalid geodata release version: {version}"),
@@ -56,12 +51,4 @@ pub(super) fn remove_paths_best_effort(paths: impl IntoIterator<Item = PathBuf>)
     for path in paths {
         let _ = remove_file_if_exists(&path);
     }
-}
-
-pub(super) fn cleanup_orphaned_internal_artifacts(dir: &Path, kind: GeodataKind) -> io::Result<()> {
-    cleanup_matching_artifacts(dir, |name| {
-        GEODATA_INTERNAL_ARTIFACT_PURPOSES
-            .iter()
-            .any(|purpose| name.starts_with(&format!(".{}.{}.tmp.", kind.file_name(), purpose)))
-    })
 }

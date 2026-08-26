@@ -19,6 +19,8 @@ run_step "format" cargo fmt --all -- --check
 run_step "repository text policy" scripts/check_no_emoji.sh
 run_step "architecture dependency policy" python3 scripts/architecture/check_dependencies.py
 run_step "architecture dependency checker tests" python3 scripts/architecture/test_check_dependencies.py
+run_step "product physical boundaries" python3 scripts/architecture/check_product_boundaries.py
+run_step "product boundary checker tests" python3 scripts/architecture/test_check_product_boundaries.py
 run_step "production dependency surface" scripts/check_production_deps.sh --all-features
 run_step "workspace check" cargo check --workspace --all-targets
 run_step "workspace library tests" cargo test --workspace --lib

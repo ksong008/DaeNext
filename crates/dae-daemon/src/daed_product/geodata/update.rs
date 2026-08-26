@@ -1,14 +1,14 @@
-use super::file::{advise_file_dontneed, summarize_geodata_file};
 use super::http::{fetch_geodata_latest_release, fetch_geodata_url_to_file};
-use super::source::geodata_source;
 use super::status::update_geodata_resource_status_cache;
 use super::transaction::{
     PreparedGeodataGeneration, commit_geodata_generation, recover_geodata_transaction,
     runtime_input_versions_if_running,
 };
-use super::types::{GeodataKind, GeodataRelease, GeodataSourceMode};
 use super::update_admission::ProductGeodataUpdateLease;
 use super::*;
+use super::{GeodataKind, GeodataRelease, GeodataSourceMode};
+use dae_product_geodata::geodata_source;
+use dae_product_geodata::{advise_file_dontneed, summarize_geodata_file};
 
 pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
     let context = ProductGeodataUpdateContext::from_app(app);

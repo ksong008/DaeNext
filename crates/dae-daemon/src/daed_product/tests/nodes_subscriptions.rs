@@ -1,4 +1,6 @@
 use super::*;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 
 fn snapshot_selected_runtime_resources(state: &Path) {
     let conn = open_state_connection(state).unwrap();

@@ -1,5 +1,5 @@
 use super::*;
-use crate::daed_product::durable_commit::{
+use dae_product_persistence::{
     DurableTransaction, ensure_private_directory, reserve_private_file,
     sync_directory as sync_durable_directory,
 };
