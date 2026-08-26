@@ -1,10 +1,10 @@
-use super::super::file::{sha256_file, summarize_geodata_file};
 use super::super::transaction::{
     GeodataCommitResult, GeodataJournalPhase, GeodataTransactionCheckpoint, GeodataUpdateJournal,
     PreparedGeodataGeneration, RuntimeInputVersions, commit_geodata_generation_with_checkpoints,
     recover_geodata_transaction, write_geodata_journal,
 };
 use super::*;
+use dae_product_geodata::{sha256_file, summarize_geodata_file};
 
 mod faults;
 mod recovery;

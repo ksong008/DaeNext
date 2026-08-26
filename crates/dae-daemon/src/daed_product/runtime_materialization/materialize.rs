@@ -27,34 +27,20 @@ pub(in crate::daed_product) struct RuntimeMaterializationPlan {
     pub(in crate::daed_product) timings: RuntimeMaterializationTimings,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::daed_product) struct RuntimeDesiredStateRevision {
-    config_id: i64,
-    config_version: i64,
-    dns_id: i64,
-    dns_version: i64,
-    routing_id: i64,
-    routing_version: i64,
-    group_version_sum: i64,
-    group_ids: String,
-    external_input_version: i64,
-    geodata_input_version: i64,
-}
-
 impl RuntimeMaterializationPlan {
     pub(in crate::daed_product) fn desired_state_revision(&self) -> RuntimeDesiredStateRevision {
-        RuntimeDesiredStateRevision {
-            config_id: self.config_id,
-            config_version: self.config_version,
-            dns_id: self.dns_id,
-            dns_version: self.dns_version,
-            routing_id: self.routing_id,
-            routing_version: self.routing_version,
-            group_version_sum: self.group_version_sum,
-            group_ids: self.group_ids.clone(),
-            external_input_version: self.external_input_version,
-            geodata_input_version: self.geodata_input_version,
-        }
+        RuntimeDesiredStateRevision::new(
+            self.config_id,
+            self.config_version,
+            self.dns_id,
+            self.dns_version,
+            self.routing_id,
+            self.routing_version,
+            self.group_version_sum,
+            self.group_ids.clone(),
+            self.external_input_version,
+            self.geodata_input_version,
+        )
     }
 }
 
@@ -124,32 +110,6 @@ pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_connect
     snapshot.commit().map_err(sqlite_io_error)?;
     plan.timings.snapshot_ns = elapsed_nanos(started);
     Ok(plan)
-}
-
-pub(in crate::daed_product) fn runtime_desired_state_revision_from_connection(
-    conn: &Connection,
-) -> io::Result<RuntimeDesiredStateRevision> {
-    let config = required_selected_section_raw(conn, SectionKind::Config)?;
-    let dns = required_selected_section_raw(conn, SectionKind::Dns)?;
-    let routing = required_selected_section_raw(conn, SectionKind::Routing)?;
-    let active = load_active_runtime_resource_revision(conn, &routing.2)?;
-    Ok(RuntimeDesiredStateRevision {
-        config_id: config.0,
-        config_version: config.3,
-        dns_id: dns.0,
-        dns_version: dns.3,
-        routing_id: routing.0,
-        routing_version: routing.3,
-        group_version_sum: active.group_version_sum,
-        group_ids: active
-            .group_ids
-            .iter()
-            .map(i64::to_string)
-            .collect::<Vec<_>>()
-            .join(","),
-        external_input_version: current_runtime_external_input_version(conn)?,
-        geodata_input_version: current_runtime_geodata_input_version(conn)?,
-    })
 }
 
 pub(super) fn prepare_runtime_materialization_plan_from_snapshot(

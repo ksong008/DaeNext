@@ -11,30 +11,6 @@ pub(crate) fn list_subscriptions(state: &Path, request: &HttpRequest) -> HttpRes
     }
 }
 
-pub(crate) fn list_subscriptions_value(state: &Path, expand_nodes: bool) -> io::Result<Value> {
-    let conn = open_state_connection(state)?;
-    let mut stmt = conn
-        .prepare("SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy FROM subscriptions ORDER BY id")
-        .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map([], subscription_row_value)
-        .map_err(sqlite_io_error)?;
-    let mut items = Vec::new();
-    for row in rows {
-        let mut value = row.map_err(sqlite_io_error)?;
-        let id = value["id"].as_i64().unwrap_or(0);
-        let node_count = count_nodes_for_subscription(&conn, id)?;
-        if let Value::Object(map) = &mut value {
-            map.insert("nodeCount".to_owned(), json!(node_count));
-            if expand_nodes {
-                map.insert("nodes".to_owned(), list_nodes_value(state, Some(id))?);
-            }
-        }
-        items.push(value);
-    }
-    Ok(json!({"items": items}))
-}
-
 pub(crate) fn create_subscription(
     control_runtime: &ProductControlRuntime,
     state: &Path,
@@ -140,17 +116,6 @@ pub(crate) fn get_subscription(state: &Path, id: i64) -> HttpResponse {
         Ok(None) => HttpResponse::json(404, json!({"error": "subscription not found"})),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
-}
-
-pub(crate) fn get_subscription_value(state: &Path, id: i64) -> io::Result<Option<Value>> {
-    let conn = open_state_connection(state)?;
-    conn.query_row(
-        "SELECT id, updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy FROM subscriptions WHERE id = ?1",
-        params![id],
-        subscription_row_value,
-    )
-    .optional()
-    .map_err(sqlite_io_error)
 }
 
 pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
@@ -340,30 +305,4 @@ fn copy_subscription_refresh_fields(source: &Value, target: &mut Value) {
             target.insert(key.to_owned(), value.clone());
         }
     }
-}
-
-pub(crate) fn subscription_row_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
-    Ok(json!({
-        "id": row.get::<_, i64>(0)?,
-        "updatedAt": row.get::<_, String>(1)?,
-        "link": row.get::<_, String>(2)?,
-        "cronExp": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| DEFAULT_SUBSCRIPTION_CRON_EXP.to_owned()),
-        "cronEnable": row.get::<_, i64>(4)? != 0,
-        "status": row.get::<_, String>(5)?,
-        "info": row.get::<_, String>(6)?,
-        "tag": row.get::<_, Option<String>>(7)?,
-        "useProxy": row.get::<_, i64>(8)? != 0,
-    }))
-}
-
-pub(crate) fn count_nodes_for_subscription(
-    conn: &Connection,
-    subscription_id: i64,
-) -> io::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM nodes WHERE subscription_id = ?1",
-        params![subscription_id],
-        |row| row.get(0),
-    )
-    .map_err(sqlite_io_error)
 }

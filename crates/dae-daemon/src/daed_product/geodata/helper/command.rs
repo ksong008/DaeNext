@@ -1,8 +1,8 @@
-use super::protocol::{
+use super::*;
+use dae_product_geodata::{
     GEODATA_HELPER_MAX_REQUEST_BYTES, GeodataHelperRequest, decode_geodata_helper_request,
     encode_geodata_helper_failure, encode_geodata_helper_success,
 };
-use super::*;
 
 pub(in crate::daed_product) fn run_geodata_prepare_helper_command(
     args: &[String],
@@ -76,8 +76,7 @@ fn run_geodata_prepare_helper(
     // dedicated helper comm. Tokio creates network sockets on runtime and
     // blocking-pool threads, so those threads must carry the same identity as
     // the helper's initial thread.
-    let control_runtime =
-        ProductControlRuntime::start_for_helper(GEODATA_PREPARE_HELPER_TASK_NAME)?;
+    let control_runtime = start_product_control_helper_runtime(GEODATA_PREPARE_HELPER_TASK_NAME)?;
     let result = prepare_geodata_download_inline(
         &control_runtime,
         &request.state,

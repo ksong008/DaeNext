@@ -1,0 +1,18 @@
+[package]
+name = "dae-product-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dae-product-core.workspace = true
+dae-product-http.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+socket2.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+argon2.workspace = true

@@ -70,7 +70,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             return DaedProductOutput::error(format!("start runtime sampler failed: {err}"));
         }
     };
-    let control_runtime = match ProductControlRuntime::start_for_http_config(http_config) {
+    let control_runtime = match start_product_control_runtime(http_config) {
         Ok(runtime) => runtime,
         Err(err) => {
             return DaedProductOutput::error(format!(
@@ -78,7 +78,15 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
             ));
         }
     };
-    let shutdown = Arc::new(ProductShutdown::default());
+    struct AllocatorShutdownWakeHook;
+    impl ProductShutdownWakeHook for AllocatorShutdownWakeHook {
+        fn wake(&self) {
+            allocator_notify_reclaim_monitor();
+        }
+    }
+    let shutdown = Arc::new(ProductShutdown::with_wake_hook(Arc::new(
+        AllocatorShutdownWakeHook,
+    )));
     let mut app = AppState {
         config_dir: options.config_dir,
         state: options.state,

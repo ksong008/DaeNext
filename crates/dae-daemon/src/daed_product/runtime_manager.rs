@@ -16,19 +16,15 @@ mod startup_recovery;
 mod stop;
 mod summary;
 mod traffic;
-use super::runtime_transition::{
-    RuntimeTransitionClass, RuntimeTransitionIdentity, classify_runtime_transition,
-    process_owned_field_changes,
-};
 pub(super) use traffic::{RuntimeTrafficAvailability, RuntimeTrafficCarry, RuntimeTrafficRead};
 
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
-use apply_state::RuntimeApplyState;
 use cleanup::{
     cleanup_replacement_before_start, cleanup_report_error, cleanup_runtime_instance_with_reclaim,
     cleanup_start_blocker_from_report, ensure_cleanup_allows_start_for_inner,
     spawn_background_cleanup,
 };
+use dae_product_runtime::RuntimeApplyState;
 pub(in crate::daed_product) use instance::PreparedProductRuntime;
 #[cfg(test)]
 pub(super) use instance::resident_dataplane_admission_detail;

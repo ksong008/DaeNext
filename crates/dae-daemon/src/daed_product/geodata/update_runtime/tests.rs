@@ -1,5 +1,5 @@
-use super::super::source::{geodata_source, set_geodata_source_url};
 use super::*;
+use dae_product_geodata::{geodata_source, set_geodata_source_url};
 
 #[test]
 fn geodata_update_runtime_is_bounded_by_the_two_resource_kinds() {

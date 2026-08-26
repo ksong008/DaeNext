@@ -371,53 +371,6 @@ fn local_interface_ips() -> Vec<std::net::IpAddr> {
     addrs
 }
 
-pub(super) fn split_path_query(raw: &str) -> (String, HashMap<String, Vec<String>>) {
-    let (path, query) = raw.split_once('?').unwrap_or((raw, ""));
-    let mut out = HashMap::new();
-    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        out.entry(percent_decode(key))
-            .or_insert_with(Vec::new)
-            .push(percent_decode(value));
-    }
-    (percent_decode(path), out)
-}
-
-pub(super) fn percent_decode(value: &str) -> String {
-    let mut out = Vec::with_capacity(value.len());
-    let bytes = value.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                if let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
-                {
-                    out.push((high << 4) | low);
-                    i += 3;
-                    continue;
-                }
-                out.push(bytes[i]);
-                i += 1;
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            byte => {
-                out.push(byte);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-pub(super) fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
 pub(super) fn json_body(request: &HttpRequest) -> Result<Value, String> {
     if request.body.is_empty() {
         return Ok(json!({}));
@@ -442,49 +395,6 @@ pub(super) fn string_array(body: &Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-pub(super) fn list_tables(conn: &Connection) -> io::Result<Vec<String>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-        )
-        .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(sqlite_io_error)?;
-    let mut tables = Vec::new();
-    for row in rows {
-        tables.push(row.map_err(sqlite_io_error)?);
-    }
-    Ok(tables)
-}
-
-pub(super) fn sha256_file_hex(path: &Path) -> io::Result<String> {
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0_u8; 8192];
-    loop {
-        let read = file.read(&mut buf)?;
-        if read == 0 {
-            break;
-        }
-        sha2::Digest::update(&mut hasher, &buf[..read]);
-    }
-    Ok(hex_encode(&hasher.finalize()))
-}
-
-pub(super) fn set_private_db_permissions(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o640))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-    Ok(())
 }
 
 pub(super) fn set_private_runtime_file_permissions(path: &Path) -> io::Result<()> {

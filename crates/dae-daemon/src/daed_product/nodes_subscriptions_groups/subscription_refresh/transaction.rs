@@ -1,4 +1,5 @@
 use super::*;
+use dae_product_subscription::{PersistedSubscriptionContent, PreparedSubscriptionPersist};
 
 pub(super) struct SubscriptionRefreshApplyResult {
     pub(super) runtime_input_changed: bool,
@@ -15,13 +16,6 @@ pub(super) struct SubscriptionRefreshApplyResult {
 pub(super) enum SubscriptionCommitResult<T> {
     Applied(T),
     Stale,
-}
-
-pub(super) enum PersistedSubscriptionContent<'a> {
-    #[cfg(test)]
-    Bytes { path: &'a Path, bytes: &'a [u8] },
-    #[cfg(not(test))]
-    StagedFile { path: &'a Path, staging: &'a Path },
 }
 
 #[cfg(test)]
@@ -60,7 +54,7 @@ pub(super) fn apply_prepared_subscription_refresh_report(
         return Ok(SubscriptionCommitResult::Stale);
     }
     let mut persisted = persist
-        .map(|persist| persistence::PreparedSubscriptionPersist::prepare(source.id, persist))
+        .map(|persist| PreparedSubscriptionPersist::prepare(source.id, persist))
         .transpose()?;
     if let Some(persisted) = persisted.as_mut() {
         persisted.activate()?;

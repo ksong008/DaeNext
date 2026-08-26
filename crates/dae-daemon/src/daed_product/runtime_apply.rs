@@ -2,7 +2,6 @@ use super::*;
 
 mod activate;
 mod commit;
-mod coordinator;
 mod journal;
 mod prepare;
 mod reconcile;
@@ -10,25 +9,16 @@ mod rollback;
 
 use self::activate::activate_runtime_generation;
 use self::commit::commit_runtime_generation;
-pub(in crate::daed_product) use self::coordinator::{
-    RuntimeApplyCoordinator, RuntimeApplyIntent, RuntimeApplyPermit, RuntimeStopPermit,
-};
-pub(in crate::daed_product) use self::journal::recover_runtime_apply_transaction;
 use self::prepare::prepare_runtime_generation;
 use self::reconcile::{record_apply_failure, record_apply_success};
 use self::rollback::rollback_runtime_generation;
 
-pub(in crate::daed_product) const RUNTIME_GENERATION_METADATA_KEY: &str = "runtime_generation_id";
-pub(in crate::daed_product) const RUNTIME_PROBE_GENERATION_METADATA_KEY: &str =
-    "runtime_probe_generation";
 const RUNTIME_RUNNING_METADATA_KEY: &str = "runtime_running";
 const RUNTIME_TRANSITION_PHASE_METADATA_KEY: &str = "runtime_transition_phase";
 const LAST_MATERIALIZED_AT_METADATA_KEY: &str = "last_materialized_at";
 const LAST_GENERATED_CONFIG_PATH_METADATA_KEY: &str = "last_generated_config_path";
 const RUNTIME_LOG_LEVEL_METADATA_KEY: &str = "runtime_log_level";
 const RUNTIME_LAST_APPLY_ERROR_METADATA_KEY: &str = "runtime_last_apply_error";
-pub(in crate::daed_product) const RUNTIME_PROCESS_TRANSITION_METADATA_KEY: &str =
-    "runtime_pending_process_transition";
 const RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS: &[&str] = &[
     RUNTIME_GENERATION_METADATA_KEY,
     RUNTIME_PROBE_GENERATION_METADATA_KEY,
