@@ -6,8 +6,10 @@ members = [
     "crates/dae-daemon",
     "crates/dae-product-identity",
     "crates/dae-product-core",
+    "crates/dae-product-control",
     "crates/dae-product-http",
     "crates/dae-product-persistence",
+    "crates/dae-product-runtime",
     "crates/dae-runtime-control",
     "crates/dae-core-types",
     "crates/dae-bench",
@@ -113,8 +115,10 @@ dae-resident-transport = { path = "crates/dae-resident-transport" }
 dae-resident-udp = { path = "crates/dae-resident-udp" }
 dae-product-identity = { path = "crates/dae-product-identity" }
 dae-product-core = { path = "crates/dae-product-core" }
+dae-product-control = { path = "crates/dae-product-control" }
 dae-product-http = { path = "crates/dae-product-http" }
 dae-product-persistence = { path = "crates/dae-product-persistence" }
+dae-product-runtime = { path = "crates/dae-product-runtime" }
 dae-routing = { path = "crates/dae-routing" }
 dae-sniffing = { path = "crates/dae-sniffing" }
 dae-sysdump = { path = "crates/dae-sysdump" }
