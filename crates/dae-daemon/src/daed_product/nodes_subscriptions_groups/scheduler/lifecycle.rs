@@ -64,7 +64,7 @@ fn run_subscription_scheduler(
         "info",
         "subscription scheduler started by Rust daed",
     );
-    let mut invalid_cron = invalid_cron::InvalidCronLogTracker::default();
+    let mut invalid_cron = InvalidCronLogTracker::default();
     loop {
         match stop.try_recv() {
             Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,

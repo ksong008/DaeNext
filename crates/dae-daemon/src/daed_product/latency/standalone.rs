@@ -62,7 +62,7 @@ impl StandaloneManualProbeJob<'_> {
                 continue;
             }
             let (written, written_alive) =
-                super::persistence::write_node_latency_results(self.conn, &results)?;
+                dae_product_subscription::write_node_latency_results(self.conn, &results)?;
             self.ensure_current()?;
             if written == 0 {
                 continue;

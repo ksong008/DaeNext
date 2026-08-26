@@ -1,6 +1,6 @@
 use super::prepare::{PreparedRuntimeGeneration, RuntimeDatabaseSnapshot, sync_directory};
 use super::*;
-use crate::daed_product::durable_commit::create_synced_file;
+use dae_product_persistence::create_synced_file;
 
 pub(super) fn rollback_runtime_generation(
     runtime: &ProductRuntimeManager,

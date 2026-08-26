@@ -166,10 +166,7 @@ impl ProductUiRuntime {
     fn owner_drained(&self, metrics: &ProductHttpMetrics) -> bool {
         self.sessions_active.load(Ordering::Acquire) == 0
             && self.requests_active.load(Ordering::Acquire) == 0
-            && metrics.active_connections.load(Ordering::Acquire) == 0
-            && metrics.active_sse_connections.load(Ordering::Acquire) == 0
-            && metrics.queue_depth.load(Ordering::Acquire) == 0
-            && metrics.sse_queue_depth.load(Ordering::Acquire) == 0
+            && metrics.is_idle()
     }
 
     pub(super) fn snapshot(&self) -> Value {

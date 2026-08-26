@@ -1,15 +1,15 @@
-use super::http::{
-    GeodataHttpFileResult, read_geodata_http_response, read_geodata_http_response_to_file,
-};
-use super::source::{
-    GeodataSourceUrlUpdate, geodata_source, geodata_source_status, reset_geodata_source_url,
-    set_geodata_source_url, set_geodata_source_use_proxy, update_geodata_source_settings,
-};
 use super::status::{
     geodata_status_for_dir, geodata_status_parse_count, reset_geodata_status_parse_count,
 };
-use super::types::{GEOIP_FILE, GEOSITE_FILE, GeodataSourceMode};
 use super::*;
+use super::{GEOIP_FILE, GEOSITE_FILE, GeodataSourceMode};
+use dae_product_geodata::{
+    GeodataHttpFileResult, read_geodata_http_response, read_geodata_http_response_to_file,
+};
+use dae_product_geodata::{
+    GeodataSourceUrlUpdate, geodata_source, geodata_source_status, reset_geodata_source_url,
+    set_geodata_source_url, set_geodata_source_use_proxy, update_geodata_source_settings,
+};
 
 mod status_cache;
 mod transaction;

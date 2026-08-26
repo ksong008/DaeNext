@@ -1,9 +1,9 @@
-use super::protocol::{
+use super::*;
+use dae_product_subscription::{
     SUBSCRIPTION_HELPER_MAX_REQUEST_BYTES, SubscriptionHelperRequest,
     decode_subscription_helper_request, encode_subscription_helper_failure,
     encode_subscription_helper_success,
 };
-use super::*;
 
 pub(in crate::daed_product) fn run_subscription_prepare_helper_command(
     args: &[String],
@@ -75,7 +75,7 @@ fn run_subscription_prepare_helper(
     request: &SubscriptionHelperRequest,
 ) -> io::Result<node_stage::PreparedSubscriptionRefresh> {
     let control_runtime =
-        ProductControlRuntime::start_for_helper(SUBSCRIPTION_PREPARE_HELPER_TASK_NAME)?;
+        start_product_control_helper_runtime(SUBSCRIPTION_PREPARE_HELPER_TASK_NAME)?;
     let result = (|| {
         let proxy_config = if request.source.use_proxy
             && subscription_link_uses_http_transport(&request.source.link)
