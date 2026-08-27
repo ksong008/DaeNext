@@ -79,22 +79,22 @@ fn update_binding_identity(digest: &mut Sha256, binding: &ResidentProxyBinding) 
         update_identity_part(
             digest,
             b"fragment-min-length",
-            &fragment.min_length.to_be_bytes(),
+            &fragment.min_length().to_be_bytes(),
         );
         update_identity_part(
             digest,
             b"fragment-max-length",
-            &fragment.max_length.to_be_bytes(),
+            &fragment.max_length().to_be_bytes(),
         );
         update_identity_part(
             digest,
             b"fragment-min-interval",
-            &fragment.min_interval_ms.to_be_bytes(),
+            &fragment.min_interval_ms().to_be_bytes(),
         );
         update_identity_part(
             digest,
             b"fragment-max-interval",
-            &fragment.max_interval_ms.to_be_bytes(),
+            &fragment.max_interval_ms().to_be_bytes(),
         );
     }
     update_identity_part(

@@ -2,10 +2,10 @@ use crate::error::OutboundError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TlsFragmentOptions {
-    pub min_length: usize,
-    pub max_length: usize,
-    pub min_interval_ms: u64,
-    pub max_interval_ms: u64,
+    min_length: usize,
+    max_length: usize,
+    min_interval_ms: u64,
+    max_interval_ms: u64,
 }
 
 impl TlsFragmentOptions {
@@ -52,6 +52,22 @@ impl TlsFragmentOptions {
 
     pub fn interval_enabled(&self) -> bool {
         self.max_interval_ms != 0
+    }
+
+    pub fn min_length(&self) -> usize {
+        self.min_length
+    }
+
+    pub fn max_length(&self) -> usize {
+        self.max_length
+    }
+
+    pub fn min_interval_ms(&self) -> u64 {
+        self.min_interval_ms
+    }
+
+    pub fn max_interval_ms(&self) -> u64 {
+        self.max_interval_ms
     }
 }
 
