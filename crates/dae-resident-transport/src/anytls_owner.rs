@@ -175,22 +175,22 @@ fn update_proxy_identity_with_mark(
         update_identity_field(
             digest,
             b"tls-fragment-min-length",
-            &fragment.min_length.to_be_bytes(),
+            &fragment.min_length().to_be_bytes(),
         );
         update_identity_field(
             digest,
             b"tls-fragment-max-length",
-            &fragment.max_length.to_be_bytes(),
+            &fragment.max_length().to_be_bytes(),
         );
         update_identity_field(
             digest,
             b"tls-fragment-min-interval-ms",
-            &fragment.min_interval_ms.to_be_bytes(),
+            &fragment.min_interval_ms().to_be_bytes(),
         );
         update_identity_field(
             digest,
             b"tls-fragment-max-interval-ms",
-            &fragment.max_interval_ms.to_be_bytes(),
+            &fragment.max_interval_ms().to_be_bytes(),
         );
     }
     update_identity_field(

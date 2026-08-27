@@ -222,7 +222,7 @@ impl TlsFragmentPlanner {
         let original_payload = &record[TLS_RECORD_HEADER_LEN..];
         let estimated_records = original_payload
             .len()
-            .div_ceil(self.options.min_length)
+            .div_ceil(self.options.min_length())
             .max(1);
         plan.bytes
             .reserve(record.len() + estimated_records * TLS_RECORD_HEADER_LEN);
@@ -280,10 +280,10 @@ impl TlsFragmentPlanner {
                 trailing_len: 0,
                 fragment_record_count,
                 fragment_payload_lens: fragment_payload_lens.unwrap_or_default(),
-                min_length: self.options.min_length,
-                max_length: self.options.max_length,
-                min_interval_ms: self.options.min_interval_ms,
-                max_interval_ms: self.options.max_interval_ms,
+                min_length: self.options.min_length(),
+                max_length: self.options.max_length(),
+                min_interval_ms: self.options.min_interval_ms(),
+                max_interval_ms: self.options.max_interval_ms(),
                 interval_enabled: self.options.interval_enabled(),
                 reassembled_record_matches: true,
             });
@@ -291,20 +291,20 @@ impl TlsFragmentPlanner {
     }
 
     fn sample_fragment_len(&mut self) -> usize {
-        if self.options.min_length == self.options.max_length {
-            self.options.min_length
+        if self.options.min_length() == self.options.max_length() {
+            self.options.min_length()
         } else {
             self.rng
-                .usize(self.options.min_length..=self.options.max_length)
+                .usize(self.options.min_length()..=self.options.max_length())
         }
     }
 
     fn sample_interval_ms(&mut self) -> u64 {
-        if self.options.min_interval_ms == self.options.max_interval_ms {
-            self.options.min_interval_ms
+        if self.options.min_interval_ms() == self.options.max_interval_ms() {
+            self.options.min_interval_ms()
         } else {
             self.rng
-                .u64(self.options.min_interval_ms..=self.options.max_interval_ms)
+                .u64(self.options.min_interval_ms()..=self.options.max_interval_ms())
         }
     }
 }

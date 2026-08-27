@@ -306,10 +306,10 @@ fn security_identity(
         quic_tls_provider,
         tls_fragment: endpoint.tls_fragment.as_ref().map(|fragment| {
             (
-                fragment.min_length,
-                fragment.max_length,
-                fragment.min_interval_ms,
-                fragment.max_interval_ms,
+                fragment.min_length(),
+                fragment.max_length(),
+                fragment.min_interval_ms(),
+                fragment.max_interval_ms(),
             )
         }),
     }

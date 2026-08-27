@@ -276,10 +276,10 @@ fn xhttp_h3_transport_identity(
     update_xhttp_h3_identity_part(&mut digest, endpoint.stream_path.as_bytes());
     update_xhttp_h3_identity_part(&mut digest, endpoint.mode.as_str().as_bytes());
     if let Some(fragment) = &endpoint.tls_fragment {
-        update_xhttp_h3_identity_part(&mut digest, &fragment.min_length.to_be_bytes());
-        update_xhttp_h3_identity_part(&mut digest, &fragment.max_length.to_be_bytes());
-        update_xhttp_h3_identity_part(&mut digest, &fragment.min_interval_ms.to_be_bytes());
-        update_xhttp_h3_identity_part(&mut digest, &fragment.max_interval_ms.to_be_bytes());
+        update_xhttp_h3_identity_part(&mut digest, &fragment.min_length().to_be_bytes());
+        update_xhttp_h3_identity_part(&mut digest, &fragment.max_length().to_be_bytes());
+        update_xhttp_h3_identity_part(&mut digest, &fragment.min_interval_ms().to_be_bytes());
+        update_xhttp_h3_identity_part(&mut digest, &fragment.max_interval_ms().to_be_bytes());
     }
     digest.finalize().into()
 }
