@@ -32,6 +32,9 @@ pub fn normalize_domain_cow(input: &str) -> Cow<'_, str> {
 }
 
 fn split_host_port(host: &str) -> Option<&str> {
+    if host.bytes().filter(|byte| *byte == b':').count() != 1 {
+        return None;
+    }
     let (domain, port) = host.rsplit_once(':')?;
     if domain.is_empty() || port.is_empty() || !port.bytes().all(|ch| ch.is_ascii_digit()) {
         return None;
@@ -52,6 +55,7 @@ mod tests {
             normalize_domain("[2606:4700:20::681a:d1f]"),
             "2606:4700:20::681a:d1f"
         );
+        assert_eq!(normalize_domain("2001:db8::1"), "2001:db8::1");
         assert!(matches!(
             normalize_domain_cow("example.com"),
             Cow::Borrowed("example.com")
