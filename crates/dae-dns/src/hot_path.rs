@@ -38,6 +38,9 @@ pub fn restore_cached_response_for_packet_question(
     out: &mut Vec<u8>,
 ) -> Result<Option<DnsPacketCacheHit>, DnsError> {
     let request = DnsPacketView::parse(request_packet)?;
+    if request.question_count() != 1 {
+        return Ok(None);
+    }
     let Some(question) = request.questions().next() else {
         return Ok(None);
     };

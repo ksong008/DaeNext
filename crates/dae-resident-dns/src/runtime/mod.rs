@@ -794,10 +794,16 @@ async fn handle_resident_dns_request_without_preference(
     }
     let cache_key = dns_response_cache_key_for_request_action(request, &action, original_dst)?;
     let mut cached_response = Vec::new();
-    if plan
-        .cache
-        .lookup_response_into(&cache_key, request, false, &mut cached_response)?
-    {
+    let cache_hit = match asis_transport {
+        Some(ResidentDnsAsisTransport::Udp) => {
+            plan.cache
+                .lookup_udp_response_into(&cache_key, request, false, &mut cached_response)?
+        }
+        _ => plan
+            .cache
+            .lookup_response_into(&cache_key, request, false, &mut cached_response)?,
+    };
+    if cache_hit {
         return Ok(cached_response);
     }
     let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);

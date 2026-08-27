@@ -272,13 +272,42 @@ impl ResidentDnsRuntimeCache {
         ignore_fixed_ttl: bool,
         out: &mut Vec<u8>,
     ) -> Result<bool, String> {
+        self.lookup_response_into_with_udp_limit(key, request, ignore_fixed_ttl, false, out)
+    }
+
+    pub fn lookup_udp_response_into(
+        &self,
+        key: &ResidentDnsResponseCacheKey,
+        request: &DnsPacketView<'_>,
+        ignore_fixed_ttl: bool,
+        out: &mut Vec<u8>,
+    ) -> Result<bool, String> {
+        self.lookup_response_into_with_udp_limit(key, request, ignore_fixed_ttl, true, out)
+    }
+
+    fn lookup_response_into_with_udp_limit(
+        &self,
+        key: &ResidentDnsResponseCacheKey,
+        request: &DnsPacketView<'_>,
+        ignore_fixed_ttl: bool,
+        udp_limit: bool,
+        out: &mut Vec<u8>,
+    ) -> Result<bool, String> {
         out.clear();
         let now_unix = unix_now();
         let mut state = self
             .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        lookup_scoped_response_into(&mut state, now_unix, key, request, ignore_fixed_ttl, out)
+        lookup_scoped_response_into(
+            &mut state,
+            now_unix,
+            key,
+            request,
+            ignore_fixed_ttl,
+            udp_limit,
+            out,
+        )
     }
 
     pub fn lookup_key_has_any_ip(
@@ -388,6 +417,7 @@ fn lookup_scoped_response_into(
     key: &ResidentDnsResponseCacheKey,
     request: &DnsPacketView<'_>,
     ignore_fixed_ttl: bool,
+    udp_limit: bool,
     out: &mut Vec<u8>,
 ) -> Result<bool, String> {
     let (lookup_deadline, cache_expires_at) = {
@@ -401,11 +431,22 @@ fn lookup_scoped_response_into(
     };
     if lookup_deadline > now_unix {
         state.stats.hit_total += 1;
-        return Ok(state
+        let restored = state
             .entries
             .get(key)
             .and_then(|stored| stored.entry.fill_packed_response_into(request.id(), out))
-            .is_some());
+            .is_some();
+        if !restored {
+            return Ok(false);
+        }
+        if udp_limit {
+            let response = std::mem::take(out);
+            let response =
+                crate::udp_response::fit_dns_response_to_udp_request(request.packet(), response)
+                    .map_err(|error| format!("fit cached DNS response to request: {error}"))?;
+            out.extend_from_slice(&response);
+        }
+        return Ok(true);
     }
     if cache_expires_at <= now_unix {
         remove_cache_entry(state, key);
