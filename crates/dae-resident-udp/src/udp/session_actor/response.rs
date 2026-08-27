@@ -1,10 +1,12 @@
 use super::*;
+use serde_json::Value;
 
 pub(super) async fn wait_and_record_udp_session_response(
     key: &UdpSessionKey,
     context: &UdpSessionActorContext,
     executor: &mut Option<UdpSessionExecutor>,
     proxy: Option<&ResidentProxyBinding>,
+    packet_session: &Value,
 ) -> Result<(), String> {
     let (Some(executor), Some(proxy)) = (executor.as_mut(), proxy) else {
         return std::future::pending().await;
@@ -13,12 +15,12 @@ pub(super) async fn wait_and_record_udp_session_response(
         Ok(Some(exchange)) => exchange,
         Ok(None) => return Ok(()),
         Err(err) => {
-            record_response_error(key, context, proxy, &err).await;
+            record_response_error(key, context, proxy, &err, packet_session).await;
             return Err(format!("upstream-read-failed: {err}"));
         }
     };
-    record_response(key, context, proxy, exchange).await;
-    drain_udp_session_responses(key, context, executor, proxy).await
+    record_response(key, context, proxy, exchange, packet_session).await;
+    drain_udp_session_responses(key, context, executor, proxy, packet_session).await
 }
 
 pub(super) async fn drain_udp_session_responses(
@@ -26,17 +28,18 @@ pub(super) async fn drain_udp_session_responses(
     context: &UdpSessionActorContext,
     executor: &mut UdpSessionExecutor,
     proxy: &ResidentProxyBinding,
+    packet_session: &Value,
 ) -> Result<(), String> {
     for _ in 0..16 {
         let exchange = match executor.poll_response().await {
             Ok(Some(exchange)) => exchange,
             Ok(None) => return Ok(()),
             Err(err) => {
-                record_response_error(key, context, proxy, &err).await;
+                record_response_error(key, context, proxy, &err, packet_session).await;
                 return Err(format!("upstream-read-failed: {err}"));
             }
         };
-        record_response(key, context, proxy, exchange).await;
+        record_response(key, context, proxy, exchange, packet_session).await;
     }
     Ok(())
 }
@@ -46,6 +49,7 @@ async fn record_response(
     context: &UdpSessionActorContext,
     proxy: &ResidentProxyBinding,
     exchange: (ResidentEventKind, UdpExchangeResult),
+    packet_session: &Value,
 ) {
     record_udp_session_response_result(
         proxy,
@@ -55,6 +59,7 @@ async fn record_response(
         Arc::clone(&context.event_lock),
         Arc::clone(&context.metrics),
         &context.udp_reply,
+        packet_session,
         Ok(exchange),
     )
     .await;
@@ -65,6 +70,7 @@ async fn record_response_error(
     context: &UdpSessionActorContext,
     proxy: &ResidentProxyBinding,
     error: &str,
+    packet_session: &Value,
 ) {
     record_udp_session_response_result(
         proxy,
@@ -74,6 +80,7 @@ async fn record_response_error(
         Arc::clone(&context.event_lock),
         Arc::clone(&context.metrics),
         &context.udp_reply,
+        packet_session,
         Err(error.to_owned()),
     )
     .await;

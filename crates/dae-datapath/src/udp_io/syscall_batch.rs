@@ -149,7 +149,7 @@ impl UdpBatchReceiver {
             let slot = &mut self.slots[index];
             iovecs[index] = libc::iovec {
                 iov_base: slot.payload.as_mut_ptr().cast::<libc::c_void>(),
-                iov_len: slot.payload.len(),
+                iov_len: slot.payload.capacity(),
             };
             messages[index].msg_hdr.msg_name =
                 (&mut slot.peer as *mut libc::sockaddr_storage).cast::<libc::c_void>();
@@ -198,12 +198,16 @@ impl UdpBatchReceiver {
                 continue;
             };
             let read = message.msg_len as usize;
-            if read > self.slots[index].payload.len() {
+            if read > self.slots[index].payload.capacity() {
                 outcome.truncated = outcome.truncated.saturating_add(1);
                 continue;
             }
-            let (mut payload, lease) = payload_pool.take(read.max(UDP_RECV_DEFAULT_CAPACITY));
-            payload.extend_from_slice(&self.slots[index].payload[..read]);
+            unsafe {
+                self.slots[index].payload.set_len(read);
+            }
+            let (mut payload, lease) = payload_pool.take(UDP_RECV_MAX_DATAGRAM_CAPACITY);
+            std::mem::swap(&mut payload, &mut self.slots[index].payload);
+            payload.truncate(read);
             packets.push(UdpOriginalDstPacket {
                 payload: UdpPayload::from_pool(payload, lease),
                 peer,

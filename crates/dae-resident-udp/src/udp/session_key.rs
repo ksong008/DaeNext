@@ -1,32 +1,15 @@
-use std::hash::{Hash, Hasher};
+use std::hash::RandomState;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::sync::OnceLock;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::*;
 
-const STABLE_UDP_SHARD_HASH_OFFSET: u64 = 0xcbf29ce484222325;
-const STABLE_UDP_SHARD_HASH_PRIME: u64 = 0x100000001b3;
-
-struct StableUdpShardHasher(u64);
-
-impl Default for StableUdpShardHasher {
-    fn default() -> Self {
-        Self(STABLE_UDP_SHARD_HASH_OFFSET)
-    }
-}
-
-impl Hasher for StableUdpShardHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 ^= u64::from(*byte);
-            self.0 = self.0.wrapping_mul(STABLE_UDP_SHARD_HASH_PRIME);
-        }
-    }
+fn stable_udp_shard_state() -> &'static RandomState {
+    static STATE: OnceLock<RandomState> = OnceLock::new();
+    STATE.get_or_init(RandomState::new)
 }
 
 pub fn stable_udp_shard_index<T>(key: &T, shard_count: usize) -> usize
@@ -34,9 +17,7 @@ where
     T: Hash + ?Sized,
 {
     let shard_count = shard_count.max(1);
-    let mut hasher = StableUdpShardHasher::default();
-    key.hash(&mut hasher);
-    (hasher.finish() as usize) % shard_count
+    (stable_udp_shard_state().hash_one(key) as usize) % shard_count
 }
 
 #[derive(Clone, Debug)]
@@ -243,36 +224,6 @@ pub(super) struct UdpPacketSessionIdentity {
 }
 
 impl UdpPacketSessionIdentity {
-    pub(super) fn from_socket(
-        proxy: &ResidentProxyPlan,
-        peer: SocketAddr,
-        original_dst: SocketAddr,
-        packet_semantics: UdpPacketSemantics,
-    ) -> Self {
-        let graph_identity_hash = graph_identity_hash(proxy);
-        let outbound = proxy.group_name.clone();
-        Self {
-            graph_id: proxy.graph_id.clone(),
-            graph_identity_hash: graph_identity_hash.clone(),
-            graph_link_hash: proxy.graph_link_hash.clone(),
-            redacted_link_source: proxy.redacted_link_source.clone(),
-            outbound: outbound.clone(),
-            source_display: resident_socket_addr_display(peer),
-            destination_display: resident_socket_addr_display(original_dst),
-            peer: Some(peer),
-            original_destination: original_dst,
-            packet_semantics,
-            wire_identity: udp_source_contract(proxy, packet_semantics).wire_identity(),
-            session_hash: session_hash(
-                &graph_identity_hash,
-                &outbound,
-                peer,
-                original_dst,
-                packet_semantics,
-            ),
-        }
-    }
-
     pub(super) fn probe(
         proxy: &ResidentProxyPlan,
         original_dst: SocketAddr,

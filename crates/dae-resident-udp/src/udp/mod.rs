@@ -90,7 +90,6 @@ mod packet_handler;
 pub use self::packet_handler::resident_dns_udp_exchange_result;
 use self::packet_handler::*;
 mod descriptors;
-use self::descriptors::*;
 pub use self::descriptors::{
     resident_udp_proxy_handler_name, udp_packet_semantics_for_destination,
     udp_probe_packet_session_value,
