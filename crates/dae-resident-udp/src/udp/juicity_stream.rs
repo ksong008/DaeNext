@@ -67,3 +67,22 @@ fn compact_juicity_response_buffer(response: &mut Vec<u8>, cursor: &mut usize) {
         *cursor = 0;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_stream_write_matches_official_server_wire_shape() {
+        let target = "192.0.2.20:53";
+        let frame = encode_stream_packet_frame(target, b"udp").unwrap();
+        let request = build_juicity_stream_packet_request(target, &frame).unwrap();
+
+        assert_eq!(
+            request,
+            [
+                3, 1, 192, 0, 2, 20, 0, 53, 1, 192, 0, 2, 20, 0, 53, 0, 3, b'u', b'd', b'p',
+            ]
+        );
+    }
+}
