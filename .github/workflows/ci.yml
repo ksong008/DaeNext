@@ -1,6 +1,14 @@
 name: Rust CI
 
 on:
+  # Temporarily disabled. Re-enable these triggers after CI runtime and cache
+  # behavior have been observed on the default branch.
+  # push:
+  #   branches:
+  #     - work/boringssl
+  # pull_request:
+  #   branches:
+  #     - work/boringssl
   workflow_dispatch:
 
 permissions:
@@ -12,6 +20,7 @@ concurrency:
 
 env:
   BPF_LINKER_VERSION: "0.10.3"
+  CARGO_PROFILE_RELEASE_LTO: "false"
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -76,8 +85,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             clang \
+            cmake \
             libelf-dev \
             llvm \
+            perl \
             pkg-config
 
       - name: Install cargo-audit
@@ -86,7 +97,9 @@ jobs:
       - name: Release gate
         env:
           DAENEXT_RELEASE_GATE_AUDIT: "1"
-        run: scripts/release_gate.sh
+        run: |
+          scripts/release_gate.sh
+          git diff --exit-code -- Cargo.lock
 
   release-build-smoke:
     name: release build smoke
@@ -125,8 +138,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             clang \
+            cmake \
             libelf-dev \
             llvm \
+            perl \
             pkg-config
 
       - name: Resolve build identity
@@ -141,7 +156,7 @@ jobs:
         env:
           DAE_VERSION: ${{ steps.identity.outputs.dae_version }}
         run: |
-          cargo build --release -p dae-cli --bin dae
+          cargo build --locked --release -p dae-cli --bin dae
 
       - name: Smoke release binary
         run: |
