@@ -11,9 +11,12 @@ pub(super) fn rollback_runtime_generation(
     latency_seed: &[Value],
     checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<(), String> {
-    checkpoints
-        .checkpoint(RuntimeApplyCheckpoint::Rollback)
-        .map_err(|err| format!("runtime rollback checkpoint: {err}"))?;
+    if let Err(err) = checkpoints.checkpoint(RuntimeApplyCheckpoint::Rollback) {
+        if let Some(transaction) = candidate.transaction.as_mut() {
+            transaction.preserve_for_recovery();
+        }
+        return Err(format!("runtime rollback checkpoint: {err}"));
+    }
     let mut errors = Vec::new();
     if let Err(err) = restore_previous_materialization(candidate) {
         errors.push(format!("restore materialization failed: {err}"));

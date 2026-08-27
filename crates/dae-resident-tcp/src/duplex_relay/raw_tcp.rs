@@ -8,7 +8,7 @@ const RAW_TCP_RELAY_BUFFER_SIZE: usize = 64 * 1024;
 const RAW_TCP_RELAY_COOPERATIVE_BUDGET: usize = 32;
 
 struct RawTcpRelayDirection {
-    buffer: [u8; RAW_TCP_RELAY_BUFFER_SIZE],
+    buffer: Vec<u8>,
     filled: usize,
     written: usize,
     source_closed: bool,
@@ -18,7 +18,7 @@ struct RawTcpRelayDirection {
 impl Default for RawTcpRelayDirection {
     fn default() -> Self {
         Self {
-            buffer: [0; RAW_TCP_RELAY_BUFFER_SIZE],
+            buffer: Vec::new(),
             filled: 0,
             written: 0,
             source_closed: false,
@@ -70,6 +70,9 @@ impl RawTcpRelayDirection {
         }
 
         if self.filled == 0 && !self.source_closed {
+            if self.buffer.is_empty() {
+                self.buffer.resize(RAW_TCP_RELAY_BUFFER_SIZE, 0);
+            }
             let mut read_buffer = ReadBuf::new(&mut self.buffer);
             match Pin::new(&mut *source).poll_read(cx, &mut read_buffer) {
                 Poll::Ready(Ok(())) => {

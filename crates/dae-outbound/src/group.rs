@@ -91,10 +91,12 @@ impl DialerGroup {
         self.dialers[index]
             .must_get_latencies10(network_type)
             .append(latency_ms);
+        self.refresh_alive_latency(index, network_type);
     }
 
     pub fn set_moving_average(&mut self, index: usize, network_type: NetworkType, latency_ms: i64) {
         self.dialers[index].set_moving_average(network_type, latency_ms);
+        self.refresh_alive_latency(index, network_type);
     }
 
     pub fn record_check_result(
@@ -166,6 +168,13 @@ impl DialerGroup {
         let alive_index = network_type.collection_index();
         if let Some(alive_set) = self.alive_sets[alive_index].as_mut() {
             alive_set.notify_latency_change(&self.dialers, index, alive);
+        }
+    }
+
+    fn refresh_alive_latency(&mut self, index: usize, network_type: NetworkType) {
+        let alive_index = network_type.collection_index();
+        if let Some(alive_set) = self.alive_sets[alive_index].as_mut() {
+            alive_set.refresh_latency(&self.dialers, index);
         }
     }
 

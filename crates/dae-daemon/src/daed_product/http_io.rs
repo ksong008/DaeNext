@@ -213,7 +213,7 @@ fn write_http_response_with_origin_and_timeout(
         response.status,
         reason,
         response.content_type,
-        if head_only { 0 } else { response.body.len() }
+        response.body.len()
     )?;
     if let Some(origin) = origin.and_then(allowed_cors_origin_value) {
         write!(

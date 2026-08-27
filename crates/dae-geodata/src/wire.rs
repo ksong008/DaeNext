@@ -106,7 +106,8 @@ pub fn read_varint(input: &mut &[u8]) -> Result<u64, GeoDataError> {
 }
 
 pub fn read_length_delimited<'a>(input: &mut &'a [u8]) -> Result<&'a [u8], GeoDataError> {
-    let length = read_varint(input)? as usize;
+    let length = read_varint(input)?;
+    let length = usize::try_from(length).map_err(|_| GeoDataError::EntryTooLarge(length))?;
     if input.len() < length {
         return Err(GeoDataError::FailedToReadExpectedLenBytes);
     }

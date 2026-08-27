@@ -27,9 +27,9 @@ pub fn daemon_identity(version: &str) -> Value {
         "rust_control_plane_entrypoint_admitted": true,
         "true_rust_native_daemon_admitted": true,
         "host_mutation_allowed": true,
-        "production_admission_allowed": true,
+        "identity_admission_allowed": true,
         "runtime_state_admission_allowed": true,
-        "production_admission_allowed": true,
+        "production_admission_allowed": false,
         "final_state_admission_allowed": true,
     })
 }

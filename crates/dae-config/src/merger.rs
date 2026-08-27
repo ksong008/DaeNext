@@ -309,11 +309,13 @@ fn unsqueeze_entries(pattern_entries: Vec<PathBuf>) -> Result<Vec<PathBuf>, Conf
 
 fn glob_paths(pattern: &Path) -> Result<Vec<PathBuf>, ConfigError> {
     if !path_has_meta(pattern) {
-        return Ok(pattern
-            .exists()
-            .then(|| pattern.to_path_buf())
-            .into_iter()
-            .collect());
+        if !pattern.exists() {
+            return Err(ConfigError::Merge(format!(
+                "included config file not found: {}",
+                pattern.display()
+            )));
+        }
+        return Ok(vec![pattern.to_path_buf()]);
     }
 
     let mut prefixes = if pattern.is_absolute() {
@@ -570,6 +572,28 @@ routing {
             .unwrap_err()
             .to_string();
         assert!(err.contains("permissions 0644"));
+    }
+
+    #[test]
+    fn rejects_missing_explicit_include_but_allows_empty_glob() {
+        let explicit = TempTree::new();
+        explicit.write_mode(
+            "entry.dae",
+            "include { missing.dae }\nglobal {}\nrouting {}\n",
+            0o640,
+        );
+        let err = merge_config_file(explicit.path("entry.dae"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("included config file not found"), "got: {err}");
+
+        let wildcard = TempTree::new();
+        wildcard.write_mode(
+            "entry.dae",
+            "include { missing/*.dae }\nglobal {}\nrouting {}\n",
+            0o640,
+        );
+        assert!(merge_config_file(wildcard.path("entry.dae")).is_ok());
     }
 
     #[test]

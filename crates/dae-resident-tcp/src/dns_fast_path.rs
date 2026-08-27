@@ -29,7 +29,13 @@ pub async fn handle_transparent_tcp_dns_fast_path_async(
         if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let Some(request) = frame_reader.read_frame(inbound).await? else {
+        let Some(request) = time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            frame_reader.read_frame(inbound),
+        )
+        .await
+        .map_err(|_| "transparent DNS TCP read timeout".to_owned())??
+        else {
             return Ok(());
         };
         metrics.add_upload(request.len());
@@ -42,7 +48,12 @@ pub async fn handle_transparent_tcp_dns_fast_path_async(
             Ok(Ok(response)) => response,
             Ok(Err(_)) | Err(_) => dns.server_failure_response(&request)?,
         };
-        write_dns_tcp_payload_async(inbound, &response).await?;
+        time::timeout(
+            RESIDENT_UDP_RESPONSE_TIMEOUT,
+            write_dns_tcp_payload_async(inbound, &response),
+        )
+        .await
+        .map_err(|_| "transparent DNS TCP write timeout".to_owned())??;
         metrics.add_download(response.len());
     }
 }
