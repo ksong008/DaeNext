@@ -402,14 +402,31 @@ pub(crate) struct ProductSignalThread {
     handle: Option<thread::JoinHandle<()>>,
 }
 
+#[cfg(all(unix, target_env = "musl"))]
+fn wake_product_signal_thread(handle: &thread::JoinHandle<()>) -> libc::c_int {
+    use std::os::unix::thread::JoinHandleExt;
+
+    let Ok(address) = usize::try_from(handle.as_pthread_t()) else {
+        return libc::EINVAL;
+    };
+    let pthread = std::ptr::with_exposed_provenance_mut(address);
+    unsafe { libc::pthread_kill(pthread, libc::SIGUSR1) }
+}
+
+#[cfg(all(unix, not(target_env = "musl")))]
+fn wake_product_signal_thread(handle: &thread::JoinHandle<()>) -> libc::c_int {
+    use std::os::unix::thread::JoinHandleExt;
+
+    unsafe { libc::pthread_kill(handle.as_pthread_t(), libc::SIGUSR1) }
+}
+
 impl ProductSignalThread {
     fn shutdown(mut self) -> io::Result<()> {
         self.stop.store(true, Ordering::Release);
         if let Some(handle) = self.handle.as_ref() {
             #[cfg(unix)]
             {
-                use std::os::unix::thread::JoinHandleExt;
-                let status = unsafe { libc::pthread_kill(handle.as_pthread_t(), libc::SIGUSR1) };
+                let status = wake_product_signal_thread(handle);
                 if status != 0 && status != libc::ESRCH {
                     return Err(io::Error::from_raw_os_error(status));
                 }
@@ -432,8 +449,7 @@ impl Drop for ProductSignalThread {
         };
         #[cfg(unix)]
         {
-            use std::os::unix::thread::JoinHandleExt;
-            let _ = unsafe { libc::pthread_kill(handle.as_pthread_t(), libc::SIGUSR1) };
+            let _ = wake_product_signal_thread(&handle);
         }
         let _ = handle.join();
     }
