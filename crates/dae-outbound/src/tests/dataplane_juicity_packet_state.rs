@@ -81,6 +81,20 @@ fn case_juicity_stream_packet_frame_roundtrips_without_trojan_crlf() {
 }
 
 #[test]
+fn case_juicity_official_server_headers_use_trojanc_address_types() {
+    let ipv4 = juicity::build_juicity_tcp_request("192.0.2.20:443", b"tcp").unwrap();
+    assert_eq!(ipv4, [1, 1, 192, 0, 2, 20, 0x01, 0xbb, b't', b'c', b'p']);
+
+    let domain = juicity::build_juicity_tcp_request("packet.example:53", &[]).unwrap();
+    assert_eq!(domain[0], 1);
+    assert_eq!(domain[1], 3);
+
+    let ipv6 = juicity::build_juicity_tcp_request("[2001:db8::20]:53", &[]).unwrap();
+    assert_eq!(ipv6[0], 1);
+    assert_eq!(ipv6[1], 4);
+}
+
+#[test]
 fn case_juicity_packet_state_smoke_keeps_true_dataplane_closed() {
     let report = juicity::packet_state_smoke(
         "fixture-zero.fixture.invalid:0",
