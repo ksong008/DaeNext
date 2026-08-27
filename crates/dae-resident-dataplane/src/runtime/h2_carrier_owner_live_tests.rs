@@ -481,6 +481,17 @@ fn concurrent_h2_acquirers_receive_one_shared_alpn_failure() {
             );
             assert_eq!(server.tcp_connections.load(Ordering::Relaxed), 1);
             assert_eq!(server.tls_handshakes.load(Ordering::Relaxed), 1);
+            time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let metrics = owner.metrics_snapshot();
+                    if metrics["activeBuilds"] == 0 && metrics["reservedPhysicalConnections"] == 0 {
+                        break;
+                    }
+                    time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
             let metrics = owner.metrics_snapshot();
             assert_eq!(metrics["cumulativeBuilds"], 1);
             assert_eq!(metrics["cumulativeBuildFailures"], 1);

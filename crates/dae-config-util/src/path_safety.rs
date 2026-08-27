@@ -235,11 +235,15 @@ mod path_verification_tests {
     use super::open_verified_in_sub_dir;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_ROOT: AtomicU64 = AtomicU64::new(0);
 
     fn test_root() -> PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "dae-config-util-path-verification-{}",
-            std::process::id()
+            "dae-config-util-path-verification-{}-{}",
+            std::process::id(),
+            NEXT_TEST_ROOT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
