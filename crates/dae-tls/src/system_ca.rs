@@ -199,9 +199,7 @@ fn cached_system_ca_snapshot(
         return snapshot.clone();
     }
     let snapshot = load().map(Arc::new);
-    if snapshot.is_ok() {
-        *cache = Some(snapshot.clone());
-    }
+    *cache = Some(snapshot.clone());
     snapshot
 }
 
@@ -552,6 +550,30 @@ mod tests {
                 .unwrap();
         assert_ne!(reloaded.identity().sha256, first_hash);
         assert_eq!(first.identity().sha256, first_hash);
+    }
+
+    #[test]
+    fn cache_keeps_failure_until_explicit_invalidation() {
+        let cache = Mutex::new(None);
+        let first = cached_system_ca_snapshot(&cache, || {
+            Err(SystemCaError::NoBundleFound {
+                candidates: Vec::new(),
+            })
+        });
+        assert!(first.is_err());
+
+        let cached = cached_system_ca_snapshot(&cache, || {
+            SystemCaSnapshot::load_from_path(PathBuf::from("unused"))
+        });
+        assert!(matches!(cached, Err(SystemCaError::NoBundleFound { .. })));
+
+        assert!(invalidate_cached_system_ca_snapshot(&cache).unwrap());
+        let recovered = cached_system_ca_snapshot(&cache, || {
+            Err(SystemCaError::NoBundleFound {
+                candidates: Vec::new(),
+            })
+        });
+        assert!(recovered.is_err());
     }
 
     #[test]

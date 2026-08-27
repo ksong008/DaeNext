@@ -120,12 +120,13 @@ impl SharedDomainSet {
     }
 
     fn matches(&self, domain: &str) -> bool {
+        let domain = normalize_query_domain(domain);
         if let Some(index) = self.inner.index.as_ref() {
-            return index.matches(domain);
+            return index.matches(domain.as_ref());
         }
         linear_domain_set_matches(
             self.key(),
-            domain,
+            domain.as_ref(),
             self.patterns(),
             self.inner.regex.as_ref(),
         )
@@ -353,15 +354,15 @@ fn has_label_suffix(domain: &str, suffix: &str) -> bool {
 
 fn normalize_patterns(patterns: Vec<String>, key: DomainKey) -> Vec<String> {
     match key {
-        DomainKey::Full => patterns
+        DomainKey::Full | DomainKey::Keyword => patterns
             .into_iter()
-            .map(|pattern| pattern.trim_end_matches('.').to_owned())
+            .map(|pattern| pattern.trim_end_matches('.').to_ascii_lowercase())
             .collect(),
         DomainKey::Suffix => patterns
             .into_iter()
             .map(|pattern| pattern.trim_end_matches('.').to_ascii_lowercase())
             .collect(),
-        DomainKey::Keyword | DomainKey::Regex => patterns,
+        DomainKey::Regex => patterns,
     }
 }
 
@@ -503,14 +504,14 @@ mod tests {
         assert!(keyword.matches("cdn.video.example"));
         assert!(!keyword.matches("cdn.audio.example"));
 
-        let mut case_sensitive_patterns = (0..DOMAIN_SET_INDEX_MIN_PATTERNS)
+        let mut case_insensitive_patterns = (0..DOMAIN_SET_INDEX_MIN_PATTERNS)
             .map(|index| format!("case-keyword-{index}"))
             .collect::<Vec<_>>();
-        case_sensitive_patterns.push("Video".to_owned());
-        let case_sensitive =
-            SharedDomainSet::from_vec(case_sensitive_patterns, DomainKey::Keyword).unwrap();
-        assert!(!case_sensitive.matches("cdn.video.example"));
-        assert!(case_sensitive.matches("cdn.Video.example"));
+        case_insensitive_patterns.push("Video".to_owned());
+        let case_insensitive =
+            SharedDomainSet::from_vec(case_insensitive_patterns, DomainKey::Keyword).unwrap();
+        assert!(case_insensitive.matches("cdn.video.example"));
+        assert!(case_insensitive.matches("cdn.Video.example"));
 
         let mut empty_patterns = (0..DOMAIN_SET_INDEX_MIN_PATTERNS)
             .map(|index| format!("empty-keyword-{index}"))

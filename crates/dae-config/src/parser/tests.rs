@@ -145,6 +145,28 @@ routing {
 }
 
 #[test]
+fn parses_bare_literal_values_with_colon_fragments() {
+    let sections = parse_config(
+        r#"
+global {
+    fallback_resolver: 8.8.8.8:53
+    ipv6_resolver: 2001:4860:4860::8888
+}
+"#,
+    )
+    .unwrap();
+
+    let Item::Param(fallback) = &sections[0].items[0] else {
+        panic!("fallback_resolver should be a parameter");
+    };
+    assert_eq!(fallback.val, "8.8.8.8:53");
+    let Item::Param(ipv6) = &sections[0].items[1] else {
+        panic!("ipv6_resolver should be a parameter");
+    };
+    assert_eq!(ipv6.val, "2001:4860:4860::8888");
+}
+
+#[test]
 fn parses_delimiter_fragments_in_generic_function_values_only_until_structure_boundaries() {
     let sections = parse_config(
         r#"

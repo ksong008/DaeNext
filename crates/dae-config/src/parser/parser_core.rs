@@ -130,6 +130,19 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_literal_expr(&mut self) -> Result<String, ConfigError> {
         let mut value = self.expect_literal("literal")?;
+        while self.at(TokenKindName::Colon) || self.at(TokenKindName::Bang) {
+            let separator = if self.at(TokenKindName::Colon) {
+                ':'
+            } else {
+                '!'
+            };
+            self.pos += 1;
+            value.push(separator);
+            if separator == ':' && self.at(TokenKindName::Colon) {
+                continue;
+            }
+            value.push_str(&self.expect_literal("literal")?);
+        }
         while self.at(TokenKindName::Comma) {
             self.expect(TokenKindName::Comma)?;
             value.push(',');
