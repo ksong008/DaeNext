@@ -339,7 +339,19 @@ fn recvmsg_udp_original_dst_with_capacity(
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
     msg.msg_control = control.as_mut_ptr().cast::<libc::c_void>();
-    msg.msg_controllen = control.len();
+    #[cfg(target_env = "musl")]
+    {
+        msg.msg_controllen = u32::try_from(control.len()).map_err(|_| {
+            UdpOriginalDstRecvError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "UDP control buffer length exceeds the platform msghdr limit",
+            ))
+        })?;
+    }
+    #[cfg(not(target_env = "musl"))]
+    {
+        msg.msg_controllen = control.len();
+    }
     let read = unsafe { libc::recvmsg(fd, &mut msg, 0) };
     if read < 0 {
         if let Some(lease) = pool_lease.take() {

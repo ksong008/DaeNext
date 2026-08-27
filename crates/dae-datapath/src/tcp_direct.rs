@@ -391,10 +391,14 @@ fn get_socket_error(fd: i32) -> io::Result<i32> {
 }
 
 fn set_timeouts(fd: i32, timeout: Duration) -> io::Result<()> {
-    let timeval = libc::timeval {
-        tv_sec: timeout.as_secs() as libc::time_t,
-        tv_usec: timeout.subsec_micros() as libc::suseconds_t,
-    };
+    let tv_sec = timeout.as_secs().try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "socket timeout seconds exceed the platform timeval limit",
+        )
+    })?;
+    let tv_usec = i64::from(timeout.subsec_micros());
+    let timeval = libc::timeval { tv_sec, tv_usec };
     set_timeval_opt(fd, libc::SO_SNDTIMEO, timeval)?;
     set_timeval_opt(fd, libc::SO_RCVTIMEO, timeval)
 }

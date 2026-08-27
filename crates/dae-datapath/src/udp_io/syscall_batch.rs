@@ -3,6 +3,11 @@ use std::os::fd::RawFd;
 
 pub const UDP_RECV_SYSCALL_BATCH_LIMIT_MAX: usize = 32;
 
+#[cfg(target_env = "musl")]
+const MMSG_DONTWAIT: libc::c_uint = libc::MSG_DONTWAIT as libc::c_uint;
+#[cfg(not(target_env = "musl"))]
+const MMSG_DONTWAIT: libc::c_int = libc::MSG_DONTWAIT;
+
 struct UdpBatchRecvSlot {
     payload: Vec<u8>,
     control: [u8; 256],
@@ -158,7 +163,20 @@ impl UdpBatchReceiver {
             messages[index].msg_hdr.msg_iov = &mut iovecs[index];
             messages[index].msg_hdr.msg_iovlen = 1;
             messages[index].msg_hdr.msg_control = slot.control.as_mut_ptr().cast::<libc::c_void>();
-            messages[index].msg_hdr.msg_controllen = slot.control.len();
+            #[cfg(target_env = "musl")]
+            {
+                messages[index].msg_hdr.msg_controllen = u32::try_from(slot.control.len())
+                    .map_err(|_| {
+                        UdpOriginalDstRecvError::Io(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "UDP control buffer length exceeds the platform msghdr limit",
+                        ))
+                    })?;
+            }
+            #[cfg(not(target_env = "musl"))]
+            {
+                messages[index].msg_hdr.msg_controllen = slot.control.len();
+            }
         }
 
         let received = loop {
@@ -232,7 +250,7 @@ fn recvmmsg_syscall(fd: RawFd, messages: &mut [libc::mmsghdr]) -> io::Result<usi
             fd,
             messages.as_mut_ptr(),
             messages.len() as libc::c_uint,
-            libc::MSG_DONTWAIT,
+            MMSG_DONTWAIT,
             std::ptr::null_mut(),
         )
     };
@@ -281,7 +299,7 @@ pub fn try_sendmmsg(fd: RawFd, datagrams: &[UdpSendMessage<'_>]) -> io::Result<u
                 fd,
                 messages.as_mut_ptr(),
                 count as libc::c_uint,
-                libc::MSG_DONTWAIT,
+                MMSG_DONTWAIT,
             )
         };
         if sent < 0 {

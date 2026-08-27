@@ -170,7 +170,7 @@ fn product_log_timestamp_text() -> String {
 
 #[cfg(target_family = "unix")]
 fn local_product_log_timestamp_text(timestamp: u64) -> Option<String> {
-    let timestamp = libc::time_t::try_from(timestamp).ok()?;
+    let timestamp = timestamp.try_into().ok()?;
     let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
     let local = unsafe { libc::localtime_r(&timestamp, tm.as_mut_ptr()) };
     if local.is_null() {

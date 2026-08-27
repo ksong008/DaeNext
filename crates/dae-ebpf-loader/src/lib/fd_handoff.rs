@@ -10,13 +10,27 @@ pub(super) fn send_fd_handoff(socket_fd: i32, payload: &[u8], fds: &[i32]) -> Re
         iov_base: payload.as_ptr() as *mut libc::c_void,
         iov_len: payload.len(),
     };
-    let rights_len = std::mem::size_of_val(fds);
-    let mut control = vec![0_u8; unsafe { libc::CMSG_SPACE(rights_len as u32) as usize }];
+    let rights_bytes = std::mem::size_of_val(fds);
+    let rights_len = rights_bytes
+        .try_into()
+        .map_err(|_| "fd handoff rights payload exceeds the platform cmsg limit".to_owned())?;
+    let control_len = unsafe { libc::CMSG_SPACE(rights_len) } as usize;
+    let cmsg_len = unsafe { libc::CMSG_LEN(rights_len) };
+    let mut control = vec![0_u8; control_len];
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
     msg.msg_control = control.as_mut_ptr().cast::<libc::c_void>();
-    msg.msg_controllen = control.len();
+    #[cfg(target_env = "musl")]
+    {
+        msg.msg_controllen = u32::try_from(control.len()).map_err(|_| {
+            "fd handoff control buffer exceeds the platform msghdr limit".to_owned()
+        })?;
+    }
+    #[cfg(not(target_env = "musl"))]
+    {
+        msg.msg_controllen = control.len();
+    }
 
     unsafe {
         let cmsg = libc::CMSG_FIRSTHDR(&msg);
@@ -25,11 +39,18 @@ pub(super) fn send_fd_handoff(socket_fd: i32, payload: &[u8], fds: &[i32]) -> Re
         }
         (*cmsg).cmsg_level = libc::SOL_SOCKET;
         (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-        (*cmsg).cmsg_len = libc::CMSG_LEN(rights_len as u32) as usize;
+        #[cfg(target_env = "musl")]
+        {
+            (*cmsg).cmsg_len = cmsg_len;
+        }
+        #[cfg(not(target_env = "musl"))]
+        {
+            (*cmsg).cmsg_len = cmsg_len as usize;
+        }
         std::ptr::copy_nonoverlapping(
             fds.as_ptr().cast::<u8>(),
             libc::CMSG_DATA(cmsg).cast::<u8>(),
-            rights_len,
+            rights_bytes,
         );
         let sent = libc::sendmsg(socket_fd, &msg, 0);
         if sent < 0 {
