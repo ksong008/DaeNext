@@ -7,24 +7,13 @@ use super::*;
 const RAW_TCP_RELAY_BUFFER_SIZE: usize = 64 * 1024;
 const RAW_TCP_RELAY_COOPERATIVE_BUDGET: usize = 32;
 
+#[derive(Default)]
 struct RawTcpRelayDirection {
     buffer: Vec<u8>,
     filled: usize,
     written: usize,
     source_closed: bool,
     sink_shutdown: bool,
-}
-
-impl Default for RawTcpRelayDirection {
-    fn default() -> Self {
-        Self {
-            buffer: Vec::new(),
-            filled: 0,
-            written: 0,
-            source_closed: false,
-            sink_shutdown: false,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
