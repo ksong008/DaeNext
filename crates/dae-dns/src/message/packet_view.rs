@@ -65,6 +65,10 @@ impl<'a> DnsPacketView<'a> {
         self.answer_offset
     }
 
+    pub const fn packet(&self) -> &'a [u8] {
+        self.packet
+    }
+
     pub fn questions(&self) -> DnsPacketQuestionIter<'a> {
         DnsPacketQuestionIter {
             packet: self.packet,
@@ -163,7 +167,21 @@ pub fn validate_dns_packet_response_for_request_fast(
             want: req.question_count as usize,
         });
     }
-    for (index, (want, got)) in req.questions().zip(resp.questions()).enumerate() {
+    let mut request_questions = req.questions();
+    let mut response_questions = resp.questions();
+    for index in 0..req.question_count() {
+        let Some(want) = request_questions.next() else {
+            return Err(DnsValidationError::QuestionCountMismatch {
+                got: index,
+                want: req.question_count(),
+            });
+        };
+        let Some(got) = response_questions.next() else {
+            return Err(DnsValidationError::QuestionCountMismatch {
+                got: index,
+                want: req.question_count(),
+            });
+        };
         if want.matches(&got) {
             continue;
         }

@@ -1,4 +1,5 @@
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use crate::error::DnsError;
 
@@ -24,6 +25,7 @@ struct ResolverState {
     init: bool,
     refreshing: bool,
     next_refresh_unix: i64,
+    last_error: Option<String>,
     stats: UpstreamResolverStats,
 }
 
@@ -47,6 +49,7 @@ impl UpstreamResolver {
                 init: false,
                 refreshing: false,
                 next_refresh_unix: 0,
+                last_error: None,
                 stats: UpstreamResolverStats::default(),
             }),
             cond: Condvar::new(),
@@ -75,10 +78,23 @@ impl UpstreamResolver {
         let old_upstream = loop {
             let mut state = self.state.lock().unwrap();
             if state.init && now_unix < state.next_refresh_unix {
-                return Ok(state.upstream.as_ref().unwrap().clone());
+                return state.upstream.clone().ok_or_else(|| {
+                    DnsError::Resolve(
+                        state
+                            .last_error
+                            .clone()
+                            .unwrap_or_else(|| "dns upstream is unavailable".to_owned()),
+                    )
+                });
             }
             if state.refreshing {
-                drop(self.cond.wait(state).unwrap());
+                let wait_for = Duration::from_secs(self.retry_interval_secs.max(1) as u64);
+                let (state, timeout) = self.cond.wait_timeout(state, wait_for).unwrap();
+                if timeout.timed_out() && state.refreshing {
+                    return Err(DnsError::Resolve(
+                        "dns upstream refresh did not finish before the retry deadline".to_owned(),
+                    ));
+                }
                 continue;
             }
             state.refreshing = true;
@@ -122,6 +138,7 @@ impl UpstreamResolver {
                 state.upstream = Some(new_upstream.clone());
                 state.init = true;
                 state.next_refresh_unix = now_unix + self.refresh_interval_secs;
+                state.last_error = None;
                 self.cond.notify_all();
                 Ok(new_upstream)
             }
@@ -129,11 +146,15 @@ impl UpstreamResolver {
                 state.stats.refresh_failure_total += 1;
                 if let Some(old) = old_upstream {
                     state.stats.stale_reuse_total += 1;
+                    state.init = true;
                     state.next_refresh_unix = now_unix + self.retry_interval_secs;
+                    state.last_error = Some(err.to_string());
                     self.cond.notify_all();
                     Ok(old)
                 } else {
+                    state.init = true;
                     state.next_refresh_unix = now_unix + self.retry_interval_secs;
+                    state.last_error = Some(err.to_string());
                     self.cond.notify_all();
                     Err(DnsError::Resolve(format!(
                         "failed to init dns upstream: {err}"
