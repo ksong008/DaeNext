@@ -1,6 +1,9 @@
 use super::*;
 use serde_json::Value;
 use std::fmt;
+use std::hash::BuildHasher;
+use std::hash::RandomState;
+use std::sync::OnceLock;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -175,29 +178,10 @@ fn stable_udp_reply_shard(original_dst: SocketAddr, peer: SocketAddr, shard_coun
 }
 
 fn stable_udp_reply_hash(original_dst: SocketAddr, peer: SocketAddr) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for address in [original_dst, peer] {
-        match address.ip() {
-            std::net::IpAddr::V4(ip) => {
-                hash = stable_udp_reply_hash_bytes(hash, &[4]);
-                hash = stable_udp_reply_hash_bytes(hash, &ip.octets());
-            }
-            std::net::IpAddr::V6(ip) => {
-                hash = stable_udp_reply_hash_bytes(hash, &[6]);
-                hash = stable_udp_reply_hash_bytes(hash, &ip.octets());
-            }
-        }
-        hash = stable_udp_reply_hash_bytes(hash, &address.port().to_be_bytes());
-    }
-    hash
-}
-
-fn stable_udp_reply_hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+    static STATE: OnceLock<RandomState> = OnceLock::new();
+    STATE
+        .get_or_init(RandomState::new)
+        .hash_one((original_dst, peer))
 }
 
 fn partitioned_udp_reply_capacity(total: usize, shard_index: usize, shard_count: usize) -> usize {

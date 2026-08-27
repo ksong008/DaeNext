@@ -70,12 +70,13 @@ async fn run_udp_session_actor(
         Arc::clone(&context.active_sessions),
         Arc::clone(&context.metrics),
     );
+    let packet_session = key.to_value();
     append_event(
         &context.event_file,
         &context.event_lock,
         json!({
             "event": "udp_session_started",
-            "packetSession": key.to_value(),
+            "packetSession": packet_session.clone(),
         }),
     );
 
@@ -180,6 +181,7 @@ async fn run_udp_session_actor(
                         Arc::clone(&context.event_lock),
                         Arc::clone(&context.metrics),
                         &context.udp_reply,
+                        &packet_session,
                         exchange,
                     ) => {}
                 }
@@ -189,7 +191,13 @@ async fn run_udp_session_actor(
                 }
                 if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref())
                 {
-                    let drain = drain_udp_session_responses(&key, &context, executor, proxy);
+                    let drain = drain_udp_session_responses(
+                        &key,
+                        &context,
+                        executor,
+                        proxy,
+                        &packet_session,
+                    );
                     tokio::select! {
                         biased;
                         _ = stop_listener.cancelled() => {
@@ -218,6 +226,7 @@ async fn run_udp_session_actor(
                 &context,
                 &mut executor,
                 session_proxy.as_ref(),
+                &packet_session,
             ), if executor.is_some() && session_proxy.is_some() => {
                 if let Err(err) = response {
                     stop_reason = err;
@@ -257,7 +266,7 @@ async fn run_udp_session_actor(
             "event": "udp_session_stopped",
             "reason": stop_reason,
             "packet_count": packets,
-            "packetSession": key.to_value(),
+            "packetSession": packet_session,
         }),
     );
 }
