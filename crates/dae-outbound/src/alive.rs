@@ -136,6 +136,13 @@ impl AliveDialerSet {
         }
     }
 
+    pub fn refresh_latency(&mut self, dialers: &[Dialer], index: usize) {
+        let Some(&alive) = self.alive.get(index) else {
+            return;
+        };
+        self.notify_latency_change(dialers, index, alive);
+    }
+
     pub fn get_rand(&self) -> Option<usize> {
         (!self.alive_indices.is_empty())
             .then(|| self.alive_indices[fastrand::usize(..self.alive_indices.len())])

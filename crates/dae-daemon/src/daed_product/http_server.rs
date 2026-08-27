@@ -222,16 +222,18 @@ fn product_http_worker_loop(
                         continue;
                     }
                 };
-                if matches!(
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     handle_stream(
                         job.stream,
                         Arc::clone(&app),
                         Arc::clone(&metrics),
                         Some(Arc::clone(&sse_runtime)),
-                    ),
-                    Ok(ProductHttpConnectionResult::Detached)
-                ) {
-                    continue;
+                    )
+                }));
+                match result {
+                    Ok(Ok(ProductHttpConnectionResult::Detached)) => continue,
+                    Err(_) => metrics.worker_panicked(),
+                    Ok(Ok(ProductHttpConnectionResult::Closed)) | Ok(Err(_)) => {}
                 }
                 metrics.closed();
             }

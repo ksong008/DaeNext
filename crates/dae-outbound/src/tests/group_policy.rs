@@ -478,6 +478,19 @@ fn moving_average_none_branch_excludes_stale_latency_from_min_selection() {
 }
 
 #[test]
+fn latency_updates_refresh_min_selection_without_a_second_notification() {
+    let mut group = make_group(2, SelectionPolicy::MinLastLatency);
+    group.set_last_latency(0, NetworkType::TCP4, 100);
+    group.set_last_latency(1, NetworkType::TCP4, 200);
+    group.notify_alive(0, NetworkType::TCP4, true);
+    group.notify_alive(1, NetworkType::TCP4, true);
+    assert_eq!(group.select(NetworkType::TCP4, false).unwrap().index, 0);
+
+    group.set_last_latency(0, NetworkType::TCP4, 300);
+    assert_eq!(group.select(NetworkType::TCP4, false).unwrap().index, 1);
+}
+
+#[test]
 fn direct_link_parser_group_override_and_connectivity_match_golden_fixtures() {
     let direct = fixture("outbound/direct/injected_resolver.json");
     for case in direct["cases"].as_array().unwrap() {

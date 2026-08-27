@@ -46,6 +46,7 @@ pub struct ProductHttpMetrics {
     accepted_total: AtomicU64,
     enqueued_total: AtomicU64,
     rejected_total: AtomicU64,
+    worker_panicked_total: AtomicU64,
     queue_depth: AtomicU64,
     sse_connection_limit: AtomicU64,
     sse_per_user_limit: AtomicU64,
@@ -108,6 +109,10 @@ impl ProductHttpMetrics {
 
     pub fn rejected(&self) {
         self.rejected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn worker_panicked(&self) {
+        self.worker_panicked_total.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn opened(&self) {
@@ -196,6 +201,7 @@ impl ProductHttpMetrics {
             "acceptedTotal": self.accepted_total.load(Ordering::Relaxed),
             "enqueuedTotal": self.enqueued_total.load(Ordering::Relaxed),
             "rejectedTotal": self.rejected_total.load(Ordering::Relaxed),
+            "workerPanickedTotal": self.worker_panicked_total.load(Ordering::Relaxed),
             "queueDepth": self.queue_depth.load(Ordering::Relaxed),
             "requestRead": self.request_read.snapshot(),
             "sseRuntime": {

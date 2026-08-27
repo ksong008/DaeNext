@@ -132,6 +132,7 @@ pub struct DurableTransaction {
     activated: bool,
     database_committed: bool,
     finished: bool,
+    rollback_failed: bool,
 }
 
 impl DurableTransaction {
@@ -141,6 +142,7 @@ impl DurableTransaction {
             activated: false,
             database_committed: false,
             finished: false,
+            rollback_failed: false,
         }
     }
 
@@ -178,6 +180,10 @@ impl DurableTransaction {
         !self.finished && !self.database_committed
     }
 
+    pub fn preserve_for_recovery(&mut self) {
+        self.rollback_failed = true;
+    }
+
     pub fn finish(mut self) -> io::Result<()> {
         self.database_committed = true;
         self.finish_in_place()
@@ -185,23 +191,27 @@ impl DurableTransaction {
 
     pub fn finish_in_place(&mut self) -> io::Result<()> {
         self.database_committed = true;
-        let result = cleanup_transaction_artifacts(&self.artifacts);
+        let result = cleanup_transaction_artifacts(&self.artifacts, true);
         self.finished = result.is_ok();
         result
     }
 
     pub fn rollback(&mut self) -> io::Result<()> {
         let mut errors = Vec::new();
+        let mut restored = true;
         if self.activated {
             if let Err(error) = restore_transaction_target(&self.artifacts) {
                 errors.push(error.to_string());
+                restored = false;
+            } else {
+                self.activated = false;
             }
-            self.activated = false;
         }
-        if let Err(error) = cleanup_transaction_artifacts(&self.artifacts) {
+        if let Err(error) = cleanup_transaction_artifacts(&self.artifacts, restored) {
             errors.push(error.to_string());
         }
         self.finished = errors.is_empty();
+        self.rollback_failed = !errors.is_empty();
         if errors.is_empty() {
             Ok(())
         } else {
@@ -220,7 +230,7 @@ impl DurableTransaction {
         } else {
             restore_transaction_target(&artifacts)?;
         }
-        cleanup_transaction_artifacts(&artifacts)
+        cleanup_transaction_artifacts(&artifacts, true)
     }
 
     pub fn recover(artifacts: DurableArtifactSet, database_committed: bool) -> io::Result<()> {
@@ -230,8 +240,14 @@ impl DurableTransaction {
 
 impl Drop for DurableTransaction {
     fn drop(&mut self) {
-        if !self.finished && !self.database_committed && !self.activated {
-            let _ = cleanup_transaction_artifacts(&self.artifacts);
+        if self.finished || self.database_committed || self.rollback_failed {
+            return;
+        }
+        if self.activated {
+            let restored = restore_transaction_target(&self.artifacts).is_ok();
+            let _ = cleanup_transaction_artifacts(&self.artifacts, restored);
+        } else {
+            let _ = cleanup_transaction_artifacts(&self.artifacts, true);
         }
     }
 }
@@ -244,7 +260,10 @@ fn restore_transaction_target(artifacts: &DurableArtifactSet) -> io::Result<()> 
     sync_directory(artifacts.directory())
 }
 
-fn cleanup_transaction_artifacts(artifacts: &DurableArtifactSet) -> io::Result<()> {
+fn cleanup_transaction_artifacts(
+    artifacts: &DurableArtifactSet,
+    remove_backup: bool,
+) -> io::Result<()> {
     let mut errors = Vec::new();
     for path in [
         artifacts.journal_path(),
@@ -255,7 +274,8 @@ fn cleanup_transaction_artifacts(artifacts: &DurableArtifactSet) -> io::Result<(
             errors.push(error.to_string());
         }
     }
-    if let Some(backup) = artifacts.backup_path()
+    if remove_backup
+        && let Some(backup) = artifacts.backup_path()
         && let Err(error) = remove_file_if_exists(&backup)
     {
         errors.push(error.to_string());
@@ -570,6 +590,48 @@ mod tests {
         assert_eq!(value, ["second"]);
         remove_leaf_if_exists_synced(&directory, &journal).unwrap();
         remove_leaf_if_exists_synced(&directory, &journal).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn transaction_artifacts(directory: &Path) -> DurableArtifactSet {
+        DurableArtifactSet::new(
+            directory,
+            ValidatedLeafName::new("target").unwrap(),
+            ValidatedLeafName::new("candidate").unwrap(),
+            Some(ValidatedLeafName::new("backup").unwrap()),
+            ValidatedLeafName::new("journal").unwrap(),
+            ValidatedLeafName::new("journal.next").unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn dropping_activated_transaction_restores_backup() {
+        let directory = temp_dir("drop-rollback");
+        fs::write(directory.join("target"), b"old").unwrap();
+        fs::rename(directory.join("target"), directory.join("backup")).unwrap();
+        fs::write(directory.join("candidate"), b"new").unwrap();
+        {
+            let mut transaction = DurableTransaction::new(transaction_artifacts(&directory));
+            transaction.activate().unwrap();
+            assert_eq!(fs::read(directory.join("target")).unwrap(), b"new");
+        }
+        assert_eq!(fs::read(directory.join("target")).unwrap(), b"old");
+        assert!(!directory.join("backup").exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_rollback_preserves_backup_for_recovery() {
+        let directory = temp_dir("rollback-backup");
+        fs::write(directory.join("backup"), b"old").unwrap();
+        fs::write(directory.join("candidate"), b"new").unwrap();
+        let mut transaction = DurableTransaction::new(transaction_artifacts(&directory));
+        transaction.activate().unwrap();
+        fs::remove_file(directory.join("target")).unwrap();
+        fs::create_dir(directory.join("target")).unwrap();
+        assert!(transaction.rollback().is_err());
+        assert_eq!(fs::read(directory.join("backup")).unwrap(), b"old");
         fs::remove_dir_all(directory).unwrap();
     }
 }
