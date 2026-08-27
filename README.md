@@ -92,6 +92,15 @@ Current limits:
 DaeNext is a Cargo workspace. Build, test, fixture, and release paths are rooted
 at the repository root.
 
+The `dae` CLI requires stable Rust and a native C/C++ toolchain. A production
+`daed` build with the default features additionally requires:
+
+- Rust nightly with the `rust-src` component, used for the embedded eBPF
+  objects;
+- `bpf-linker`, `clang`, LLVM, and libelf development headers;
+- CMake, Perl, `pkg-config`, and a C/C++ compiler for BoringSSL and native
+  dependencies.
+
 Format the workspace:
 
 ```bash
@@ -119,7 +128,80 @@ cargo test -p dae-daemon --test service_contract
 Build the Rust `dae` binary:
 
 ```bash
-cargo build --release -p dae-cli --bin dae
+cargo build --locked --release -p dae-cli --bin dae
+```
+
+Build the Rust-native `daed` product binary:
+
+```bash
+cargo build --locked --release -p dae-daemon --bin daed
+```
+
+The default `dae-daemon` feature set is the production set. It includes the
+product API, resident runtime, native Aya/eBPF loader, jemalloc, and the
+BoringSSL TCP-TLS and QUIC providers. Rustls and AWS-LC are not part of the
+production dependency graph.
+
+### Build Parameters
+
+| Parameter | Meaning |
+| --- | --- |
+| `--locked` | Requires the dependency versions recorded in `Cargo.lock`; use it for reproducible builds. |
+| `--release` | Uses Cargo's optimized release profile. DaeNext release builds use neither fat nor thin LTO. |
+| `--target <triple>` | Selects the Rust compilation target, for example `aarch64-unknown-linux-gnu`. The matching Rust target and cross linker must be installed. |
+| `--profile production-performance` | Uses the workspace performance profile: optimization level 3, 16 codegen units, no LTO, unstripped output. |
+| `--profile production-size` | Uses the size profile: `opt-level=z`, one codegen unit, no LTO, stripped output. |
+| `CARGO_TARGET_DIR` | Moves Cargo artifacts to a separate cache/output directory. Use separate directories when building different CPU levels concurrently. |
+| `CARGO_PROFILE_RELEASE_LTO=false` | Explicitly disables LTO for callers that may otherwise inject a release-profile override. |
+| `RUSTFLAGS="-C target-cpu=..."` | Selects the minimum CPU instruction baseline. It affects compatibility and must match the artifact label. |
+| `DAE_DAEMON_VERSION` | Overrides the complete version text embedded in `daed --version`; product builds normally set this automatically. |
+| `DAE_RUST_NATIVE_BPF_TOOLCHAIN` | Selects the Rust toolchain used to build the embedded eBPF objects; the default is `nightly`. |
+| `DAE_RUST_NATIVE_BPF_OBJECT` | Reuses a prebuilt generic native eBPF object instead of rebuilding it. The object is still validated before embedding. |
+| `DAE_RUST_NATIVE_BPF_PNAME_CORE_OBJECT` | Reuses the corresponding prebuilt process-name CO-RE eBPF object. |
+
+Recommended distributable CPU baselines:
+
+| Artifact | `RUSTFLAGS` | Compatibility |
+| --- | --- | --- |
+| x86_64 v1 | `-C target-cpu=x86-64` | Baseline x86-64 systems. |
+| x86_64 v2 | `-C target-cpu=x86-64-v2` | Modern x86-64 systems with the v2 ISA level; no AVX2 requirement. |
+| x86_64 v3 | `-C target-cpu=x86-64-v3` | AVX2-class systems; do not install on v1/v2-only CPUs. |
+| ARM64 generic | `-C target-cpu=generic` | Baseline AArch64/ARMv8-A, including Cortex-A53 at the ISA level. |
+
+For example, build a reproducible x86_64-v2 daemon without LTO:
+
+```bash
+CARGO_PROFILE_RELEASE_LTO=false \
+RUSTFLAGS="-C target-cpu=x86-64-v2" \
+cargo build --locked --release -p dae-daemon --bin daed
+```
+
+Do not use `target-cpu=native` for a redistributable binary: it may enable
+instructions that are unavailable on the destination host. OpenWrt package
+architecture names such as `aarch64_generic` and `aarch64_cortex-a53` are
+package-manager labels, not Rust CPU tuning values.
+
+### Daemon Features
+
+| Feature | Purpose |
+| --- | --- |
+| `default` | Production daemon graph: product API, resident runtime, native eBPF, jemalloc, and BoringSSL providers. Keep this for normal builds. |
+| `product-api` | Enables the `daed` product API and its persistence/authentication dependencies. The `daed` binary requires it. |
+| `resident-runtime` | Enables the production resident dataplane runtime. |
+| `native-ebpf` | Builds and embeds the Aya eBPF objects and enables the native loader. |
+| `allocator-jemalloc` | Selects jemalloc and its runtime statistics/reclaim controls; this is the production default. |
+| `allocator-system` | Selects the system allocator for controlled comparison builds. It is mutually exclusive with `allocator-jemalloc`, so it requires a complete `--no-default-features` feature list. |
+
+Features prefixed with `test-` are internal A/B or regression switches. The
+historically named `test-boringssl-tcp-tls` and `test-boringssl-quic` gates are
+already part of the current production default and select the sole admitted
+BoringSSL providers. Other `test-*` switches must not be enabled in release
+artifacts unless running the corresponding controlled experiment.
+
+Inspect the effective feature graph when changing a build configuration:
+
+```bash
+cargo tree -p dae-daemon -e features
 ```
 
 Run the same gate used by CI and release:
