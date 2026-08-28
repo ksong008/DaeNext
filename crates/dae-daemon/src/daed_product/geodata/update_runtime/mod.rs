@@ -188,8 +188,15 @@ impl ProductGeodataUpdateRuntime {
 
     pub(in crate::daed_product) fn startup_fields(&self) -> BTreeMap<String, String> {
         let mut fields = BTreeMap::new();
-        let workers = self.workers.lock().ok().map_or(0, |workers| workers.len());
-        fields.insert("geodataUpdateWorkers".to_owned(), workers.to_string());
+        let active_workers = self.workers.lock().ok().map_or(0, |workers| workers.len());
+        fields.insert(
+            "geodataUpdateWorkers".to_owned(),
+            self.config.worker_count.to_string(),
+        );
+        fields.insert(
+            "geodataUpdateWorkersActive".to_owned(),
+            active_workers.to_string(),
+        );
         fields.insert(
             "geodataUpdateQueueCapacity".to_owned(),
             self.config.queue_capacity.to_string(),
