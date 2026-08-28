@@ -167,9 +167,11 @@ impl ResidentUdpGenerationRuntime {
         event_file: &Path,
         event_lock: &Arc<Mutex<()>>,
         active_sessions: &Arc<AtomicUsize>,
+        session_admission: &Arc<ResidentUdpSessionAdmission>,
     ) -> Self {
         let plan = &generation.udp;
         let config = plan.runtime_config.clone();
+        session_admission.set_limit(config.session_admission_limit);
         let reply_dispatcher = UdpReplyDispatcher::start(
             config.reply_shards(),
             config.reply_queue_depth,
@@ -194,6 +196,7 @@ impl ResidentUdpGenerationRuntime {
             Arc::clone(&generation.metrics),
             udp_reply.clone(),
             Arc::clone(active_sessions),
+            Arc::clone(session_admission),
             plan.hysteria2_owner_registry.clone(),
             plan.tuic_owner_registry.clone(),
             plan.juicity_owner_registry.clone(),
@@ -361,6 +364,9 @@ pub(super) async fn run_resident_udp_session_manager_async(
     let initial_plan = &initial_generation.udp;
     let initial_config = &initial_plan.runtime_config;
     let shared_payload_admission = initial_config.payload_admission.clone();
+    let session_admission = Arc::new(ResidentUdpSessionAdmission::new(
+        initial_config.session_admission_limit,
+    ));
     if let Err(err) = socket.set_nonblocking(true) {
         let report = udp_session_manager_start_failure("socket-nonblocking", err.to_string());
         append_event(
@@ -398,6 +404,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                 "mode": if initial_config.session_admission_limit.is_some() { "fixed" } else { "automatic" },
                 "fixed_limit": initial_config.session_admission_limit,
                 "soft_watermark": initial_config.session_soft_watermark,
+                "scope": "resident-udp-manager",
             },
             "dns_fast_path_concurrency": initial_config.dns_fast_path_concurrency,
             "dns_fast_path_queue_depth": initial_config.dns_fast_path_queue_depth,
@@ -416,6 +423,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                     "mode": if initial_config.session_admission_limit.is_some() { "fixed" } else { "automatic" },
                     "fixedLimit": initial_config.session_admission_limit,
                     "softWatermark": initial_config.session_soft_watermark,
+                    "scope": "resident-udp-manager",
                 },
                 "perSessionQueueDepth": initial_config.session_queue_depth,
                 "replyQueueDepth": initial_config.reply_queue_depth,
@@ -458,6 +466,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
             &event_file,
             &event_lock,
             &active_sessions,
+            &session_admission,
         ),
     );
     drop(initial_generation);
@@ -519,6 +528,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                             &event_file,
                                             &event_lock,
                                             &active_sessions,
+                                            &session_admission,
                                         )
                                     });
                                 } else if !generations.contains_key(&generation_id) {
@@ -580,6 +590,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                         &event_file,
                                         &event_lock,
                                         &active_sessions,
+                                        &session_admission,
                                     )
                             });
                             let generation = generations
@@ -755,6 +766,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
         "graceful": graceful,
         "completionMode": completion_mode,
         "activeSessions": active_sessions,
+        "sessionAdmission": session_admission.snapshot(),
         "queuedPayloadAdmission": queued_payload_admission,
         "queuedPayloadReleased": queued_payload_released,
         "retiredGenerationShutdowns": retired_shutdown_count,

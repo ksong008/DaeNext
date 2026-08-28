@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::ops::Deref;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::ResidentStopSignal;
@@ -40,7 +40,7 @@ enum ResidentUdpShardPacket {
 #[derive(Clone)]
 struct ResidentUdpSessionShardContext {
     shared: Arc<UdpSessionSharedContext>,
-    admission: Option<Arc<Semaphore>>,
+    admission: Arc<ResidentUdpSessionAdmission>,
     session_queue_depth: usize,
     cleanup_queue_depth: usize,
 }
@@ -77,6 +77,7 @@ impl ResidentUdpSessionShardPool {
         metrics: Arc<ResidentDataplaneMetrics>,
         udp_reply: UdpReplyHandle,
         active_sessions: Arc<AtomicUsize>,
+        session_admission: Arc<ResidentUdpSessionAdmission>,
         hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
@@ -84,9 +85,6 @@ impl ResidentUdpSessionShardPool {
     ) -> Self {
         let shard_count = runtime_config.runtime_shards.max(1);
         let queue_depth = runtime_config.per_shard_dispatch_queue_depth();
-        let admission = runtime_config
-            .session_admission_limit
-            .map(|limit| Arc::new(Semaphore::new(limit)));
         let actor_stop = ResidentStopSignal::shared();
         let shared = Arc::new(UdpSessionSharedContext {
             event_file: event_file.clone(),
@@ -105,7 +103,7 @@ impl ResidentUdpSessionShardPool {
         });
         let context = ResidentUdpSessionShardContext {
             shared,
-            admission,
+            admission: session_admission,
             session_queue_depth: runtime_config.session_queue_depth,
             cleanup_queue_depth: runtime_config.per_shard_cleanup_queue_depth(),
         };

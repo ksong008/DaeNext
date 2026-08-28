@@ -14,6 +14,7 @@ mod network_defaults;
 mod payload_admission;
 mod relay_deadline;
 mod resource_profile;
+mod session_admission;
 mod socket;
 mod stop_signal;
 mod task_set;
@@ -60,6 +61,9 @@ pub use payload_admission::{
 };
 pub use relay_deadline::{reset_resident_relay_idle_deadline, resident_relay_idle_deadline};
 pub use resource_profile::*;
+pub use session_admission::{
+    ResidentUdpSessionAdmission, ResidentUdpSessionAdmissionError, ResidentUdpSessionPermit,
+};
 pub use socket::{apply_udp_socket_buffer_tuning, set_socket_mark};
 pub use stop_signal::{
     ResidentStopListener, ResidentStopSignal, SharedResidentStopSignal, run_until_resident_stop,
