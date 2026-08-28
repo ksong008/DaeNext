@@ -1,17 +1,16 @@
 use super::super::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-use super::super::{
-    ActiveGenerationSlot, GenerationGate, PublicationEpoch, ResidentDataplaneGeneration,
-};
+use super::super::{PublicationEpoch, ResidentDataplaneGeneration, ResidentRuntimeCoordinator};
 use super::*;
 
 pub(crate) async fn resident_tcp_accept_loop_async(
     listener: TcpListener,
-    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
-    generation_gate: Arc<GenerationGate>,
+    coordinator: ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
 ) {
+    let active_generation = coordinator.active_generation_slot();
+    let generation_gate = coordinator.generation_gate();
     if let Err(err) = listener.set_nonblocking(true) {
         append_event(
             &event_file,

@@ -31,6 +31,7 @@ members = [
     "crates/dae-resident-dataplane",
     "crates/dae-resident-model",
     "crates/dae-resident-plan",
+    "crates/dae-resident-runtime",
     "crates/dae-resident-tcp",
     "crates/dae-resident-transport",
     "crates/dae-resident-udp",
@@ -112,6 +113,7 @@ dae-resident-dns = { path = "crates/dae-resident-dns" }
 dae-resident-dataplane = { path = "crates/dae-resident-dataplane", default-features = false }
 dae-resident-model = { path = "crates/dae-resident-model" }
 dae-resident-plan = { path = "crates/dae-resident-plan" }
+dae-resident-runtime = { path = "crates/dae-resident-runtime" }
 dae-resident-tcp = { path = "crates/dae-resident-tcp" }
 dae-resident-transport = { path = "crates/dae-resident-transport" }
 dae-resident-udp = { path = "crates/dae-resident-udp" }

@@ -238,6 +238,7 @@
         "dae-resident-core",
         "dae-resident-dns",
         "dae-resident-plan",
+        "dae-resident-runtime",
         "dae-resident-tcp",
         "dae-resident-transport",
         "dae-resident-udp",
@@ -289,6 +290,12 @@
     "dae-resident-plan": {
       "layer": "resident-shared",
       "normal": ["dae-resident-model"],
+      "build": [],
+      "dev": []
+    },
+    "dae-resident-runtime": {
+      "layer": "resident-coordinator",
+      "normal": ["dae-resident-core"],
       "build": [],
       "dev": []
     },

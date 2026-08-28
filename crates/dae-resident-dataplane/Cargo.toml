@@ -42,6 +42,7 @@ dae-outbound.workspace = true
 dae-resident-core.workspace = true
 dae-resident-dns.workspace = true
 dae-resident-plan.workspace = true
+dae-resident-runtime.workspace = true
 dae-resident-tcp.workspace = true
 dae-resident-transport.workspace = true
 dae-resident-udp.workspace = true

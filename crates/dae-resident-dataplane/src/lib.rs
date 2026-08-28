@@ -112,6 +112,7 @@ pub(crate) use dae_resident_plan::{
     display_name_from_link, execution_link_hash, graph_id_from_link_hash, link_hash,
     redacted_link_source,
 };
+pub(crate) use dae_resident_runtime::ResidentRuntimeCoordinator;
 pub(crate) use dae_resident_transport::resolve_host_addrs_with_configured_fallback_dns_ttl;
 pub(crate) use dae_resident_transport::{
     ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
