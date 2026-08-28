@@ -220,7 +220,7 @@
     },
     "dae-resident-core": {
       "layer": "resident-shared",
-      "normal": ["dae-core-types", "dae-outbound"],
+      "normal": ["dae-core-types"],
       "build": [],
       "dev": []
     },
