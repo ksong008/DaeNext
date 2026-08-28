@@ -264,7 +264,7 @@ pub enum UdpFixedTargetPayload {
         validation: UdpFixedTargetValidation,
     },
     Rejected {
-        payload_len: usize,
+        payload: Vec<u8>,
         reason: UdpResponseDropReason,
     },
 }
@@ -280,7 +280,7 @@ impl UdpFixedTargetPayload {
     pub fn payload_len(&self) -> usize {
         match self {
             Self::Accepted { payload, .. } => payload.len(),
-            Self::Rejected { payload_len, .. } => *payload_len,
+            Self::Rejected { payload, .. } => payload.len(),
         }
     }
 
@@ -288,6 +288,12 @@ impl UdpFixedTargetPayload {
         match self {
             Self::Accepted { payload, .. } => Ok(payload),
             Self::Rejected { reason, .. } => Err(reason),
+        }
+    }
+
+    pub fn into_buffer(self) -> Vec<u8> {
+        match self {
+            Self::Accepted { payload, .. } | Self::Rejected { payload, .. } => payload,
         }
     }
 }

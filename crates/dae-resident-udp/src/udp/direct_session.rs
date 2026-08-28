@@ -358,15 +358,20 @@ async fn drain_direct_udp_session_responses(
                 continue;
             }
         }
+        if matches!(validation, UdpFixedTargetValidation::Dropped(_)) {
+            session.recycle_response_buffer(fixed_target.into_buffer());
+            continue;
+        }
         let Some(response) = fixed_target.into_payload().ok() else {
             continue;
         };
         match context
             .udp_reply
-            .send(key.original_destination(), key.peer(), response)
+            .send_reclaimable(key.original_destination(), key.peer(), response)
             .await
         {
-            Ok(()) => {
+            Ok(response_buffer) => {
+                session.recycle_response_buffer(response_buffer);
                 context.metrics.add_download(response_len);
                 append_udp_direct_packet_finished(context, key, upstream_peer, response_len);
             }
@@ -447,12 +452,16 @@ impl DirectUdpSession {
     }
 
     fn try_recv_response(&mut self) -> Result<Option<(SocketAddr, Vec<u8>)>, String> {
-        if self.response_buf.len() < UDP_DIRECT_RESPONSE_CAPACITY {
-            self.response_buf.resize(UDP_DIRECT_RESPONSE_CAPACITY, 0);
+        let mut response_buf = std::mem::take(&mut self.response_buf);
+        if response_buf.len() < UDP_DIRECT_RESPONSE_CAPACITY {
+            response_buf.resize(UDP_DIRECT_RESPONSE_CAPACITY, 0);
         }
         self.response_buffer_last_used = Some(time::Instant::now());
-        match self.socket.try_recv_from(&mut self.response_buf) {
-            Ok((read, peer)) => Ok(Some((peer, self.response_buf[..read].to_vec()))),
+        match self.socket.try_recv_from(&mut response_buf) {
+            Ok((read, peer)) => {
+                response_buf.truncate(read);
+                Ok(Some((peer, response_buf)))
+            }
             Err(err)
                 if matches!(
                     err.kind(),
@@ -461,9 +470,20 @@ impl DirectUdpSession {
                         | std::io::ErrorKind::TimedOut
                 ) =>
             {
+                self.response_buf = response_buf;
                 Ok(None)
             }
-            Err(err) => Err(format!("receive direct UDP datagram: {err}")),
+            Err(err) => {
+                self.response_buf = response_buf;
+                Err(format!("receive direct UDP datagram: {err}"))
+            }
+        }
+    }
+
+    fn recycle_response_buffer(&mut self, mut response_buf: Vec<u8>) {
+        response_buf.clear();
+        if response_buf.capacity() > self.response_buf.capacity() {
+            self.response_buf = response_buf;
         }
     }
 

@@ -143,10 +143,9 @@ impl UdpResponseEnvelope {
                     validation,
                 }
             }
-            UdpFixedTargetValidation::Dropped(reason) => UdpFixedTargetPayload::Rejected {
-                payload_len: payload.len(),
-                reason,
-            },
+            UdpFixedTargetValidation::Dropped(reason) => {
+                UdpFixedTargetPayload::Rejected { payload, reason }
+            }
         }
     }
 

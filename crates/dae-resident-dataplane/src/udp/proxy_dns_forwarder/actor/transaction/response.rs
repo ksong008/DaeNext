@@ -31,11 +31,8 @@ pub(in crate::udp::proxy_dns_forwarder::actor) fn handle_proxy_dns_udp_response(
                 return Err(fixed_target_validation_error(reason));
             }
         },
-        UdpFixedTargetPayload::Rejected {
-            payload_len,
-            reason,
-        } => {
-            metrics.udp_response_dropped(payload_len);
+        UdpFixedTargetPayload::Rejected { payload, reason } => {
+            metrics.udp_response_dropped(payload.len());
             return Err(fixed_target_validation_error(reason));
         }
     };
