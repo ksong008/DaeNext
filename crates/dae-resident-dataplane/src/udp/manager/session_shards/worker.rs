@@ -1,17 +1,15 @@
-use tokio::sync::OwnedSemaphorePermit;
-
 use super::*;
 
 struct ResidentUdpProxyShardEntry {
     actor_id: u64,
     session: UdpSessionEntry,
-    _admission: Option<OwnedSemaphorePermit>,
+    _admission: ResidentUdpSessionPermit,
 }
 
 struct ResidentUdpDirectShardEntry {
     actor_id: u64,
     session: UdpDirectSessionEntry,
-    _admission: Option<OwnedSemaphorePermit>,
+    _admission: ResidentUdpSessionPermit,
 }
 
 pub(super) async fn run_resident_udp_session_shard(
@@ -408,15 +406,9 @@ fn create_direct_session(
 }
 
 fn try_reserve_session(
-    admission: &Option<Arc<Semaphore>>,
-) -> Result<Option<OwnedSemaphorePermit>, ()> {
-    let Some(admission) = admission else {
-        return Ok(None);
-    };
-    Arc::clone(admission)
-        .try_acquire_owned()
-        .map(Some)
-        .map_err(|_| ())
+    admission: &Arc<ResidentUdpSessionAdmission>,
+) -> Result<ResidentUdpSessionPermit, ()> {
+    admission.try_acquire().map_err(|_| ())
 }
 
 fn allocate_actor_id(next_actor_id: &mut u64) -> u64 {
@@ -544,17 +536,19 @@ mod tests {
 
     #[test]
     fn automatic_session_admission_has_no_fixed_count_rejection() {
-        let admission = None;
+        let admission = Arc::new(ResidentUdpSessionAdmission::new(None));
+        let mut permits = Vec::new();
         for _ in 0..65_536 {
-            assert!(matches!(try_reserve_session(&admission), Ok(None)));
+            permits.push(try_reserve_session(&admission).unwrap());
         }
+        assert_eq!(admission.current(), 65_536);
     }
 
     #[test]
     fn configured_session_admission_releases_capacity_on_drop() {
-        let admission = Some(Arc::new(Semaphore::new(2)));
-        let first = try_reserve_session(&admission).unwrap().unwrap();
-        let second = try_reserve_session(&admission).unwrap().unwrap();
+        let admission = Arc::new(ResidentUdpSessionAdmission::new(Some(2)));
+        let first = try_reserve_session(&admission).unwrap();
+        let second = try_reserve_session(&admission).unwrap();
         assert!(try_reserve_session(&admission).is_err());
         drop(first);
         assert!(try_reserve_session(&admission).is_ok());
