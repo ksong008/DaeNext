@@ -302,7 +302,6 @@
         "dae-netutil",
         "dae-outbound",
         "dae-resident-core",
-        "dae-resident-dns",
         "dae-resident-plan",
         "dae-resident-transport",
         "dae-routing",

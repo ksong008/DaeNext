@@ -2,9 +2,9 @@ use super::*;
 use crate::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
-use dae_resident_dns::{
-    ResidentDnsProxyFuture, ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession,
-    ResidentDnsProxyTcpTransport,
+use dae_resident_transport::{
+    ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession, ResidentDnsProxyTcpTransport,
+    ResidentTransportFuture,
 };
 
 pub fn resident_dns_proxy_tcp_transport(
@@ -26,8 +26,10 @@ impl ResidentDnsProxyTcpTransport for ResidentDataplaneDnsProxyTcpTransport {
     fn open(
         &self,
         request: ResidentDnsProxyTcpOpenRequest,
-    ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyTcpSession>, ProxyDnsRequestError>>
-    {
+    ) -> ResidentTransportFuture<
+        '_,
+        Result<Box<dyn ResidentDnsProxyTcpSession>, ProxyDnsRequestError>,
+    > {
         let owners = self.owners.clone();
         Box::pin(async move {
             let (stream, handler) = open_resident_proxy_dns_tcp_stream_async(
@@ -57,7 +59,7 @@ impl ResidentDnsProxyTcpSession for ResidentDataplaneDnsProxyTcpSession {
         mut self: Box<Self>,
         deadline: time::Instant,
         exchange_failed: bool,
-    ) -> ResidentDnsProxyFuture<'static, Result<String, String>> {
+    ) -> ResidentTransportFuture<'static, Result<String, String>> {
         let Some(mut handler) = self.handler.take() else {
             return Box::pin(async {
                 Err("proxy DNS TCP session handler is unavailable".to_owned())
