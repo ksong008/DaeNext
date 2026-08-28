@@ -30,7 +30,9 @@ fn geodata_update_runtime_starts_workers_only_when_submitted() {
         ),
     )
     .unwrap();
-    assert_eq!(runtime.startup_fields()["geodataUpdateWorkers"], "0");
+    let fields = runtime.startup_fields();
+    assert_eq!(fields["geodataUpdateWorkers"], "2");
+    assert_eq!(fields["geodataUpdateWorkersActive"], "0");
     drop(runtime);
     let _ = control_runtime.shutdown();
     fs::remove_dir_all(dir).unwrap();

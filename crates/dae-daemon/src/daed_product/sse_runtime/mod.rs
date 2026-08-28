@@ -261,13 +261,16 @@ impl ProductSseRuntime {
 
     pub(super) fn startup_fields(&self) -> BTreeMap<String, String> {
         let mut fields = BTreeMap::new();
-        let workers = self
+        let worker_active = self
             .worker
             .lock()
             .ok()
-            .map(|worker| usize::from(worker.is_some()))
-            .unwrap_or(0);
-        fields.insert("sseRuntimeWorkers".to_owned(), workers.to_string());
+            .is_some_and(|worker| worker.is_some());
+        fields.insert("sseRuntimeWorkers".to_owned(), "1".to_owned());
+        fields.insert(
+            "sseRuntimeWorkerActive".to_owned(),
+            worker_active.to_string(),
+        );
         fields.insert(
             "sseConnectionLimit".to_owned(),
             self.config.connection_limit.to_string(),
