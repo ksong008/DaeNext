@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use dae_core_types::{PayloadByteReservation, PayloadByteReservationOwner};
 use serde_json::{Value, json};
 
 #[derive(Clone)]
@@ -20,8 +21,7 @@ struct ResidentUdpPayloadAdmissionState {
 
 #[derive(Debug)]
 pub struct ResidentUdpPayloadPermit {
-    admission: ResidentUdpPayloadAdmission,
-    bytes: usize,
+    reservation: PayloadByteReservation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,8 +66,10 @@ impl ResidentUdpPayloadAdmission {
                 Ok(_) => {
                     self.state.peak.fetch_max(next, Ordering::Relaxed);
                     return Ok(ResidentUdpPayloadPermit {
-                        admission: self.clone(),
-                        bytes,
+                        reservation: PayloadByteReservation::new(
+                            Arc::clone(&self.state) as Arc<dyn PayloadByteReservationOwner>,
+                            bytes,
+                        ),
                     });
                 }
                 Err(observed) => current = observed,
@@ -107,6 +109,22 @@ impl ResidentUdpPayloadAdmission {
     }
 }
 
+impl PayloadByteReservationOwner for ResidentUdpPayloadAdmissionState {
+    fn release(&self, bytes: usize) {
+        let _ = self
+            .current
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(current.saturating_sub(bytes))
+            });
+    }
+}
+
+impl ResidentUdpPayloadPermit {
+    pub fn into_payload_reservation(self) -> PayloadByteReservation {
+        self.reservation
+    }
+}
+
 impl PartialEq for ResidentUdpPayloadAdmission {
     fn eq(&self, other: &Self) -> bool {
         self.generation == other.generation && self.state.limit == other.state.limit
@@ -123,16 +141,6 @@ impl fmt::Debug for ResidentUdpPayloadAdmission {
             .field("limit", &self.state.limit)
             .field("current", &self.current())
             .finish()
-    }
-}
-
-impl Drop for ResidentUdpPayloadPermit {
-    fn drop(&mut self) {
-        let _ = self.admission.state.current.fetch_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |current| Some(current.saturating_sub(self.bytes)),
-        );
     }
 }
 

@@ -9,7 +9,10 @@ pub enum ResidentEventKind {
     TcpRouteChosen,
     UdpDnsPacketFinished,
     UdpPacketFinished,
+    UdpReplyFailed,
     UdpRouteChosen,
+    UdpSessionStarted,
+    UdpSessionStopped,
 }
 
 impl ResidentEventKind {
@@ -20,7 +23,10 @@ impl ResidentEventKind {
             Self::TcpRouteChosen => "tcp_route_chosen",
             Self::UdpDnsPacketFinished => "udp_dns_packet_finished",
             Self::UdpPacketFinished => "udp_packet_finished",
+            Self::UdpReplyFailed => "udp_reply_failed",
             Self::UdpRouteChosen => "udp_route_chosen",
+            Self::UdpSessionStarted => "udp_session_started",
+            Self::UdpSessionStopped => "udp_session_stopped",
         }
     }
 
@@ -30,14 +36,20 @@ impl ResidentEventKind {
             Self::UdpDnsPacketFinished | Self::UdpPacketFinished => {
                 ResidentEventLifecycleClass::Packet
             }
-            Self::DnsBindQueryFinished | Self::DnsPathChosen | Self::UdpRouteChosen => {
-                ResidentEventLifecycleClass::Debug
-            }
+            Self::UdpReplyFailed => ResidentEventLifecycleClass::Error,
+            Self::UdpSessionStarted => ResidentEventLifecycleClass::Startup,
+            Self::DnsBindQueryFinished
+            | Self::DnsPathChosen
+            | Self::UdpRouteChosen
+            | Self::UdpSessionStopped => ResidentEventLifecycleClass::Debug,
         }
     }
 
     const fn severity(self) -> ResidentEventSeverity {
-        ResidentEventSeverity::Debug
+        match self {
+            Self::UdpReplyFailed => ResidentEventSeverity::Error,
+            _ => ResidentEventSeverity::Debug,
+        }
     }
 }
 
