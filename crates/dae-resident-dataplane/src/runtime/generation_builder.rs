@@ -155,11 +155,7 @@ pub(super) fn build_resident_dataplane_generation(
         owner.data_plane_handle(),
     ));
     let dns_transport_owners = ResidentTransportOwnerRegistries::new(
-        Some(
-            owner
-                .hysteria2_owner_registry()
-                .ok_or_else(|| "Hysteria2 owner registry was not installed".to_owned())?,
-        ),
+        owner.hysteria2_owner_registry(),
         owner.tuic_owner_registry(),
         owner.juicity_owner_registry(),
     )
@@ -208,9 +204,7 @@ pub(super) fn build_resident_dataplane_generation(
         so_mark_from_dae,
         config.global.mptcp,
         Arc::new(health_resuscitation.clone()),
-        owner
-            .hysteria2_owner_registry()
-            .ok_or_else(|| "Hysteria2 owner registry was not installed".to_owned())?,
+        owner.hysteria2_owner_registry(),
         owner.tuic_owner_registry(),
         owner.juicity_owner_registry(),
         owner.anytls_owner_registry(),
@@ -248,9 +242,7 @@ pub(super) fn build_resident_dataplane_generation(
         dns::ResidentDnsDispatcher::new(Arc::clone(&dns)),
         udp_runtime_config.clone(),
         health_resuscitation,
-        owner
-            .hysteria2_owner_registry()
-            .ok_or_else(|| "Hysteria2 owner registry was not installed".to_owned())?,
+        owner.hysteria2_owner_registry(),
         owner.tuic_owner_registry(),
         owner.juicity_owner_registry(),
         owner.anytls_owner_registry(),
@@ -283,9 +275,7 @@ pub(super) fn build_resident_dataplane_generation(
         let health_proxy_groups = Arc::clone(&proxy_groups);
         let metrics = owner.metrics();
         let health_dns = Arc::clone(&dns);
-        let hysteria2_owner_registry = owner
-            .hysteria2_owner_registry()
-            .ok_or_else(|| "Hysteria2 owner registry was not installed".to_owned())?;
+        let hysteria2_owner_registry = owner.hysteria2_owner_registry();
         let tuic_owner_registry = owner.tuic_owner_registry();
         let juicity_owner_registry = owner.juicity_owner_registry();
         let anytls_owner_registry = owner.anytls_owner_registry();
@@ -305,7 +295,7 @@ pub(super) fn build_resident_dataplane_generation(
                 health_bootstrap_concurrency,
                 health_runtime_config,
                 Some(owner.data_plane_worker_threads()),
-                Some(hysteria2_owner_registry),
+                hysteria2_owner_registry,
                 tuic_owner_registry,
                 juicity_owner_registry,
                 anytls_owner_registry,

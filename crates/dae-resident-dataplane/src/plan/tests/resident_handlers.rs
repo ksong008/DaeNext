@@ -177,6 +177,41 @@ pub(super) fn resident_tcp_handler_config() -> Config {
 }
 
 #[test]
+fn protocol_owner_specs_only_enable_hysteria2_for_hysteria2_plans() {
+    let without_hysteria2 = build_resident_dataplane_plan(&resident_tcp_handler_config()).unwrap();
+    assert!(!without_hysteria2.protocol_owner_specs().hysteria2);
+
+    let hysteria2_link = hysteria2_fixture_url(
+        "hy2",
+        &fixture_host(FixtureEndpoint::Primary),
+        fixture_port(1),
+    );
+    let config = parse_config(&format!(
+        r#"
+        global {{
+        lan_interface: daerust0
+        allow_insecure: false
+        }}
+        node {{
+        hy2: '{hysteria2_link}'
+        }}
+        group {{
+        proxy {{
+            filter: name(hy2)
+            policy: fixed(0)
+        }}
+        }}
+        routing {{
+        l4proto(tcp) && dport(443) -> proxy
+        fallback: direct
+        }}
+        "#
+    ));
+    let with_hysteria2 = build_resident_dataplane_plan(&config).unwrap();
+    assert!(with_hysteria2.protocol_owner_specs().hysteria2);
+}
+
+#[test]
 pub(super) fn resident_dataplane_plan_admits_basic_and_shadowsocks_handlers() {
     let config = resident_tcp_handler_config();
     let proxies = assert_basic_and_shadowsocks_handlers(&config);

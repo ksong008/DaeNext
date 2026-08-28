@@ -388,6 +388,15 @@ impl ResidentProxyGroupPlan {
         self.candidates.len()
     }
 
+    pub(crate) fn requires_hysteria2_owner(&self) -> bool {
+        self.candidates.iter().any(|candidate| {
+            matches!(
+                &candidate.binding.plan().handler,
+                ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
+            )
+        })
+    }
+
     pub(crate) fn requires_tuic_transport_owner(&self) -> bool {
         self.candidates.iter().any(|candidate| {
             matches!(

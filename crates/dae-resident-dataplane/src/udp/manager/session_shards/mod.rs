@@ -77,7 +77,7 @@ impl ResidentUdpSessionShardPool {
         metrics: Arc<ResidentDataplaneMetrics>,
         udp_reply: UdpReplyHandle,
         active_sessions: Arc<AtomicUsize>,
-        hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+        hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
         anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
