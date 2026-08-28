@@ -1,45 +1,5 @@
 use super::*;
 
-pub(super) fn read_http_message<S: Read>(
-    stream: &mut S,
-    context: &str,
-) -> Result<(Vec<u8>, Vec<u8>), OutboundError> {
-    let head_with_leftover = read_http_head(stream)?;
-    let Some(index) = head_with_leftover
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-    else {
-        return Err(OutboundError::BadSharedTransport(format!(
-            "incomplete {context} header"
-        )));
-    };
-    let body_start = index + 4;
-    let head = head_with_leftover[..body_start].to_vec();
-    let mut body = head_with_leftover[body_start..].to_vec();
-    let content_length = crate::shared_transport::bounded_http_message_body_length(
-        http_content_length(&head)?,
-        context,
-    )?;
-    while body.len() < content_length {
-        let mut buf = [0_u8; 8192];
-        let wanted = (content_length - body.len()).min(buf.len());
-        let n = stream
-            .read(&mut buf[..wanted])
-            .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
-        if n == 0 {
-            break;
-        }
-        body.extend_from_slice(&buf[..n]);
-    }
-    if body.len() < content_length {
-        return Err(OutboundError::BadSharedTransport(format!(
-            "incomplete {context} body"
-        )));
-    }
-    body.truncate(content_length);
-    Ok((head, body))
-}
-
 pub(super) fn validate_meek_request_head(
     request_head: &[u8],
     meek_options: &MeekRoundTripOptions,
@@ -245,27 +205,6 @@ pub(super) fn decode_response_payload(input: &[u8]) -> Result<(usize, Vec<u8>), 
         ));
     }
     Ok((response_header_len, input[response_header_len..].to_vec()))
-}
-
-pub(super) fn http_content_length(head: &[u8]) -> Result<usize, OutboundError> {
-    let text = std::str::from_utf8(head)
-        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
-    http_header_value(text, "content-length")
-        .unwrap_or("0")
-        .parse::<usize>()
-        .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))
-}
-
-pub(super) fn http_header_value<'a>(head: &'a str, key: &str) -> Option<&'a str> {
-    for line in head.split("\r\n") {
-        let Some((got_key, value)) = line.split_once(':') else {
-            continue;
-        };
-        if got_key.eq_ignore_ascii_case(key) {
-            return Some(value.trim());
-        }
-    }
-    None
 }
 
 pub(super) fn http_transport_host(options: &HttpConnectOptions) -> String {

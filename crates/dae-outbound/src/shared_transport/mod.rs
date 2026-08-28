@@ -46,6 +46,8 @@ pub(crate) fn bounded_http_message_body_length(
     Ok(length)
 }
 
+pub(crate) use dataplane::{http_content_length, http_header_value, read_http_message};
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod body_length_tests {
