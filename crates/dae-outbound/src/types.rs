@@ -1,3 +1,5 @@
+use dae_core_types::NetworkTypeId;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum L4Proto {
     Tcp,
@@ -162,5 +164,36 @@ impl NetworkType {
         ]
         .into_iter()
         .find(|network_type| network_type.dimension_name() == value)
+    }
+}
+
+impl From<NetworkType> for NetworkTypeId {
+    fn from(network_type: NetworkType) -> Self {
+        match network_type.collection_index() {
+            0 => Self::DnsTcp4,
+            1 => Self::DnsTcp6,
+            2 => Self::DnsUdp4,
+            3 => Self::DnsUdp6,
+            4 => Self::Tcp4,
+            5 => Self::Tcp6,
+            6 => Self::DataUdp4,
+            7 => Self::DataUdp6,
+            _ => unreachable!("network type collection index is bounded"),
+        }
+    }
+}
+
+impl From<NetworkTypeId> for NetworkType {
+    fn from(network_type: NetworkTypeId) -> Self {
+        match network_type {
+            NetworkTypeId::DnsTcp4 => Self::DNS_TCP4,
+            NetworkTypeId::DnsTcp6 => Self::DNS_TCP6,
+            NetworkTypeId::DnsUdp4 => Self::DNS_UDP4,
+            NetworkTypeId::DnsUdp6 => Self::DNS_UDP6,
+            NetworkTypeId::Tcp4 => Self::TCP4,
+            NetworkTypeId::Tcp6 => Self::TCP6,
+            NetworkTypeId::DataUdp4 => Self::DATA_UDP4,
+            NetworkTypeId::DataUdp6 => Self::DATA_UDP6,
+        }
     }
 }

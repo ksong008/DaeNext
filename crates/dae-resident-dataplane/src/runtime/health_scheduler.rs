@@ -39,7 +39,7 @@ impl ResidentHealthResuscitationHandle {
     pub(crate) fn trigger(&self, outbound: u8, network_type: NetworkType) {
         let request = ResidentHealthResuscitationRequest {
             outbound,
-            network_type,
+            network_type: network_type.into(),
         };
         match self.sender.try_send(request) {
             Ok(()) => self.metrics.health_resuscitation_queued(),
@@ -50,8 +50,8 @@ impl ResidentHealthResuscitationHandle {
 }
 
 impl ResidentHealthResuscitation for ResidentHealthResuscitationHandle {
-    fn trigger(&self, outbound: u8, network_type: NetworkType) {
-        self.trigger(outbound, network_type);
+    fn trigger(&self, outbound: u8, network_type: dae_core_types::NetworkTypeId) {
+        self.trigger(outbound, network_type.into());
     }
 }
 

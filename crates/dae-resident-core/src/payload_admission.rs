@@ -4,8 +4,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
-use dae_datapath::udp_io::UdpPayload;
-
 #[derive(Clone)]
 pub struct ResidentUdpPayloadAdmission {
     generation: u64,
@@ -107,15 +105,6 @@ impl ResidentUdpPayloadAdmission {
             "rejectedBytes": self.state.rejected_bytes.load(Ordering::Relaxed),
         })
     }
-}
-
-pub fn admit_udp_payload(
-    payload: &mut UdpPayload,
-    admission: &ResidentUdpPayloadAdmission,
-) -> Result<(), ResidentUdpPayloadAdmissionError> {
-    let permit = admission.try_acquire(payload.len())?;
-    let _ = payload.attach_retained_owner(permit);
-    Ok(())
 }
 
 impl PartialEq for ResidentUdpPayloadAdmission {

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use dae_datapath::udp_io::UdpOriginalDstRecvError;
-use dae_datapath::udp_io::{UdpBatchReceiver, UdpOriginalDstPacket, UdpPayloadPool};
+use dae_datapath::udp_io::{UdpBatchReceiver, UdpOriginalDstPacket, UdpPayload, UdpPayloadPool};
 #[cfg(test)]
 use dae_outbound::shared_transport::GrpcMode;
 #[cfg(test)]
@@ -35,6 +35,15 @@ use tokio::time;
 use super::plan::share_resident_proxy_groups;
 use super::plan::{ResidentProxyGroupPlan, SharedResidentProxyGroupMap};
 use super::*;
+
+fn admit_udp_payload(
+    payload: &mut UdpPayload,
+    admission: &ResidentUdpPayloadAdmission,
+) -> Result<(), ResidentUdpPayloadAdmissionError> {
+    let permit = admission.try_acquire(payload.len())?;
+    let _ = payload.attach_retained_owner(permit);
+    Ok(())
+}
 
 #[cfg(test)]
 use dae_resident_udp::vless_udp_length_frame;

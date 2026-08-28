@@ -19,7 +19,7 @@ pub const RESIDENT_TCP_CANDIDATE_MAX_IN_FLIGHT: usize = 2;
 pub const RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 pub const RESIDENT_UDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 pub const RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT: Duration =
-    Duration::from_millis(dae_datapath::DNS_NAT_TIMEOUT_MS as u64);
+    Duration::from_millis(dae_core_types::DNS_NAT_TIMEOUT_MS as u64);
 pub const RESIDENT_UDP_SOCKET_BUFFER_BYTES_ENV: &str = "RESIDENT_UDP_SOCKET_BUFFER_BYTES";
 pub const RESIDENT_UDP_SOCKET_BUFFER_BYTES_DEFAULT: usize = 512 * 1024;
 pub const RESIDENT_UDP_SOCKET_BUFFER_BYTES_MIN: usize = 64 * 1024;

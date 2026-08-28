@@ -313,7 +313,7 @@ impl ResidentTcpRouter {
                         if err.no_alive
                             && let Some(resuscitator) = self.health_resuscitation.as_ref()
                         {
-                            resuscitator.trigger(final_outbound, network_type);
+                            resuscitator.trigger(final_outbound, network_type.into());
                         }
                         return Err(err.message);
                     }
