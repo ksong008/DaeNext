@@ -2,6 +2,7 @@
 
 mod active_generation_slot;
 mod display;
+mod dns_ports;
 pub mod events;
 mod execution;
 mod execution_types;
@@ -26,6 +27,7 @@ pub use display::{
     resident_normalized_socket_addr, resident_socket_addr_display, resident_tcp_network_name,
     resident_udp_network_name,
 };
+pub use dns_ports::{ResidentDnsUdpFuture, ResidentDnsUdpResolver};
 pub use execution::{
     RuntimeExecutionDescriptor, append_runtime_execution_descriptor, tcp_execution_descriptor,
     udp_execution_descriptor,
