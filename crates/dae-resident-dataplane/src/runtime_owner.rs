@@ -130,7 +130,7 @@ impl ResidentRuntimeOwner {
         let runtime = self.data_plane_handle();
         let stop = self.transport_stop_handle();
         let worker_threads = self.data_plane_worker_threads();
-        if self.hysteria2_owner_registry.is_none() {
+        if specs.hysteria2 && self.hysteria2_owner_registry.is_none() {
             let (registry, task) =
                 start_hysteria2_owner_registry_on(&runtime, generation, Arc::clone(&stop));
             self.install_hysteria2_owner_registry_task(registry, task);

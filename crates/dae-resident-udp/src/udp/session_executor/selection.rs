@@ -29,7 +29,7 @@ impl UdpSessionExecutor {
     pub fn new_with_transport_owner(
         binding: ResidentProxyBinding,
         original_dst: SocketAddr,
-        owner_registry: Hysteria2OwnerRegistryHandle,
+        owner_registry: Option<Hysteria2OwnerRegistryHandle>,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
         anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
@@ -48,14 +48,14 @@ impl UdpSessionExecutor {
 
     pub fn new_proxy_packet_with_transport_owner(
         binding: ResidentProxyBinding,
-        owner_registry: Hysteria2OwnerRegistryHandle,
+        owner_registry: Option<Hysteria2OwnerRegistryHandle>,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
         anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Self {
         Self::new_proxy_packet_with_optional_transport_owner(
             binding,
-            Some(owner_registry),
+            owner_registry,
             tuic_owner_registry,
             juicity_owner_registry,
             anytls_owner_registry,

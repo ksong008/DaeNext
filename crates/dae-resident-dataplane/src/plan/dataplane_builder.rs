@@ -20,6 +20,7 @@ pub(crate) struct ResidentDataplanePlan {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ResidentProtocolOwnerSpecs {
+    pub(crate) hysteria2: bool,
     pub(crate) tuic: bool,
     pub(crate) juicity: bool,
     pub(crate) anytls: bool,
@@ -47,6 +48,10 @@ impl ResidentDataplanePlan {
 
     pub(crate) fn protocol_owner_specs(&self) -> ResidentProtocolOwnerSpecs {
         ResidentProtocolOwnerSpecs {
+            hysteria2: self
+                .proxies
+                .values()
+                .any(ResidentProxyGroupPlan::requires_hysteria2_owner),
             tuic: self
                 .proxies
                 .values()

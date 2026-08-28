@@ -29,7 +29,7 @@ pub struct UdpSessionSharedContext {
     pub metrics: Arc<ResidentDataplaneMetrics>,
     pub udp_reply: UdpReplyHandle,
     pub active_sessions: Arc<AtomicUsize>,
-    pub hysteria2_owner_registry: Hysteria2OwnerRegistryHandle,
+    pub hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     pub tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     pub juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     pub anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
