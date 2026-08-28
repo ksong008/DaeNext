@@ -10,6 +10,11 @@
     "resident-coordinator",
     "product"
   ],
+  "forbidden": {
+    "dae-resident-dns": ["dae-resident-tcp", "dae-resident-udp"],
+    "dae-resident-tcp": ["dae-resident-dns", "dae-resident-udp"],
+    "dae-resident-udp": ["dae-resident-dns", "dae-resident-tcp"]
+  },
   "packages": {
     "dae-bench": {
       "layer": "product",

@@ -78,6 +78,15 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
         )
         self.assertTrue(any("dependency cycle" in error for error in errors))
 
+    def test_forbidden_edge_is_rejected_even_when_declared(self) -> None:
+        graph = metadata(("a", [("b", None)]), ("b", []))
+        fixture_policy = policy(("a", ["b"], [], []), ("b", [], [], []))
+        fixture_policy["forbidden"] = {"a": ["b"]}
+
+        errors = CHECKER.validate(graph, fixture_policy, scan_sources=False)
+
+        self.assertTrue(any("forbidden architecture dependency" in error for error in errors))
+
     def test_source_import_must_have_declared_edge(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -95,6 +104,22 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
             )
         source_errors = [error for error in errors if "source import crosses" in error]
         self.assertEqual(len(source_errors), 2)
+
+    def test_forbidden_source_import_is_rejected_when_edge_is_declared(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source_root = root / "a" / "src"
+            source_root.mkdir(parents=True)
+            (source_root / "lib.rs").write_text("use b::item;\n", encoding="utf-8")
+            graph = metadata(("a", [("b", None)]), ("b", []))
+            graph["packages"][0]["manifest_path"] = str(root / "a" / "Cargo.toml")
+            fixture_policy = policy(("a", ["b"], [], []), ("b", [], [], []))
+            fixture_policy["forbidden"] = {"a": ["b"]}
+            errors = CHECKER.validate(graph, fixture_policy, scan_sources=True)
+
+        self.assertTrue(
+            any("source import crosses forbidden architecture edge" in error for error in errors)
+        )
 
 
 if __name__ == "__main__":

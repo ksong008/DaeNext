@@ -115,6 +115,26 @@ def validate_policy_shape(
                     errors.append(
                         f"{package_name}: policy names non-workspace dependency {target}"
                     )
+    forbidden = policy.get("forbidden", {})
+    if not isinstance(forbidden, dict):
+        errors.append("architecture policy forbidden must be an object")
+    else:
+        for source, targets in sorted(forbidden.items()):
+            if source not in packages:
+                errors.append(f"forbidden policy names non-workspace package: {source}")
+                continue
+            if not isinstance(targets, list) or not all(
+                isinstance(target, str) for target in targets
+            ):
+                errors.append(f"{source}: forbidden policy must be a list of names")
+                continue
+            if len(set(targets)) != len(targets):
+                errors.append(f"{source}: duplicate forbidden dependency")
+            for target in targets:
+                if target not in packages:
+                    errors.append(
+                        f"{source}: forbidden policy names non-workspace dependency {target}"
+                    )
     return errors
 
 
@@ -149,6 +169,21 @@ def validate_declared_edges(
                     "policy dependency is not declared by Cargo: "
                     + format_edge(source, target, kind, package_policy)
                 )
+    return errors
+
+
+def validate_forbidden_edges(
+    edges: dict[str, dict[str, set[str]]], policy: dict[str, Any]
+) -> list[str]:
+    errors: list[str] = []
+    forbidden = policy.get("forbidden", {})
+    for source, targets in sorted(forbidden.items()):
+        actual = set().union(*(edges[source][kind] for kind in DEPENDENCY_KINDS))
+        for target in sorted(actual & set(targets)):
+            errors.append(
+                "forbidden architecture dependency: "
+                + format_edge(source, target, "any", policy.get("packages", {}))
+            )
     return errors
 
 
@@ -218,6 +253,7 @@ def validate_source_imports(
     }
     errors: list[str] = []
     package_policy = policy.get("packages", {})
+    forbidden = policy.get("forbidden", {})
     for package_name, package in sorted(packages.items()):
         entry = package_policy.get(package_name, {})
         for path, source_kind in source_files(package):
@@ -229,6 +265,13 @@ def validate_source_imports(
                     target = module_to_package.get(module_name)
                     if target is None or target == package_name:
                         continue
+                    if target in forbidden.get(package_name, []):
+                        errors.append(
+                            "source import crosses forbidden architecture edge: "
+                            f"{package_name}[{entry.get('layer', '<unknown>')}] "
+                            f"{path.relative_to(pathlib.Path(package['manifest_path']).parent)}:{line_number} "
+                            f"imports {target}[{package_policy.get(target, {}).get('layer', '<unknown>')}]"
+                        )
                     allowed = {
                         target
                         for kind in DEPENDENCY_KINDS
@@ -252,6 +295,7 @@ def validate(
     errors = validate_policy_shape(policy, packages)
     edges = workspace_edges(packages)
     errors.extend(validate_declared_edges(edges, policy))
+    errors.extend(validate_forbidden_edges(edges, policy))
     for cycle in dependency_cycles(edges):
         errors.append(f"workspace architecture dependency cycle: {cycle}")
     if scan_sources:
