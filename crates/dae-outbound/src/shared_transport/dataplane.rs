@@ -419,6 +419,56 @@ pub fn read_http_head_with_leftover(
     }
 }
 
+pub(crate) fn read_http_message<S: Read>(
+    stream: &mut S,
+    context: &str,
+) -> Result<(Vec<u8>, Vec<u8>), OutboundError> {
+    let (head, mut body) = read_http_head_with_leftover(stream, 8192, |message| {
+        OutboundError::BadSharedTransport(format!("{context}: {message}"))
+    })?;
+    let content_length =
+        super::bounded_http_message_body_length(http_content_length(&head)?, context)?;
+    while body.len() < content_length {
+        let mut buffer = [0_u8; 8192];
+        let wanted = (content_length - body.len()).min(buffer.len());
+        let read = stream
+            .read(&mut buffer[..wanted])
+            .map_err(|error| OutboundError::BadSharedTransport(error.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(&buffer[..read]);
+    }
+    if body.len() < content_length {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "incomplete {context} body"
+        )));
+    }
+    body.truncate(content_length);
+    Ok((head, body))
+}
+
+pub(crate) fn http_content_length(head: &[u8]) -> Result<usize, OutboundError> {
+    let text = std::str::from_utf8(head)
+        .map_err(|error| OutboundError::BadSharedTransport(error.to_string()))?;
+    http_header_value(text, "content-length")
+        .unwrap_or("0")
+        .parse::<usize>()
+        .map_err(|error| OutboundError::BadSharedTransport(error.to_string()))
+}
+
+pub(crate) fn http_header_value<'a>(head: &'a str, key: &str) -> Option<&'a str> {
+    for line in head.split("\r\n") {
+        let Some((got_key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if got_key.eq_ignore_ascii_case(key) {
+            return Some(value.trim());
+        }
+    }
+    None
+}
+
 pub fn validate_http_status(response: &[u8], want: u16) -> Result<(), OutboundError> {
     let text = std::str::from_utf8(response)
         .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;

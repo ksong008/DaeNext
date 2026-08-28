@@ -19,8 +19,9 @@ use crate::http_proxy::{HttpConnectOptions, request as http_proxy_request};
 use crate::shared_transport::{
     DEFAULT_WS_KEY, GrpcLifecycleOptions, HttpUpgradeOptions, MeekRoundTripOptions,
     MuxFrameOptions, WS_MASK_KEY, grpc_hunk_frame, grpc_hunk_frame_len, grpc_stream_preface,
-    http_upgrade_request, meek_http_request, mux, mux_data_frame, mux_end_frame, mux_new_frame,
-    read_grpc_hunk_frame, read_http_head, read_websocket_binary_frame, validate_http_status,
+    http_content_length, http_header_value, http_upgrade_request, meek_http_request, mux,
+    mux_data_frame, mux_end_frame, mux_new_frame, read_grpc_hunk_frame, read_http_head,
+    read_http_message, read_websocket_binary_frame, validate_http_status,
     websocket_client_binary_frame, websocket_handshake_request,
 };
 use crate::vmess::uuid::normalize_vmess_uuid;
