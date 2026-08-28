@@ -70,6 +70,38 @@ fn lifecycle_work_waits_for_completion_without_an_artificial_deadline() {
 }
 
 #[test]
+fn submitted_work_completes_without_blocking_the_caller() {
+    let runtime = ProductControlRuntime::start(ProductControlRuntimeConfig::for_test()).unwrap();
+    let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+    let (finished_sender, finished_receiver) = std::sync::mpsc::sync_channel(1);
+
+    runtime
+        .submit(
+            ProductControlTaskKind::RuntimeLifecycle,
+            move |_| async move {
+                release_receiver.recv().unwrap();
+                finished_sender.send(()).unwrap();
+            },
+        )
+        .unwrap();
+
+    assert!(finished_receiver.try_recv().is_err());
+    release_sender.send(()).unwrap();
+    finished_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while runtime.snapshot()["activeTasks"].as_u64() != Some(0) && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    assert_eq!(
+        runtime.snapshot()["activeByClass"]["runtimeLifecycle"],
+        json!(0)
+    );
+    runtime.shutdown().unwrap();
+}
+
+#[test]
 fn caller_timeout_requests_cooperative_task_cancellation() {
     let runtime = ProductControlRuntime::start(ProductControlRuntimeConfig::for_test()).unwrap();
     let result = runtime.execute(

@@ -11,6 +11,8 @@ pub(super) struct Parser<'a> {
 /// sections; without a bound, a deeply nested configuration would overflow
 /// the stack (user-controlled input on the validate/reload path).
 const MAX_SECTION_DEPTH: usize = 128;
+const PARAMETERIZED_SECTION_ERROR: &str =
+    "parameterized sections are not supported by DAE syntax; expected '{' after section name";
 
 impl<'a> Parser<'a> {
     pub(super) fn new(input: &'a str, tokens: Vec<Token>) -> Self {
@@ -46,6 +48,9 @@ impl<'a> Parser<'a> {
 
     fn parse_section_inner(&mut self) -> Result<Section, ConfigError> {
         let name = self.expect_literal("section name")?;
+        if self.at(TokenKindName::LParen) {
+            return Err(self.error_here(PARAMETERIZED_SECTION_ERROR));
+        }
         self.expect(TokenKindName::LBrace)?;
         let mut items = Vec::new();
         while !self.at(TokenKindName::RBrace) {
@@ -60,6 +65,9 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_item(&mut self) -> Result<Item, ConfigError> {
         self.charge_ast_node()?;
+        if self.starts_parameterized_section() {
+            return Err(self.error_here(PARAMETERIZED_SECTION_ERROR));
+        }
         if self.starts_section() {
             return Ok(Item::Section(Box::new(self.parse_section()?)));
         }
@@ -247,6 +255,33 @@ impl<'a> Parser<'a> {
 
     pub(super) fn starts_section(&self) -> bool {
         self.at_literal() && self.at_name(TokenKindName::LBrace, 1)
+    }
+
+    fn starts_parameterized_section(&self) -> bool {
+        if !self.at_literal() || !self.at_name(TokenKindName::LParen, 1) {
+            return false;
+        }
+        let mut depth = 0_usize;
+        for (index, token) in self.tokens.iter().enumerate().skip(self.pos + 1) {
+            match token.kind {
+                TokenKind::LParen => depth = depth.saturating_add(1),
+                TokenKind::RParen => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(
+                            self.tokens.get(index + 1).map(|token| &token.kind),
+                            Some(TokenKind::LBrace)
+                        );
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+        }
+        false
     }
 
     pub(super) fn starts_function_expr_at(&self, pos: usize) -> bool {

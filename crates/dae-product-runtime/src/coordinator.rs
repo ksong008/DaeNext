@@ -35,6 +35,7 @@ pub struct RuntimeApplyCoordinator {
     gate: Arc<Mutex<()>>,
     next_intent: Arc<AtomicU64>,
     stop_epoch: Arc<AtomicU64>,
+    stop_pending: Arc<AtomicU64>,
     state: Arc<Mutex<RuntimeApplyCoordinatorState>>,
     gate_wait_timeout: Duration,
 }
@@ -63,6 +64,7 @@ pub struct RuntimeStopPermit<'a> {
     _gate: MutexGuard<'a, ()>,
     intent_id: u64,
     finished: bool,
+    pending_released: bool,
 }
 
 impl Default for RuntimeApplyCoordinator {
@@ -77,6 +79,7 @@ impl RuntimeApplyCoordinator {
             gate: Arc::new(Mutex::new(())),
             next_intent: Arc::new(AtomicU64::new(1)),
             stop_epoch: Arc::new(AtomicU64::new(0)),
+            stop_pending: Arc::new(AtomicU64::new(0)),
             state: Arc::new(Mutex::new(RuntimeApplyCoordinatorState {
                 phase: "idle".to_owned(),
                 ..RuntimeApplyCoordinatorState::default()
@@ -97,6 +100,10 @@ impl RuntimeApplyCoordinator {
         intent: RuntimeApplyIntent,
     ) -> Result<RuntimeApplyPermit<'_>, String> {
         let intent_id = self.next_intent.fetch_add(1, Ordering::Relaxed);
+        if self.stop_pending.load(Ordering::Acquire) != 0 {
+            self.record_superseded();
+            return Err("runtime apply intent was superseded by stop".to_owned());
+        }
         let accepted_stop_epoch = self.stop_epoch.load(Ordering::Acquire);
         let gate = match self.gate.try_lock() {
             Ok(gate) => gate,
@@ -107,11 +114,10 @@ impl RuntimeApplyCoordinator {
                 return Err("runtime apply coordinator lock poisoned".to_owned());
             }
         };
-        if self.stop_epoch.load(Ordering::Acquire) != accepted_stop_epoch {
-            if let Ok(mut state) = self.state.lock() {
-                state.superseded_count = state.superseded_count.saturating_add(1);
-                state.updated_at = Some(product_now_text());
-            }
+        if self.stop_epoch.load(Ordering::Acquire) != accepted_stop_epoch
+            || self.stop_pending.load(Ordering::Acquire) != 0
+        {
+            self.record_superseded();
             drop(gate);
             return Err("runtime apply intent was superseded by stop".to_owned());
         }
@@ -131,8 +137,15 @@ impl RuntimeApplyCoordinator {
 
     pub fn begin_stop(&self) -> Result<RuntimeStopPermit<'_>, String> {
         let intent_id = self.next_intent.fetch_add(1, Ordering::Relaxed);
+        self.stop_pending.fetch_add(1, Ordering::AcqRel);
         self.stop_epoch.fetch_add(1, Ordering::AcqRel);
-        let gate = lock_gate_with_timeout(&self.gate, APPLY_GATE_WAIT_TIMEOUT)?;
+        let gate = match self.gate.lock() {
+            Ok(gate) => gate,
+            Err(_) => {
+                self.stop_pending.fetch_sub(1, Ordering::AcqRel);
+                return Err("runtime apply coordinator lock poisoned".to_owned());
+            }
+        };
         if let Ok(mut state) = self.state.lock() {
             state.active_intent = Some(intent_id);
             state.active_source = Some("stop".to_owned());
@@ -144,7 +157,15 @@ impl RuntimeApplyCoordinator {
             _gate: gate,
             intent_id,
             finished: false,
+            pending_released: false,
         })
+    }
+
+    fn record_superseded(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.superseded_count = state.superseded_count.saturating_add(1);
+            state.updated_at = Some(product_now_text());
+        }
     }
 
     pub fn summary(&self) -> Value {
@@ -159,6 +180,7 @@ impl RuntimeApplyCoordinator {
             "lastResult": state.last_result,
             "coalescedCount": state.coalesced_count,
             "supersededCount": state.superseded_count,
+            "stopPending": self.stop_pending.load(Ordering::Acquire),
             "updatedAt": state.updated_at,
         })
     }
@@ -239,6 +261,7 @@ impl RuntimeStopPermit<'_> {
     pub fn finish(mut self, result: &str) {
         self.record_finish(result);
         self.finished = true;
+        self.release_pending();
     }
 
     fn record_finish(&self, result: &str) {
@@ -253,6 +276,15 @@ impl RuntimeStopPermit<'_> {
             state.updated_at = Some(product_now_text());
         }
     }
+
+    fn release_pending(&mut self) {
+        if self.pending_released {
+            return;
+        }
+        let previous = self.coordinator.stop_pending.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "runtime stop pending counter underflow");
+        self.pending_released = true;
+    }
 }
 
 impl Drop for RuntimeStopPermit<'_> {
@@ -260,6 +292,7 @@ impl Drop for RuntimeStopPermit<'_> {
         if !self.finished {
             self.record_finish("abandoned");
         }
+        self.release_pending();
     }
 }
 
@@ -304,6 +337,43 @@ mod tests {
         );
         stop.join().unwrap().unwrap();
         assert_eq!(coordinator.summary()["lastResult"], json!("stopped"));
+    }
+
+    #[test]
+    fn pending_stop_waits_for_active_apply_and_rejects_new_apply() {
+        let coordinator = Arc::new(RuntimeApplyCoordinator::with_gate_wait_timeout(
+            Duration::from_millis(50),
+        ));
+        let active = coordinator
+            .begin_apply(RuntimeApplyIntent::ApiReload)
+            .unwrap();
+        let stop_coordinator = Arc::clone(&coordinator);
+        let stop = thread::spawn(move || {
+            let permit = stop_coordinator.begin_stop()?;
+            permit.finish("stopped");
+            Ok::<(), String>(())
+        });
+        while coordinator.stop_pending.load(Ordering::Acquire) == 0 {
+            thread::yield_now();
+        }
+
+        let started_at = Instant::now();
+        let rejected = coordinator.begin_apply(RuntimeApplyIntent::LocalControlReload);
+        assert!(matches!(
+            rejected,
+            Err(ref error) if error == "runtime apply intent was superseded by stop"
+        ));
+        assert!(started_at.elapsed() < Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(coordinator.summary()["stopPending"], json!(1));
+
+        active.finish("succeeded");
+        stop.join().unwrap().unwrap();
+        assert_eq!(coordinator.summary()["stopPending"], json!(0));
+        let later = coordinator
+            .begin_apply(RuntimeApplyIntent::LocalControlReload)
+            .unwrap();
+        later.finish("succeeded");
     }
 
     #[test]

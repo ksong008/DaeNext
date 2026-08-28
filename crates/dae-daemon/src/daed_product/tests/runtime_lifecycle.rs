@@ -65,6 +65,90 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
 }
 
 #[test]
+fn authenticated_http_runtime_reload_releases_the_http_worker() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-runtime-reload-http-test-{}",
+        fastrand::u64(..)
+    ));
+    let state = dir.join("daed.db");
+    ensure_state_schema(&state).unwrap();
+    let conn = open_state_connection(&state).unwrap();
+    conn.execute_batch(
+        r#"
+            INSERT INTO configs(id, name, global, selected, version)
+                VALUES(1, 'global', 'global {}', 1, 1);
+            INSERT INTO dns(id, name, dns, selected, version)
+                VALUES(1, 'dns', 'dns {}', 1, 1);
+            INSERT INTO routings(id, name, routing, selected, version)
+                VALUES(1, 'routing', 'routing {}', 1, 1);
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+    initialize_log_store(&dir, &state).unwrap();
+    let token = create_user(&state, "admin", "abc12345").unwrap();
+    let app = Arc::new(AppState {
+        config_dir: dir.clone(),
+        state: state.clone(),
+        web_root: dir.clone(),
+        api_only: true,
+        control_socket: dir.join("control.sock"),
+        shutdown: Arc::new(ProductShutdown::default()),
+        runtime: Arc::new(ProductRuntimeManager::new()),
+        runtime_sampler: None,
+        latency_jobs: Arc::new(LatencyJobManager::default()),
+        http_metrics: Arc::new(ProductHttpMetrics::default()),
+        ui_runtime: Arc::new(ProductUiRuntime::default()),
+        auth_runtime: product_test_auth_runtime(),
+        geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
+        geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
+        geodata_update_runtime: None,
+        control_runtime: product_test_control_runtime(),
+    });
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let body = br#"{"dry":true}"#;
+    write!(
+        client,
+        "POST /api/runtime/reload HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    client.write_all(body).unwrap();
+    client.flush().unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    app.http_metrics.opened();
+
+    let started = Instant::now();
+    let result = handle_stream(
+        server,
+        Arc::clone(&app),
+        Arc::clone(&app.http_metrics),
+        None,
+    )
+    .unwrap();
+    assert!(matches!(result, ProductHttpConnectionResult::Detached));
+    assert!(started.elapsed() < Duration::from_secs(1));
+
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.contains("\"dry\":true"), "{response}");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while app.http_metrics.snapshot()["activeConnections"] != json!(0) && Instant::now() < deadline
+    {
+        thread::yield_now();
+    }
+    assert_eq!(app.http_metrics.snapshot()["activeConnections"], json!(0));
+    app.control_runtime.shutdown().unwrap();
+    drop(app);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 pub(crate) fn materialize_runtime_requires_explicit_selected_resources() {
     let dir = std::env::temp_dir().join(format!("daed-product-test-{}", fastrand::u64(..)));
     let state = dir.join("daed.db");

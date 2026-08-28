@@ -159,6 +159,65 @@ impl ProductControlRuntime {
         self.execute_with_wait(kind, ProductControlWait::Completion, action)
     }
 
+    pub fn submit<F, Fut>(
+        &self,
+        kind: ProductControlTaskKind,
+        action: F,
+    ) -> Result<(), ProductControlExecutionError>
+    where
+        F: FnOnce(ProductControlCancellation) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.metrics.submitted();
+        if self.stopping.load(Ordering::Acquire) {
+            self.metrics.rejected();
+            return Err(ProductControlExecutionError::Unavailable);
+        }
+        let permit = self.admission.try_acquire(kind).ok_or_else(|| {
+            self.metrics.rejected();
+            ProductControlExecutionError::Busy
+        })?;
+        let sender = self
+            .sender
+            .lock()
+            .ok()
+            .and_then(|sender| sender.as_ref().cloned())
+            .ok_or_else(|| {
+                self.metrics.rejected();
+                ProductControlExecutionError::Unavailable
+            })?;
+        let cancellation = ProductControlCancellation::new();
+        let task_cancellation = cancellation.clone();
+        let metrics = Arc::clone(&self.metrics);
+        let future = Box::pin(async move {
+            let active = metrics.active();
+            action(task_cancellation).await;
+            drop(permit);
+            drop(active);
+        });
+        let command = ProductControlTaskCommand {
+            cancellation,
+            future,
+        };
+        self.metrics.queued();
+        match sender.try_send(command) {
+            Ok(()) => {
+                self.metrics.enqueued();
+                Ok(())
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                self.metrics.dequeued();
+                self.metrics.rejected();
+                Err(ProductControlExecutionError::Busy)
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                self.metrics.dequeued();
+                self.metrics.rejected();
+                Err(ProductControlExecutionError::Unavailable)
+            }
+        }
+    }
+
     fn execute_with_wait<T, F, Fut>(
         &self,
         kind: ProductControlTaskKind,

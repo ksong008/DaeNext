@@ -350,6 +350,22 @@ pub(super) fn handle_stream(
         }
         return detach_geodata_update_stream(stream, request, kind, runtime, metrics);
     }
+    if is_runtime_reload_request(&request) {
+        match authenticate_request(&app, &request) {
+            Ok(Some(_user)) => {}
+            Ok(None) => {
+                let response = HttpResponse::json(401, json!({"error": "authentication required"}));
+                write_http_response_for_request(&mut stream, &request, &response, false)?;
+                return Ok(ProductHttpConnectionResult::Closed);
+            }
+            Err(err) => {
+                let response = HttpResponse::json(500, json!({"error": err.to_string()}));
+                write_http_response_for_request(&mut stream, &request, &response, false)?;
+                return Ok(ProductHttpConnectionResult::Closed);
+            }
+        }
+        return detach_runtime_reload_stream(stream, request, app, metrics);
+    }
     let response = route_request_with_context(&app, &request, context);
     write_http_response_for_request(&mut stream, &request, &response, head_only)?;
     Ok(ProductHttpConnectionResult::Closed)
@@ -357,6 +373,61 @@ pub(super) fn handle_stream(
 
 fn is_static_request(request: &HttpRequest) -> bool {
     request.path != "/health" && !request.path.starts_with("/api")
+}
+
+fn is_runtime_reload_request(request: &HttpRequest) -> bool {
+    request.method == "POST" && request.path == "/api/runtime/reload"
+}
+
+fn detach_runtime_reload_stream(
+    mut stream: TcpStream,
+    request: HttpRequest,
+    app: Arc<AppState>,
+    metrics: Arc<ProductHttpMetrics>,
+) -> io::Result<ProductHttpConnectionResult> {
+    let mut response_stream = stream.try_clone()?;
+    let response_request = request.clone();
+    let response_context = RuntimeReloadHttpContext::from_app(&app);
+    let response_metrics = Arc::clone(&metrics);
+    let submitted = app.control_runtime.submit(
+        ProductControlTaskKind::RuntimeLifecycle,
+        move |_cancellation| async move {
+            let _completion = ProductDetachedHttpCompletion(response_metrics);
+            let worker = tokio::task::spawn_blocking(move || {
+                let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    api_runtime_reload_with_context(&response_context, &response_request)
+                })) {
+                    Ok(response) => response,
+                    Err(_) => {
+                        HttpResponse::json(500, json!({"error": "runtime reload worker failed"}))
+                    }
+                };
+                let _ = write_http_response_for_request(
+                    &mut response_stream,
+                    &response_request,
+                    &response,
+                    false,
+                );
+            });
+            let _ = worker.await;
+        },
+    );
+    match submitted {
+        Ok(()) => Ok(ProductHttpConnectionResult::Detached),
+        Err(error) => {
+            let response = HttpResponse::json(503, json!({"error": error.to_string()}));
+            write_http_response_for_request(&mut stream, &request, &response, false)?;
+            Ok(ProductHttpConnectionResult::Closed)
+        }
+    }
+}
+
+struct ProductDetachedHttpCompletion(Arc<ProductHttpMetrics>);
+
+impl Drop for ProductDetachedHttpCompletion {
+    fn drop(&mut self) {
+        self.0.closed();
+    }
 }
 
 fn detach_geodata_update_stream(
