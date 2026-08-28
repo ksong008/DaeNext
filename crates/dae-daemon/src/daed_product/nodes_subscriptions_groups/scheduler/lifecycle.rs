@@ -8,8 +8,10 @@ enum SchedulerCommand {
     Wake,
 }
 
+type SchedulerWakeRegistry = Mutex<Option<(u64, Sender<SchedulerCommand>)>>;
+
 static NEXT_SCHEDULER_ID: AtomicU64 = AtomicU64::new(1);
-static SCHEDULER_WAKE: OnceLock<Mutex<Option<(u64, Sender<SchedulerCommand>)>>> = OnceLock::new();
+static SCHEDULER_WAKE: OnceLock<SchedulerWakeRegistry> = OnceLock::new();
 
 #[derive(Debug)]
 pub(crate) struct SubscriptionSchedulerHandle {
