@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, Read};
-use std::net::TcpStream;
+use std::net::{IpAddr, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -82,6 +82,11 @@ pub struct HttpRequest {
     pub query: HashMap<String, Vec<String>>,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProductHttpRequestContext {
+    pub peer_ip: Option<IpAddr>,
 }
 
 #[derive(Debug)]
@@ -165,5 +170,15 @@ pub fn http_request_read_error_response(error: &HttpRequestReadError) -> Option<
         HttpRequestReadErrorKind::InvalidRequest | HttpRequestReadErrorKind::Io => Some(
             HttpResponse::json(400, json!({"error": format!("bad request: {error}")})),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProductHttpRequestContext;
+
+    #[test]
+    fn request_context_defaults_without_peer_identity() {
+        assert_eq!(ProductHttpRequestContext::default().peer_ip, None);
     }
 }

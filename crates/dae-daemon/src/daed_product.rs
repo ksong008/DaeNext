@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, BufRead, BufWriter, Read, Seek, SeekFrom, Write};
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -409,11 +409,6 @@ struct UserRecord {
     json_storage: String,
     avatar: Option<String>,
     name: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ProductHttpRequestContext {
-    peer_ip: Option<IpAddr>,
 }
 
 mod cli_commands;
