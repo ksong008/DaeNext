@@ -25,7 +25,7 @@ impl std::fmt::Debug for ProductRuntimeSampler {
         formatter
             .debug_struct("ProductRuntimeSampler")
             .field("config", &self.config)
-            .field("metrics", &self.snapshot())
+            .field("metrics", &self.snapshot_without_start())
             .finish_non_exhaustive()
     }
 }
@@ -63,6 +63,10 @@ impl ProductRuntimeSampler {
 
     pub(crate) fn snapshot(&self) -> Value {
         let _ = self.ensure_worker();
+        self.snapshot_without_start()
+    }
+
+    fn snapshot_without_start(&self) -> Value {
         let history_length = self
             .state
             .lock()
