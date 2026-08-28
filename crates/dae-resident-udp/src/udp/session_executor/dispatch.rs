@@ -3,7 +3,7 @@ use super::*;
 impl UdpSessionExecutor {
     pub async fn execute(
         &mut self,
-        dns: &ResidentDnsDispatcher,
+        dns: &dyn ResidentDnsUdpResolver,
         binding: &ResidentProxyBinding,
         original_dst: SocketAddr,
         payload: &[u8],

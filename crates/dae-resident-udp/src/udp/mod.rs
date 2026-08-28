@@ -56,7 +56,6 @@ use dae_resident_core::events::{
     ResidentEventKind, ResidentEventMetadata, append_event, append_event_with_metadata,
 };
 use dae_resident_core::{append_runtime_execution_descriptor, udp_execution_descriptor};
-use dae_resident_dns::ResidentDnsDispatcher;
 mod task_shutdown;
 pub use self::task_shutdown::*;
 mod availability;

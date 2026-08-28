@@ -8,7 +8,10 @@ mod runtime;
 mod udp_response;
 mod udp_runtime;
 
+use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use dae_resident_core::{ResidentDnsUdpFuture, ResidentDnsUdpResolver};
 
 pub use cache::{
     ResidentDnsFlightPermit, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
@@ -42,6 +45,16 @@ pub use udp_response::fit_dns_response_to_udp_request;
 pub use udp_runtime::ResidentDnsUdpRuntimeConfig;
 
 pub const DNS_MAX_UDP_MESSAGE_SIZE: usize = u16::MAX as usize;
+
+impl ResidentDnsUdpResolver for ResidentDnsDispatcher {
+    fn query_udp<'a>(
+        &'a self,
+        original_dst: SocketAddr,
+        request: &'a [u8],
+    ) -> ResidentDnsUdpFuture<'a> {
+        Box::pin(async move { ResidentDnsDispatcher::query_udp(self, original_dst, request).await })
+    }
+}
 
 fn unix_now() -> i64 {
     SystemTime::now()
