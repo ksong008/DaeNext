@@ -87,7 +87,11 @@ where
         .write_all(&obfs_request)
         .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
 
-    let (_head, leftover) = read_http_head_and_leftover(stream)?;
+    let (_head, leftover) = crate::shared_transport::dataplane::read_http_head_with_leftover(
+        stream,
+        8192,
+        OutboundError::BadShadowsocks,
+    )?;
     let mut reader = PrefixReader::new(leftover, stream);
     let mut server_salt = vec![0_u8; salts.server.len()];
     reader
@@ -137,7 +141,11 @@ pub fn simple_obfs_http_request_with_body(
 pub fn read_simple_obfs_http_request(
     stream: &mut impl Read,
 ) -> Result<Sip003SimpleObfsHttpRequest, OutboundError> {
-    let (head, mut leftover) = read_http_head_and_leftover(stream)?;
+    let (head, mut leftover) = crate::shared_transport::dataplane::read_http_head_with_leftover(
+        stream,
+        8192,
+        OutboundError::BadShadowsocks,
+    )?;
     let text =
         std::str::from_utf8(&head).map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     let mut lines = text.split("\r\n");
@@ -213,39 +221,6 @@ pub fn encode_simple_obfs_http_shadowsocks_response(
     .into_bytes();
     out.extend_from_slice(&inner);
     Ok(out)
-}
-
-fn read_http_head_and_leftover(
-    stream: &mut impl Read,
-) -> Result<(Vec<u8>, Vec<u8>), OutboundError> {
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 256];
-    loop {
-        let n = stream
-            .read(&mut buf)
-            .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
-        if n == 0 {
-            break;
-        }
-        response.extend_from_slice(&buf[..n]);
-        if let Some(index) = find_header_end(&response) {
-            let leftover = response[index + 4..].to_vec();
-            let head = response[..index + 4].to_vec();
-            return Ok((head, leftover));
-        }
-        if response.len() > 8192 {
-            return Err(OutboundError::BadShadowsocks(
-                "simple-obfs HTTP header too large".to_owned(),
-            ));
-        }
-    }
-    Err(OutboundError::BadShadowsocks(
-        "incomplete simple-obfs HTTP header".to_owned(),
-    ))
-}
-
-fn find_header_end(input: &[u8]) -> Option<usize> {
-    input.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
 struct PrefixReader<'a, S> {

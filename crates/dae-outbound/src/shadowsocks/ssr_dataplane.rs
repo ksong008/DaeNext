@@ -149,7 +149,11 @@ pub fn read_shadowsocksr_http_simple_request(
     options: &ShadowsocksRThreeLayerOptions,
 ) -> Result<ShadowsocksRThreeLayerRequest, OutboundError> {
     validate_supported_stack(cipher, options)?;
-    let (head, remainder) = read_http_head_with_remainder(stream)?;
+    let (head, remainder) = crate::shared_transport::dataplane::read_http_head_with_leftover(
+        stream,
+        16384,
+        OutboundError::BadShadowsocks,
+    )?;
     if !remainder.is_empty() {
         return Err(OutboundError::BadShadowsocks(
             "SSR http_simple request carried unexpected body bytes".to_owned(),
@@ -245,7 +249,11 @@ fn read_http_simple_response_payload(
     stream: &mut impl Read,
     expected_len: usize,
 ) -> Result<Vec<u8>, OutboundError> {
-    let (head, mut body) = read_http_head_with_remainder(stream)?;
+    let (head, mut body) = crate::shared_transport::dataplane::read_http_head_with_leftover(
+        stream,
+        16384,
+        OutboundError::BadShadowsocks,
+    )?;
     let head_text =
         std::str::from_utf8(&head).map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     let status_line = head_text
@@ -266,34 +274,6 @@ fn read_http_simple_response_payload(
     }
     body.truncate(expected_len);
     Ok(body)
-}
-
-fn read_http_head_with_remainder(
-    stream: &mut impl Read,
-) -> Result<(Vec<u8>, Vec<u8>), OutboundError> {
-    let mut buf = Vec::new();
-    let mut chunk = [0_u8; 256];
-    loop {
-        let n = stream
-            .read(&mut chunk)
-            .map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
-        if n == 0 {
-            return Err(OutboundError::BadShadowsocks(
-                "incomplete SSR HTTP obfs head".to_owned(),
-            ));
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if let Some(pos) = find_header_end(&buf) {
-            let body = buf[pos + 4..].to_vec();
-            buf.truncate(pos + 4);
-            return Ok((buf, body));
-        }
-        if buf.len() > 16384 {
-            return Err(OutboundError::BadShadowsocks(
-                "SSR HTTP obfs head too large".to_owned(),
-            ));
-        }
-    }
 }
 
 fn stream_encrypt_with_iv(
@@ -432,8 +412,4 @@ fn hex_nibble(byte: u8) -> Result<u8, OutboundError> {
             "bad SSR percent escape byte: {byte}"
         ))),
     }
-}
-
-fn find_header_end(input: &[u8]) -> Option<usize> {
-    input.windows(4).position(|window| window == b"\r\n\r\n")
 }

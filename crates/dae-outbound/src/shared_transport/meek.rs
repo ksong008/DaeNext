@@ -112,7 +112,13 @@ pub fn meek_polling_exchange(
 }
 
 fn read_http_response_body(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundError> {
-    let (head, mut leftover) = read_http_head_and_leftover(stream)?;
+    let (head, mut leftover) = super::dataplane::read_http_head_with_leftover(
+        stream,
+        8192,
+        OutboundError::BadSharedTransport,
+    )?;
+    let head = String::from_utf8(head)
+        .map_err(|error| OutboundError::BadSharedTransport(error.to_string()))?;
     let content_length = crate::shared_transport::bounded_http_message_body_length(
         content_length(&head)?,
         "meek response",
@@ -135,35 +141,6 @@ fn read_http_response_body(stream: &mut TcpStream) -> Result<Vec<u8>, OutboundEr
     }
     leftover.truncate(content_length);
     Ok(leftover)
-}
-
-fn read_http_head_and_leftover(stream: &mut TcpStream) -> Result<(String, Vec<u8>), OutboundError> {
-    let mut data = Vec::new();
-    let mut buf = [0_u8; 256];
-    loop {
-        let n = stream
-            .read(&mut buf)
-            .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
-        if n == 0 {
-            return Err(OutboundError::BadSharedTransport(
-                "incomplete meek response".to_owned(),
-            ));
-        }
-        data.extend_from_slice(&buf[..n]);
-        if data.len() > 8192 {
-            return Err(OutboundError::BadSharedTransport(
-                "meek response header too large".to_owned(),
-            ));
-        }
-        if let Some(index) = data.windows(4).position(|window| window == b"\r\n\r\n") {
-            let body_start = index + 4;
-            let leftover = data[body_start..].to_vec();
-            data.truncate(body_start);
-            let head = String::from_utf8(data)
-                .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
-            return Ok((head, leftover));
-        }
-    }
 }
 
 fn content_length(head: &str) -> Result<usize, OutboundError> {

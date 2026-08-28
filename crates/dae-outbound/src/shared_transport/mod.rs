@@ -64,12 +64,13 @@ mod body_length_tests {
 pub use dataplane::{
     DEFAULT_WS_KEY, HttpUpgradeOptions, SharedTransportLoopbackReport, SimpleObfsHttpOptions,
     WS_ACCEPT_SAMPLE, WS_MASK_KEY, WebSocketClientHandshake, http_upgrade_exchange,
-    http_upgrade_request, read_http_head, read_websocket_binary_frame, simpleobfs_http_exchange,
-    simpleobfs_http_request, validate_http_status, validate_websocket_handshake_response,
-    websocket_accept_for_key, websocket_client_binary_frame,
-    websocket_client_binary_frame_with_random_mask, websocket_client_handshake,
-    websocket_client_handshake_key, websocket_client_handshake_request, websocket_client_mask_key,
-    websocket_exchange, websocket_handshake_request, websocket_server_binary_frame,
+    http_upgrade_request, read_http_head, read_http_head_with_leftover,
+    read_websocket_binary_frame, simpleobfs_http_exchange, simpleobfs_http_request,
+    validate_http_status, validate_websocket_handshake_response, websocket_accept_for_key,
+    websocket_client_binary_frame, websocket_client_binary_frame_with_random_mask,
+    websocket_client_handshake, websocket_client_handshake_key, websocket_client_handshake_request,
+    websocket_client_mask_key, websocket_exchange, websocket_handshake_request,
+    websocket_server_binary_frame,
 };
 pub use ech::{
     ECH_CONFIG_LIST_MAX_BASE64_BYTES, ECH_CONFIG_LIST_MAX_BYTES, EchConfigList, EchConfigListError,
