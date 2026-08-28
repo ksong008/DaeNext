@@ -10,6 +10,8 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dae_core_types::PayloadByteReservation;
+
 #[path = "udp_io/syscall_batch.rs"]
 mod syscall_batch;
 pub use syscall_batch::{UdpBatchReceiver, UdpSendMessage, try_sendmmsg};
@@ -193,6 +195,7 @@ pub struct UdpPayload {
     bytes: Vec<u8>,
     pool: Option<UdpPayloadPoolLease>,
     retained_owner: Option<Box<dyn Send>>,
+    retained_reservation: Option<PayloadByteReservation>,
 }
 
 impl UdpPayload {
@@ -201,6 +204,7 @@ impl UdpPayload {
             bytes,
             pool: None,
             retained_owner: None,
+            retained_reservation: None,
         }
     }
 
@@ -209,6 +213,7 @@ impl UdpPayload {
             bytes,
             pool: Some(pool),
             retained_owner: None,
+            retained_reservation: None,
         }
     }
 
@@ -217,10 +222,21 @@ impl UdpPayload {
     }
 
     pub fn attach_retained_owner<T: Send + 'static>(&mut self, owner: T) -> Result<(), T> {
-        if self.retained_owner.is_some() {
+        if self.retained_owner.is_some() || self.retained_reservation.is_some() {
             return Err(owner);
         }
         self.retained_owner = Some(Box::new(owner));
+        Ok(())
+    }
+
+    pub fn attach_payload_reservation(
+        &mut self,
+        reservation: PayloadByteReservation,
+    ) -> Result<(), PayloadByteReservation> {
+        if self.retained_owner.is_some() || self.retained_reservation.is_some() {
+            return Err(reservation);
+        }
+        self.retained_reservation = Some(reservation);
         Ok(())
     }
 }

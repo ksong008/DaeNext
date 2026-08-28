@@ -143,13 +143,16 @@ async fn run_udp_direct_session_actor(
         Arc::clone(&context.active_sessions),
         Arc::clone(&context.metrics),
     );
-    append_event(
+    append_event_with_metadata(
         &context.event_file,
         &context.event_lock,
-        json!({
-            "event": "udp_session_started",
-            "packetSession": key.to_value(),
-        }),
+        ResidentEventMetadata::new(ResidentEventKind::UdpSessionStarted),
+        || {
+            json!({
+                "event": ResidentEventKind::UdpSessionStarted.name(),
+                "packetSession": key.to_value(),
+            })
+        },
     );
 
     let mut packets = 0_u64;
@@ -296,15 +299,18 @@ async fn run_udp_direct_session_actor(
         }
     }
 
-    append_event(
+    append_event_with_metadata(
         &context.event_file,
         &context.event_lock,
-        json!({
-            "event": "udp_session_stopped",
-            "reason": stop_reason,
-            "packet_count": packets,
-            "packetSession": key.to_value(),
-        }),
+        ResidentEventMetadata::new(ResidentEventKind::UdpSessionStopped),
+        || {
+            json!({
+                "event": ResidentEventKind::UdpSessionStopped.name(),
+                "reason": stop_reason,
+                "packet_count": packets,
+                "packetSession": key.to_value(),
+            })
+        },
     );
 }
 
@@ -366,16 +372,19 @@ async fn drain_direct_udp_session_responses(
             }
             Err(err) => {
                 if err.should_log() {
-                    append_event(
+                    append_event_with_metadata(
                         &context.event_file,
                         &context.event_lock,
-                        json!({
-                            "event": "udp_reply_failed",
-                            "peer": resident_socket_addr_display(key.peer()),
-                            "original_dst": resident_socket_addr_display(key.original_destination()),
-                            "upstream_peer": resident_socket_addr_display(upstream_peer),
-                            "error": err.to_string(),
-                        }),
+                        ResidentEventMetadata::new(ResidentEventKind::UdpReplyFailed),
+                        || {
+                            json!({
+                                "event": ResidentEventKind::UdpReplyFailed.name(),
+                                "peer": resident_socket_addr_display(key.peer()),
+                                "original_dst": resident_socket_addr_display(key.original_destination()),
+                                "upstream_peer": resident_socket_addr_display(upstream_peer),
+                                "error": err.to_string(),
+                            })
+                        },
                     );
                 }
                 return Err(format!("direct-reply-failed: {err}"));

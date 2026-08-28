@@ -136,10 +136,11 @@ async fn record_udp_session_exchange_result(
             if let Some(payload) = forwarded_payload {
                 if let Err(err) = udp_reply.try_send_detached(original_dst, peer, payload, true) {
                     if err.should_log() {
-                        append_event(
+                        append_event_with_metadata(
                             &event_file,
                             &event_lock,
-                            json!({"event": "udp_reply_failed", "peer": resident_socket_addr_display(peer), "original_dst": resident_socket_addr_display(original_dst), "error": err.to_string()}),
+                            ResidentEventMetadata::new(ResidentEventKind::UdpReplyFailed),
+                            || json!({"event": ResidentEventKind::UdpReplyFailed.name(), "peer": resident_socket_addr_display(peer), "original_dst": resident_socket_addr_display(original_dst), "error": err.to_string()}),
                         );
                     }
                     return;

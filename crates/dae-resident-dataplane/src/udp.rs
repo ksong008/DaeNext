@@ -41,7 +41,7 @@ fn admit_udp_payload(
     admission: &ResidentUdpPayloadAdmission,
 ) -> Result<(), ResidentUdpPayloadAdmissionError> {
     let permit = admission.try_acquire(payload.len())?;
-    let _ = payload.attach_retained_owner(permit);
+    let _ = payload.attach_payload_reservation(permit.into_payload_reservation());
     Ok(())
 }
 

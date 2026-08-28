@@ -71,13 +71,16 @@ async fn run_udp_session_actor(
         Arc::clone(&context.metrics),
     );
     let packet_session = key.to_value();
-    append_event(
+    append_event_with_metadata(
         &context.event_file,
         &context.event_lock,
-        json!({
-            "event": "udp_session_started",
-            "packetSession": packet_session.clone(),
-        }),
+        ResidentEventMetadata::new(ResidentEventKind::UdpSessionStarted),
+        || {
+            json!({
+                "event": ResidentEventKind::UdpSessionStarted.name(),
+                "packetSession": packet_session.clone(),
+            })
+        },
     );
 
     let mut packets = 0_u64;
@@ -259,15 +262,18 @@ async fn run_udp_session_actor(
     if let Some(mut executor) = executor {
         let _ = time::timeout(RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE, executor.shutdown()).await;
     }
-    append_event(
+    append_event_with_metadata(
         &context.event_file,
         &context.event_lock,
-        json!({
-            "event": "udp_session_stopped",
-            "reason": stop_reason,
-            "packet_count": packets,
-            "packetSession": packet_session,
-        }),
+        ResidentEventMetadata::new(ResidentEventKind::UdpSessionStopped),
+        || {
+            json!({
+                "event": ResidentEventKind::UdpSessionStopped.name(),
+                "reason": stop_reason,
+                "packet_count": packets,
+                "packetSession": packet_session,
+            })
+        },
     );
 }
 

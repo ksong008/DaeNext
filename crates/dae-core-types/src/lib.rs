@@ -4,6 +4,7 @@ pub mod dns;
 pub mod metrics;
 pub mod network;
 pub mod outbound;
+pub mod payload;
 pub mod reload;
 pub mod tproxy;
 
@@ -21,6 +22,7 @@ pub use network::{
     L4ProtoStr, NetworkTypeId,
 };
 pub use outbound::OutboundIndex;
+pub use payload::{PayloadByteReservation, PayloadByteReservationOwner};
 pub use reload::{RELOAD_DONE, RELOAD_ERROR, RELOAD_PROCESSING, RELOAD_SEND};
 pub use tproxy::{
     BPF_PIN_ROOT, LOOPBACK_IFINDEX, RECOGNIZE, TASK_COMM_LEN, TPROXY_MARK, TPROXY_MARK_STRING,
