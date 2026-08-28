@@ -533,7 +533,8 @@ mod http_control_character_tests {
     use std::io::Cursor;
 
     use super::{
-        HttpUpgradeOptions, http_upgrade_request, read_http_head_with_leftover, validate_http_field,
+        HttpUpgradeOptions, http_upgrade_request, read_http_head_with_leftover, read_http_message,
+        validate_http_field,
     };
     use crate::error::OutboundError;
 
@@ -569,6 +570,23 @@ mod http_control_character_tests {
                 .unwrap();
         assert_eq!(head, b"HTTP/1.1 101 Switching Protocols\r\n\r\n");
         assert_eq!(leftover, b"first");
+    }
+
+    #[test]
+    fn shared_http_message_reader_reads_only_declared_body() {
+        let mut stream = Cursor::new(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhelloextra");
+        let (head, body) = read_http_message(&mut stream, "fixture").unwrap();
+        assert!(head.ends_with(b"\r\n\r\n"));
+        assert_eq!(body, b"hello");
+    }
+
+    #[test]
+    fn shared_http_message_reader_rejects_incomplete_body() {
+        let mut stream = Cursor::new(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nno");
+        let error = read_http_message(&mut stream, "fixture")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("incomplete fixture body"));
     }
 
     #[test]
