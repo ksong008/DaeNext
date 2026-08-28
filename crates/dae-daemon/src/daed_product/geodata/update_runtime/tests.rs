@@ -11,6 +11,32 @@ fn geodata_update_runtime_is_bounded_by_the_two_resource_kinds() {
 }
 
 #[test]
+fn geodata_update_runtime_starts_workers_only_when_submitted() {
+    let dir = std::env::temp_dir().join(format!(
+        "daed-product-geodata-update-runtime-lazy-{}",
+        fastrand::u64(..)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let control_runtime = product_test_control_runtime();
+    let runtime = ProductGeodataUpdateRuntime::start_with_config(
+        ProductGeodataUpdateRuntimeConfig::for_test(),
+        ProductGeodataUpdateContext::new(
+            dir.join("daed.db"),
+            &dir.join("web"),
+            Arc::new(ProductRuntimeManager::new()),
+            Arc::clone(&control_runtime),
+            Arc::new(ProductGeodataUpdateCoordinator::default()),
+            Arc::new(Mutex::new(GeodataStatusCache::default())),
+        ),
+    )
+    .unwrap();
+    assert_eq!(runtime.startup_fields()["geodataUpdateWorkers"], "0");
+    drop(runtime);
+    let _ = control_runtime.shutdown();
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn geodata_update_runtime_detaches_slow_work_and_rejects_same_kind_immediately() {
     let fixture = GeodataUpdateRuntimeFixture::new("detach");
     let runtime = fixture.start_runtime();

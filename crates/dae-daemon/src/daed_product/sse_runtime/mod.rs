@@ -70,12 +70,15 @@ pub(super) struct ProductSseSubmissionError {
 
 pub(super) struct ProductSseRuntime {
     config: ProductSseRuntimeConfig,
+    app: std::sync::Weak<AppState>,
     sender: Mutex<Option<tokio::sync::mpsc::Sender<ProductSseJob>>>,
+    receiver: Mutex<Option<tokio::sync::mpsc::Receiver<ProductSseJob>>>,
     stop: tokio::sync::watch::Sender<bool>,
     worker: Mutex<Option<ProductSseWorkerHandle>>,
     admission: Arc<ProductSseAdmission>,
     metrics: Arc<ProductHttpMetrics>,
     overview: tokio::sync::broadcast::Sender<Arc<ProductRuntimeOverviewTick>>,
+    overview_full_cache: Arc<ProductRuntimeOverviewFullCache>,
 }
 
 impl ProductSseRuntime {
@@ -107,25 +110,47 @@ impl ProductSseRuntime {
         let (sender, receiver) = tokio::sync::mpsc::channel(config.queue_capacity);
         let (overview, _) = runtime_overview_feed();
         let overview_full_cache = Arc::new(ProductRuntimeOverviewFullCache::default());
-        let (stop, stop_receiver) = tokio::sync::watch::channel(false);
-        let worker = start_product_sse_worker(
-            config,
-            app,
-            receiver,
-            stop_receiver,
-            Arc::clone(&metrics),
-            overview.clone(),
-            Arc::clone(&overview_full_cache),
-        )?;
+        let (stop, _) = tokio::sync::watch::channel(false);
         Ok(Arc::new(Self {
             config,
+            app,
             sender: Mutex::new(Some(sender)),
+            receiver: Mutex::new(Some(receiver)),
             stop,
-            worker: Mutex::new(Some(worker)),
+            worker: Mutex::new(None),
             admission,
             metrics,
             overview,
+            overview_full_cache,
         }))
+    }
+
+    fn ensure_worker(&self) -> io::Result<()> {
+        let mut worker = self
+            .worker
+            .lock()
+            .map_err(|_| io::Error::other("SSE worker lock poisoned"))?;
+        if worker.is_some() {
+            return Ok(());
+        }
+        let receiver = self
+            .receiver
+            .lock()
+            .map_err(|_| io::Error::other("SSE receiver lock poisoned"))?
+            .take()
+            .ok_or_else(|| io::Error::other("SSE receiver is unavailable"))?;
+        let stop_receiver = self.stop.subscribe();
+        let started = start_product_sse_worker(
+            self.config,
+            self.app.clone(),
+            receiver,
+            stop_receiver,
+            Arc::clone(&self.metrics),
+            self.overview.clone(),
+            Arc::clone(&self.overview_full_cache),
+        )?;
+        *worker = Some(started);
+        Ok(())
     }
 
     pub(super) fn submit(
@@ -137,6 +162,22 @@ impl ProductSseRuntime {
         http_metrics: Arc<ProductHttpMetrics>,
         ui_runtime: &Arc<ProductUiRuntime>,
     ) -> Result<(), Box<ProductSseSubmissionError>> {
+        if *self.stop.borrow() {
+            self.metrics.sse_rejected_unavailable();
+            return Err(Box::new(ProductSseSubmissionError {
+                stream,
+                request,
+                response: HttpResponse::json(503, json!({"error": "SSE runtime is unavailable"})),
+            }));
+        }
+        if let Err(error) = self.ensure_worker() {
+            self.metrics.sse_rejected_unavailable();
+            return Err(Box::new(ProductSseSubmissionError {
+                stream,
+                request,
+                response: HttpResponse::json(503, json!({"error": error.to_string()})),
+            }));
+        }
         let admission = match self.admission.acquire(user_id) {
             Ok(lease) => lease,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -220,7 +261,13 @@ impl ProductSseRuntime {
 
     pub(super) fn startup_fields(&self) -> BTreeMap<String, String> {
         let mut fields = BTreeMap::new();
-        fields.insert("sseRuntimeWorkers".to_owned(), "1".to_owned());
+        let workers = self
+            .worker
+            .lock()
+            .ok()
+            .map(|worker| usize::from(worker.is_some()))
+            .unwrap_or(0);
+        fields.insert("sseRuntimeWorkers".to_owned(), workers.to_string());
         fields.insert(
             "sseConnectionLimit".to_owned(),
             self.config.connection_limit.to_string(),
