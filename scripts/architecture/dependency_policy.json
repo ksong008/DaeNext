@@ -297,7 +297,6 @@
       "normal": [
         "dae-core-types",
         "dae-datapath",
-        "dae-dns",
         "dae-ebpf-support",
         "dae-netutil",
         "dae-outbound",
@@ -331,7 +330,6 @@
       "normal": [
         "dae-core-types",
         "dae-datapath",
-        "dae-dns",
         "dae-ebpf-support",
         "dae-netutil",
         "dae-outbound",

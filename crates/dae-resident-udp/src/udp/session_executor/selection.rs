@@ -1,10 +1,8 @@
 use super::*;
-use dae_dns::DNS_DEFAULT_PORT;
-
 impl UdpSessionExecutor {
     #[cfg(any(test, feature = "test-support"))]
     pub fn new(proxy: &ResidentProxyPlan, original_dst: SocketAddr) -> Self {
-        if original_dst.port() == DNS_DEFAULT_PORT {
+        if original_dst.port() == RESIDENT_DNS_DEFAULT_PORT {
             return Self::Dns;
         }
         Self::new_proxy_packet(proxy)
@@ -34,7 +32,7 @@ impl UdpSessionExecutor {
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
         anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     ) -> Self {
-        if original_dst.port() == DNS_DEFAULT_PORT {
+        if original_dst.port() == RESIDENT_DNS_DEFAULT_PORT {
             return Self::Dns;
         }
         Self::new_proxy_packet_with_transport_owner(

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 pub const RESIDENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const RESIDENT_DNS_DEFAULT_PORT: u16 = 53;
 pub const RESIDENT_TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub const RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 pub const RESIDENT_ANYTLS_RELAY_BUFFER_SIZE: usize = 32 * 1024;
