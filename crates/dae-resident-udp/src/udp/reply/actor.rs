@@ -51,13 +51,18 @@ impl fmt::Display for UdpReplyError {
     }
 }
 
+enum UdpReplyCompletion {
+    Result(oneshot::Sender<Result<(), UdpReplyError>>),
+    Reclaim(oneshot::Sender<Result<Vec<u8>, UdpReplyError>>),
+}
+
 struct UdpReplyRequest {
     original_dst: SocketAddr,
     peer: SocketAddr,
     payload: Vec<u8>,
     _payload_admission: ResidentUdpPayloadPermit,
     deadline: time::Instant,
-    response: Option<oneshot::Sender<Result<(), UdpReplyError>>>,
+    response: Option<UdpReplyCompletion>,
     download_bytes_on_success: usize,
 }
 
@@ -112,7 +117,60 @@ impl UdpReplyHandle {
             payload,
             _payload_admission: payload_admission,
             deadline,
-            response: Some(response),
+            response: Some(UdpReplyCompletion::Result(response)),
+            download_bytes_on_success: 0,
+        });
+        self.metrics.udp_reply_queued();
+        match time::timeout_at(deadline, receiver).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(UdpReplyError::DispatcherClosed),
+            Err(_) => Err(UdpReplyError::ResponseTimedOut),
+        }
+    }
+
+    pub async fn send_reclaimable(
+        &self,
+        original_dst: SocketAddr,
+        peer: SocketAddr,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, UdpReplyError> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(UdpReplyError::Closing);
+        }
+        let payload_admission = self
+            .payload_admission
+            .try_acquire(payload.len())
+            .map_err(UdpReplyError::PayloadLimit)?;
+        let deadline = time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT;
+        let (response, receiver) = oneshot::channel();
+        let sender = self.sender_for(original_dst, peer);
+        let permit = match sender.try_reserve() {
+            Ok(permit) => permit,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                match time::timeout_at(deadline, sender.reserve()).await {
+                    Ok(Ok(permit)) => permit,
+                    Ok(Err(_)) => return Err(UdpReplyError::DispatcherClosed),
+                    Err(_) => {
+                        self.metrics.udp_reply_queue_full();
+                        self.metrics.udp_reply_failed();
+                        return Err(UdpReplyError::QueueFull);
+                    }
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                return Err(UdpReplyError::DispatcherClosed);
+            }
+        };
+        if self.closing.load(Ordering::Acquire) {
+            return Err(UdpReplyError::Closing);
+        }
+        permit.send(UdpReplyRequest {
+            original_dst,
+            peer,
+            payload,
+            _payload_admission: payload_admission,
+            deadline,
+            response: Some(UdpReplyCompletion::Reclaim(response)),
             download_bytes_on_success: 0,
         });
         self.metrics.udp_reply_queued();
@@ -369,7 +427,18 @@ async fn run_udp_reply_actor(
                         metrics.add_download(request.download_bytes_on_success);
                     }
                     if let Some(response) = request.response {
-                        let _ = response.send(result);
+                        match response {
+                            UdpReplyCompletion::Result(response) => {
+                                let _ = response.send(result);
+                            }
+                            UdpReplyCompletion::Reclaim(response) => {
+                                let result = match result {
+                                    Ok(()) => Ok(request.payload),
+                                    Err(error) => Err(error),
+                                };
+                                let _ = response.send(result);
+                            }
+                        }
                     }
                 }
             }
@@ -451,7 +520,7 @@ mod tests {
                     .try_acquire(1)
                     .unwrap(),
                 deadline: time::Instant::now() + RESIDENT_UDP_RESPONSE_TIMEOUT,
-                response: Some(response),
+                response: Some(UdpReplyCompletion::Result(response)),
                 download_bytes_on_success: 0,
             })
             .unwrap();
@@ -461,9 +530,15 @@ mod tests {
         assert!(!send.is_finished());
 
         let first = receiver.recv().await.unwrap();
-        let _ = first.response.unwrap().send(Ok(()));
+        let UdpReplyCompletion::Result(response) = first.response.unwrap() else {
+            panic!("expected result completion");
+        };
+        let _ = response.send(Ok(()));
         let second = receiver.recv().await.unwrap();
-        let _ = second.response.unwrap().send(Ok(()));
+        let UdpReplyCompletion::Result(response) = second.response.unwrap() else {
+            panic!("expected result completion");
+        };
+        let _ = response.send(Ok(()));
 
         send.await.unwrap().unwrap();
         assert_eq!(metrics.snapshot()["udpReplyQueueFull"].as_u64().unwrap(), 0);
@@ -589,19 +664,20 @@ mod tests {
                 async move { progressing_handle.send(target, second_peer, vec![3]).await },
             );
         let mut second_request = second_receiver.recv().await.unwrap();
-        second_request
-            .response
-            .take()
-            .unwrap()
-            .send(Ok(()))
-            .unwrap();
+        let UdpReplyCompletion::Result(response) = second_request.response.take().unwrap() else {
+            panic!("expected result completion");
+        };
+        response.send(Ok(())).unwrap();
         drop(second_request);
         progressing.await.unwrap().unwrap();
         assert!(!blocked.is_finished());
 
         drop(first_receiver.recv().await.unwrap());
         let mut first_request = first_receiver.recv().await.unwrap();
-        first_request.response.take().unwrap().send(Ok(())).unwrap();
+        let UdpReplyCompletion::Result(response) = first_request.response.take().unwrap() else {
+            panic!("expected result completion");
+        };
+        response.send(Ok(())).unwrap();
         drop(first_request);
         blocked.await.unwrap().unwrap();
         assert_eq!(payload_admission.current(), 0);
