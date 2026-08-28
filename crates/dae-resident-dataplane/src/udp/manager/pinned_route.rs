@@ -169,19 +169,22 @@ impl ResidentUdpPinnedRoute {
                         )
                     },
                 );
-                append_event(
+                append_event_with_metadata(
                     event_file,
                     event_lock,
-                    json!({
-                        "event": "udp_packet_dropped",
-                        "reason": "resident UDP selected block outbound",
-                        "peer": resident_socket_addr_display(packet.peer),
-                        "original_dst": resident_socket_addr_display(original_dst),
-                        "initial_outbound": route.initial_outbound,
-                        "final_outbound": route.final_outbound,
-                        "network": resident_udp_network_name(original_dst),
-                        "dscp": dscp,
-                    }),
+                    ResidentEventMetadata::new(ResidentEventKind::UdpPacketDropped),
+                    || {
+                        json!({
+                            "event": "udp_packet_dropped",
+                            "reason": "resident UDP selected block outbound",
+                            "peer": resident_socket_addr_display(packet.peer),
+                            "original_dst": resident_socket_addr_display(original_dst),
+                            "initial_outbound": route.initial_outbound,
+                            "final_outbound": route.final_outbound,
+                            "network": resident_udp_network_name(original_dst),
+                            "dscp": dscp,
+                        })
+                    },
                 );
             }
         }

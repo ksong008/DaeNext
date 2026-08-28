@@ -9,6 +9,7 @@ pub enum ResidentEventKind {
     TcpRouteChosen,
     UdpDnsPacketFinished,
     UdpPacketFinished,
+    UdpPacketDropped,
     UdpReplyFailed,
     UdpRouteChosen,
     UdpSessionStarted,
@@ -23,6 +24,7 @@ impl ResidentEventKind {
             Self::TcpRouteChosen => "tcp_route_chosen",
             Self::UdpDnsPacketFinished => "udp_dns_packet_finished",
             Self::UdpPacketFinished => "udp_packet_finished",
+            Self::UdpPacketDropped => "udp_packet_dropped",
             Self::UdpReplyFailed => "udp_reply_failed",
             Self::UdpRouteChosen => "udp_route_chosen",
             Self::UdpSessionStarted => "udp_session_started",
@@ -36,6 +38,7 @@ impl ResidentEventKind {
             Self::UdpDnsPacketFinished | Self::UdpPacketFinished => {
                 ResidentEventLifecycleClass::Packet
             }
+            Self::UdpPacketDropped => ResidentEventLifecycleClass::Packet,
             Self::UdpReplyFailed => ResidentEventLifecycleClass::Error,
             Self::UdpSessionStarted => ResidentEventLifecycleClass::Startup,
             Self::DnsBindQueryFinished
