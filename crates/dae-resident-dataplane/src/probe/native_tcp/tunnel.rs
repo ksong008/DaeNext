@@ -73,63 +73,6 @@ where
     }
 }
 
-pub(super) struct PrefixedNativeTcpTunnel<T> {
-    prefix: Vec<u8>,
-    offset: usize,
-    stream: T,
-}
-
-impl<T> PrefixedNativeTcpTunnel<T> {
-    pub(super) fn new(prefix: Vec<u8>, stream: T) -> Self {
-        Self {
-            prefix,
-            offset: 0,
-            stream,
-        }
-    }
-}
-
-impl<T> AsyncRead for PrefixedNativeTcpTunnel<T>
-where
-    T: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        if self.offset < self.prefix.len() && buf.remaining() > 0 {
-            let available = &self.prefix[self.offset..];
-            let len = available.len().min(buf.remaining());
-            buf.put_slice(&available[..len]);
-            self.offset += len;
-            return Poll::Ready(Ok(()));
-        }
-        Pin::new(&mut self.stream).poll_read(cx, buf)
-    }
-}
-
-impl<T> AsyncWrite for PrefixedNativeTcpTunnel<T>
-where
-    T: AsyncWrite + Unpin,
-{
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write(cx, buf)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.stream).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.stream).poll_shutdown(cx)
-    }
-}
-
 pub(super) struct SpawnedNativeTcpTunnel<T = DuplexStream> {
     stream: T,
     task: Option<JoinHandle<()>>,
