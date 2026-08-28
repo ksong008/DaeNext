@@ -8,6 +8,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use dae_core_types::Ss2022UdpReplayMetricsSnapshot;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
 #[cfg(test)]
 use dae_outbound::hysteria2::{HYSTERIA2_MAX_UDP_MESSAGE_LENGTH, decode_hysteria2_udp_message};
@@ -27,8 +28,7 @@ use dae_outbound::{
         decode_stream_packet_payload_prefix, encode_stream_packet_frame,
     },
     shadowsocks::{
-        Ss2022UdpCodec, Ss2022UdpReplayMetricsSnapshot,
-        decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
+        Ss2022UdpCodec, decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
         ss2022_udp_unix_timestamp_now,
     },
     shared_transport::{

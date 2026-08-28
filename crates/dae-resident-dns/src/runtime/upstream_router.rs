@@ -83,7 +83,7 @@ impl ResidentDnsUpstreamRouter {
                         if err.no_alive
                             && let Some(resuscitator) = self.health_resuscitation.as_ref()
                         {
-                            resuscitator.trigger(outbound, proxy_network_type);
+                            resuscitator.trigger(outbound, proxy_network_type.into());
                         }
                         return Err(err.message);
                     }

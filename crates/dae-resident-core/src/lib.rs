@@ -55,7 +55,6 @@ pub use network_defaults::{
 };
 pub use payload_admission::{
     ResidentUdpPayloadAdmission, ResidentUdpPayloadAdmissionError, ResidentUdpPayloadPermit,
-    admit_udp_payload,
 };
 pub use relay_deadline::{reset_resident_relay_idle_deadline, resident_relay_idle_deadline};
 pub use resource_profile::*;
@@ -68,7 +67,7 @@ pub use task_set::{
 };
 
 pub trait ResidentHealthResuscitation: std::fmt::Debug + Send + Sync {
-    fn trigger(&self, outbound: u8, network_type: dae_outbound::NetworkType);
+    fn trigger(&self, outbound: u8, network_type: dae_core_types::NetworkTypeId);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

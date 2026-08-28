@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use dae_outbound::shadowsocks::Ss2022UdpReplayMetricsSnapshot;
+use dae_core_types::Ss2022UdpReplayMetricsSnapshot;
 use serde_json::{Value, json};
 
 #[path = "metrics/proxied_doh3.rs"]

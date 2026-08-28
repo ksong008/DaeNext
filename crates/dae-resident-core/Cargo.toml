@@ -11,7 +11,7 @@ test-support = []
 
 [dependencies]
 arc-swap.workspace = true
-dae-datapath.workspace = true
+dae-core-types.workspace = true
 dae-outbound.workspace = true
 h2.workspace = true
 libc.workspace = true

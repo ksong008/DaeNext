@@ -10,7 +10,7 @@ const RESIDENT_HEALTH_STOP_MONITOR_INTERVAL: Duration = Duration::from_millis(50
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResidentHealthResuscitationRequest {
     pub(super) outbound: u8,
-    pub(super) network_type: NetworkType,
+    pub(super) network_type: dae_core_types::NetworkTypeId,
 }
 
 #[derive(Clone)]
@@ -188,7 +188,7 @@ pub(super) async fn run_resident_health_resuscitation_dispatcher(
                 let Some(group) = proxy_groups.get(&request.outbound).cloned() else {
                     continue;
                 };
-                if !group.try_begin_resuscitation(request.network_type) {
+                if !group.try_begin_resuscitation(request.network_type.into()) {
                     continue;
                 }
                 let stop = Arc::clone(&stop);

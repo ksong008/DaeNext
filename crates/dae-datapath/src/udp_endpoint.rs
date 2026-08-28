@@ -1,6 +1,6 @@
 pub const DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES: i32 = 4096;
 pub const DEFAULT_NAT_TIMEOUT_MS: i64 = 180_000;
-pub const DNS_NAT_TIMEOUT_MS: i64 = 17_000;
+pub use dae_core_types::DNS_NAT_TIMEOUT_MS;
 pub const ANYFROM_TIMEOUT_MS: i64 = 5_000;
 pub const MAX_RETRY: i32 = 2;
 

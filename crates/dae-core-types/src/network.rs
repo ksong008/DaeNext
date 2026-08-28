@@ -4,6 +4,19 @@ pub const L4_PROTO_TCP: &str = "tcp";
 pub const L4_PROTO_UDP: &str = "udp";
 pub const IP_VERSION_4: &str = "4";
 pub const IP_VERSION_6: &str = "6";
+pub const DNS_NAT_TIMEOUT_MS: i64 = 17_000;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum NetworkTypeId {
+    DnsTcp4,
+    DnsTcp6,
+    DnsUdp4,
+    DnsUdp6,
+    Tcp4,
+    Tcp6,
+    DataUdp4,
+    DataUdp6,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum L4ProtoStr {
