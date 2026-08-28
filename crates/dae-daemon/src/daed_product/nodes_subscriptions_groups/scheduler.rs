@@ -1,11 +1,17 @@
 use super::*;
-use dae_product_subscription::{InvalidCronLogTracker, due_scheduled_subscriptions};
+use dae_product_subscription::{
+    InvalidCronLogTracker, due_scheduled_subscriptions, next_scheduled_subscription_deadline,
+};
 
 pub(crate) use dae_product_subscription::validate_subscription_cron_expression;
 
 mod lifecycle;
 
 pub(crate) use lifecycle::SubscriptionSchedulerHandle;
+
+pub(crate) fn notify_subscription_scheduler() {
+    lifecycle::notify_subscription_scheduler();
+}
 
 pub(crate) fn start_subscription_scheduler(
     state: PathBuf,
@@ -16,7 +22,7 @@ pub(crate) fn start_subscription_scheduler(
     lifecycle::start_subscription_scheduler(state, config_dir, runtime, control_runtime)
 }
 
-const SUBSCRIPTION_SCHEDULER_TICK: Duration = Duration::from_secs(60);
+const SUBSCRIPTION_SCHEDULER_RETRY: Duration = Duration::from_secs(60);
 
 #[cfg(test)]
 pub(crate) fn refresh_due_subscriptions_for_scheduler(
@@ -142,6 +148,12 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
         "runtimeReload": runtime_apply.report,
         "runtimeReloadError": runtime_apply.error,
     }))
+}
+
+fn subscription_scheduler_wait(state: &Path, now_unix: u64) -> io::Result<Option<Duration>> {
+    let conn = open_state_connection(state)?;
+    let deadline = next_scheduled_subscription_deadline(&conn, now_unix)?;
+    Ok(deadline.map(|deadline| Duration::from_secs(deadline.saturating_sub(now_unix).max(1))))
 }
 
 #[cfg(test)]
