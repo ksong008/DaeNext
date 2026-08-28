@@ -47,7 +47,7 @@ impl UdpDirectSessionKey {
     }
 
     pub fn idle_timeout(&self, session_idle_timeout: Duration) -> Duration {
-        if self.original_destination.port() == dae_dns::DNS_DEFAULT_PORT {
+        if self.original_destination.port() == RESIDENT_DNS_DEFAULT_PORT {
             RESIDENT_UDP_DNS_SESSION_IDLE_TIMEOUT
         } else {
             session_idle_timeout

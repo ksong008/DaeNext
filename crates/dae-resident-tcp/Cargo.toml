@@ -16,7 +16,6 @@ test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
 [dependencies]
 dae-core-types.workspace = true
 dae-datapath.workspace = true
-dae-dns.workspace = true
 dae-ebpf-support.workspace = true
 dae-netutil.workspace = true
 dae-outbound.workspace = true

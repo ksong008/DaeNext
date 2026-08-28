@@ -1,11 +1,9 @@
-use dae_dns::DNS_DEFAULT_PORT;
-
 use super::*;
-use crate::RESIDENT_UDP_RESPONSE_TIMEOUT;
 use crate::{DnsTcpFrameReader, write_dns_tcp_payload_async};
+use crate::{RESIDENT_DNS_DEFAULT_PORT, RESIDENT_UDP_RESPONSE_TIMEOUT};
 
 pub fn transparent_tcp_dns_destination(original_dst: SocketAddr) -> bool {
-    original_dst.port() == DNS_DEFAULT_PORT
+    original_dst.port() == RESIDENT_DNS_DEFAULT_PORT
 }
 
 pub fn transparent_tcp_dns_fast_path_applies(
@@ -62,13 +60,14 @@ pub async fn handle_transparent_tcp_dns_fast_path_async(
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
 
-    use dae_dns::DNS_DEFAULT_PORT;
-
     use super::*;
 
     #[test]
     fn transparent_tcp_dns_fast_path_uses_dns_default_port_without_an_explicit_route() {
-        let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), DNS_DEFAULT_PORT);
+        let dns_dst = SocketAddr::new(
+            Ipv4Addr::new(192, 0, 2, 53).into(),
+            RESIDENT_DNS_DEFAULT_PORT,
+        );
         let non_dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), 853);
 
         assert!(transparent_tcp_dns_destination(dns_dst));
@@ -79,7 +78,10 @@ mod tests {
 
     #[test]
     fn transparent_tcp_dns_fast_path_preserves_non_must_capture() {
-        let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), DNS_DEFAULT_PORT);
+        let dns_dst = SocketAddr::new(
+            Ipv4Addr::new(192, 0, 2, 53).into(),
+            RESIDENT_DNS_DEFAULT_PORT,
+        );
         let route = BpfRoutingResult {
             outbound: OutboundIndex::USER_DEFINED_MIN.value(),
             must: 0,
@@ -91,7 +93,10 @@ mod tests {
 
     #[test]
     fn transparent_tcp_dns_fast_path_honors_every_must_outbound_kind() {
-        let dns_dst = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 53).into(), DNS_DEFAULT_PORT);
+        let dns_dst = SocketAddr::new(
+            Ipv4Addr::new(192, 0, 2, 53).into(),
+            RESIDENT_DNS_DEFAULT_PORT,
+        );
         for outbound in [
             OUTBOUND_DIRECT,
             OUTBOUND_BLOCK,
