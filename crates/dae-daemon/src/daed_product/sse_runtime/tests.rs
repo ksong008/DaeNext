@@ -40,9 +40,7 @@ fn multiple_sse_connections_share_one_runtime_thread() {
         Arc::clone(&metrics),
     )
     .unwrap();
-    wait_until(Duration::from_secs(1), || {
-        named_thread_count("daed-sse-rt") == baseline_threads + 1
-    });
+    assert_eq!(named_thread_count("daed-sse-rt"), baseline_threads);
 
     let mut clients = Vec::new();
     for user_id in [1_i64, 1, 2, 2] {
@@ -58,6 +56,9 @@ fn multiple_sse_connections_share_one_runtime_thread() {
                 &app.ui_runtime,
             )
             .unwrap();
+        wait_until(Duration::from_secs(1), || {
+            named_thread_count("daed-sse-rt") == baseline_threads + 1
+        });
         read_until(&mut client, "event: runtime.overview");
         clients.push(client);
     }

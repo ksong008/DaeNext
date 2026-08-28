@@ -14,6 +14,7 @@ pub(in crate::daed_product) struct ProductGeodataUpdateRuntime {
     config: ProductGeodataUpdateRuntimeConfig,
     context: ProductGeodataUpdateContext,
     sender: Mutex<Option<std::sync::mpsc::SyncSender<ProductGeodataUpdateJob>>>,
+    receiver: Arc<Mutex<std::sync::mpsc::Receiver<ProductGeodataUpdateJob>>>,
     workers: Mutex<Vec<ProductGeodataUpdateWorkerHandle>>,
     metrics: Arc<ProductGeodataUpdateMetrics>,
     stopping: Arc<std::sync::atomic::AtomicBool>,
@@ -50,35 +51,47 @@ impl ProductGeodataUpdateRuntime {
         let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (sender, receiver) = std::sync::mpsc::sync_channel(config.queue_capacity);
         let receiver = Arc::new(Mutex::new(receiver));
-        let mut workers = Vec::with_capacity(config.worker_count);
-        for index in 0..config.worker_count {
+        Ok(Arc::new(Self {
+            config,
+            context,
+            sender: Mutex::new(Some(sender)),
+            receiver,
+            workers: Mutex::new(Vec::new()),
+            metrics,
+            stopping,
+        }))
+    }
+
+    fn ensure_workers(&self) -> io::Result<()> {
+        let mut workers = self
+            .workers
+            .lock()
+            .map_err(|_| io::Error::other("geodata update worker lock poisoned"))?;
+        if !workers.is_empty() {
+            return Ok(());
+        }
+        let mut started = Vec::with_capacity(self.config.worker_count);
+        for index in 0..self.config.worker_count {
             match start_product_geodata_update_worker(
                 index,
-                config,
-                context.clone(),
-                Arc::clone(&receiver),
-                Arc::clone(&metrics),
-                Arc::clone(&stopping),
+                self.config,
+                self.context.clone(),
+                Arc::clone(&self.receiver),
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.stopping),
             ) {
-                Ok(worker) => workers.push(worker),
+                Ok(worker) => started.push(worker),
                 Err(error) => {
-                    stopping.store(true, Ordering::Release);
-                    drop(sender);
-                    for worker in workers {
+                    self.stopping.store(true, Ordering::Release);
+                    for worker in started {
                         worker.join_if_finished();
                     }
                     return Err(error);
                 }
             }
         }
-        Ok(Arc::new(Self {
-            config,
-            context,
-            sender: Mutex::new(Some(sender)),
-            workers: Mutex::new(workers),
-            metrics,
-            stopping,
-        }))
+        *workers = started;
+        Ok(())
     }
 
     pub(in crate::daed_product) fn submit(
@@ -95,6 +108,15 @@ impl ProductGeodataUpdateRuntime {
                 request,
                 503,
                 "geodata update runtime is unavailable",
+            ));
+        }
+        if let Err(error) = self.ensure_workers() {
+            self.metrics.rejected_unavailable();
+            return Err(submission_error(
+                stream,
+                request,
+                503,
+                &format!("geodata update runtime is unavailable: {error}"),
             ));
         }
         let lease = match self.context.updates.acquire(kind) {
@@ -166,10 +188,8 @@ impl ProductGeodataUpdateRuntime {
 
     pub(in crate::daed_product) fn startup_fields(&self) -> BTreeMap<String, String> {
         let mut fields = BTreeMap::new();
-        fields.insert(
-            "geodataUpdateWorkers".to_owned(),
-            self.config.worker_count.to_string(),
-        );
+        let workers = self.workers.lock().ok().map_or(0, |workers| workers.len());
+        fields.insert("geodataUpdateWorkers".to_owned(), workers.to_string());
         fields.insert(
             "geodataUpdateQueueCapacity".to_owned(),
             self.config.queue_capacity.to_string(),
