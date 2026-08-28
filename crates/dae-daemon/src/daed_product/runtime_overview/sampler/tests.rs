@@ -226,11 +226,12 @@ fn sampler_runs_on_fixed_cadence_and_api_reads_do_not_sample() {
         ProductRuntimeSamplerConfig::for_test(),
     )
     .unwrap();
+    assert_eq!(named_sampler_threads(), baseline_threads);
+    let initial = sampler.view(60, 100).sample_count;
     wait_until(Duration::from_secs(1), || {
         named_sampler_threads() == baseline_threads + 1
     });
 
-    let initial = sampler.view(60, 100).sample_count;
     for max_points in [1, 2, 10, 100] {
         let view = sampler.view(60, max_points);
         assert_eq!(view.sample_count, initial);
