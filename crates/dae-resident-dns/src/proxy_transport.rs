@@ -11,6 +11,9 @@ use dae_resident_transport::{
     ObservedQuicEndpoint, ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure,
     ProxyDnsRequestStage, QuicEndpointOpenContext,
 };
+pub use dae_resident_transport::{
+    ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession, ResidentDnsProxyTcpTransport,
+};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 
@@ -86,32 +89,6 @@ pub trait ResidentDnsQuicEndpointTransport: Send + Sync {
         deadline: dae_runtime_control::AbsoluteDeadline,
         cancellation: &dae_runtime_control::OwnerCancellationSignal,
     ) -> Result<ObservedQuicEndpoint, String>;
-}
-
-pub struct ResidentDnsProxyTcpOpenRequest {
-    pub binding: ResidentProxyBinding,
-    pub target: String,
-    pub dial_ip: bool,
-    pub sniff_payload: Vec<u8>,
-    pub sniff_domain: String,
-    pub context: ProxyDnsRequestContext,
-}
-
-pub trait ResidentDnsProxyTcpSession: Send {
-    fn take_stream(&mut self) -> Option<TcpStream>;
-
-    fn finish(
-        self: Box<Self>,
-        deadline: Instant,
-        exchange_failed: bool,
-    ) -> ResidentDnsProxyFuture<'static, Result<String, String>>;
-}
-
-pub trait ResidentDnsProxyTcpTransport: Send + Sync {
-    fn open(
-        &self,
-        request: ResidentDnsProxyTcpOpenRequest,
-    ) -> ResidentDnsProxyFuture<'_, Result<Box<dyn ResidentDnsProxyTcpSession>, ProxyDnsRequestError>>;
 }
 
 pub trait ResidentDnsProxyUdpForwarder: Send + Sync {

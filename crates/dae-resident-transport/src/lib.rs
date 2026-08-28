@@ -21,6 +21,7 @@ mod anytls_frame;
 mod anytls_owner;
 mod direct_dial;
 mod dns_name;
+mod dns_ports;
 mod dns_request;
 mod dns_tcp_wire;
 mod grpc_common;
@@ -62,6 +63,10 @@ pub use anytls_owner::{
 };
 pub use direct_dial::{DirectTcpConnection, open_direct_tcp_connection_async};
 pub use dns_name::encode_dns_qname;
+pub use dns_ports::{
+    ResidentDnsProxyTcpOpenRequest, ResidentDnsProxyTcpSession, ResidentDnsProxyTcpTransport,
+    ResidentTransportFuture,
+};
 pub use dns_request::{
     ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
     ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestOutcome, ProxyDnsRequestStage,
