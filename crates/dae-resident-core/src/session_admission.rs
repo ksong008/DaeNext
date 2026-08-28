@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
-const UNLIMITED_SESSION_LIMIT: usize = usize::MAX;
+const UNLIMITED_SESSION_LIMIT: usize = 0;
 
 #[derive(Clone, Debug)]
 pub struct ResidentUdpSessionAdmission {
@@ -60,12 +60,17 @@ impl ResidentUdpSessionAdmission {
     ) -> Result<ResidentUdpSessionPermit, ResidentUdpSessionAdmissionError> {
         let mut current = self.state.current.load(Ordering::Acquire);
         loop {
-            let limit = self.state.limit.load(Ordering::Acquire);
+            let normalized_limit = self.state.limit.load(Ordering::Acquire);
+            let limit = if normalized_limit == UNLIMITED_SESSION_LIMIT {
+                usize::MAX
+            } else {
+                normalized_limit
+            };
             let Some(next) = current.checked_add(1) else {
-                return Err(self.reject(current, limit));
+                return Err(self.reject(current, normalized_limit));
             };
             if next > limit {
-                return Err(self.reject(current, limit));
+                return Err(self.reject(current, normalized_limit));
             }
             match self.state.current.compare_exchange_weak(
                 current,
@@ -163,6 +168,13 @@ mod tests {
         drop(second);
         assert_eq!(admission.current(), 0);
         assert_eq!(admission.snapshot()["peak"], 2);
+    }
+
+    #[test]
+    fn maximum_explicit_limit_remains_fixed() {
+        let admission = ResidentUdpSessionAdmission::new(Some(usize::MAX));
+        assert_eq!(admission.configured_limit(), Some(usize::MAX));
+        assert_eq!(admission.snapshot()["mode"], "fixed");
     }
 
     #[test]
