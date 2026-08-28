@@ -2,13 +2,12 @@ use super::*;
 pub struct ResidentDataplaneRuntime {
     pub(crate) owner: ResidentRuntimeOwner,
     pub(super) read_handle: ResidentDataplaneReadHandle,
-    pub(super) active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
+    pub(super) coordinator: ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
     pub(super) generation_drain: ResidentGenerationDrain,
     pub(super) workload_shutdown: Option<ResidentRuntimeWorkloadShutdown>,
     pub(super) routing_tuple_map_id: Option<u32>,
     pub(super) domain_routing_map_id: Option<u32>,
     pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingGenerationFence>,
-    pub(super) generation_gate: Arc<GenerationGate>,
 }
 
 impl std::fmt::Debug for ResidentDataplaneRuntime {
@@ -16,7 +15,7 @@ impl std::fmt::Debug for ResidentDataplaneRuntime {
         f.debug_struct("ResidentDataplaneRuntime")
             .field(
                 "active_reload_generation",
-                &self.active_generation.load().reload_generation,
+                &self.coordinator.load().reload_generation,
             )
             .field(
                 "workload_shutdown_prepared",
@@ -30,7 +29,7 @@ impl std::fmt::Debug for ResidentDataplaneRuntime {
 
 impl ResidentDataplaneRuntime {
     pub fn active_generation_snapshot(&self) -> Arc<ResidentDataplaneGeneration> {
-        self.active_generation.load()
+        self.coordinator.load()
     }
 
     pub fn traffic_counters(&self) -> ResidentTrafficCounters {
@@ -50,7 +49,7 @@ impl ResidentDataplaneRuntime {
     }
 
     pub fn health_state_snapshots(&self) -> Vec<Value> {
-        let generation = self.active_generation.load();
+        let generation = self.coordinator.load();
         generation
             .groups
             .iter()
@@ -62,15 +61,15 @@ impl ResidentDataplaneRuntime {
     }
 
     pub fn group_selector_snapshot_map(&self) -> BTreeMap<String, Value> {
-        resident_group_selector_snapshot_map(&self.active_generation.load().groups)
+        resident_group_selector_snapshot_map(&self.coordinator.load().groups)
     }
 
     pub fn manual_probe_handle(&self) -> ResidentManualProbeHandle {
-        self.active_generation.load().manual_probe_handle.clone()
+        self.coordinator.load().manual_probe_handle.clone()
     }
 
     pub fn dns_reload_snapshot(&self) -> Result<ResidentDnsReloadSnapshot, String> {
-        self.active_generation
+        self.coordinator
             .load()
             .dns_reload_handle
             .snapshot_for_reload()
@@ -78,7 +77,7 @@ impl ResidentDataplaneRuntime {
 
     pub fn shutdown(&mut self, steps: &mut Vec<Value>) {
         self.quiesce_workloads();
-        let generation = self.active_generation.load();
+        let generation = self.coordinator.load();
         let reload_generation = generation.reload_generation.get();
         drop(generation);
         let workload = self
@@ -145,7 +144,7 @@ impl ResidentDataplaneRuntime {
             self.owner
                 .shutdown_after_workloads(workload, RESIDENT_RUNTIME_TASK_JOIN_GRACE),
         );
-        let active_generation = self.active_generation.clear();
+        let active_generation = self.coordinator.clear();
         let external_generation_owners = active_generation
             .as_ref()
             .map(|generation| Arc::strong_count(generation).saturating_sub(1))
@@ -186,7 +185,7 @@ impl ResidentDataplaneRuntime {
         if self.workload_shutdown.is_some() {
             return;
         }
-        let generation = self.active_generation.load();
+        let generation = self.coordinator.load();
         generation.request_stop();
         self.generation_drain.stop_all();
         self.workload_shutdown = Some(
@@ -218,9 +217,7 @@ impl ResidentDataplaneRuntime {
         built.generation.dns.activate_domain_routing_generation()?;
         let next_id = built.generation.token().logical();
         let next_token = built.generation.token();
-        let previous = self.generation_gate.switch(next_token, || {
-            Ok::<_, String>(self.active_generation.publish(built.generation))
-        })?;
+        let previous = self.coordinator.publish(next_token, built.generation);
         let previous_id = previous.id;
         self.generation_drain.retire(previous);
         Ok(json!({
@@ -242,7 +239,7 @@ impl ResidentDataplaneRuntime {
         &mut self,
         generation: Arc<ResidentDataplaneGeneration>,
     ) -> Result<Value, String> {
-        let active = self.active_generation.load();
+        let active = self.coordinator.load();
         if Arc::ptr_eq(&active, &generation) {
             return Ok(json!({
                 "status": "pass",
@@ -256,9 +253,7 @@ impl ResidentDataplaneRuntime {
         self.generation_drain.reactivate(generation.id)?;
         generation.dns.activate_domain_routing_generation()?;
         let restored_id = generation.id;
-        let displaced = self.generation_gate.switch(generation.token(), || {
-            Ok::<_, String>(self.active_generation.publish(generation))
-        })?;
+        let displaced = self.coordinator.publish(generation.token(), generation);
         let displaced_id = displaced.id;
         self.generation_drain.retire(displaced);
         self.generation_drain.finalize_retirement(displaced_id);

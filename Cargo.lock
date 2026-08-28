@@ -976,6 +976,7 @@ dependencies = [
  "dae-resident-core",
  "dae-resident-dns",
  "dae-resident-plan",
+ "dae-resident-runtime",
  "dae-resident-tcp",
  "dae-resident-transport",
  "dae-resident-udp",
@@ -1058,6 +1059,14 @@ name = "dae-resident-plan"
 version = "3.1.0"
 dependencies = [
  "dae-resident-model",
+]
+
+[[package]]
+name = "dae-resident-runtime"
+version = "3.1.0"
+dependencies = [
+ "dae-resident-core",
+ "tokio",
 ]
 
 [[package]]

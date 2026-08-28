@@ -158,12 +158,13 @@ fn set_resident_dns_tcp_listener_backlog(
 
 pub(super) async fn run_resident_dns_bind_listener_async(
     mut listener: ResidentDnsBindListener,
-    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
+    coordinator: ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     executor_worker_threads: usize,
 ) {
+    let active_generation = coordinator.active_generation_slot();
     let configured = listener.configured.clone();
     let resources = listener.resources;
     let mut tasks = tokio::task::JoinSet::new();

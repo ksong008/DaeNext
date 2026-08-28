@@ -186,6 +186,23 @@ pub fn start_resident_dataplane_workers(
             None,
         );
     }
+    if let Err(error) =
+        generation_gate.switch(built_generation.generation.token(), || Ok::<_, String>(()))
+    {
+        let cleanup = owner.shutdown();
+        return (
+            json!({
+                "status": "fail",
+                "enabled": true,
+                "error": error,
+                "cleanup": cleanup,
+                "event_file": Value::Null,
+                "event_file_status": "disabled",
+                "event_log": "product-log-sink",
+            }),
+            None,
+        );
+    }
     let proxy = Arc::clone(&built_generation.default_proxy);
     let proxy_group = Arc::clone(&built_generation.default_group);
     let health_scheduler_report = built_generation.health_scheduler_report.clone();
@@ -207,7 +224,10 @@ pub fn start_resident_dataplane_workers(
     let udp_session_admission_limit = udp_runtime_config.session_admission_limit;
     let udp_session_soft_watermark = udp_runtime_config.session_soft_watermark;
     let udp_session_queue_depth = udp_runtime_config.session_queue_depth;
-    let active_generation = ActiveGenerationSlot::new(built_generation.generation);
+    let coordinator = ResidentRuntimeCoordinator::with_gate(
+        ActiveGenerationSlot::new(built_generation.generation),
+        Arc::clone(&generation_gate),
+    );
     let generation_drain = ResidentGenerationDrain::new(ResidentGenerationDrainPolicy::selected());
     {
         let stop = owner.stop_handle();
@@ -225,8 +245,7 @@ pub fn start_resident_dataplane_workers(
             "tcp-accept",
             resident_tcp_accept_loop_async(
                 tcp_listener,
-                active_generation.clone(),
-                Arc::clone(&generation_gate),
+                coordinator.clone(),
                 stop,
                 event_file,
                 event_lock,
@@ -235,15 +254,15 @@ pub fn start_resident_dataplane_workers(
     }
     {
         let stop = owner.stop_handle();
-        let udp_generation = active_generation.clone();
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let active_sessions = owner.udp_sessions_active();
         let cleanup_reporter = owner.cleanup_reporter("udp-session-manager");
+        let udp_coordinator = coordinator.clone();
         owner.spawn_async_task("udp-session-manager", "udp-session-manager", async move {
             let report = resident_udp_loop_async(
                 udp_socket,
-                udp_generation,
+                udp_coordinator,
                 stop,
                 event_file,
                 event_lock,
@@ -255,14 +274,14 @@ pub fn start_resident_dataplane_workers(
     }
     if let Some(dns_bind_listener) = dns_bind_listener {
         let stop = owner.stop_handle();
-        let dns_generation = active_generation.clone();
         let event_file = owner.event_file();
         let event_lock = owner.event_lock();
         let executor_worker_threads = owner.data_plane_worker_threads();
+        let dns_coordinator = coordinator.clone();
         owner.spawn_async_task("dns-bind-listener", "dns-bind-listener", async move {
             run_resident_dns_bind_listener_async(
                 dns_bind_listener,
-                dns_generation,
+                dns_coordinator,
                 stop,
                 event_file,
                 event_lock,
@@ -453,13 +472,12 @@ pub fn start_resident_dataplane_workers(
         Some(ResidentDataplaneRuntime {
             owner,
             read_handle,
-            active_generation,
+            coordinator,
             generation_drain,
             workload_shutdown: None,
             routing_tuple_map_id,
             domain_routing_map_id,
             domain_routing_fence,
-            generation_gate,
         }),
     )
 }
