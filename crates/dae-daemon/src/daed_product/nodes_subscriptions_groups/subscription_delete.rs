@@ -56,6 +56,9 @@ pub(in crate::daed_product) fn delete_subscriptions_by_ids(
         bump_runtime_external_input_version_with_connection(&tx)?;
     }
     tx.commit().map_err(sqlite_io_error)?;
+    if removed != 0 {
+        notify_subscription_scheduler();
+    }
     Ok(removed)
 }
 

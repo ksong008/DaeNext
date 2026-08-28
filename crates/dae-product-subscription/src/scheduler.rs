@@ -81,6 +81,48 @@ pub fn due_scheduled_subscriptions(
     })
 }
 
+pub fn next_scheduled_subscription_deadline(
+    conn: &Connection,
+    now_unix: u64,
+) -> io::Result<Option<u64>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT updated_at, COALESCE(cron_exp, '10 */6 * * *')
+             FROM subscriptions
+             WHERE cron_enable != 0",
+        )
+        .map_err(scheduler_sqlite_io_error)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(scheduler_sqlite_io_error)?;
+    let mut next_deadline = None;
+    for row in rows {
+        let (updated_at, cron_exp) = row.map_err(scheduler_sqlite_io_error)?;
+        let Ok(cron) = parse_cron_expression(&cron_exp) else {
+            continue;
+        };
+        let Some(last_unix) = parse_iso8601_utc(&updated_at) else {
+            next_deadline = min_deadline(next_deadline, now_unix.saturating_add(60));
+            continue;
+        };
+        if last_unix < now_unix && next_cron_moment_after(&cron, last_unix, now_unix).is_some() {
+            next_deadline = min_deadline(next_deadline, now_unix.saturating_add(60));
+            continue;
+        }
+        let horizon = now_unix.saturating_add(4 * 366 * 24 * 60 * 60);
+        if let Some(deadline) = next_cron_moment_after(&cron, now_unix, horizon) {
+            next_deadline = min_deadline(next_deadline, deadline);
+        }
+    }
+    Ok(next_deadline)
+}
+
+fn min_deadline(current: Option<u64>, candidate: u64) -> Option<u64> {
+    Some(current.map_or(candidate, |current| current.min(candidate)))
+}
+
 fn subscription_due_at(cron_exp: &str, updated_at: &str, now_unix: u64) -> Result<bool, String> {
     let Some(last_unix) = parse_iso8601_utc(updated_at) else {
         return Ok(true);
@@ -551,6 +593,62 @@ mod tests {
         assert_eq!(
             scan.due.iter().map(|item| item.id).collect::<Vec<_>>(),
             vec![1]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn next_subscription_deadline_returns_nearest_enabled_schedule() {
+        let dir =
+            std::env::temp_dir().join(format!("daed-product-scheduler-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute(
+            "INSERT INTO subscriptions(id, updated_at, link, cron_exp, cron_enable, status, info, tag)
+             VALUES(1, ?1, 'file://a', '0 */2 * * *', 1, '', '', 'a')",
+            params![product_iso8601_utc(unix_utc(2026, 6, 17, 0, 1, 0))],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO subscriptions(id, updated_at, link, cron_exp, cron_enable, status, info, tag)
+             VALUES(2, ?1, 'file://b', '10 * * * *', 1, '', '', 'b')",
+            params![product_iso8601_utc(unix_utc(2026, 6, 17, 0, 1, 0))],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO subscriptions(id, updated_at, link, cron_exp, cron_enable, status, info, tag)
+             VALUES(3, ?1, 'file://c', '0 * * * *', 0, '', '', 'c')",
+            params![product_iso8601_utc(unix_utc(2026, 6, 17, 0, 1, 0))],
+        )
+        .unwrap();
+
+        let now = unix_utc(2026, 6, 17, 0, 2, 0);
+        assert_eq!(
+            next_scheduled_subscription_deadline(&conn, now).unwrap(),
+            Some(unix_utc(2026, 6, 17, 0, 10, 0))
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn due_subscription_deadline_is_delayed_for_retry() {
+        let dir =
+            std::env::temp_dir().join(format!("daed-product-scheduler-{}", fastrand::u64(..)));
+        let state = dir.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        conn.execute(
+            "INSERT INTO subscriptions(id, updated_at, link, cron_exp, cron_enable, status, info, tag)
+             VALUES(1, ?1, 'file://a', '0 * * * *', 1, '', '', 'a')",
+            params![product_iso8601_utc(unix_utc(2026, 6, 17, 0, 0, 0))],
+        )
+        .unwrap();
+
+        let now = unix_utc(2026, 6, 17, 1, 2, 0);
+        assert_eq!(
+            next_scheduled_subscription_deadline(&conn, now).unwrap(),
+            Some(now + 60)
         );
         fs::remove_dir_all(dir).unwrap();
     }

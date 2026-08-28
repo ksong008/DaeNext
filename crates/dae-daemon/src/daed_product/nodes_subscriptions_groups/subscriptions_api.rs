@@ -76,6 +76,7 @@ pub(crate) fn create_subscription(
     let id = conn.last_insert_rowid();
     drop(conn);
     drop(_guard);
+    notify_subscription_scheduler();
     let import_log_message = format!("subscription {id} imported");
     let _ = append_log_for_config(config_dir, state, "info", &import_log_message);
     let import_report = refresh_subscription_from_remote(control_runtime, state, config_dir, id)
@@ -187,6 +188,7 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
     }
     drop(conn);
     drop(_guard);
+    notify_subscription_scheduler();
     get_subscription(state, id)
 }
 
@@ -198,6 +200,7 @@ pub(crate) fn refresh_subscription(
     id: i64,
 ) -> HttpResponse {
     let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Subscription);
+    notify_subscription_scheduler();
     match refresh_subscription_from_remote(control_runtime, state, config_dir, id) {
         Ok(mut report) => {
             let outcome = SubscriptionRefreshOutcome::from_report(&report);
