@@ -384,28 +384,39 @@ fn set_timeout(stream: &mut TcpStream, timeout: Duration) -> Result<(), Outbound
 }
 
 pub fn read_http_head(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
+    let (mut head, leftover) =
+        read_http_head_with_leftover(stream, 8192, OutboundError::BadSharedTransport)?;
+    head.extend_from_slice(&leftover);
+    Ok(head)
+}
+
+pub fn read_http_head_with_leftover(
+    stream: &mut impl Read,
+    max_bytes: usize,
+    error: impl Fn(String) -> OutboundError,
+) -> Result<(Vec<u8>, Vec<u8>), OutboundError> {
     let mut response = Vec::new();
-    let mut buf = [0_u8; 256];
+    let mut buffer = [0_u8; 256];
     loop {
-        let n = stream
-            .read(&mut buf)
-            .map_err(|err| OutboundError::BadSharedTransport(err.to_string()))?;
-        if n == 0 {
-            break;
+        let read = stream
+            .read(&mut buffer)
+            .map_err(|err| error(err.to_string()))?;
+        if read == 0 {
+            return Err(error("incomplete http response header".to_owned()));
         }
-        response.extend_from_slice(&buf[..n]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(response);
+        response.extend_from_slice(&buffer[..read]);
+        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            let head_end = index + 4;
+            if head_end > max_bytes {
+                return Err(error("http response header too large".to_owned()));
+            }
+            let leftover = response.split_off(head_end);
+            return Ok((response, leftover));
         }
-        if response.len() > 8192 {
-            return Err(OutboundError::BadSharedTransport(
-                "http response header too large".to_owned(),
-            ));
+        if response.len() > max_bytes {
+            return Err(error("http response header too large".to_owned()));
         }
     }
-    Err(OutboundError::BadSharedTransport(
-        "incomplete http response header".to_owned(),
-    ))
 }
 
 pub fn validate_http_status(response: &[u8], want: u16) -> Result<(), OutboundError> {
@@ -469,7 +480,12 @@ fn report(
 
 #[cfg(test)]
 mod http_control_character_tests {
-    use super::{HttpUpgradeOptions, http_upgrade_request, validate_http_field};
+    use std::io::Cursor;
+
+    use super::{
+        HttpUpgradeOptions, http_upgrade_request, read_http_head_with_leftover, validate_http_field,
+    };
+    use crate::error::OutboundError;
 
     #[test]
     fn rejects_crlf_injection_in_host() {
@@ -493,6 +509,16 @@ mod http_control_character_tests {
             path: "/ok".to_owned(),
         };
         assert!(http_upgrade_request(&options).is_ok());
+    }
+
+    #[test]
+    fn shared_http_head_reader_preserves_leftover_bytes() {
+        let mut stream = Cursor::new(b"HTTP/1.1 101 Switching Protocols\r\n\r\nfirst");
+        let (head, leftover) =
+            read_http_head_with_leftover(&mut stream, 8192, OutboundError::BadSharedTransport)
+                .unwrap();
+        assert_eq!(head, b"HTTP/1.1 101 Switching Protocols\r\n\r\n");
+        assert_eq!(leftover, b"first");
     }
 
     #[test]

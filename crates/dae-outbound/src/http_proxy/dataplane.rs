@@ -3,6 +3,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use crate::error::OutboundError;
+use crate::shared_transport::dataplane::read_http_head_with_leftover;
 
 use super::request::{self, HttpConnectOptions};
 
@@ -48,7 +49,7 @@ where
         .write_all(&connect_request)
         .map_err(|err| OutboundError::BadHttpProxy(err.to_string()))?;
 
-    let response = read_http_head(stream)?;
+    let (response, _) = read_http_head_with_leftover(stream, 8192, OutboundError::BadHttpProxy)?;
     let status = request::parse_connect_response(&response)?;
     if status != 200 {
         return Err(OutboundError::BadHttpProxy(format!(
@@ -72,29 +73,4 @@ where
         echoed_payload,
         true_dataplane: true,
     })
-}
-
-fn read_http_head(stream: &mut impl Read) -> Result<Vec<u8>, OutboundError> {
-    let mut response = Vec::new();
-    let mut buf = [0_u8; 512];
-    loop {
-        let n = stream
-            .read(&mut buf)
-            .map_err(|err| OutboundError::BadHttpProxy(err.to_string()))?;
-        if n == 0 {
-            break;
-        }
-        response.extend_from_slice(&buf[..n]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(response);
-        }
-        if response.len() > 8192 {
-            return Err(OutboundError::BadHttpProxy(
-                "response header too large".to_owned(),
-            ));
-        }
-    }
-    Err(OutboundError::BadHttpProxy(
-        "incomplete response header".to_owned(),
-    ))
 }
