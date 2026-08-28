@@ -75,7 +75,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct HttpRequest {
     pub method: String,
     pub path: String,

@@ -196,6 +196,19 @@ group {
 }
 
 #[test]
+fn parameterized_sections_are_rejected_with_the_official_syntax_contract() {
+    for input in ["global(proxy) {}", "group { g1(proxy) { policy: random } }"] {
+        let error = parse_config(input).unwrap_err().to_string();
+        assert!(
+            error.contains("parameterized sections are not supported by DAE syntax"),
+            "unexpected parser error for {input:?}: {error}"
+        );
+    }
+
+    assert!(parse_config("routing { domain(suffix:example.com) -> direct }").is_ok());
+}
+
+#[test]
 fn parses_ast_basic_projection_matches_native_golden() {
     let fixture = dae_golden::load_json(PARSER_AST_BASIC).unwrap();
     let case = &fixture["cases"][0];

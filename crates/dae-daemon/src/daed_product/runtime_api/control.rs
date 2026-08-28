@@ -1,14 +1,38 @@
 use super::*;
 
+#[derive(Clone)]
+pub(in crate::daed_product) struct RuntimeReloadHttpContext {
+    config_dir: PathBuf,
+    state: PathBuf,
+    runtime: Arc<ProductRuntimeManager>,
+}
+
+impl RuntimeReloadHttpContext {
+    pub(in crate::daed_product) fn from_app(app: &AppState) -> Self {
+        Self {
+            config_dir: app.config_dir.clone(),
+            state: app.state.clone(),
+            runtime: Arc::clone(&app.runtime),
+        }
+    }
+}
+
 pub(in crate::daed_product) fn api_runtime_reload(
     app: &AppState,
+    request: &HttpRequest,
+) -> HttpResponse {
+    api_runtime_reload_with_context(&RuntimeReloadHttpContext::from_app(app), request)
+}
+
+pub(in crate::daed_product) fn api_runtime_reload_with_context(
+    context: &RuntimeReloadHttpContext,
     request: &HttpRequest,
 ) -> HttpResponse {
     let reload_started_at = Instant::now();
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
     if dry {
-        let plan = match prepare_runtime_reload_preview(&app.state) {
+        let plan = match prepare_runtime_reload_preview(&context.state) {
             Ok(plan) => plan,
             Err(err) => {
                 let mut fields = BTreeMap::new();
@@ -16,8 +40,8 @@ pub(in crate::daed_product) fn api_runtime_reload(
                 fields.insert("dry".to_owned(), dry.to_string());
                 fields.insert("error".to_owned(), err.to_string());
                 let _ = append_lifecycle_log_fields_for_config(
-                    &app.config_dir,
-                    &app.state,
+                    &context.config_dir,
+                    &context.state,
                     "error",
                     err.api_log_message(),
                     fields,
@@ -25,7 +49,7 @@ pub(in crate::daed_product) fn api_runtime_reload(
                 return HttpResponse::json(err.http_status(), json!({"error": err.to_string()}));
             }
         };
-        let preview = plan.report(Some(&app.config_dir), true);
+        let preview = plan.report(Some(&context.config_dir), true);
         let mut fields = BTreeMap::new();
         fields.insert("source".to_owned(), "api".to_owned());
         fields.insert("dry".to_owned(), "true".to_owned());
@@ -35,8 +59,8 @@ pub(in crate::daed_product) fn api_runtime_reload(
             format!("{:?}", reload_started_at.elapsed()),
         );
         let _ = append_lifecycle_log_fields_for_config(
-            &app.config_dir,
-            &app.state,
+            &context.config_dir,
+            &context.state,
             "info",
             "[Reload] Preview finished",
             fields,
@@ -48,49 +72,29 @@ pub(in crate::daed_product) fn api_runtime_reload(
         return HttpResponse::json(200, Value::Object(response));
     }
     let latency_seed =
-        stored_successful_node_latency_seed_snapshots(&app.state).unwrap_or_default();
-    let reload_app = app.clone();
-    let applied = match app.control_runtime.execute_to_completion(
-        ProductControlTaskKind::RuntimeLifecycle,
-        move |_cancellation| async move {
-            coordinate_runtime_reload_inner(
-                &reload_app.runtime,
-                &reload_app.state,
-                Some(&reload_app.config_dir),
-                RuntimeApplyIntent::ApiReload,
-                &latency_seed,
-                AllocatorReclaimReason::ReloadCompleted,
-            )
-        },
+        stored_successful_node_latency_seed_snapshots(&context.state).unwrap_or_default();
+    let applied = match coordinate_runtime_reload_inner(
+        &context.runtime,
+        &context.state,
+        Some(&context.config_dir),
+        RuntimeApplyIntent::ApiReload,
+        &latency_seed,
+        AllocatorReclaimReason::ReloadCompleted,
     ) {
-        Ok(Ok(applied)) => applied,
-        Ok(Err(err)) => {
-            let mut fields = BTreeMap::new();
-            fields.insert("source".to_owned(), "api".to_owned());
-            fields.insert("dry".to_owned(), "false".to_owned());
-            fields.insert("error".to_owned(), err.to_string());
-            let _ = append_lifecycle_log_fields_for_config(
-                &app.config_dir,
-                &app.state,
-                "error",
-                err.api_log_message(),
-                fields,
-            );
-            return HttpResponse::json(err.http_status(), json!({"error": err.to_string()}));
-        }
+        Ok(applied) => applied,
         Err(err) => {
             let mut fields = BTreeMap::new();
             fields.insert("source".to_owned(), "api".to_owned());
             fields.insert("dry".to_owned(), "false".to_owned());
             fields.insert("error".to_owned(), err.to_string());
             let _ = append_lifecycle_log_fields_for_config(
-                &app.config_dir,
-                &app.state,
+                &context.config_dir,
+                &context.state,
                 "error",
-                "[Reload] Failed to enter the product control runtime",
+                err.api_log_message(),
                 fields,
             );
-            return HttpResponse::json(503, json!({"error": err.to_string()}));
+            return HttpResponse::json(err.http_status(), json!({"error": err.to_string()}));
         }
     };
     let mut fields = BTreeMap::new();
@@ -103,8 +107,8 @@ pub(in crate::daed_product) fn api_runtime_reload(
         format!("{:?}", reload_started_at.elapsed()),
     );
     let _ = append_lifecycle_log_fields_for_config(
-        &app.config_dir,
-        &app.state,
+        &context.config_dir,
+        &context.state,
         "info",
         "[Reload] Finished",
         fields,
@@ -120,7 +124,10 @@ pub(in crate::daed_product) fn api_runtime_reload(
     );
     response.insert("dry".to_owned(), json!(false));
     response.insert("coalesced".to_owned(), json!(applied.coalesced));
-    response.insert("runtimeStarted".to_owned(), json!(app.runtime.is_running()));
+    response.insert(
+        "runtimeStarted".to_owned(),
+        json!(context.runtime.is_running()),
+    );
     response.insert(
         "pendingProcessTransition".to_owned(),
         json!(applied.pending_process_transition),
