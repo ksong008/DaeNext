@@ -13,6 +13,7 @@ mod tests;
 
 pub(crate) struct ProductRuntimeSampler {
     config: ProductRuntimeSamplerConfig,
+    runtime: std::sync::Weak<ProductRuntimeManager>,
     state: Arc<Mutex<ProductRuntimeSamplerState>>,
     stop: Arc<ProductRuntimeSamplerStop>,
     worker: Mutex<Option<ProductRuntimeSamplerWorkerHandle>>,
@@ -38,18 +39,12 @@ impl ProductRuntimeSampler {
         let stop = Arc::new(ProductRuntimeSamplerStop::new());
         let metrics = Arc::new(ProductRuntimeSamplerMetrics::default());
         metrics.configure(config);
-        let worker = start_product_runtime_sampler_worker(
-            config,
-            runtime,
-            Arc::clone(&state),
-            Arc::clone(&stop),
-            Arc::clone(&metrics),
-        )?;
         Ok(Arc::new(Self {
             config,
+            runtime,
             state,
             stop,
-            worker: Mutex::new(Some(worker)),
+            worker: Mutex::new(None),
             metrics,
         }))
     }
@@ -59,6 +54,7 @@ impl ProductRuntimeSampler {
     }
 
     pub(crate) fn view(&self, window_sec: u64, max_points: usize) -> ProductRuntimeSampleView {
+        let _ = self.ensure_worker();
         self.state
             .lock()
             .map(|state| state.view(window_sec, max_points))
@@ -66,6 +62,7 @@ impl ProductRuntimeSampler {
     }
 
     pub(crate) fn snapshot(&self) -> Value {
+        let _ = self.ensure_worker();
         let history_length = self
             .state
             .lock()
@@ -75,10 +72,28 @@ impl ProductRuntimeSampler {
     }
 
     pub(crate) fn sequence(&self) -> u64 {
+        let _ = self.ensure_worker();
         self.state
             .lock()
             .map(|state| state.sequence())
             .unwrap_or_default()
+    }
+
+    fn ensure_worker(&self) -> io::Result<()> {
+        let mut worker = self
+            .worker
+            .lock()
+            .map_err(|_| io::Error::other("runtime sampler worker lock poisoned"))?;
+        if worker.is_none() {
+            *worker = Some(start_product_runtime_sampler_worker(
+                self.config,
+                self.runtime.clone(),
+                Arc::clone(&self.state),
+                Arc::clone(&self.stop),
+                Arc::clone(&self.metrics),
+            )?);
+        }
+        Ok(())
     }
 }
 
