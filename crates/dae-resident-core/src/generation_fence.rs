@@ -25,6 +25,21 @@ impl GenerationGate {
         self.active() == Some(generation)
     }
 
+    pub fn with_active<R, E>(
+        &self,
+        generation: GenerationToken,
+        operation: impl FnOnce() -> Result<R, E>,
+    ) -> Result<Option<R>, E> {
+        let active = self
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *active != Some(generation) {
+            return Ok(None);
+        }
+        operation().map(Some)
+    }
+
     pub fn switch<R, E>(
         &self,
         generation: GenerationToken,
@@ -69,19 +84,13 @@ impl<T> GenerationFence<T> {
         generation: GenerationToken,
         operation: impl FnOnce(&mut T) -> Result<R, E>,
     ) -> Result<Option<R>, E> {
-        let active = self
-            .gate
-            .active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *active != Some(generation) {
-            return Ok(None);
-        }
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        operation(&mut state).map(Some)
+        self.gate.with_active(generation, || {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            operation(&mut state)
+        })
     }
 
     pub fn switch<R, E>(
@@ -138,6 +147,47 @@ mod tests {
         assert_eq!(
             fence
                 .with_active(generation(2), |value| Ok::<_, ()>(*value))
+                .unwrap(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn generation_switch_waits_for_an_in_flight_resource_write() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let first = generation(1);
+        let second = generation(2);
+        let gate = Arc::new(GenerationGate::new(Some(first)));
+        let fence = Arc::new(GenerationFence::new(Arc::clone(&gate), 0_u32));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+
+        let writer_fence = Arc::clone(&fence);
+        let writer_entered = Arc::clone(&entered);
+        let writer_release = Arc::clone(&release);
+        let writer = thread::spawn(move || {
+            writer_fence
+                .with_active(first, |value| {
+                    writer_entered.wait();
+                    writer_release.wait();
+                    *value = 1;
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+        });
+        entered.wait();
+
+        let switch_gate = Arc::clone(&gate);
+        let switch = thread::spawn(move || switch_gate.switch(second, || Ok::<_, ()>(())));
+        release.wait();
+        writer.join().unwrap();
+        switch.join().unwrap().unwrap();
+
+        assert_eq!(
+            fence
+                .with_active(second, |value| Ok::<_, ()>(*value))
                 .unwrap(),
             Some(1)
         );
