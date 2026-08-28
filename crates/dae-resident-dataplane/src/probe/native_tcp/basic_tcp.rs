@@ -8,7 +8,8 @@ use super::super::super::tcp::{
 };
 use super::errors::NativeTcpProbeError;
 use super::target::native_tcp_probe_selection;
-use super::tunnel::{NativeTcpTunnel, PrefixedNativeTcpTunnel, boxed_native_tcp_tunnel};
+use super::tunnel::{NativeTcpTunnel, boxed_native_tcp_tunnel};
+use dae_resident_transport::AsyncPrefixedStream;
 
 pub(super) async fn open_basic_native_tcp_tunnel(
     binding: ResidentProxyBinding,
@@ -70,7 +71,7 @@ pub(super) async fn open_basic_native_tcp_tunnel(
             )
             .await
             .map_err(NativeTcpProbeError::Open)?;
-            Ok(boxed_native_tcp_tunnel(PrefixedNativeTcpTunnel::new(
+            Ok(boxed_native_tcp_tunnel(AsyncPrefixedStream::new(
                 response_leftover,
                 stream,
             )))
