@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "packages": {
+    "dae-daemon": {
+      "production": 60000,
+      "tests": 21000
+    },
+    "dae-outbound": {
+      "production": 54000,
+      "tests": 15000
+    },
+    "dae-resident-dataplane": {
+      "production": 34000,
+      "tests": 29000
+    }
+  }
+}

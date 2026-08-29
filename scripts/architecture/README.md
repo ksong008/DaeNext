@@ -13,6 +13,7 @@ The checker validates:
 - layer direction and generic same-layer resident-domain boundaries;
 - workspace crate imports in production and build sources;
 - external `#[path]` source embedding, except for explicit test-only compatibility paths.
+- production/test line budgets for the large daemon, resident assembly, and outbound boundaries.
 
 Run it locally with:
 
