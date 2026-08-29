@@ -39,7 +39,8 @@ class ProductBoundaryGateTests(unittest.TestCase):
     def test_rejects_missing_product_source(self) -> None:
         root = self.fixture()
         target = root / "crates" / MODULE.REQUIRED_CRATES[0] / "src"
-        (target / "lib.rs").unlink()
+        for path in target.iterdir():
+            path.unlink()
         target.rmdir()
         errors = MODULE.validate(root)
         self.assertTrue(any("source directory is missing" in error for error in errors))
