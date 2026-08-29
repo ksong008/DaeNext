@@ -1,5 +1,6 @@
 use super::*;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use dae_resident_core::ResidentGenerationLifecycle;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Debug)]
 struct TestDrainControl {
@@ -86,7 +87,7 @@ impl TestGeneration {
 
 impl ResidentDrainableGeneration for TestGeneration {
     fn drain_control(&self) -> Arc<dyn ResidentDrainControl> {
-        Arc::clone(&self.control) as Arc<dyn ResidentDrainControl>
+        self.control.clone()
     }
 
     fn retire_workloads(&self) {

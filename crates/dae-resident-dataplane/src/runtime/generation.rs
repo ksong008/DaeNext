@@ -154,6 +154,44 @@ impl ResidentGenerationDrainControl {
     }
 }
 
+impl ResidentDrainControl for ResidentGenerationDrainControl {
+    fn id(&self) -> LogicalGenerationId {
+        ResidentGenerationDrainControl::id(self)
+    }
+
+    fn close_admission(&self) {
+        ResidentGenerationDrainControl::close_admission(self);
+    }
+
+    fn reopen_admission(&self) -> Result<(), String> {
+        ResidentGenerationDrainControl::reopen_admission(self)
+    }
+
+    fn stop_is_requested(&self) -> bool {
+        ResidentGenerationDrainControl::stop_is_requested(self)
+    }
+
+    fn flow_stop_is_requested(&self) -> bool {
+        ResidentGenerationDrainControl::flow_stop_is_requested(self)
+    }
+
+    fn udp_stop_is_requested(&self) -> bool {
+        ResidentGenerationDrainControl::udp_stop_is_requested(self)
+    }
+
+    fn udp_router_is_retained(&self) -> bool {
+        ResidentGenerationDrainControl::udp_router_is_retained(self)
+    }
+
+    fn udp_dns_runtime_is_retained(&self) -> bool {
+        ResidentGenerationDrainControl::udp_dns_runtime_is_retained(self)
+    }
+
+    fn request_force_stop(&self) {
+        ResidentGenerationDrainControl::request_force_stop(self);
+    }
+}
+
 pub struct ResidentDataplaneGeneration {
     pub(crate) id: LogicalGenerationId,
     pub(crate) reload_generation: PhysicalRuntimeId,
@@ -210,6 +248,36 @@ impl ResidentDataplaneGeneration {
         if let Some(maintenance) = self.domain_routing_maintenance.as_ref() {
             maintenance.stop();
         }
+    }
+}
+
+impl ResidentDrainableGeneration for ResidentDataplaneGeneration {
+    fn drain_control(&self) -> Arc<dyn ResidentDrainControl> {
+        let control: Arc<dyn ResidentDrainControl> = self.drain_control.clone();
+        control
+    }
+
+    fn retire_workloads(&self) {
+        ResidentDataplaneGeneration::retire_workloads(self);
+    }
+
+    fn request_force_stop(&self) {
+        ResidentDataplaneGeneration::request_stop(self);
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ResidentDataplaneGenerationDrainHooks;
+
+impl ResidentGenerationDrainHooks for ResidentDataplaneGenerationDrainHooks {
+    fn request_reclaim(&self) {
+        resident_allocator_request_reclaim(
+            ResidentAllocatorReclaimReason::RetiredGenerationReleased,
+        );
+    }
+
+    fn lifetime_counts(&self) -> (u64, u64, u64) {
+        resident_dataplane_generation_lifetime_counts()
     }
 }
 

@@ -5,10 +5,15 @@ use std::sync::Arc;
 use dae_resident_core::{ActiveGenerationSlot, GenerationGate, GenerationToken, PublicationEpoch};
 
 mod executor;
+mod generation_drain;
 mod task;
 
 pub use executor::{
     ResidentRuntimeAllocatorHooks, ResidentRuntimeExecutor, ResidentRuntimeExecutorConfig,
+};
+pub use generation_drain::{
+    ResidentDrainControl, ResidentDrainableGeneration, ResidentGenerationDrain,
+    ResidentGenerationDrainHooks, ResidentGenerationDrainPolicy,
 };
 pub use task::{
     ResidentAsyncRuntimeShutdown, ResidentAsyncRuntimeTask, ResidentRuntimeTaskRole,

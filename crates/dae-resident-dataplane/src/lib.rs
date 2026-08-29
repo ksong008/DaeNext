@@ -133,7 +133,6 @@ pub(crate) use self::runtime::*;
 #[path = "runtime/generation.rs"]
 mod generation;
 pub(crate) use self::generation::ResidentDataplaneGeneration;
-pub(crate) use self::generation::resident_dataplane_generation_lifetime_counts;
 use self::generation::{
     ResidentDataplaneGenerationLifetime, ResidentGenerationDrainControl,
     next_resident_dataplane_generation_id,
@@ -141,12 +140,10 @@ use self::generation::{
 #[path = "runtime/generation_builder.rs"]
 mod generation_builder;
 use self::generation_builder::*;
-#[path = "runtime/generation_drain.rs"]
-mod generation_drain;
-use self::generation_drain::*;
-#[path = "runtime/generation_drain_policy.rs"]
-mod generation_drain_policy;
-use self::generation_drain_policy::*;
+pub(crate) use dae_resident_runtime::{
+    ResidentDrainControl, ResidentDrainableGeneration, ResidentGenerationDrain,
+    ResidentGenerationDrainHooks, ResidentGenerationDrainPolicy,
+};
 #[path = "runtime/read_view.rs"]
 mod read_view;
 pub(crate) use self::read_view::ResidentDataplaneReadHandle;
