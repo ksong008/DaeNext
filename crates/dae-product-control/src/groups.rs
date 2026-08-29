@@ -1,15 +1,27 @@
-use super::*;
+use std::collections::BTreeMap;
+use std::io;
+use std::path::Path;
 
-pub(crate) fn list_groups(
+use dae_product_core::{DEFAULT_PRODUCT_GROUP_NAME, DEFAULT_PRODUCT_GROUP_POLICY};
+use dae_product_http::{HttpRequest, HttpResponse, integer_array, json_body};
+use dae_product_persistence::{
+    open_state_connection, running_group_references_id, sqlite_io_error,
+};
+use dae_product_runtime::parse_boolish;
+use dae_product_subscription::*;
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use serde_json::{Value, json};
+
+pub fn list_groups(
     state: &Path,
     request: &HttpRequest,
-    runtime: Option<&ProductRuntimeManager>,
+    runtime_selectors: Option<&BTreeMap<String, Value>>,
 ) -> HttpResponse {
     let result = if request_summary_enabled(request) {
-        let runtime_selectors = runtime
-            .map(ProductRuntimeManager::group_selector_snapshot_map)
-            .unwrap_or_default();
-        list_group_summaries_value_with_runtime_selection(state, &runtime_selectors)
+        list_group_summaries_value_with_runtime_selection(
+            state,
+            runtime_selectors.unwrap_or(&BTreeMap::new()),
+        )
     } else {
         list_groups_value(state)
     };
@@ -19,12 +31,7 @@ pub(crate) fn list_groups(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn list_group_summaries_value(state: &Path) -> io::Result<Value> {
-    list_group_summaries_value_with_runtime_selection(state, &BTreeMap::new())
-}
-
-pub(crate) fn list_group_summaries_value_with_runtime_selection(
+pub fn list_group_summaries_value_with_runtime_selection(
     state: &Path,
     runtime_selectors: &BTreeMap<String, Value>,
 ) -> io::Result<Value> {
@@ -32,7 +39,16 @@ pub(crate) fn list_group_summaries_value_with_runtime_selection(
     dae_product_subscription::list_group_summaries_batched(&conn, runtime_selectors)
 }
 
-pub(crate) fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse {
+fn request_summary_enabled(request: &HttpRequest) -> bool {
+    request
+        .query
+        .get("summary")
+        .and_then(|values| values.first())
+        .and_then(|value| parse_boolish(value))
+        .unwrap_or(false)
+}
+
+pub fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -81,7 +97,7 @@ pub(crate) fn create_group(state: &Path, request: &HttpRequest) -> HttpResponse 
     get_group(state, id).with_status(201)
 }
 
-pub(crate) fn get_group(state: &Path, id: i64) -> HttpResponse {
+pub fn get_group(state: &Path, id: i64) -> HttpResponse {
     match get_group_value(state, id) {
         Ok(Some(value)) => HttpResponse::json(200, value),
         Ok(None) => HttpResponse::json(404, json!({"error": "group not found"})),
@@ -89,7 +105,7 @@ pub(crate) fn get_group(state: &Path, id: i64) -> HttpResponse {
     }
 }
 
-pub(crate) fn update_group(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
+pub fn update_group(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -146,7 +162,7 @@ pub(crate) fn update_group(state: &Path, request: &HttpRequest, id: i64) -> Http
     get_group(state, id)
 }
 
-pub(crate) fn delete_group(state: &Path, id: i64) -> HttpResponse {
+pub fn delete_group(state: &Path, id: i64) -> HttpResponse {
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -179,12 +195,7 @@ pub(crate) fn delete_group(state: &Path, id: i64) -> HttpResponse {
     }
 }
 
-pub(crate) fn update_group_nodes(
-    state: &Path,
-    request: &HttpRequest,
-    id: i64,
-    add: bool,
-) -> HttpResponse {
+pub fn update_group_nodes(state: &Path, request: &HttpRequest, id: i64, add: bool) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "nodeIds");
     let conn = match open_state_connection(state) {
@@ -204,7 +215,7 @@ pub(crate) fn update_group_nodes(
     get_group(state, id)
 }
 
-pub(crate) fn replace_group_nodes(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
+pub fn replace_group_nodes(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -265,7 +276,7 @@ pub(crate) fn replace_group_nodes(state: &Path, request: &HttpRequest, id: i64) 
     get_group(state, id)
 }
 
-pub(crate) fn update_group_subscriptions(
+pub fn update_group_subscriptions(
     state: &Path,
     request: &HttpRequest,
     id: i64,

@@ -79,7 +79,10 @@ pub(super) fn api_subscriptions(
 pub(super) fn api_groups(app: &AppState, request: &HttpRequest, api_path: &str) -> HttpResponse {
     if api_path == "/groups" {
         return match request.method.as_str() {
-            "GET" => list_groups(&app.state, request, Some(app.runtime.as_ref())),
+            "GET" => {
+                let runtime_selectors = app.runtime.group_selector_snapshot_map();
+                list_groups(&app.state, request, Some(&runtime_selectors))
+            }
             "POST" => create_group(&app.state, request),
             _ => HttpResponse::json(405, json!({"error": "method not allowed"})),
         };

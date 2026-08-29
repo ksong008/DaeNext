@@ -34,6 +34,8 @@ mod admission;
 use admission::*;
 mod default_resources;
 pub use default_resources::*;
+mod groups;
+pub use groups::*;
 mod benchmark;
 pub use benchmark::{ProductControlBenchmarkFixture, product_control_benchmark_fixture};
 mod cancellation;
