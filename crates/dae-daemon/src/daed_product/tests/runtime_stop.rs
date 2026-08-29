@@ -29,7 +29,7 @@ fn running_stop_fixture(scope: &str) -> (FreshProductState, ProductRuntimeManage
         .unwrap();
     let runtime = ProductRuntimeManager::new();
     {
-        let mut inner = runtime.inner.lock().unwrap();
+        let mut inner = runtime.inner().lock().unwrap();
         inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
             started_at: "2026-07-11T00:00:00+08:00".to_owned(),
             tproxy_port: 12345,

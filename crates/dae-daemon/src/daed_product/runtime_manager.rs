@@ -8,8 +8,6 @@ mod cleanup;
 pub(in crate::daed_product) mod event_identity;
 mod instance;
 mod process_transition;
-mod read_view;
-use self::read_view::ProductRuntimeReadSnapshot;
 mod readiness;
 mod recovery;
 mod startup_recovery;
@@ -340,7 +338,7 @@ impl ProductRuntimeManager {
         self.domain.lifecycle()
     }
 
-    fn inner(&self) -> &Arc<Mutex<ProductRuntimeState>> {
+    pub(in crate::daed_product) fn inner(&self) -> &Arc<Mutex<ProductRuntimeState>> {
         self.domain.state()
     }
 
@@ -927,8 +925,25 @@ impl ProductRuntimeManager {
                 "error": "product runtime manager lock poisoned",
             });
         };
+        let backend = match inner.runtime.as_ref() {
+            Some(ProductRuntimeInstance::Resident(runtime)) => {
+                let handle = runtime.read_handle();
+                dae_product_runtime::RuntimeReadBackend::Resident(Box::new(move || {
+                    handle.product_state_summary()
+                }))
+            }
+            Some(ProductRuntimeInstance::Fake(fake)) => {
+                dae_product_runtime::RuntimeReadBackend::Fake {
+                    started_at: fake.started_at.clone(),
+                    tproxy_port: fake.tproxy_port,
+                }
+            }
+            None => dae_product_runtime::RuntimeReadBackend::Stopped {
+                fake_runtime_enabled,
+            },
+        };
         let snapshot =
-            ProductRuntimeReadSnapshot::capture(&inner, coordinator, fake_runtime_enabled);
+            dae_product_runtime::ProductRuntimeReadSnapshot::capture(&inner, coordinator, backend);
         drop(inner);
         #[cfg(test)]
         if let Some(barrier) = render_barrier {

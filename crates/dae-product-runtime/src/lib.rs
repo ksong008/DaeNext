@@ -6,8 +6,10 @@ mod cgroup_memory;
 mod contracts;
 mod coordinator;
 mod domain;
+mod event_identity;
 mod journal;
 mod materialization;
+mod read_view;
 mod reconcile;
 mod rendering;
 mod resource_pools;
@@ -35,8 +37,10 @@ pub use dae_product_persistence::{
     RuntimeDesiredStateRevision, runtime_desired_state_revision_from_connection,
 };
 pub use domain::*;
+pub use event_identity::*;
 pub use journal::*;
 pub use materialization::*;
+pub use read_view::*;
 pub use reconcile::{
     ProductRuntimeReconcileAdmission, ProductRuntimeReconcileFollower, ProductRuntimeReconcileLead,
     ProductRuntimeReconcileRequest, ProductRuntimeReconciler,
