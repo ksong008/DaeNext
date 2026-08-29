@@ -86,7 +86,6 @@ pub fn refresh_subscription_from_remote_with_callbacks<C: SubscriptionRefreshCal
             record_subscription_fetch_failure(state, &source, &fetched_at, failure)
         }
         SubscriptionRefreshFetch::Prepared { prepared, persist } => {
-            let persist = persist;
             match apply_prepared_subscription_refresh_report(
                 state,
                 &source,
