@@ -1,13 +1,43 @@
-use super::*;
+use std::collections::BTreeSet;
+use std::io;
+use std::path::Path;
 
-pub(crate) fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
+use crate::{notify_subscription_scheduler, subscription_write_guard};
+use dae_product_persistence::{
+    bump_runtime_external_input_version_with_connection, open_state_connection, sqlite_io_error,
+};
+use rusqlite::{Connection, TransactionBehavior, params};
+
+pub struct SubscriptionTagConflict;
+
+impl SubscriptionTagConflict {
+    pub fn matches(error: &rusqlite::Error) -> bool {
+        matches!(
+            error,
+            rusqlite::Error::SqliteFailure(sqlite_error, _)
+                if sqlite_error.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+        )
+    }
+}
+
+pub fn subscription_tag_exists(conn: &Connection, tag: Option<&str>) -> io::Result<bool> {
+    let Some(tag) = tag else {
+        return Ok(false);
+    };
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM subscriptions WHERE tag = ?1)",
+        params![tag],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(sqlite_io_error)
+}
+
+pub fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
     delete_subscriptions_by_ids(state, &[id])
 }
 
-pub(in crate::daed_product) fn delete_subscriptions_by_ids(
-    state: &Path,
-    ids: &[i64],
-) -> io::Result<usize> {
+pub fn delete_subscriptions_by_ids(state: &Path, ids: &[i64]) -> io::Result<usize> {
     let ids = ids.iter().copied().collect::<BTreeSet<_>>();
     if ids.is_empty() {
         return Ok(0);
