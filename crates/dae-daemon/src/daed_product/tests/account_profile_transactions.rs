@@ -45,8 +45,10 @@ fn account_profile_fields_are_updated_by_one_statement() {
             .to_string()
             .contains("injected account profile failure")
     );
-    let stored = load_user_by_id(fixture.state(), user.id).unwrap().unwrap();
-    assert_eq!(stored.username, "original-user");
-    assert_eq!(stored.name.as_deref(), Some("Original Name"));
-    assert_eq!(stored.avatar.as_deref(), Some("original-avatar"));
+    let stored = load_user_by_id(fixture.state(), user.id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.username(), "original-user");
+    assert_eq!(stored.name(), Some("Original Name"));
+    assert_eq!(stored.avatar(), Some("original-avatar"));
 }

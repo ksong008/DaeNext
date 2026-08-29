@@ -239,8 +239,8 @@ pub(crate) fn jwt_roundtrip_uses_user_secret() {
     let state = dir.join("daed.db");
     let token = create_user(&state, "admin", "abc12345").unwrap();
     let user = verify_token(&state, &token).unwrap().unwrap();
-    assert_eq!(user.username, "admin");
-    assert!(user.password_hash.starts_with("$argon2id$"));
+    assert_eq!(user.username(), "admin");
+    assert!(user.password_hash().starts_with("$argon2id$"));
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -253,7 +253,7 @@ pub(crate) fn valid_jwt_verification_loads_the_user_once() {
     reset_user_query_count_for_current_thread();
     let user = verify_token(&state, &token).unwrap().unwrap();
 
-    assert_eq!(user.username, "admin");
+    assert_eq!(user.username(), "admin");
     assert_eq!(user_query_count_for_current_thread(), 1);
     fs::remove_dir_all(dir).unwrap();
 }
@@ -279,7 +279,10 @@ pub(crate) fn username_change_invalidates_the_old_subject_and_new_login_succeeds
     assert!(verify_token(&state, &old_token).unwrap().is_none());
     let new_token = issue_token(&state, "operator", "abc12345").unwrap();
     assert_eq!(
-        verify_token(&state, &new_token).unwrap().unwrap().username,
+        verify_token(&state, &new_token)
+            .unwrap()
+            .unwrap()
+            .username(),
         "operator"
     );
     fs::remove_dir_all(dir).unwrap();
@@ -455,10 +458,10 @@ pub(crate) fn legacy_password_hash_migrates_to_argon2id_after_successful_login()
     let token = issue_token(&state, "admin", "abc12345").unwrap();
     assert!(verify_token(&state, &token).unwrap().is_some());
     let migrated = load_user_by_username(&state, "admin").unwrap().unwrap();
-    assert!(migrated.password_hash.starts_with("$argon2id$"));
+    assert!(migrated.password_hash().starts_with("$argon2id$"));
     assert!(verify_password_hash(
-        &migrated.password_hash,
-        migrated.jwt_secret.as_bytes(),
+        migrated.password_hash(),
+        migrated.jwt_secret().as_bytes(),
         "abc12345"
     ));
     fs::remove_dir_all(dir).unwrap();
@@ -478,7 +481,7 @@ pub(crate) fn token_auth_prefers_bearer_header_over_event_query_token() {
     );
 
     let user = authenticate_request(&app, &request).unwrap().unwrap();
-    assert_eq!(user.username, "admin");
+    assert_eq!(user.username(), "admin");
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -561,7 +564,7 @@ pub(crate) fn password_update_rotates_secret_and_invalidates_old_token() {
     let new_token = body["token"].as_str().unwrap();
     assert!(verify_token(&state, &old_token).unwrap().is_none());
     assert_eq!(
-        verify_token(&state, new_token).unwrap().unwrap().username,
+        verify_token(&state, new_token).unwrap().unwrap().username(),
         "admin"
     );
     fs::remove_dir_all(dir).unwrap();
@@ -648,7 +651,7 @@ fn signed_test_token(user: &UserRecord, alg: &str, payload: Value) -> String {
     let encoded_header = URL_SAFE_NO_PAD.encode(header.as_bytes());
     let encoded_payload = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
     let signing_input = format!("{encoded_header}.{encoded_payload}");
-    let signature = hmac_sha256(user.jwt_secret.as_bytes(), signing_input.as_bytes());
+    let signature = hmac_sha256(user.jwt_secret().as_bytes(), signing_input.as_bytes());
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 

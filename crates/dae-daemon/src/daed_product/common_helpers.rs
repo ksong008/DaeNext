@@ -130,15 +130,15 @@ pub(super) fn create_user(state: &Path, username: &str, password: &str) -> io::R
         params![username, password_hash, secret],
     )
     .map_err(sqlite_io_error)?;
-    let user = UserRecord {
-        id: tx.last_insert_rowid(),
-        username: username.to_owned(),
+    let user = UserRecord::new(
+        tx.last_insert_rowid(),
+        username.to_owned(),
         password_hash,
-        jwt_secret: secret,
-        json_storage: "{}".to_owned(),
-        avatar: None,
-        name: None,
-    };
+        secret,
+        "{}".to_owned(),
+        None,
+        None,
+    );
     tx.commit().map_err(sqlite_io_error)?;
     signed_token(&user)
 }
@@ -150,21 +150,21 @@ pub(super) fn issue_token(state: &Path, username: &str, password: &str) -> io::R
             "incorrect username or password",
         ));
     };
-    if !verify_password_hash(&user.password_hash, user.jwt_secret.as_bytes(), password) {
+    if !verify_password_hash(user.password_hash(), user.jwt_secret().as_bytes(), password) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "incorrect username or password",
         ));
     }
-    if password_hash_needs_migration(&user.password_hash) {
-        let migrated_hash = hash_password(user.jwt_secret.as_bytes(), password);
+    if password_hash_needs_migration(user.password_hash()) {
+        let migrated_hash = hash_password(user.jwt_secret().as_bytes(), password);
         let conn = open_state_connection(state)?;
         conn.execute(
             "UPDATE users SET password_hash = ?1 WHERE id = ?2 AND password_hash = ?3",
-            params![migrated_hash, user.id, user.password_hash],
+            params![migrated_hash, user.id(), user.password_hash()],
         )
         .map_err(sqlite_io_error)?;
-        user.password_hash = migrated_hash;
+        user.set_password_hash(migrated_hash);
     }
     signed_token(&user)
 }

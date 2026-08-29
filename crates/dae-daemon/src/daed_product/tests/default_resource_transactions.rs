@@ -63,10 +63,10 @@ fn default_resources_and_user_storage_roll_back_together() {
     assert_eq!(
         conn.query_row(
             "SELECT json_storage FROM users WHERE id = ?1",
-            params![user.id],
+            params![user.id()],
             |row| { row.get::<_, String>(0) }
         )
         .unwrap(),
-        user.json_storage
+        user.json_storage()
     );
 }

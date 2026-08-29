@@ -327,7 +327,7 @@ pub(super) fn handle_stream(
             stream,
             metrics,
             request,
-            user.id,
+            user.id(),
             sse_runtime,
             &app.ui_runtime,
         );

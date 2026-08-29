@@ -158,7 +158,7 @@ fn invalid_full_file_import_leaves_selected_resources_and_defaults_untouched() {
     let fixture = FreshProductState::new("dae-file-import-rollback");
     fixture.seed_selected_resources();
     let user = fixture_user(&fixture);
-    let before_storage = user.json_storage.clone();
+    let before_storage = user.json_storage().to_owned();
     let invalid = r#"
 global {}
 global { log_level: 'debug' }
@@ -174,7 +174,7 @@ routing { fallback: direct }
     assert_eq!(
         conn.query_row(
             "SELECT json_storage FROM users WHERE id = ?1",
-            params![user.id],
+            params![user.id()],
             |row| row.get::<_, String>(0),
         )
         .unwrap(),

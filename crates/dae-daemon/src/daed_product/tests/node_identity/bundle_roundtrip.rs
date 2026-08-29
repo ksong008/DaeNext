@@ -49,7 +49,7 @@ fn bundle_roundtrip_preserves_node_id_runtime_tag_and_group_binding() {
         .execute(
             "INSERT INTO users(id, username, password_hash, jwt_secret, json_storage)
              VALUES(?1, ?2, '', '', '{}')",
-            params![user.id, user.username],
+            params![user.id(), user.username()],
         )
         .unwrap();
     let outcome = import_bundle(target.state(), target.root(), &bundle, &user).unwrap();
@@ -82,13 +82,13 @@ fn bundle_roundtrip_preserves_node_id_runtime_tag_and_group_binding() {
 }
 
 fn fixture_user() -> UserRecord {
-    UserRecord {
-        id: 1,
-        username: "fixture-user".to_owned(),
-        password_hash: String::new(),
-        jwt_secret: String::new(),
-        json_storage: "{}".to_owned(),
-        avatar: None,
-        name: None,
-    }
+    UserRecord::new(
+        1,
+        "fixture-user".to_owned(),
+        String::new(),
+        String::new(),
+        "{}".to_owned(),
+        None,
+        None,
+    )
 }

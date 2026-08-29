@@ -58,17 +58,16 @@ where
     USER_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
 
     conn.query_row(sql, params, |row| {
-        Ok(ProductUserRecord {
-            id: row.get(0)?,
-            username: row.get(1)?,
-            password_hash: row.get(2)?,
-            jwt_secret: row.get(3)?,
-            json_storage: row
-                .get::<_, Option<String>>(4)?
+        Ok(ProductUserRecord::new(
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get::<_, Option<String>>(4)?
                 .unwrap_or_else(|| "{}".to_owned()),
-            avatar: row.get(5)?,
-            name: row.get(6)?,
-        })
+            row.get(5)?,
+            row.get(6)?,
+        ))
     })
     .optional()
     .map_err(sqlite_io_error)
@@ -76,11 +75,11 @@ where
 
 pub(crate) fn user_resource(user: &UserRecord) -> Value {
     let mut map = Map::new();
-    map.insert("username".to_owned(), json!(user.username));
-    if let Some(name) = &user.name {
+    map.insert("username".to_owned(), json!(user.username()));
+    if let Some(name) = user.name() {
         map.insert("name".to_owned(), json!(name));
     }
-    if let Some(avatar) = &user.avatar {
+    if let Some(avatar) = user.avatar() {
         map.insert("avatar".to_owned(), json!(avatar));
     }
     Value::Object(map)
