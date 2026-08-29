@@ -1,3 +1,5 @@
+use std::sync::{Mutex, OnceLock};
+
 mod content;
 pub mod fetch_error;
 mod group_store;
@@ -18,6 +20,8 @@ mod node_view;
 mod outcome;
 mod parser;
 mod persistence;
+mod refresh_node_sync;
+mod refresh_transaction;
 mod scheduler;
 mod subscription_view;
 mod wire_http;
@@ -41,6 +45,16 @@ pub use node_view::*;
 pub use outcome::*;
 pub use parser::*;
 pub use persistence::*;
+pub use refresh_node_sync::*;
+pub use refresh_transaction::*;
 pub use scheduler::*;
 pub use subscription_view::*;
 pub use wire_http::*;
+
+pub fn subscription_write_guard() -> std::io::Result<std::sync::MutexGuard<'static, ()>> {
+    static SUBSCRIPTION_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    SUBSCRIPTION_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| std::io::Error::other("subscription write lock poisoned"))
+}

@@ -1,4 +1,4 @@
-use super::prepare::PreparedRuntimeGeneration;
+use super::PreparedRuntimeGeneration;
 
 pub(super) fn write_runtime_apply_journal(
     candidate: &mut PreparedRuntimeGeneration,

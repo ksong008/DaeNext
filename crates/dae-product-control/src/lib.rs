@@ -15,6 +15,9 @@ use serde_json::{Value, json};
 pub mod auth;
 pub use auth::*;
 
+mod durable_recovery;
+pub use durable_recovery::recover_product_durable_state;
+
 pub trait ProductControlRuntimeHooks: Send + Sync {
     fn on_thread_start(&self) {}
     fn on_thread_stop(&self) {}

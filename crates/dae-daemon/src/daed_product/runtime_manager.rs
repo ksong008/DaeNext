@@ -394,49 +394,6 @@ impl ProductRuntimeProbeHandle {
     }
 }
 
-#[derive(Debug)]
-pub(super) struct RuntimeStartOutcome {
-    pub(super) report: Value,
-}
-
-#[derive(Debug, Default)]
-pub(super) struct RuntimeOverviewDeltaState {
-    pub(super) reload_count: u64,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(super) enum ProductRuntimeLifecycleLogMode {
-    StartupRestore,
-    ReloadLocalControl,
-    ReloadSubscriptionRefresh,
-}
-
-impl ProductRuntimeLifecycleLogMode {
-    pub(super) fn source(self) -> &'static str {
-        match self {
-            Self::StartupRestore => "startup-restore",
-            Self::ReloadLocalControl => "local-control",
-            Self::ReloadSubscriptionRefresh => "subscription-refresh",
-        }
-    }
-
-    pub(super) fn apply_intent(self) -> RuntimeApplyIntent {
-        match self {
-            Self::StartupRestore => RuntimeApplyIntent::StartupRestore,
-            Self::ReloadLocalControl => RuntimeApplyIntent::LocalControlReload,
-            Self::ReloadSubscriptionRefresh => RuntimeApplyIntent::SubscriptionRefresh,
-        }
-    }
-
-    pub(super) fn is_startup(self) -> bool {
-        matches!(self, Self::StartupRestore)
-    }
-
-    pub(super) fn returns_detailed_report(self) -> bool {
-        matches!(self, Self::ReloadSubscriptionRefresh)
-    }
-}
-
 pub(super) const PRODUCT_RUNTIME_FAKE_START_ENV: &str = "PRODUCT_RUNTIME_FAKE_START";
 pub(super) const PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV: &str = "DAED_PRODUCT_RUNTIME_FAKE_START";
 const PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT: Duration = Duration::from_secs(5);

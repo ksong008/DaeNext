@@ -15,17 +15,17 @@ fn completed_reload(coalesced: bool) -> AppliedRuntimeReload {
 #[test]
 fn identical_fingerprint_callers_observe_one_result() {
     let reconciler = RuntimeReconciler::new(RuntimeApplyCoordinator::new());
-    let fingerprint = ActiveRuntimeFingerprint::for_test("same");
+    let fingerprint = "same";
     let RuntimeReconcileAdmission::Lead(lead) = reconciler
         .begin(RuntimeApplyIntent::ApiReload)
-        .admit(&fingerprint)
+        .admit(fingerprint)
         .unwrap()
     else {
         panic!("first request must lead its fingerprint flight");
     };
     let RuntimeReconcileAdmission::Follow(follower) = reconciler
         .begin(RuntimeApplyIntent::SubscriptionRefresh)
-        .admit(&fingerprint)
+        .admit(fingerprint)
         .unwrap()
     else {
         panic!("second request must follow its fingerprint flight");
@@ -45,14 +45,14 @@ fn newer_desired_fingerprint_supersedes_prepare_before_commit() {
     let reconciler = RuntimeReconciler::new(RuntimeApplyCoordinator::new());
     let RuntimeReconcileAdmission::Lead(mut older) = reconciler
         .begin(RuntimeApplyIntent::ApiReload)
-        .admit(&ActiveRuntimeFingerprint::for_test("older"))
+        .admit("older")
         .unwrap()
     else {
         panic!("older request must lead");
     };
     let RuntimeReconcileAdmission::Lead(mut newer) = reconciler
         .begin(RuntimeApplyIntent::LocalControlReload)
-        .admit(&ActiveRuntimeFingerprint::for_test("newer"))
+        .admit("newer")
         .unwrap()
     else {
         panic!("newer request must lead");
@@ -71,7 +71,7 @@ fn stop_cancels_prepare_but_waits_for_commit_boundary() {
     let reconciler = RuntimeReconciler::new(RuntimeApplyCoordinator::new());
     let RuntimeReconcileAdmission::Lead(mut preparing) = reconciler
         .begin(RuntimeApplyIntent::ApiReload)
-        .admit(&ActiveRuntimeFingerprint::for_test("preparing"))
+        .admit("preparing")
         .unwrap()
     else {
         panic!("request must lead");
@@ -83,7 +83,7 @@ fn stop_cancels_prepare_but_waits_for_commit_boundary() {
 
     let RuntimeReconcileAdmission::Lead(mut committing) = reconciler
         .begin(RuntimeApplyIntent::ApiReload)
-        .admit(&ActiveRuntimeFingerprint::for_test("committing"))
+        .admit("committing")
         .unwrap()
     else {
         panic!("request must lead");

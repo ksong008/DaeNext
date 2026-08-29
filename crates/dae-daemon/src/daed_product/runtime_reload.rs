@@ -64,6 +64,12 @@ pub(in crate::daed_product) enum CoordinatedRuntimeReloadError {
     Apply(String),
 }
 
+impl From<String> for CoordinatedRuntimeReloadError {
+    fn from(error: String) -> Self {
+        Self::Apply(error)
+    }
+}
+
 impl CoordinatedRuntimeReloadError {
     pub(in crate::daed_product) fn http_status(&self) -> u16 {
         match self {
@@ -206,7 +212,7 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_inner(
             }
         };
     let admission = request
-        .admit(&plan.active_fingerprint)
+        .admit(plan.active_fingerprint.as_str())
         .map_err(CoordinatedRuntimeReloadError::Apply)?;
     let RuntimeReconcileAdmission::Lead(mut lead) = admission else {
         let RuntimeReconcileAdmission::Follow(follower) = admission else {
@@ -238,18 +244,21 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_inner(
         let permit = commit.expect("runtime commit admission success was checked");
         let runtime_report = runtime.summary();
         permit.finish_coalesced();
-        return lead.finish(Ok(AppliedRuntimeReload {
-            applied: false,
-            coalesced: true,
-            runtime_report,
-            materialized_report: json!({
-                "applied": false,
-                "coalesced": true,
-                "reason": "active runtime already matches latest desired state",
+        return lead.finish_with_coalesced(
+            Ok(AppliedRuntimeReload {
+                applied: false,
+                coalesced: true,
+                runtime_report,
+                materialized_report: json!({
+                    "applied": false,
+                    "coalesced": true,
+                    "reason": "active runtime already matches latest desired state",
+                }),
+                allocator_reclaim: Value::Null,
+                pending_process_transition: runtime.pending_process_transition(),
             }),
-            allocator_reclaim: Value::Null,
-            pending_process_transition: runtime.pending_process_transition(),
-        }));
+            true,
+        );
     }
     if let Err(error) = lead.checkpoint("materializing") {
         return lead.finish(Err(error));

@@ -1,5 +1,4 @@
 use super::*;
-pub(super) use dae_product_geodata::ensure_runtime_input_versions_bumped;
 
 pub(in crate::daed_product::geodata) fn runtime_input_versions_if_running(
     context: &ProductGeodataUpdateContext,

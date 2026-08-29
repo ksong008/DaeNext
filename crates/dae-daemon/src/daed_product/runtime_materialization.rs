@@ -1,14 +1,16 @@
 use super::*;
 
-mod materialize;
-mod queries;
-mod render;
 mod state;
 mod stop_state;
 
-pub(super) use self::materialize::*;
-pub(super) use self::queries::*;
-pub(super) use self::render::*;
 pub(super) use self::state::*;
 pub(super) use self::stop_state::*;
-pub(super) use dae_product_runtime::load_active_runtime_resources;
+pub(super) use dae_product_runtime::{
+    RuntimeMaterializationPlan, build_runtime_config_from_content, materialize_runtime,
+    prepare_runtime_materialization_plan, prepare_runtime_materialization_plan_with_connection,
+    prepare_runtime_materialization_plan_with_modified_state, render_generated_config,
+    runtime_modified,
+};
+
+#[cfg(test)]
+pub(super) use dae_product_runtime::apply_runtime_materialization_plan;

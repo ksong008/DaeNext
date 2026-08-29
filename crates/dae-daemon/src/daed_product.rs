@@ -21,7 +21,6 @@ use dae_product_core::{product_iso8601_utc as iso8601_utc, product_now_text as n
 use dae_product_subscription::{count_nodes_for_subscription, list_all_nodes_value};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::allocator::{
     AllocatorReclaimBusyKind, AllocatorReclaimReason, AllocatorReclaimScope,
@@ -433,8 +432,6 @@ mod pprof_runtime;
 use self::pprof_runtime::*;
 mod runtime_reconcile;
 use self::runtime_reconcile::*;
-mod durable_recovery;
-use self::durable_recovery::*;
 use dae_product_persistence::*;
 type UserRecord = ProductUserRecord;
 mod runtime_apply;

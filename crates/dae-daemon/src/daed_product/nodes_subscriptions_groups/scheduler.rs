@@ -1,16 +1,12 @@
 use super::*;
 use dae_product_subscription::{
-    InvalidCronLogTracker, due_scheduled_subscriptions, next_scheduled_subscription_deadline,
+    InvalidCronLogTracker, SubscriptionSchedulerCallbacks, SubscriptionSchedulerRuntimeApply,
 };
 
 pub(crate) use dae_product_subscription::validate_subscription_cron_expression;
 
-mod lifecycle;
-
-pub(crate) use lifecycle::SubscriptionSchedulerHandle;
-
 pub(crate) fn notify_subscription_scheduler() {
-    lifecycle::notify_subscription_scheduler();
+    dae_product_subscription::notify_subscription_scheduler();
 }
 
 pub(crate) fn start_subscription_scheduler(
@@ -19,10 +15,14 @@ pub(crate) fn start_subscription_scheduler(
     runtime: Arc<ProductRuntimeManager>,
     control_runtime: Arc<ProductControlRuntime>,
 ) -> io::Result<SubscriptionSchedulerHandle> {
-    lifecycle::start_subscription_scheduler(state, config_dir, runtime, control_runtime)
+    let callbacks = Arc::new(OwnedDaemonSubscriptionSchedulerCallbacks {
+        control_runtime: Arc::clone(&control_runtime),
+        runtime: Arc::clone(&runtime),
+    });
+    dae_product_subscription::start_subscription_scheduler(state, config_dir, callbacks)
 }
 
-const SUBSCRIPTION_SCHEDULER_RETRY: Duration = Duration::from_secs(60);
+pub(crate) use dae_product_subscription::SubscriptionSchedulerHandle;
 
 #[cfg(test)]
 pub(crate) fn refresh_due_subscriptions_for_scheduler(
@@ -51,109 +51,99 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
     now_unix: u64,
     invalid_cron: &mut InvalidCronLogTracker,
 ) -> io::Result<Value> {
-    ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    let scan = due_scheduled_subscriptions(&conn, now_unix)?;
-    drop(conn);
+    let callbacks = DaemonSubscriptionSchedulerCallbacks {
+        control_runtime,
+        runtime,
+    };
+    dae_product_subscription::refresh_due_subscriptions_with_callbacks(
+        &callbacks,
+        state,
+        config_dir,
+        now_unix,
+        invalid_cron,
+    )
+}
 
-    for invalid in invalid_cron.take_changed(&scan.invalid_cron) {
-        let _ = append_log_for_config(
-            config_dir,
-            state,
-            "error",
-            &format!(
-                "subscription {} scheduler cron error: {}",
-                invalid.id, invalid.error
-            ),
-        );
+struct DaemonSubscriptionSchedulerCallbacks<'a> {
+    control_runtime: &'a ProductControlRuntime,
+    runtime: &'a ProductRuntimeManager,
+}
+
+struct OwnedDaemonSubscriptionSchedulerCallbacks {
+    control_runtime: Arc<ProductControlRuntime>,
+    runtime: Arc<ProductRuntimeManager>,
+}
+
+impl SubscriptionSchedulerCallbacks for DaemonSubscriptionSchedulerCallbacks<'_> {
+    fn refresh_subscription(
+        &self,
+        state: &Path,
+        config_dir: &Path,
+        subscription_id: i64,
+    ) -> io::Result<Value> {
+        refresh_subscription_from_remote(self.control_runtime, state, config_dir, subscription_id)
     }
 
-    let attempted = scan.due.len();
-    let mut fetched = 0_usize;
-    let mut fetch_errors = 0_usize;
-    let mut runtime_input_changes = 0_usize;
-    for subscription in &scan.due {
-        match refresh_subscription_from_remote(control_runtime, state, config_dir, subscription.id)
-        {
-            Ok(report) => {
-                let outcome = SubscriptionRefreshOutcome::from_report(&report);
-                if outcome.fetched {
-                    fetched += 1;
-                } else {
-                    fetch_errors += 1;
-                }
-                if outcome.requests_runtime_apply() {
-                    runtime_input_changes += 1;
-                }
-                let _ = append_log_for_config(
-                    config_dir,
-                    state,
-                    if outcome.fetched { "info" } else { "error" },
-                    &format!(
-                        "subscription {} {} by scheduler",
-                        subscription.id,
-                        if outcome.fetched {
-                            "refreshed"
-                        } else {
-                            "refresh fetch failed"
-                        }
-                    ),
-                );
-            }
-            Err(err) => {
-                fetch_errors += 1;
-                let _ = append_log_for_config(
-                    config_dir,
-                    state,
-                    "error",
-                    &format!(
-                        "subscription {} scheduler refresh failed: {err}",
-                        subscription.id
-                    ),
-                );
-            }
+    fn apply_runtime(
+        &self,
+        state: &Path,
+        config_dir: &Path,
+        requested: bool,
+    ) -> SubscriptionSchedulerRuntimeApply {
+        let result = apply_runtime_after_subscription_change(
+            state,
+            config_dir,
+            self.runtime,
+            requested,
+            "subscription-scheduler",
+        );
+        SubscriptionSchedulerRuntimeApply {
+            requested: result.requested,
+            applied: result.applied,
+            report: result.report.unwrap_or(Value::Null),
+            error: result.error,
         }
     }
 
-    let runtime_apply = apply_runtime_after_subscription_change(
-        state,
-        config_dir,
-        runtime,
-        runtime_input_changes > 0,
-        "subscription-scheduler",
-    );
-
-    let checked_at = iso8601_utc(now_unix);
-    let _ = set_metadata(state, "subscription_scheduler_last_tick_at", &checked_at);
-    let _ = set_metadata(
-        state,
-        "subscription_scheduler_last_due_count",
-        &scan.due.len().to_string(),
-    );
-    let _ = set_metadata(
-        state,
-        "subscription_scheduler_last_invalid_count",
-        &scan.invalid_cron.len().to_string(),
-    );
-    Ok(json!({
-        "checkedAt": checked_at,
-        "attempted": attempted,
-        "dueCount": scan.due.len(),
-        "refreshed": fetched,
-        "runtimeInputChanged": runtime_input_changes,
-        "fetchErrors": fetch_errors,
-        "invalidCronCount": scan.invalid_cron.len(),
-        "runtimeApplyRequested": runtime_apply.requested,
-        "runtimeReloaded": runtime_apply.applied,
-        "runtimeReload": runtime_apply.report,
-        "runtimeReloadError": runtime_apply.error,
-    }))
+    fn append_log(&self, config_dir: &Path, state: &Path, level: &str, message: &str) {
+        let _ = append_log_for_config(config_dir, state, level, message);
+    }
 }
 
-fn subscription_scheduler_wait(state: &Path, now_unix: u64) -> io::Result<Option<Duration>> {
-    let conn = open_state_connection(state)?;
-    let deadline = next_scheduled_subscription_deadline(&conn, now_unix)?;
-    Ok(deadline.map(|deadline| Duration::from_secs(deadline.saturating_sub(now_unix).max(1))))
+impl SubscriptionSchedulerCallbacks for OwnedDaemonSubscriptionSchedulerCallbacks {
+    fn refresh_subscription(
+        &self,
+        state: &Path,
+        config_dir: &Path,
+        subscription_id: i64,
+    ) -> io::Result<Value> {
+        refresh_subscription_from_remote(&self.control_runtime, state, config_dir, subscription_id)
+    }
+
+    fn apply_runtime(
+        &self,
+        state: &Path,
+        config_dir: &Path,
+        requested: bool,
+    ) -> SubscriptionSchedulerRuntimeApply {
+        let result = apply_runtime_after_subscription_change(
+            state,
+            config_dir,
+            &self.runtime,
+            requested,
+            "subscription-scheduler",
+        );
+        SubscriptionSchedulerRuntimeApply {
+            requested: result.requested,
+            applied: result.applied,
+            report: result.report.unwrap_or(Value::Null),
+            error: result.error,
+        }
+    }
+
+    fn append_log(&self, config_dir: &Path, state: &Path, level: &str, message: &str) {
+        let _ = append_log_for_config(config_dir, state, level, message);
+    }
 }
 
 #[cfg(test)]

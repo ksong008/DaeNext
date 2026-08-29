@@ -36,10 +36,4 @@ pub(super) fn subscription_tag_exists(conn: &Connection, tag: Option<&str>) -> i
     .map_err(sqlite_io_error)
 }
 
-pub(super) fn subscription_write_guard() -> io::Result<std::sync::MutexGuard<'static, ()>> {
-    static SUBSCRIPTION_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    SUBSCRIPTION_WRITE_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| io::Error::other("subscription write lock poisoned"))
-}
+pub(super) use dae_product_subscription::subscription_write_guard;

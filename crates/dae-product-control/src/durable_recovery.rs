@@ -1,4 +1,4 @@
-use super::*;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecoveryOwner {
@@ -17,7 +17,7 @@ impl RecoveryOwner {
     }
 }
 
-pub(super) fn recover_product_durable_state(
+pub fn recover_product_durable_state(
     state: &Path,
     config_dir: &Path,
     geodata_dir: &Path,
@@ -30,7 +30,7 @@ pub(super) fn recover_product_durable_state(
     for owner in steps {
         let result = match owner {
             RecoveryOwner::SubscriptionPersistence => {
-                nodes_subscriptions_groups::recover_subscription_persist_transaction(
+                dae_product_subscription::recover_subscription_persist_transaction(
                     state, config_dir,
                 )
                 .map_err(|error| error.to_string())
@@ -39,7 +39,7 @@ pub(super) fn recover_product_durable_state(
                 dae_product_runtime::recover_runtime_apply_transaction(state, config_dir)
             }
             RecoveryOwner::GeodataGeneration => {
-                geodata::recover_geodata_transactions(geodata_dir, state)
+                dae_product_geodata::recover_geodata_transactions(geodata_dir, state)
                     .map_err(|error| error.to_string())
             }
         };

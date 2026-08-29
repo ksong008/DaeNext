@@ -1,8 +1,20 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
+use std::time::Duration;
 
 use dae_product_core::product_civil_from_days;
+use dae_product_core::product_iso8601_utc;
+use dae_product_core::{product_now_text, unix_now};
+use dae_product_persistence::{ensure_state_schema, open_state_connection, set_metadata};
 use rusqlite::Connection;
+use serde_json::{Value, json};
+
+use crate::SubscriptionRefreshOutcome;
 
 #[derive(Clone, Debug)]
 pub struct ScheduledSubscription {
@@ -490,6 +502,315 @@ impl InvalidCronLogTracker {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct SubscriptionSchedulerRuntimeApply {
+    pub requested: bool,
+    pub applied: bool,
+    pub report: Value,
+    pub error: Option<String>,
+}
+
+pub trait SubscriptionSchedulerCallbacks: Send + Sync {
+    fn refresh_subscription(
+        &self,
+        state: &Path,
+        config_dir: &Path,
+        subscription_id: i64,
+    ) -> io::Result<Value>;
+
+    fn apply_runtime(
+        &self,
+        state: &Path,
+        config_dir: &Path,
+        requested: bool,
+    ) -> SubscriptionSchedulerRuntimeApply;
+
+    fn append_log(&self, config_dir: &Path, state: &Path, level: &str, message: &str);
+}
+
+#[derive(Debug)]
+enum SchedulerCommand {
+    Stop,
+    Wake,
+}
+
+type SchedulerWakeRegistry = Mutex<Option<(u64, Sender<SchedulerCommand>)>>;
+
+static NEXT_SCHEDULER_ID: AtomicU64 = AtomicU64::new(1);
+static SCHEDULER_WAKE: OnceLock<SchedulerWakeRegistry> = OnceLock::new();
+
+#[derive(Debug)]
+pub struct SubscriptionSchedulerHandle {
+    id: u64,
+    stop: Option<Sender<SchedulerCommand>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl SubscriptionSchedulerHandle {
+    pub fn shutdown(mut self) -> io::Result<()> {
+        self.stop_and_join()
+    }
+
+    fn stop_and_join(&mut self) -> io::Result<()> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(SchedulerCommand::Stop);
+        }
+        let Some(thread) = self.thread.take() else {
+            unregister_scheduler(self.id);
+            return Ok(());
+        };
+        let result = thread
+            .join()
+            .map_err(|_| io::Error::other("subscription scheduler thread panicked"));
+        unregister_scheduler(self.id);
+        result
+    }
+}
+
+impl Drop for SubscriptionSchedulerHandle {
+    fn drop(&mut self) {
+        let _ = self.stop_and_join();
+    }
+}
+
+pub fn start_subscription_scheduler<C: SubscriptionSchedulerCallbacks + 'static>(
+    state: std::path::PathBuf,
+    config_dir: std::path::PathBuf,
+    callbacks: Arc<C>,
+) -> io::Result<SubscriptionSchedulerHandle> {
+    let (stop, receiver) = std::sync::mpsc::channel();
+    let id = NEXT_SCHEDULER_ID.fetch_add(1, Ordering::Relaxed);
+    register_scheduler(id, stop.clone())?;
+    let thread = thread::Builder::new()
+        .name("daed-subscription-scheduler".to_owned())
+        .spawn(move || run_subscription_scheduler(state, config_dir, callbacks, receiver));
+    let thread = match thread {
+        Ok(thread) => thread,
+        Err(error) => {
+            unregister_scheduler(id);
+            return Err(error);
+        }
+    };
+    Ok(SubscriptionSchedulerHandle {
+        id,
+        stop: Some(stop),
+        thread: Some(thread),
+    })
+}
+
+pub fn notify_subscription_scheduler() {
+    let Some(registry) = SCHEDULER_WAKE.get() else {
+        return;
+    };
+    let Ok(registry) = registry.lock() else {
+        return;
+    };
+    if let Some((_, sender)) = registry.as_ref() {
+        let _ = sender.send(SchedulerCommand::Wake);
+    }
+}
+
+fn register_scheduler(id: u64, sender: Sender<SchedulerCommand>) -> io::Result<()> {
+    let registry = SCHEDULER_WAKE.get_or_init(|| Mutex::new(None));
+    let mut registry = registry
+        .lock()
+        .map_err(|_| io::Error::other("subscription scheduler registry lock poisoned"))?;
+    if registry.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "subscription scheduler is already running",
+        ));
+    }
+    *registry = Some((id, sender));
+    Ok(())
+}
+
+fn unregister_scheduler(id: u64) {
+    let Some(registry) = SCHEDULER_WAKE.get() else {
+        return;
+    };
+    let Ok(mut registry) = registry.lock() else {
+        return;
+    };
+    if registry.as_ref().is_some_and(|(current, _)| *current == id) {
+        *registry = None;
+    }
+}
+
+fn run_subscription_scheduler<C: SubscriptionSchedulerCallbacks + 'static>(
+    state: std::path::PathBuf,
+    config_dir: std::path::PathBuf,
+    callbacks: Arc<C>,
+    stop: Receiver<SchedulerCommand>,
+) {
+    let _ = ensure_state_schema(&state);
+    let _ = set_metadata(
+        &state,
+        "subscription_scheduler_started_at",
+        &product_now_text(),
+    );
+    callbacks.append_log(
+        &config_dir,
+        &state,
+        "info",
+        "subscription scheduler started by Rust daed",
+    );
+    let mut invalid_cron = InvalidCronLogTracker::default();
+    loop {
+        if let Err(error) = refresh_due_subscriptions_with_callbacks(
+            callbacks.as_ref(),
+            &state,
+            &config_dir,
+            unix_now(),
+            &mut invalid_cron,
+        ) {
+            callbacks.append_log(
+                &config_dir,
+                &state,
+                "error",
+                &format!("subscription scheduler tick failed: {error}"),
+            );
+        }
+        let wait = match subscription_scheduler_wait(&state, unix_now()) {
+            Ok(Some(wait)) => Some(wait),
+            Ok(None) => None,
+            Err(_) => Some(Duration::from_secs(60)),
+        };
+        let command = match wait {
+            Some(wait) => match stop.recv_timeout(wait) {
+                Ok(command) => Some(command),
+                Err(RecvTimeoutError::Disconnected) => Some(SchedulerCommand::Stop),
+                Err(RecvTimeoutError::Timeout) => None,
+            },
+            None => match stop.recv() {
+                Ok(command) => Some(command),
+                Err(_) => Some(SchedulerCommand::Stop),
+            },
+        };
+        match command {
+            Some(SchedulerCommand::Stop) => break,
+            Some(SchedulerCommand::Wake) => loop {
+                match stop.try_recv() {
+                    Ok(SchedulerCommand::Wake) => {}
+                    Ok(SchedulerCommand::Stop)
+                    | Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                }
+            },
+            None => {}
+        }
+    }
+    let _ = set_metadata(
+        &state,
+        "subscription_scheduler_stopped_at",
+        &product_now_text(),
+    );
+}
+
+fn subscription_scheduler_wait(state: &Path, now_unix: u64) -> io::Result<Option<Duration>> {
+    let conn = open_state_connection(state)?;
+    let deadline = next_scheduled_subscription_deadline(&conn, now_unix)?;
+    Ok(deadline.map(|deadline| Duration::from_secs(deadline.saturating_sub(now_unix).max(1))))
+}
+
+pub fn refresh_due_subscriptions_with_callbacks<C: SubscriptionSchedulerCallbacks>(
+    callbacks: &C,
+    state: &Path,
+    config_dir: &Path,
+    now_unix: u64,
+    invalid_cron: &mut InvalidCronLogTracker,
+) -> io::Result<Value> {
+    ensure_state_schema(state)?;
+    let conn = open_state_connection(state)?;
+    let scan = due_scheduled_subscriptions(&conn, now_unix)?;
+    drop(conn);
+
+    for invalid in invalid_cron.take_changed(&scan.invalid_cron) {
+        callbacks.append_log(
+            config_dir,
+            state,
+            "error",
+            &format!(
+                "subscription {} scheduler cron error: {}",
+                invalid.id, invalid.error
+            ),
+        );
+    }
+
+    let attempted = scan.due.len();
+    let mut fetched = 0_usize;
+    let mut fetch_errors = 0_usize;
+    let mut runtime_input_changes = 0_usize;
+    for subscription in &scan.due {
+        match callbacks.refresh_subscription(state, config_dir, subscription.id) {
+            Ok(report) => {
+                let outcome = SubscriptionRefreshOutcome::from_report(&report);
+                if outcome.fetched {
+                    fetched += 1;
+                } else {
+                    fetch_errors += 1;
+                }
+                if outcome.requests_runtime_apply() {
+                    runtime_input_changes += 1;
+                }
+                callbacks.append_log(
+                    config_dir,
+                    state,
+                    if outcome.fetched { "info" } else { "error" },
+                    &format!(
+                        "subscription {} {} by scheduler",
+                        subscription.id,
+                        if outcome.fetched {
+                            "refreshed"
+                        } else {
+                            "refresh fetch failed"
+                        }
+                    ),
+                );
+            }
+            Err(error) => {
+                fetch_errors += 1;
+                callbacks.append_log(
+                    config_dir,
+                    state,
+                    "error",
+                    &format!(
+                        "subscription {} scheduler refresh failed: {error}",
+                        subscription.id
+                    ),
+                );
+            }
+        }
+    }
+
+    let runtime_apply = callbacks.apply_runtime(state, config_dir, runtime_input_changes > 0);
+    let checked_at = product_iso8601_utc(now_unix);
+    let _ = set_metadata(state, "subscription_scheduler_last_tick_at", &checked_at);
+    let _ = set_metadata(
+        state,
+        "subscription_scheduler_last_due_count",
+        &scan.due.len().to_string(),
+    );
+    let _ = set_metadata(
+        state,
+        "subscription_scheduler_last_invalid_count",
+        &scan.invalid_cron.len().to_string(),
+    );
+    Ok(json!({
+        "checkedAt": checked_at,
+        "attempted": attempted,
+        "dueCount": scan.due.len(),
+        "refreshed": fetched,
+        "runtimeInputChanged": runtime_input_changes,
+        "fetchErrors": fetch_errors,
+        "invalidCronCount": scan.invalid_cron.len(),
+        "runtimeApplyRequested": runtime_apply.requested,
+        "runtimeReloaded": runtime_apply.applied,
+        "runtimeReload": runtime_apply.report,
+        "runtimeReloadError": runtime_apply.error,
+    }))
+}
+
 fn scheduler_sqlite_io_error(error: rusqlite::Error) -> io::Error {
     io::Error::other(error.to_string())
 }
@@ -498,6 +819,7 @@ fn scheduler_sqlite_io_error(error: rusqlite::Error) -> io::Error {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::AtomicUsize;
 
     use dae_product_core::product_iso8601_utc;
     use dae_product_persistence::{ensure_state_schema, open_state_connection};
@@ -673,5 +995,60 @@ mod tests {
         );
         assert!(tracker.take_changed(&[]).is_empty());
         assert_eq!(tracker.take_changed(&[invalid("second")]).len(), 1);
+    }
+
+    struct SchedulerLifecycleCallbacks {
+        log_calls: AtomicUsize,
+    }
+
+    impl SubscriptionSchedulerCallbacks for SchedulerLifecycleCallbacks {
+        fn refresh_subscription(
+            &self,
+            _state: &Path,
+            _config_dir: &Path,
+            _subscription_id: i64,
+        ) -> io::Result<Value> {
+            Ok(json!({"fetched": false}))
+        }
+
+        fn apply_runtime(
+            &self,
+            _state: &Path,
+            _config_dir: &Path,
+            _requested: bool,
+        ) -> SubscriptionSchedulerRuntimeApply {
+            SubscriptionSchedulerRuntimeApply::default()
+        }
+
+        fn append_log(&self, _config_dir: &Path, _state: &Path, _level: &str, _message: &str) {
+            self.log_calls.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn scheduler_handle_owns_thread_and_releases_singleton_registration() {
+        let directory = std::env::temp_dir().join(format!(
+            "dae-product-subscription-scheduler-lifecycle-{}",
+            fastrand::u64(..)
+        ));
+        let state = directory.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let callbacks = Arc::new(SchedulerLifecycleCallbacks {
+            log_calls: AtomicUsize::new(0),
+        });
+        let handle =
+            start_subscription_scheduler(state.clone(), directory.clone(), Arc::clone(&callbacks))
+                .unwrap();
+        let second =
+            start_subscription_scheduler(state.clone(), directory.clone(), Arc::clone(&callbacks))
+                .unwrap_err();
+        assert_eq!(second.kind(), io::ErrorKind::AlreadyExists);
+        handle.shutdown().unwrap();
+        assert!(callbacks.log_calls.load(Ordering::Relaxed) >= 1);
+
+        let replacement =
+            start_subscription_scheduler(state, directory.clone(), callbacks).unwrap();
+        replacement.shutdown().unwrap();
+        fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -1,34 +1,58 @@
-use super::*;
+use std::fs;
+use std::io;
+use std::path::Path;
+use std::time::Instant;
 
-pub(in crate::daed_product) fn build_runtime_config_from_content(
-    content: &str,
-) -> Result<Config, String> {
+use dae_config::Config;
+use dae_config::parser::parse_config;
+use dae_config::schema::build_config;
+use dae_product_core::{
+    RuntimeNodeTag, SectionKind, hex_encode, path_string, product_now_text as now_text,
+    runtime_node_tag,
+};
+use dae_product_persistence::{
+    RuntimeDesiredStateRevision, current_runtime_external_input_version,
+    current_runtime_geodata_input_version, ensure_state_schema, open_state_connection,
+    selected_section_raw, set_metadata, set_private_runtime_file_permissions, sqlite_io_error,
+};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+
+use crate::{
+    display_global_config_text, load_active_runtime_resources, render_group_policy,
+    render_runtime_config, runtime_group_node_tags,
+};
+
+pub const RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY: &str = "runtime_active_fingerprint";
+
+pub fn build_runtime_config_from_content(content: &str) -> Result<Config, String> {
     let sections = parse_config(content).map_err(|err| err.to_string())?;
     build_config(&sections).map_err(|err| err.to_string())
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::daed_product) struct RuntimeMaterializationPlan {
-    pub(in crate::daed_product) content: String,
-    pub(in crate::daed_product) generated_at: String,
-    pub(in crate::daed_product) config_id: i64,
-    pub(in crate::daed_product) config_version: i64,
-    pub(in crate::daed_product) dns_id: i64,
-    pub(in crate::daed_product) dns_version: i64,
-    pub(in crate::daed_product) routing_id: i64,
-    pub(in crate::daed_product) routing_version: i64,
-    pub(in crate::daed_product) group_version_sum: i64,
-    pub(in crate::daed_product) group_ids: String,
-    pub(in crate::daed_product) external_input_version: i64,
-    pub(in crate::daed_product) geodata_input_version: i64,
-    pub(in crate::daed_product) active_fingerprint: ActiveRuntimeFingerprint,
-    pub(in crate::daed_product) group_count: usize,
-    pub(in crate::daed_product) node_count: usize,
-    pub(in crate::daed_product) timings: RuntimeMaterializationTimings,
+pub struct RuntimeMaterializationPlan {
+    pub content: String,
+    pub generated_at: String,
+    pub config_id: i64,
+    pub config_version: i64,
+    pub dns_id: i64,
+    pub dns_version: i64,
+    pub routing_id: i64,
+    pub routing_version: i64,
+    pub group_version_sum: i64,
+    pub group_ids: String,
+    pub external_input_version: i64,
+    pub geodata_input_version: i64,
+    pub active_fingerprint: ActiveRuntimeFingerprint,
+    pub group_count: usize,
+    pub node_count: usize,
+    pub timings: RuntimeMaterializationTimings,
 }
 
 impl RuntimeMaterializationPlan {
-    pub(in crate::daed_product) fn desired_state_revision(&self) -> RuntimeDesiredStateRevision {
+    pub fn desired_state_revision(&self) -> RuntimeDesiredStateRevision {
         RuntimeDesiredStateRevision::new(
             self.config_id,
             self.config_version,
@@ -45,27 +69,27 @@ impl RuntimeMaterializationPlan {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::daed_product) struct RuntimeMaterializationTimings {
-    pub(in crate::daed_product) snapshot_ns: u64,
-    pub(in crate::daed_product) dependency_resolution_ns: u64,
-    pub(in crate::daed_product) render_ns: u64,
+pub struct RuntimeMaterializationTimings {
+    pub snapshot_ns: u64,
+    pub dependency_resolution_ns: u64,
+    pub render_ns: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::daed_product) struct ActiveRuntimeFingerprint(String);
+pub struct ActiveRuntimeFingerprint(String);
 
 impl ActiveRuntimeFingerprint {
-    pub(in crate::daed_product) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 
     #[cfg(test)]
-    pub(in crate::daed_product) fn for_test(value: &str) -> Self {
+    pub fn for_test(value: &str) -> Self {
         Self(value.to_owned())
     }
 }
 
-pub(in crate::daed_product) fn materialize_runtime(
+pub fn materialize_runtime(
     state: &Path,
     config_dir: Option<&Path>,
     dry: bool,
@@ -78,7 +102,7 @@ pub(in crate::daed_product) fn materialize_runtime(
     }
 }
 
-pub(in crate::daed_product) fn prepare_runtime_materialization_plan(
+pub fn prepare_runtime_materialization_plan(
     state: &Path,
 ) -> io::Result<RuntimeMaterializationPlan> {
     ensure_state_schema(state)?;
@@ -86,7 +110,7 @@ pub(in crate::daed_product) fn prepare_runtime_materialization_plan(
     prepare_runtime_materialization_plan_with_connection(&conn)
 }
 
-pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_modified_state(
+pub fn prepare_runtime_materialization_plan_with_modified_state(
     state: &Path,
     running: bool,
 ) -> io::Result<(RuntimeMaterializationPlan, bool)> {
@@ -101,7 +125,7 @@ pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_modifie
     Ok((plan, modified))
 }
 
-pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_connection(
+pub fn prepare_runtime_materialization_plan_with_connection(
     conn: &Connection,
 ) -> io::Result<RuntimeMaterializationPlan> {
     let started = Instant::now();
@@ -112,7 +136,7 @@ pub(in crate::daed_product) fn prepare_runtime_materialization_plan_with_connect
     Ok(plan)
 }
 
-pub(super) fn prepare_runtime_materialization_plan_from_snapshot(
+pub fn prepare_runtime_materialization_plan_from_snapshot(
     conn: &Connection,
 ) -> io::Result<RuntimeMaterializationPlan> {
     let config = required_selected_section_raw(conn, SectionKind::Config)?;
@@ -237,7 +261,7 @@ fn update_fingerprint_part(hasher: &mut Sha256, value: &[u8]) {
     Digest::update(hasher, value);
 }
 
-pub(in crate::daed_product) fn apply_runtime_materialization_plan(
+pub fn apply_runtime_materialization_plan(
     state: &Path,
     config_dir: Option<&Path>,
     plan: &RuntimeMaterializationPlan,
@@ -283,7 +307,7 @@ pub(in crate::daed_product) fn apply_runtime_materialization_plan(
 }
 
 impl RuntimeMaterializationPlan {
-    pub(in crate::daed_product) fn report(&self, config_dir: Option<&Path>, dry: bool) -> Value {
+    pub fn report(&self, config_dir: Option<&Path>, dry: bool) -> Value {
         let output_path = config_dir.map(|dir| dir.join("runtime").join("generated.dae"));
         let mut report = Map::new();
         report.insert("filename".to_owned(), json!("generated.dae"));
@@ -341,4 +365,89 @@ fn required_selected_section_raw(
             format!("no selected {} resource", kind.table()),
         )
     })
+}
+
+pub fn render_generated_config(
+    generated_at: &str,
+    config: Option<&(i64, String, String, i64)>,
+    dns: Option<&(i64, String, String, i64)>,
+    routing: Option<&(i64, String, String, i64)>,
+    groups: &Value,
+    nodes: &Value,
+) -> io::Result<String> {
+    render_runtime_config(
+        generated_at,
+        config.map(|(_, _, raw, _)| display_global_config_text(raw)),
+        dns.map(|(_, _, raw, _)| raw.as_str()),
+        routing.map(|(_, _, raw, _)| raw.as_str()),
+        groups,
+        nodes,
+    )
+}
+
+pub fn runtime_modified(conn: &Connection, running: bool) -> io::Result<bool> {
+    if !running {
+        return Ok(false);
+    }
+    if let Some(active_fingerprint) =
+        metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
+    {
+        let desired = prepare_runtime_materialization_plan_with_connection(conn)?;
+        return Ok(desired.active_fingerprint.as_str() != active_fingerprint);
+    }
+    legacy_runtime_modified(conn)
+}
+
+pub fn runtime_modified_with_prepared_plan(
+    conn: &Connection,
+    running: bool,
+    plan: &RuntimeMaterializationPlan,
+) -> io::Result<bool> {
+    if !running {
+        return Ok(false);
+    }
+    if let Some(active_fingerprint) =
+        metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
+    {
+        return Ok(plan.active_fingerprint.as_str() != active_fingerprint);
+    }
+    legacy_runtime_modified(conn)
+}
+
+fn metadata_value_from_connection(conn: &Connection, key: &str) -> io::Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM daed_product_metadata WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(sqlite_io_error)
+}
+
+fn legacy_runtime_modified(conn: &Connection) -> io::Result<bool> {
+    let Some(config) = dae_product_persistence::selected_section_state(conn, SectionKind::Config)?
+    else {
+        return Ok(true);
+    };
+    let Some(dns) = dae_product_persistence::selected_section_state(conn, SectionKind::Dns)? else {
+        return Ok(true);
+    };
+    let Some(routing) =
+        dae_product_persistence::selected_section_state(conn, SectionKind::Routing)?
+    else {
+        return Ok(true);
+    };
+    let Some(running_state) = dae_product_persistence::running_runtime_state(conn)? else {
+        return Ok(true);
+    };
+
+    Ok(running_state.config_id != Some(config.id)
+        || running_state.config_version != config.version
+        || running_state.dns_id != Some(dns.id)
+        || running_state.dns_version != dns.version
+        || running_state.routing_id != Some(routing.id)
+        || running_state.routing_version != routing.version
+        || running_state.group_version_sum != dae_product_persistence::group_version_sum(conn)?
+        || running_state.group_ids != dae_product_persistence::group_ids_text(conn)?
+        || running_state.external_input_version != current_runtime_external_input_version(conn)?)
 }
