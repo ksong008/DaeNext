@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::GenerationToken;
 
@@ -25,18 +25,28 @@ impl GenerationGate {
         self.active() == Some(generation)
     }
 
-    pub fn with_active<R, E>(
-        &self,
-        generation: GenerationToken,
-        operation: impl FnOnce() -> Result<R, E>,
-    ) -> Result<Option<R>, E> {
+    pub fn acquire_write(&self, generation: GenerationToken) -> Option<GenerationWritePermit<'_>> {
         let active = self
             .active
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *active != Some(generation) {
-            return Ok(None);
+            return None;
         }
+        Some(GenerationWritePermit {
+            generation,
+            _active: active,
+        })
+    }
+
+    pub fn with_active<R, E>(
+        &self,
+        generation: GenerationToken,
+        operation: impl FnOnce() -> Result<R, E>,
+    ) -> Result<Option<R>, E> {
+        let Some(_permit) = self.acquire_write(generation) else {
+            return Ok(None);
+        };
         operation().map(Some)
     }
 
@@ -52,6 +62,17 @@ impl GenerationGate {
         let result = operation()?;
         *active = Some(generation);
         Ok(result)
+    }
+}
+
+pub struct GenerationWritePermit<'a> {
+    generation: GenerationToken,
+    _active: MutexGuard<'a, Option<GenerationToken>>,
+}
+
+impl GenerationWritePermit<'_> {
+    pub fn generation(&self) -> GenerationToken {
+        self.generation
     }
 }
 
@@ -150,6 +171,24 @@ mod tests {
                 .unwrap(),
             Some(1)
         );
+    }
+
+    #[test]
+    fn write_permit_is_shared_and_generation_scoped() {
+        let first = generation(1);
+        let second = generation(2);
+        let gate = GenerationGate::new(Some(first));
+
+        assert!(gate.acquire_write(second).is_none());
+        let permit = gate
+            .acquire_write(first)
+            .expect("active generation write permit");
+        assert_eq!(permit.generation(), first);
+        drop(permit);
+
+        gate.switch(second, || Ok::<_, ()>(())).unwrap();
+        assert!(gate.acquire_write(first).is_none());
+        assert_eq!(gate.acquire_write(second).unwrap().generation(), second);
     }
 
     #[test]
