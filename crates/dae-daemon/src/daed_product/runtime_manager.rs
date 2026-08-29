@@ -58,10 +58,7 @@ use summary::{
 
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
-    _domain: ProductRuntimeDomain,
-    reconciler: RuntimeReconciler,
-    lifecycle: Arc<Mutex<()>>,
-    pub(super) inner: Arc<Mutex<ProductRuntimeState>>,
+    domain: ProductRuntimeDomain,
     interface_recovery: Mutex<ProductRuntimeInterfaceRecoverySupervisor>,
     startup_recovery: Mutex<ProductRuntimeStartupRecoverySupervisor>,
     process_http_config: Mutex<Option<ProductHttpWorkerConfig>>,
@@ -337,6 +334,18 @@ const PRODUCT_RUNTIME_INTERFACE_RECOVERY_RETRY: Duration = Duration::from_secs(3
 const PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE: &str = "interface-monitor";
 
 impl ProductRuntimeManager {
+    fn reconciler(&self) -> &RuntimeReconciler {
+        self.domain.reconciler()
+    }
+
+    fn lifecycle(&self) -> &Arc<Mutex<()>> {
+        self.domain.lifecycle()
+    }
+
+    fn inner(&self) -> &Arc<Mutex<ProductRuntimeState>> {
+        self.domain.state()
+    }
+
     #[cfg(test)]
     pub(super) fn new() -> Self {
         Self::new_with_state(None)
@@ -349,20 +358,14 @@ impl ProductRuntimeManager {
     fn new_with_state(state: Option<PathBuf>) -> Self {
         let coordinator = RuntimeApplyCoordinator::new();
         let domain = ProductRuntimeDomain::new(coordinator.clone());
-        let reconciler = domain.reconciler();
-        let lifecycle = domain.lifecycle().clone();
-        let inner = domain.state().clone();
         let interface_recovery = ProductRuntimeInterfaceRecoverySupervisor::start(
             coordinator.clone(),
-            Arc::clone(&lifecycle),
-            Arc::clone(&inner),
+            domain.lifecycle().clone(),
+            domain.state().clone(),
             state,
         );
         Self {
-            _domain: domain,
-            reconciler,
-            lifecycle,
-            inner,
+            domain,
             interface_recovery: Mutex::new(interface_recovery),
             startup_recovery: Mutex::new(ProductRuntimeStartupRecoverySupervisor::default()),
             process_http_config: Mutex::new(None),
@@ -393,8 +396,8 @@ impl ProductRuntimeManager {
         latency_seed: &[Value],
     ) -> Result<RuntimeStartOutcome, String> {
         reload_prepared_product_runtime_with_config_content(
-            &self.lifecycle,
-            &self.inner,
+            self.domain.lifecycle(),
+            self.domain.state(),
             prepared,
             config_content.map(Arc::<str>::from),
             source,
@@ -403,7 +406,7 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn is_running(&self) -> bool {
-        self.inner
+        self.inner()
             .lock()
             .map(|inner| inner.runtime.is_some())
             .unwrap_or(false)
@@ -426,14 +429,14 @@ impl ProductRuntimeManager {
         &self,
         intent: RuntimeApplyIntent,
     ) -> Result<RuntimeApplyPermit<'_>, String> {
-        self.reconciler.begin_exclusive(intent)
+        self.domain.reconciler().begin_exclusive(intent)
     }
 
     pub(in crate::daed_product) fn begin_reconcile(
         &self,
         intent: RuntimeApplyIntent,
     ) -> RuntimeReconcileRequest {
-        self.reconciler.begin(intent)
+        self.domain.reconciler().begin(intent)
     }
 }
 
@@ -900,16 +903,16 @@ fn replace_prepared_product_runtime_with_config_content(
 impl ProductRuntimeManager {
     #[cfg(test)]
     pub(super) fn wait_for_cleanup_idle(&self, timeout: Duration) -> bool {
-        cleanup::wait_for_cleanup_idle_for_inner(&self.inner, timeout)
+        cleanup::wait_for_cleanup_idle_for_inner(self.inner(), timeout)
     }
 
     #[cfg(test)]
     pub(super) fn ensure_cleanup_allows_start(&self) -> Result<(), String> {
-        ensure_cleanup_allows_start_for_inner(&self.inner)
+        ensure_cleanup_allows_start_for_inner(self.inner())
     }
 
     pub(super) fn summary(&self) -> Value {
-        let coordinator = self.reconciler.summary();
+        let coordinator = self.reconciler().summary();
         let fake_runtime_enabled = product_runtime_fake_start_enabled();
         #[cfg(test)]
         let render_barrier = self
@@ -917,7 +920,7 @@ impl ProductRuntimeManager {
             .lock()
             .ok()
             .and_then(|barrier| barrier.clone());
-        let Ok(inner) = self.inner.lock() else {
+        let Ok(inner) = self.inner().lock() else {
             return json!({
                 "running": false,
                 "state": "error",
@@ -950,7 +953,7 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn runtime_overview_delta_state(&self) -> RuntimeOverviewDeltaState {
-        let Ok(inner) = self.inner.lock() else {
+        let Ok(inner) = self.inner().lock() else {
             return RuntimeOverviewDeltaState::default();
         };
         RuntimeOverviewDeltaState {
@@ -959,14 +962,14 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn allocator_publication_id(&self) -> u64 {
-        self.inner
+        self.inner()
             .lock()
             .map(|inner| inner.allocator_publication_id)
             .unwrap_or(u64::MAX)
     }
 
     pub(super) fn group_selector_snapshot_map(&self) -> BTreeMap<String, Value> {
-        let Ok(inner) = self.inner.lock() else {
+        let Ok(inner) = self.inner().lock() else {
             return BTreeMap::new();
         };
         match inner.runtime.as_ref() {
@@ -978,14 +981,14 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn current_config(&self) -> Option<Arc<Config>> {
-        self.inner
+        self.inner()
             .lock()
             .ok()
             .and_then(|inner| inner.config.clone())
     }
 
     pub(super) fn node_latency_probe_handle(&self) -> Option<ProductRuntimeProbeHandle> {
-        let Ok(inner) = self.inner.lock() else {
+        let Ok(inner) = self.inner().lock() else {
             return None;
         };
         match inner.runtime.as_ref() {
@@ -1004,7 +1007,7 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn current_probe_generation(&self) -> Option<u64> {
-        let Ok(inner) = self.inner.lock() else {
+        let Ok(inner) = self.inner().lock() else {
             return None;
         };
         match inner.runtime.as_ref() {
@@ -1016,14 +1019,14 @@ impl ProductRuntimeManager {
     }
 
     pub(super) fn latency_probe_lifecycle_epoch(&self) -> u64 {
-        self.inner
+        self.inner()
             .lock()
             .map(|inner| inner.lifecycle_epoch)
             .unwrap_or(u64::MAX)
     }
 
     pub(super) fn active_generation(&self) -> Option<String> {
-        self.inner
+        self.inner()
             .lock()
             .ok()
             .and_then(|inner| inner.active_generation.clone())
@@ -1031,7 +1034,7 @@ impl ProductRuntimeManager {
 
     pub(super) fn prune_resident_event_log(&self) -> io::Result<()> {
         let inner = self
-            .inner
+            .inner()
             .lock()
             .map_err(|_| io::Error::other("product runtime manager lock poisoned"))?;
         if let Some(ProductRuntimeInstance::Resident(runtime)) = inner.runtime.as_ref() {
@@ -1042,7 +1045,7 @@ impl ProductRuntimeManager {
 
     pub(super) fn clear_resident_event_log(&self) -> io::Result<()> {
         let inner = self
-            .inner
+            .inner()
             .lock()
             .map_err(|_| io::Error::other("product runtime manager lock poisoned"))?;
         if let Some(ProductRuntimeInstance::Resident(runtime)) = inner.runtime.as_ref() {

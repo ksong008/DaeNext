@@ -22,8 +22,8 @@ where
         }
     }
 
-    pub fn reconciler(&self) -> ProductRuntimeReconciler<T, E> {
-        self.reconciler.clone()
+    pub fn reconciler(&self) -> &ProductRuntimeReconciler<T, E> {
+        &self.reconciler
     }
 
     pub fn lifecycle(&self) -> &Arc<Mutex<()>> {

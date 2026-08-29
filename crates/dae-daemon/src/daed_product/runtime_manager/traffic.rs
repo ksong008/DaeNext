@@ -2,7 +2,7 @@ use super::*;
 
 impl ProductRuntimeManager {
     pub(in crate::daed_product) fn resident_traffic_read(&self) -> RuntimeTrafficRead {
-        let Ok(inner) = self.inner.lock() else {
+        let Ok(inner) = self.inner().lock() else {
             return RuntimeTrafficRead {
                 epoch: u64::MAX,
                 counters: ResidentTrafficCounters::default(),

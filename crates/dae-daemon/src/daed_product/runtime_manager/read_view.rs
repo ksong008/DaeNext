@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn detailed_summary_render_does_not_hold_manager_state_lock() {
         let manager = Arc::new(ProductRuntimeManager::new());
-        manager.inner.lock().unwrap().runtime =
+        manager.inner().lock().unwrap().runtime =
             Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
                 started_at: "captured-start".to_owned(),
                 tproxy_port: 1234,
@@ -181,7 +181,7 @@ mod tests {
         let summary_manager = Arc::clone(&manager);
         let summary_thread = std::thread::spawn(move || summary_manager.summary());
         barrier.wait();
-        assert!(manager.inner.try_lock().is_ok());
+        assert!(manager.inner().try_lock().is_ok());
         barrier.wait();
 
         let summary = summary_thread.join().unwrap();
