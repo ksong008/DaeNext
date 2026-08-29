@@ -1,12 +1,27 @@
-use super::*;
-pub(crate) fn list_nodes(state: &Path, subscription_id: Option<i64>) -> HttpResponse {
+use std::collections::BTreeSet;
+use std::io;
+use std::path::Path;
+
+use dae_product_http::{HttpRequest, HttpResponse, integer_array, json_body};
+use dae_product_persistence::{
+    bump_runtime_external_input_version_with_connection, open_state_connection, sqlite_io_error,
+};
+use dae_product_runtime::parse_boolish;
+use dae_product_subscription::{
+    NodeListScope, ParsedNodeLink, StableNodeKey, get_node_value, list_nodes_by_scope,
+    list_nodes_value, parse_node_link,
+};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::{Value, json};
+
+pub fn list_nodes(state: &Path, subscription_id: Option<i64>) -> HttpResponse {
     match list_nodes_value(state, subscription_id) {
         Ok(value) => HttpResponse::json(200, value),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-pub(crate) fn list_nodes_for_request(state: &Path, request: &HttpRequest) -> HttpResponse {
+pub fn list_nodes_for_request(state: &Path, request: &HttpRequest) -> HttpResponse {
     let subscription_id = request
         .query
         .get("subscriptionId")
@@ -32,7 +47,7 @@ pub(crate) fn list_nodes_for_request(state: &Path, request: &HttpRequest) -> Htt
     }
 }
 
-pub(crate) fn get_node(state: &Path, id: i64) -> HttpResponse {
+pub fn get_node(state: &Path, id: i64) -> HttpResponse {
     match get_node_value(state, id) {
         Ok(Some(value)) => HttpResponse::json(200, value),
         Ok(None) => HttpResponse::json(404, json!({"error": "node not found"})),
@@ -40,7 +55,7 @@ pub(crate) fn get_node(state: &Path, id: i64) -> HttpResponse {
     }
 }
 
-pub(crate) fn import_nodes(
+pub fn import_nodes(
     state: &Path,
     request: &HttpRequest,
     subscription_id: Option<i64>,
@@ -170,7 +185,7 @@ enum PendingNodeImport {
     Inserted { link: String, id: i64 },
 }
 
-pub(crate) fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
+pub fn update_node(state: &Path, request: &HttpRequest, id: i64) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -286,7 +301,7 @@ fn node_latency_identity_changed(current: &NodeLatencyIdentity, next: &ParsedNod
         || current.protocol != next.protocol
 }
 
-pub(crate) fn delete_nodes(state: &Path, request: &HttpRequest) -> HttpResponse {
+pub fn delete_nodes(state: &Path, request: &HttpRequest) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     let ids = integer_array(&body, "ids");
     match delete_nodes_transaction(state, ids) {
@@ -295,14 +310,14 @@ pub(crate) fn delete_nodes(state: &Path, request: &HttpRequest) -> HttpResponse 
     }
 }
 
-pub(crate) fn delete_node_by_id(state: &Path, id: i64) -> HttpResponse {
+pub fn delete_node_by_id(state: &Path, id: i64) -> HttpResponse {
     match delete_node(state, id) {
         Ok(removed) => HttpResponse::json(200, json!({"removed": removed})),
         Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
     }
 }
 
-pub(crate) fn delete_node(state: &Path, id: i64) -> io::Result<usize> {
+pub fn delete_node(state: &Path, id: i64) -> io::Result<usize> {
     delete_nodes_transaction(state, [id])
 }
 
@@ -332,7 +347,3 @@ fn delete_nodes_transaction(state: &Path, ids: impl IntoIterator<Item = i64>) ->
     tx.commit().map_err(sqlite_io_error)?;
     Ok(removed)
 }
-
-#[cfg(test)]
-pub(crate) use dae_product_subscription::decode_node_label;
-pub(crate) use dae_product_subscription::{ParsedNodeLink, parse_node_link};

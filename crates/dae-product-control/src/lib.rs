@@ -36,6 +36,8 @@ mod default_resources;
 pub use default_resources::*;
 mod groups;
 pub use groups::*;
+mod nodes;
+pub use nodes::*;
 mod section_parsers;
 pub use section_parsers::*;
 mod sections;
