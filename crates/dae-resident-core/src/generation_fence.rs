@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::GenerationToken;
+use crate::{ActiveGenerationSlot, GenerationToken};
 
 #[derive(Debug, Default)]
 pub struct GenerationGate {
@@ -62,6 +62,20 @@ impl GenerationGate {
         let result = operation()?;
         *active = Some(generation);
         Ok(result)
+    }
+
+    pub fn publish<T>(
+        &self,
+        generation: GenerationToken,
+        active: &ActiveGenerationSlot<T>,
+        next: Arc<T>,
+    ) -> Arc<T> {
+        match self.switch(generation, || {
+            Ok::<_, std::convert::Infallible>(active.publish_unchecked(next))
+        }) {
+            Ok(previous) => previous,
+            Err(error) => match error {},
+        }
     }
 }
 

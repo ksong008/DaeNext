@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 
@@ -82,12 +81,8 @@ impl<T> ResidentRuntimeCoordinator<T> {
     }
 
     pub fn publish(&self, token: GenerationToken, generation: Arc<T>) -> Arc<T> {
-        match self.generation_gate.switch(token, || {
-            Ok::<_, Infallible>(self.active_generation.publish(generation))
-        }) {
-            Ok(previous) => previous,
-            Err(error) => match error {},
-        }
+        self.generation_gate
+            .publish(token, &self.active_generation, generation)
     }
 
     pub fn clear(&self) -> Option<Arc<T>> {

@@ -65,7 +65,7 @@ impl<T> ActiveGenerationSlot<T> {
         self.inner.publication_signal.subscribe()
     }
 
-    pub fn publish(&self, generation: Arc<T>) -> Arc<T> {
+    pub(crate) fn publish_unchecked(&self, generation: Arc<T>) -> Arc<T> {
         let mut active = self
             .inner
             .generation
@@ -100,7 +100,7 @@ mod tests {
         let first = Arc::new(String::from("first"));
         let slot = ActiveGenerationSlot::new(Arc::clone(&first));
         let (first_publication, pinned) = slot.load_versioned();
-        let retired = slot.publish(Arc::new(String::from("second")));
+        let retired = slot.publish_unchecked(Arc::new(String::from("second")));
         let (second_publication, active) = slot.load_versioned();
 
         assert_eq!(pinned.as_str(), "first");
@@ -117,7 +117,7 @@ mod tests {
         let mut publication = slot.subscribe_publication();
         assert_eq!(*publication.borrow_and_update(), PublicationEpoch::INITIAL);
 
-        let previous = slot.publish(Arc::new(String::from("second")));
+        let previous = slot.publish_unchecked(Arc::new(String::from("second")));
 
         tokio::time::timeout(Duration::from_secs(1), publication.changed())
             .await
@@ -145,7 +145,7 @@ mod tests {
         let slot = ActiveGenerationSlot::new(Arc::new(String::from("first")));
         slot.inner.publication.store(u64::MAX, Ordering::Release);
 
-        slot.publish(Arc::new(String::from("second")));
+        slot.publish_unchecked(Arc::new(String::from("second")));
 
         let (publication, active) = slot.load_versioned();
         assert_eq!(publication, PublicationEpoch::new(0));
