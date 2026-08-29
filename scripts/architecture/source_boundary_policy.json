@@ -1,6 +1,34 @@
 {
   "version": 1,
   "packages": {
+    "dae-product-control": {
+      "production": 3200,
+      "tests": 700
+    },
+    "dae-product-core": {
+      "production": 1300,
+      "tests": 0
+    },
+    "dae-product-geodata": {
+      "production": 2800,
+      "tests": 0
+    },
+    "dae-product-http": {
+      "production": 3400,
+      "tests": 0
+    },
+    "dae-product-persistence": {
+      "production": 2600,
+      "tests": 0
+    },
+    "dae-product-runtime": {
+      "production": 4500,
+      "tests": 300
+    },
+    "dae-product-subscription": {
+      "production": 6500,
+      "tests": 0
+    },
     "dae-daemon": {
       "production": 60000,
       "tests": 21000
