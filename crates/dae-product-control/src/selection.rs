@@ -1,10 +1,19 @@
-use super::*;
+use std::io;
+use std::path::Path;
+
+use dae_product_core::SectionKind;
+use dae_product_http::{HttpRequest, HttpResponse, json_body};
+use dae_product_persistence::{ensure_state_schema, open_state_connection, sqlite_io_error};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde_json::{Value, json};
+
+use crate::sections::get_section;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::daed_product) struct ProfileSelection {
-    pub(in crate::daed_product) config_id: i64,
-    pub(in crate::daed_product) dns_id: i64,
-    pub(in crate::daed_product) routing_id: i64,
+pub struct ProfileSelection {
+    pub config_id: i64,
+    pub dns_id: i64,
+    pub routing_id: i64,
 }
 
 impl ProfileSelection {
@@ -27,17 +36,14 @@ impl ProfileSelection {
     }
 }
 
-pub(crate) fn select_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
+pub fn select_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     match select_section_transactionally(state, kind, id) {
         Ok(()) => get_section(state, kind, id),
         Err(err) => selection_error_response(err),
     }
 }
 
-pub(in crate::daed_product) fn api_select_profile(
-    state: &Path,
-    request: &HttpRequest,
-) -> HttpResponse {
+pub fn api_select_profile(state: &Path, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -52,11 +58,7 @@ pub(in crate::daed_product) fn api_select_profile(
     }
 }
 
-pub(in crate::daed_product) fn select_section_transactionally(
-    state: &Path,
-    kind: SectionKind,
-    id: i64,
-) -> io::Result<()> {
+pub fn select_section_transactionally(state: &Path, kind: SectionKind, id: i64) -> io::Result<()> {
     ensure_state_schema(state)?;
     let mut conn = open_state_connection(state)?;
     let tx = conn
@@ -67,10 +69,7 @@ pub(in crate::daed_product) fn select_section_transactionally(
     tx.commit().map_err(sqlite_io_error)
 }
 
-pub(in crate::daed_product) fn select_profile_transactionally(
-    state: &Path,
-    selection: ProfileSelection,
-) -> io::Result<()> {
+pub fn select_profile_transactionally(state: &Path, selection: ProfileSelection) -> io::Result<()> {
     ensure_state_schema(state)?;
     let mut conn = open_state_connection(state)?;
     let tx = conn
