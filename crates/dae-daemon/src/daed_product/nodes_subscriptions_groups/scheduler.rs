@@ -1,7 +1,7 @@
 use super::*;
-use dae_product_subscription::{
-    InvalidCronLogTracker, SubscriptionSchedulerCallbacks, SubscriptionSchedulerRuntimeApply,
-};
+#[cfg(test)]
+use dae_product_subscription::InvalidCronLogTracker;
+use dae_product_subscription::{SubscriptionSchedulerCallbacks, SubscriptionSchedulerRuntimeApply};
 
 pub(crate) use dae_product_subscription::validate_subscription_cron_expression;
 
