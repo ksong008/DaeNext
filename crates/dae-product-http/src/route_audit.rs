@@ -1,5 +1,43 @@
 use serde_json::{Value, json};
 
+pub fn product_openapi_skeleton(version: &str) -> Value {
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "daed Rust native product API",
+            "version": version,
+        },
+        "x-runtime-surface": "native-product",
+        "x-runtime-state": "runtime-state",
+        "paths": {
+            "/api/health": {"get": {"summary": "health"}},
+            "/api/auth/status": {"get": {"summary": "setup/auth status"}},
+            "/api/user/me": {"get": {"summary": "current user"}, "patch": {"summary": "update current user"}},
+            "/api/user/me/storage": {"get": {"summary": "read JSON storage"}, "put": {"summary": "write JSON storage"}, "delete": {"summary": "delete JSON storage"}},
+            "/api/user/me/dae-bundle": {"get": {"summary": "export DAE bundle"}, "put": {"summary": "import DAE bundle"}},
+            "/api/profiles/select": {"post": {"summary": "atomically select config, DNS, and routing resources"}},
+            "/api/user/me/dae-config-file": {"get": {"summary": "export generated DAE config"}, "put": {"summary": "import DAE config"}},
+            "/api/configs": {"get": {"summary": "list config resources"}, "post": {"summary": "create config resource"}},
+            "/api/dns": {"get": {"summary": "list DNS resources"}, "post": {"summary": "create DNS resource"}},
+            "/api/routings": {"get": {"summary": "list routing resources"}, "post": {"summary": "create routing resource"}},
+            "/api/nodes": {"get": {"summary": "list nodes"}, "post": {"summary": "import nodes"}, "delete": {"summary": "delete nodes"}},
+            "/api/subscriptions": {"get": {"summary": "list subscriptions"}, "post": {"summary": "import subscription"}, "delete": {"summary": "delete subscriptions"}},
+            "/api/groups": {"get": {"summary": "list groups"}, "post": {"summary": "create group"}},
+            "/api/groups/subscription-preview": {"post": {"summary": "preview subscription node-name filtering"}},
+            "/api/groups/{id}/nodes": {"post": {"summary": "add group nodes"}, "put": {"summary": "atomically replace group nodes"}, "delete": {"summary": "delete group nodes"}},
+            "/api/nodes/latencies": {"get": {"summary": "list latency results"}, "post": {"summary": "enqueue latency test"}},
+            "/api/nodes/latencies/job": {"get": {"summary": "current latency test job"}, "delete": {"summary": "cancel latency test job"}},
+            "/api/runtime/reload": {"post": {"summary": "materialize and apply runtime state"}},
+            "/api/runtime/stop": {"post": {"summary": "stop runtime owner state"}},
+            "/api/runtime/overview": {"get": {"summary": "runtime overview"}},
+            "/api/logs": {"get": {"summary": "list logs"}, "delete": {"summary": "clear logs"}},
+            "/api/logs/settings": {"get": {"summary": "read log settings"}, "patch": {"summary": "update log settings"}},
+            "/api/events/runtime": {"get": {"summary": "runtime SSE stream"}},
+            "/api/events/logs": {"get": {"summary": "log SSE stream"}}
+        }
+    })
+}
+
 pub fn webui_route_audit_report() -> Value {
     let covered = webui_route_patterns()
         .into_iter()

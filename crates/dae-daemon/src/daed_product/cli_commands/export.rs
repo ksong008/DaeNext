@@ -1,9 +1,10 @@
 use super::*;
 pub(crate) fn run_export_command(args: &[String]) -> DaedProductOutput {
     match args.first().map(String::as_str) {
-        Some("openapi") if args.len() == 1 => {
-            DaedProductOutput::ok(format!("{}\n", product_openapi_skeleton()))
-        }
+        Some("openapi") if args.len() == 1 => DaedProductOutput::ok(format!(
+            "{}\n",
+            product_openapi_skeleton(&crate::version::version_from_env())
+        )),
         Some("flatdesc") if args.len() == 1 => {
             DaedProductOutput::ok(format!("{}\n", product_flatdesc()))
         }
