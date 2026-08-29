@@ -238,7 +238,6 @@
         "dae-dns",
         "dae-ebpf-support",
         "dae-geodata",
-        "dae-netutil",
         "dae-outbound",
         "dae-resident-core",
         "dae-resident-dns",
@@ -268,7 +267,6 @@
       "layer": "resident-domain",
       "normal": [
         "dae-config",
-        "dae-core-types",
         "dae-datapath",
         "dae-dns",
         "dae-outbound",
@@ -310,7 +308,6 @@
         "dae-core-types",
         "dae-datapath",
         "dae-ebpf-support",
-        "dae-netutil",
         "dae-outbound",
         "dae-resident-core",
         "dae-resident-plan",
@@ -331,8 +328,7 @@
         "dae-outbound",
         "dae-resident-core",
         "dae-resident-model",
-        "dae-runtime-control",
-        "dae-tls"
+        "dae-runtime-control"
       ],
       "build": [],
       "dev": ["dae-outbound", "dae-resident-core", "dae-resident-model"]
@@ -343,14 +339,11 @@
         "dae-core-types",
         "dae-datapath",
         "dae-ebpf-support",
-        "dae-netutil",
         "dae-outbound",
         "dae-resident-core",
         "dae-resident-plan",
         "dae-resident-transport",
-        "dae-runtime-control",
-        "dae-routing",
-        "dae-tls"
+        "dae-runtime-control"
       ],
       "build": [],
       "dev": ["dae-outbound", "dae-resident-core", "dae-resident-plan", "dae-resident-transport"]

@@ -13,7 +13,6 @@ dns-runtime-tests = []
 
 [dependencies]
 dae-config.workspace = true
-dae-core-types.workspace = true
 dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-outbound.workspace = true
@@ -32,13 +31,10 @@ h3.workspace = true
 h3-quinn.workspace = true
 http.workspace = true
 quinn.workspace = true
-quinn-boring.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-socket2.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tokio-boring.workspace = true
-url.workspace = true
 
 [dev-dependencies]
 dae-datapath = { workspace = true, features = ["test-support"] }
