@@ -39,45 +39,26 @@ pub(crate) fn create_subscription(
         .get("useProxy")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let now = now_text();
-    let _guard = match subscription_write_guard() {
-        Ok(guard) => guard,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    };
-    let conn = match open_state_connection(state) {
-        Ok(conn) => conn,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    };
-    match subscription_tag_exists(&conn, tag) {
-        Ok(true) => return SubscriptionTagConflict::response(),
-        Ok(false) => {}
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    }
-    if let Err(err) = conn.execute(
-        "INSERT INTO subscriptions(updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![
-            now,
-            link,
-            body.get("cronExp")
-                .and_then(Value::as_str)
-                .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_EXP),
-            body.get("cronEnable")
-                .and_then(Value::as_bool)
-                .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_ENABLE) as i64,
-            DEFAULT_SUBSCRIPTION_STATUS,
-            "",
-            tag,
-            use_proxy as i64
-        ],
+    let id = match dae_product_subscription::create_subscription_record(
+        state,
+        link,
+        body.get("cronExp")
+            .and_then(Value::as_str)
+            .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_EXP),
+        body.get("cronEnable")
+            .and_then(Value::as_bool)
+            .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_ENABLE),
+        DEFAULT_SUBSCRIPTION_STATUS,
+        tag,
+        use_proxy,
+        &now_text(),
     ) {
-        if SubscriptionTagConflict::matches(&err) {
-            return SubscriptionTagConflict::response();
+        Ok(id) => id,
+        Err(dae_product_subscription::SubscriptionMutationError::TagConflict) => {
+            return subscription_tag_conflict_response();
         }
-        return HttpResponse::json(400, json!({"error": err.to_string()}));
-    }
-    let id = conn.last_insert_rowid();
-    drop(conn);
-    drop(_guard);
+        Err(error) => return HttpResponse::json(400, json!({"error": error.to_string()})),
+    };
     notify_subscription_scheduler();
     let import_log_message = format!("subscription {id} imported");
     let _ = append_log_for_config(config_dir, state, "info", &import_log_message);
@@ -144,52 +125,26 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
         .get("useProxy")
         .and_then(Value::as_bool)
         .map(|value| value as i64);
-    let _guard = match subscription_write_guard() {
-        Ok(guard) => guard,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    };
-    let mut conn = match open_state_connection(state) {
-        Ok(conn) => conn,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    };
-    let tx = match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
-        Ok(tx) => tx,
-        Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
-    };
-    let updated = match tx.execute(
-        "UPDATE subscriptions
-         SET link = COALESCE(?1, link),
-             tag = CASE WHEN ?2 THEN ?3 ELSE tag END,
-             cron_exp = COALESCE(?4, cron_exp),
-             cron_enable = COALESCE(?5, cron_enable),
-             use_proxy = COALESCE(?6, use_proxy),
-             updated_at = ?7
-         WHERE id = ?8",
-        params![
-            link,
-            tag_present,
-            tag,
-            cron_exp,
-            cron_enable,
-            use_proxy,
-            now_text(),
-            id
-        ],
+    let updated = match dae_product_subscription::update_subscription_record(
+        state,
+        id,
+        link,
+        tag_present,
+        tag,
+        cron_exp,
+        cron_enable.map(|value| value != 0),
+        use_proxy.map(|value| value != 0),
+        &now_text(),
     ) {
         Ok(updated) => updated,
-        Err(err) if SubscriptionTagConflict::matches(&err) => {
-            return SubscriptionTagConflict::response();
+        Err(dae_product_subscription::SubscriptionMutationError::TagConflict) => {
+            return subscription_tag_conflict_response();
         }
-        Err(err) => return HttpResponse::json(400, json!({"error": err.to_string()})),
+        Err(error) => return HttpResponse::json(400, json!({"error": error.to_string()})),
     };
-    if updated == 0 {
+    if !updated {
         return HttpResponse::json(404, json!({"error": "subscription not found"}));
     }
-    if let Err(err) = tx.commit() {
-        return HttpResponse::json(500, json!({"error": err.to_string()}));
-    }
-    drop(conn);
-    drop(_guard);
     notify_subscription_scheduler();
     get_subscription(state, id)
 }
@@ -310,4 +265,15 @@ fn copy_subscription_refresh_fields(source: &Value, target: &mut Value) {
             target.insert(key.to_owned(), value.clone());
         }
     }
+}
+
+fn subscription_tag_conflict_response() -> HttpResponse {
+    HttpResponse::json(
+        409,
+        json!({
+            "error": "a subscription with this tag already exists; update it or choose a different tag",
+            "errorCode": "subscription_tag_conflict",
+            "retryable": false,
+        }),
+    )
 }

@@ -1,8 +1,4 @@
 use super::*;
-mod subscription_store;
-use self::subscription_store::{
-    SubscriptionTagConflict, subscription_tag_exists, subscription_write_guard,
-};
 pub(super) use dae_product_control::{
     delete_node_by_id, delete_nodes, get_node, import_nodes, list_nodes_for_request, update_node,
 };
