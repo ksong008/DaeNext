@@ -22,6 +22,7 @@ mod status;
 mod status_cache;
 mod transaction;
 mod update;
+mod update_runtime;
 
 pub use admission::*;
 pub use commit::*;
@@ -33,6 +34,7 @@ pub use status::*;
 pub use status_cache::*;
 pub use transaction::*;
 pub use update::*;
+pub use update_runtime::*;
 
 pub struct GeodataRelease {
     pub version: Option<String>,

@@ -193,6 +193,7 @@
       "dev": [
         "dae-datapath",
         "dae-outbound",
+        "dae-product-geodata",
         "dae-product-persistence",
         "dae-resident-dataplane"
       ]

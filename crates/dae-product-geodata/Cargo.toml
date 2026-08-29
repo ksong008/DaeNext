@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 dae-geodata.workspace = true
 dae-product-core.workspace = true
