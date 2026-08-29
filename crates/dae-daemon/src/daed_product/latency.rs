@@ -10,7 +10,8 @@ pub(crate) use dae_product_subscription::{
     LatencyJobAdmissionKind, runtime_node_latency_results_for_nodes, store_node_latency_result,
 };
 pub(crate) use dae_product_subscription::{
-    LatencyJobCancelError, LatencyJobCancellation, LatencyJobManager, cancel_node_latency_job_value,
+    LatencyJobCancelError, LatencyJobCancellation, LatencyJobManager, LatencyJobRunOutcome,
+    cancel_node_latency_job_value,
 };
 pub(crate) use dae_product_subscription::{
     LatencyProbeNode, current_latency_probe_nodes, latency_probe_link_chunks,
