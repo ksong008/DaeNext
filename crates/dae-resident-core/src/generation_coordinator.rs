@@ -58,6 +58,7 @@ impl<T> GenerationCoordinator<T> {
     }
 
     pub fn clear(&self) -> Option<Arc<T>> {
+        self.generation_gate.clear();
         self.active_generation.clear()
     }
 }

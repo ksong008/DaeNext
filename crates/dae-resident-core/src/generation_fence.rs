@@ -25,6 +25,13 @@ impl GenerationGate {
         self.active() == Some(generation)
     }
 
+    pub fn clear(&self) -> Option<GenerationToken> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
     pub fn acquire_write(&self, generation: GenerationToken) -> Option<GenerationWritePermit<'_>> {
         let active = self
             .active
@@ -203,6 +210,17 @@ mod tests {
         gate.switch(second, || Ok::<_, ()>(())).unwrap();
         assert!(gate.acquire_write(first).is_none());
         assert_eq!(gate.acquire_write(second).unwrap().generation(), second);
+    }
+
+    #[test]
+    fn clearing_the_gate_rejects_terminal_generation_writes() {
+        let first = generation(1);
+        let gate = GenerationGate::new(Some(first));
+
+        assert_eq!(gate.clear(), Some(first));
+        assert_eq!(gate.active(), None);
+        assert!(!gate.is_active(first));
+        assert!(gate.acquire_write(first).is_none());
     }
 
     #[test]
