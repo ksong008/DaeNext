@@ -106,7 +106,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         control_runtime: Arc::clone(&control_runtime),
     };
     let geodata_update_runtime =
-        match geodata::ProductGeodataUpdateRuntime::start_for_app(http_config, &app) {
+        match geodata::start_geodata_update_runtime_for_app(http_config, &app) {
             Ok(runtime) => runtime,
             Err(err) => {
                 drop(app);
