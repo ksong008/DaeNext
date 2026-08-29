@@ -29,6 +29,10 @@ class ProductAdapterGateTests(unittest.TestCase):
                 "control-adapter": ["api_routes", "api_routes.rs"],
                 "tests": ["tests"],
             },
+            "role_product_imports": {
+                "control-adapter": ["dae_product_control"],
+                "tests": ["dae_product_control"],
+            },
             "production_line_limits": {"api_routes": 2, "api_routes.rs": 2},
         }
         return root, policy
@@ -68,6 +72,25 @@ class ProductAdapterGateTests(unittest.TestCase):
         policy["adapter_roles"]["control-adapter"].append("not-allowed")
         errors = MODULE.validate(root, policy)
         self.assertTrue(any("unapproved path" in error for error in errors))
+
+    def test_rejects_product_import_outside_role_allowlist(self) -> None:
+        root, policy = self.fixture()
+        (root / "crates/dae-daemon/src/daed_product/api_routes.rs").write_text(
+            "use dae_product_runtime::ProductRuntimeState;\n", encoding="utf-8"
+        )
+        errors = MODULE.validate(root, policy)
+        self.assertTrue(any("not allowed for role" in error for error in errors))
+
+    def test_accepts_absolute_and_extern_imports_in_role_allowlist(self) -> None:
+        root, policy = self.fixture()
+        (root / "crates/dae-daemon/src/daed_product/api_routes.rs").write_text(
+            "pub use dae_product_control::State;\n", encoding="utf-8"
+        )
+        (root / "crates/dae-daemon/src/daed_product/api_routes").mkdir()
+        (root / "crates/dae-daemon/src/daed_product/api_routes/router.rs").write_text(
+            "extern crate dae_product_control;\n", encoding="utf-8"
+        )
+        self.assertEqual(MODULE.validate(root, policy), [])
 
 
 if __name__ == "__main__":
