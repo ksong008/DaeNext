@@ -6,6 +6,7 @@ mod dns_ports;
 pub mod events;
 mod execution;
 mod execution_types;
+mod generation_coordinator;
 mod generation_fence;
 mod generation_identity;
 mod generation_lifecycle;
@@ -33,6 +34,7 @@ pub use execution::{
     RuntimeExecutionDescriptor, append_runtime_execution_descriptor, tcp_execution_descriptor,
     udp_execution_descriptor,
 };
+pub use generation_coordinator::GenerationCoordinator;
 pub use generation_fence::{GenerationFence, GenerationGate, GenerationWritePermit};
 pub use generation_identity::{
     GenerationToken, LogicalGenerationId, PhysicalRuntimeId, PublicationEpoch,
