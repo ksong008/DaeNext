@@ -6,6 +6,23 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+pub fn sqlite_io_error(error: rusqlite::Error) -> io::Error {
+    io::Error::other(error)
+}
+
+pub fn set_private_runtime_file_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 pub struct ProductUserRecord {
     id: i64,

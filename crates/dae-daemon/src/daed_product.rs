@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(not(unix))]
+use std::time::SystemTime;
+use std::time::{Duration, Instant};
 
 use dae_config::Config;
 use dae_config::parser::parse_config;
