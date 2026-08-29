@@ -36,10 +36,6 @@ mod allocator_hooks;
 mod client;
 mod control_transport_owners;
 mod direct;
-#[cfg(not(all(test, feature = "dns-runtime-tests")))]
-mod dns;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-#[path = "../../dae-resident-dns/src/runtime/mod.rs"]
 mod dns;
 mod dns_listener;
 mod events;
@@ -92,21 +88,7 @@ pub(crate) use self::transport::quic_endpoint::quic_endpoint_metrics_snapshot;
 pub(crate) use self::udp::probe_resident_proxy_dns_udp_with_forwarder_async;
 pub(crate) use self::udp::resident_dns_proxy_udp_transport;
 pub(crate) use dae_resident_core::*;
-#[cfg(not(all(test, feature = "dns-runtime-tests")))]
 pub(crate) use dae_resident_dns::ResidentDnsUdpRuntimeConfig;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-pub(crate) use dae_resident_dns::{
-    DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
-    ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
-    ResidentDnsGeodata, ResidentDnsProxySelector, ResidentDnsProxyTcpTransport,
-    ResidentDnsProxyUdpBridge, ResidentDnsProxyUdpForwarder, ResidentDnsProxyUdpTransport,
-    ResidentDnsQuicEndpointTransport, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
-    ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot, ResidentDnsTransportOwnerObservation,
-    ResidentDnsTransportPorts, ResidentDnsUdpRuntimeConfig, ResidentDomainRoutingGenerationFence,
-    build_dns_server_failure_response, build_reject_response,
-    exchange_resident_proxy_dns_tcp_stream, fit_dns_response_to_udp_request,
-    run_resident_proxy_dns_tcp_connection,
-};
 pub(crate) use dae_resident_plan::{
     display_name_from_link, execution_link_hash, graph_id_from_link_hash, link_hash,
     redacted_link_source,
