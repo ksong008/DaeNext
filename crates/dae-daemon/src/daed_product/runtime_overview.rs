@@ -1,6 +1,4 @@
 use super::*;
-mod traffic_stats;
-pub(super) use self::traffic_stats::*;
 mod sampler;
 pub(super) use self::sampler::*;
 mod resource_ledger;
