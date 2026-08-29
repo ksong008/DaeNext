@@ -1,7 +1,21 @@
-use super::*;
-pub(crate) use dae_product_core::SectionKind;
+use std::io;
+use std::path::Path;
 
-pub(crate) fn api_section_preview(request: &HttpRequest, api_path: &str) -> HttpResponse {
+use dae_product_core::{DEFAULT_GLOBAL_RESOURCE_TEXT, SectionKind};
+use dae_product_http::{HttpRequest, HttpResponse, json_body};
+use dae_product_persistence::{
+    open_state_connection, running_section_references_id, sqlite_io_error,
+};
+use dae_product_runtime::{
+    build_runtime_config_from_content, display_global_config_text, normalize_global_result,
+    parse_boolish, render_global_config_text,
+};
+use rusqlite::{OptionalExtension, params};
+use serde_json::{Value, json};
+
+use crate::section_parsers::{parsed_dns_value, parsed_routing_value};
+
+pub fn api_section_preview(request: &HttpRequest, api_path: &str) -> HttpResponse {
     let body = json_body(request).unwrap_or_else(|_| json!({}));
     if api_path == "/configs/parsed" {
         let global = if let Some(parsed_global) = body.get("parsedGlobal") {
@@ -31,11 +45,7 @@ pub(crate) fn api_section_preview(request: &HttpRequest, api_path: &str) -> Http
     HttpResponse::json(200, parsed_routing_value(raw))
 }
 
-pub(crate) fn list_sections(
-    state: &Path,
-    request: &HttpRequest,
-    kind: SectionKind,
-) -> HttpResponse {
+pub fn list_sections(state: &Path, request: &HttpRequest, kind: SectionKind) -> HttpResponse {
     let result = if request_summary_enabled(request) {
         list_section_summaries_value(state, kind)
     } else {
@@ -47,7 +57,7 @@ pub(crate) fn list_sections(
     }
 }
 
-pub(crate) fn request_summary_enabled(request: &HttpRequest) -> bool {
+pub fn request_summary_enabled(request: &HttpRequest) -> bool {
     request
         .query
         .get("summary")
@@ -56,7 +66,7 @@ pub(crate) fn request_summary_enabled(request: &HttpRequest) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn list_section_summaries_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
+pub fn list_section_summaries_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let sql = format!(
         "SELECT id, name, selected, version FROM {} ORDER BY id",
@@ -81,7 +91,7 @@ pub(crate) fn list_section_summaries_value(state: &Path, kind: SectionKind) -> i
     Ok(json!({"items": items}))
 }
 
-pub(crate) fn list_sections_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
+pub fn list_sections_value(state: &Path, kind: SectionKind) -> io::Result<Value> {
     let conn = open_state_connection(state)?;
     let sql = format!(
         "SELECT id, name, {}, selected, version FROM {} ORDER BY id",
@@ -109,12 +119,7 @@ pub(crate) fn list_sections_value(state: &Path, kind: SectionKind) -> io::Result
     Ok(json!({"items": items}))
 }
 
-pub(crate) fn section_summary_resource(
-    id: i64,
-    name: String,
-    selected: bool,
-    version: i64,
-) -> Value {
+pub fn section_summary_resource(id: i64, name: String, selected: bool, version: i64) -> Value {
     json!({
         "id": id,
         "name": name,
@@ -125,7 +130,7 @@ pub(crate) fn section_summary_resource(
     })
 }
 
-pub(crate) fn get_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
+pub fn get_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     match get_section_value(state, kind, id) {
         Ok(Some(value)) => HttpResponse::json(200, value),
         Ok(None) => HttpResponse::json(404, json!({"error": "resource not found"})),
@@ -133,11 +138,7 @@ pub(crate) fn get_section(state: &Path, kind: SectionKind, id: i64) -> HttpRespo
     }
 }
 
-pub(crate) fn get_section_value(
-    state: &Path,
-    kind: SectionKind,
-    id: i64,
-) -> io::Result<Option<Value>> {
+pub fn get_section_value(state: &Path, kind: SectionKind, id: i64) -> io::Result<Option<Value>> {
     let conn = open_state_connection(state)?;
     let sql = format!(
         "SELECT id, name, {}, selected, version FROM {} WHERE id = ?1",
@@ -159,11 +160,7 @@ pub(crate) fn get_section_value(
     .map_err(sqlite_io_error)
 }
 
-pub(crate) fn create_section(
-    state: &Path,
-    request: &HttpRequest,
-    kind: SectionKind,
-) -> HttpResponse {
+pub fn create_section(state: &Path, request: &HttpRequest, kind: SectionKind) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -192,7 +189,7 @@ pub(crate) fn create_section(
     get_section(state, kind, id).with_status(201)
 }
 
-pub(crate) fn update_section(
+pub fn update_section(
     state: &Path,
     request: &HttpRequest,
     kind: SectionKind,
@@ -238,7 +235,7 @@ pub(crate) fn update_section(
     get_section(state, kind, id)
 }
 
-pub(crate) fn delete_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
+pub fn delete_section(state: &Path, kind: SectionKind, id: i64) -> HttpResponse {
     let conn = match open_state_connection(state) {
         Ok(conn) => conn,
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
@@ -266,7 +263,7 @@ pub(crate) fn delete_section(state: &Path, kind: SectionKind, id: i64) -> HttpRe
     }
 }
 
-pub(crate) fn section_request_value(kind: SectionKind, body: &Value) -> String {
+pub fn section_request_value(kind: SectionKind, body: &Value) -> String {
     if kind == SectionKind::Config
         && let Some(parsed_global) = body.get("parsedGlobal")
     {
@@ -288,7 +285,7 @@ fn validated_section_request_value(kind: SectionKind, body: &Value) -> Result<St
     Ok(value)
 }
 
-pub(crate) fn section_resource(
+pub fn section_resource(
     kind: SectionKind,
     id: i64,
     name: String,
