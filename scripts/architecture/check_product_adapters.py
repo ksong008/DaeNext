@@ -48,6 +48,9 @@ def validate(root: pathlib.Path, policy: dict[str, Any]) -> list[str]:
         return ["product adapter policy allowed_top_level must be a string array"]
     if not isinstance(limits, dict):
         return ["product adapter policy production_line_limits must be an object"]
+    total_limit = policy.get("total_production_line_limit")
+    if total_limit is not None and (not isinstance(total_limit, int) or total_limit < 0):
+        return ["product adapter policy total_production_line_limit must be a non-negative integer"]
     allowed_set = set(allowed)
     roles = policy.get("adapter_roles")
     if not isinstance(roles, dict) or not roles:
@@ -132,6 +135,13 @@ def validate(root: pathlib.Path, policy: dict[str, Any]) -> list[str]:
             errors.append(
                 f"daemon product adapter {bucket} grew to {actual} production lines; "
                 f"limit is {maximum}"
+            )
+    if total_limit is not None:
+        total = sum(buckets.values())
+        if total > total_limit:
+            errors.append(
+                f"daemon product adapters grew to {total} production lines; "
+                f"total limit is {total_limit}"
             )
     return errors
 

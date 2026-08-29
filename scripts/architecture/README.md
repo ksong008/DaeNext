@@ -18,6 +18,12 @@ The checker validates:
 - production/test line budgets for the large daemon, resident assembly, and outbound boundaries.
 - daemon access to resident implementations is restricted to the resident façade.
 
+The product adapter policy also assigns every remaining daemon product path to
+an explicit role and enforces both per-path and aggregate production budgets.
+These paths are host adapters only: product behavior belongs to the product
+crates, while resident startup, allocator integration, HTTP socket handling,
+and process-level observation remain in the daemon.
+
 Run it locally with:
 
 ```text

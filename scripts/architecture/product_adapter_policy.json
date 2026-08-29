@@ -134,5 +134,6 @@
     "runtime_reload.rs": 550,
     "service_metadata.rs": 400,
     "sse_runtime": 1400
-  }
+  },
+  "total_production_line_limit": 19300
 }
