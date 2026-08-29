@@ -1,7 +1,11 @@
-use super::*;
+use std::sync::Arc;
 
-enum ProductRuntimeInstanceReadView {
-    Resident(Arc<ResidentProductionRuntimeReadHandle>),
+use serde_json::{Value, json};
+
+use crate::{ProductRuntimeState, RuntimeApplyState, RuntimeCleanupState, RuntimeTrafficCarry};
+
+pub enum RuntimeReadBackend {
+    Resident(Box<dyn FnOnce() -> Value + Send>),
     Fake {
         started_at: String,
         tproxy_port: u16,
@@ -11,7 +15,18 @@ enum ProductRuntimeInstanceReadView {
     },
 }
 
-pub(super) struct ProductRuntimeReadSnapshot {
+enum ProductRuntimeInstanceReadView {
+    Resident(Box<dyn FnOnce() -> Value + Send>),
+    Fake {
+        started_at: String,
+        tproxy_port: u16,
+    },
+    Stopped {
+        fake_runtime_enabled: bool,
+    },
+}
+
+pub struct ProductRuntimeReadSnapshot {
     runtime: ProductRuntimeInstanceReadView,
     traffic_carry: RuntimeTrafficCarry,
     last_transition_at: Option<String>,
@@ -29,20 +44,25 @@ pub(super) struct ProductRuntimeReadSnapshot {
 }
 
 impl ProductRuntimeReadSnapshot {
-    pub(super) fn capture(
-        state: &ProductRuntimeState,
+    pub fn capture<R>(
+        state: &ProductRuntimeState<R>,
         coordinator: Value,
-        fake_runtime_enabled: bool,
+        backend: RuntimeReadBackend,
     ) -> Self {
-        let runtime = match state.runtime.as_ref() {
-            Some(ProductRuntimeInstance::Resident(runtime)) => {
-                ProductRuntimeInstanceReadView::Resident(runtime.read_handle())
+        let runtime = match backend {
+            RuntimeReadBackend::Resident(summary) => {
+                ProductRuntimeInstanceReadView::Resident(summary)
             }
-            Some(ProductRuntimeInstance::Fake(fake)) => ProductRuntimeInstanceReadView::Fake {
-                started_at: fake.started_at.clone(),
-                tproxy_port: fake.tproxy_port,
+            RuntimeReadBackend::Fake {
+                started_at,
+                tproxy_port,
+            } => ProductRuntimeInstanceReadView::Fake {
+                started_at,
+                tproxy_port,
             },
-            None => ProductRuntimeInstanceReadView::Stopped {
+            RuntimeReadBackend::Stopped {
+                fake_runtime_enabled,
+            } => ProductRuntimeInstanceReadView::Stopped {
                 fake_runtime_enabled,
             },
         };
@@ -64,10 +84,10 @@ impl ProductRuntimeReadSnapshot {
         }
     }
 
-    pub(super) fn render(self) -> Value {
+    pub fn render(self) -> Value {
         match self.runtime {
-            ProductRuntimeInstanceReadView::Resident(runtime) => {
-                let mut summary = runtime.product_state_summary();
+            ProductRuntimeInstanceReadView::Resident(summary_fn) => {
+                let mut summary = summary_fn();
                 self.traffic_carry.apply_to_runtime_summary(&mut summary);
                 if let Value::Object(map) = &mut summary {
                     map.insert(
@@ -151,41 +171,36 @@ impl ProductRuntimeReadSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn read_snapshot_shares_detailed_reports_until_render() {
+    fn read_snapshot_keeps_domain_state_until_render() {
         let report = Arc::new(json!({
             "status": "pass",
-            "details": vec!["entry"; 256],
+            "entries": vec!["entry"; 8],
         }));
-        let state = ProductRuntimeState {
+        let state = ProductRuntimeState::<u8> {
             last_report: Some(Arc::clone(&report)),
             ..ProductRuntimeState::default()
         };
-        let snapshot = ProductRuntimeReadSnapshot::capture(&state, json!({}), false);
+        let snapshot = ProductRuntimeReadSnapshot::capture(
+            &state,
+            json!({}),
+            RuntimeReadBackend::Stopped {
+                fake_runtime_enabled: false,
+            },
+        );
         assert!(Arc::ptr_eq(snapshot.last_report.as_ref().unwrap(), &report));
         assert_eq!(snapshot.render()["lastReport"], report.as_ref().clone());
     }
 
     #[test]
-    fn detailed_summary_render_does_not_hold_manager_state_lock() {
-        let manager = Arc::new(ProductRuntimeManager::new());
-        manager.inner().lock().unwrap().runtime =
-            Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
-                started_at: "captured-start".to_owned(),
-                tproxy_port: 1234,
-            }));
-        let barrier = Arc::new(std::sync::Barrier::new(2));
-        *manager.summary_render_barrier.lock().unwrap() = Some(Arc::clone(&barrier));
-
-        let summary_manager = Arc::clone(&manager);
-        let summary_thread = std::thread::spawn(move || summary_manager.summary());
-        barrier.wait();
-        assert!(manager.inner().try_lock().is_ok());
-        barrier.wait();
-
-        let summary = summary_thread.join().unwrap();
-        assert_eq!(summary["running"], json!(true));
-        assert_eq!(summary["tproxyPort"], json!(1234));
+    fn resident_backend_is_evaluated_after_capture() {
+        let snapshot = ProductRuntimeReadSnapshot::capture(
+            &ProductRuntimeState::<u8>::default(),
+            json!({}),
+            RuntimeReadBackend::Resident(Box::new(|| json!({"running": true}))),
+        );
+        assert_eq!(snapshot.render()["running"], json!(true));
     }
 }

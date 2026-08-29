@@ -230,7 +230,7 @@ pub(crate) fn resident_dataplane_admission_detail_prefers_structured_error() {
 pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.traffic_carry = RuntimeTrafficCarry {
             upload_total: 100,
             download_total: 200,
@@ -241,7 +241,7 @@ pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
 
     manager.stop().unwrap();
 
-    let inner = manager.inner.lock().unwrap();
+    let inner = manager.inner().lock().unwrap();
     assert_eq!(inner.traffic_carry, RuntimeTrafficCarry::default());
     assert_eq!(inner.runtime_started_at, None);
 }
@@ -250,7 +250,7 @@ pub(crate) fn runtime_stop_clears_reload_traffic_carry() {
 pub(crate) fn runtime_stop_records_cleanup_lifecycle_for_fake_runtime() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
             started_at: "2026-06-23T01:00:00.000Z".to_owned(),
             tproxy_port: 12345,
@@ -276,7 +276,7 @@ pub(crate) fn runtime_stop_records_cleanup_lifecycle_for_fake_runtime() {
 pub(crate) fn runtime_signal_stop_waits_for_cleanup_report() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
             started_at: "2026-06-23T01:00:00.000Z".to_owned(),
             tproxy_port: 12345,
@@ -325,7 +325,7 @@ pub(crate) fn product_server_blocks_lifecycle_signals_before_spawning_log_worker
 pub(crate) fn runtime_cleanup_interlock_blocks_failed_cleanup() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.cleanup.begin(7, "background-stop");
         inner.cleanup.finish(Some(json!({
             "status": "fail",
@@ -344,7 +344,7 @@ pub(crate) fn runtime_cleanup_interlock_blocks_failed_cleanup() {
 pub(crate) fn active_runtime_allows_reload_while_retired_cleanup_finishes() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
             started_at: "2026-07-27T12:00:00.000Z".to_owned(),
             tproxy_port: 12345,
@@ -360,7 +360,7 @@ pub(crate) fn active_runtime_allows_reload_while_retired_cleanup_finishes() {
 pub(crate) fn retired_runtime_thread_failure_does_not_block_replacement_publication() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.cleanup.begin(8, "reload-replace");
         inner.cleanup.finish(Some(json!({
             "status": "fail",
@@ -421,7 +421,7 @@ pub(crate) fn owner_cleanup_failure_keeps_bounded_protocol_diagnostics() {
         "sys_fs_bpf_dae_mutated": false,
     });
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.cleanup.begin(10, "reload-replace");
         inner.cleanup.finish(Some(report));
     }
@@ -484,7 +484,7 @@ pub(crate) fn udp_owner_cleanup_failure_keeps_bounded_generation_diagnostics() {
         "sys_fs_bpf_dae_mutated": false,
     });
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.cleanup.begin(11, "reload-replace");
         inner.cleanup.finish(Some(report));
     }
@@ -503,7 +503,7 @@ pub(crate) fn udp_owner_cleanup_failure_keeps_bounded_generation_diagnostics() {
 pub(crate) fn forced_bounded_cleanup_without_residuals_does_not_latch_interlock() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.cleanup.begin(9, "reload-replace");
         inner.cleanup.finish(Some(json!({
             "status": "pass",
@@ -537,14 +537,14 @@ pub(crate) fn forced_bounded_cleanup_without_residuals_does_not_latch_interlock(
 pub(crate) fn runtime_interface_recovery_ignores_fake_runtime() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
             started_at: "2026-06-23T01:00:00.000Z".to_owned(),
             tproxy_port: 12345,
         }));
     }
 
-    assert!(resident_interface_recovery_request(&manager.inner).is_none());
+    assert!(resident_interface_recovery_request(manager.inner()).is_none());
 }
 
 #[test]
@@ -863,7 +863,7 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
 pub(crate) fn runtime_prepare_failure_preserves_active_runtime_without_cleanup_reclaim() {
     let manager = ProductRuntimeManager::new();
     {
-        let mut inner = manager.inner.lock().unwrap();
+        let mut inner = manager.inner().lock().unwrap();
         inner.runtime = Some(ProductRuntimeInstance::Fake(FakeProductRuntime {
             started_at: "2026-07-06T01:00:00.000Z".to_owned(),
             tproxy_port: 12345,
