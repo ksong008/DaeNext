@@ -61,6 +61,16 @@ class ProductAdapterGateTests(unittest.TestCase):
         errors = MODULE.validate(root, policy)
         self.assertTrue(any("grew" in error for error in errors))
 
+    def test_rejects_total_adapter_growth(self) -> None:
+        root, policy = self.fixture()
+        policy["production_line_limits"] = {"api_routes": 10, "api_routes.rs": 10}
+        policy["total_production_line_limit"] = 2
+        (root / "crates/dae-daemon/src/daed_product/api_routes.rs").write_text(
+            "one\ntwo\nthree\n", encoding="utf-8"
+        )
+        errors = MODULE.validate(root, policy)
+        self.assertTrue(any("total limit" in error for error in errors))
+
     def test_rejects_unowned_allowlisted_path(self) -> None:
         root, policy = self.fixture()
         policy["adapter_roles"] = {"control-adapter": ["api_routes"]}
