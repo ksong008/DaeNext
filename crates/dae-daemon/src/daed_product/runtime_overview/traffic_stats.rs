@@ -50,6 +50,7 @@ pub(crate) fn runtime_traffic_observation(
             download_total: counters.download_total,
             active_tcp_connections: counters.active_tcp_connections,
             active_udp_sessions: counters.active_udp_sessions,
+            ..RuntimeTrafficCounters::default()
         },
         epoch,
         timestamp,

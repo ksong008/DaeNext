@@ -1,28 +1,5 @@
 use super::*;
 
-#[derive(Debug, Default)]
-pub(super) struct SubscriptionRuntimeApplyResult {
-    pub(super) requested: bool,
-    pub(super) applied: bool,
-    pub(super) report: Option<Value>,
-    pub(super) error: Option<String>,
-}
-
-impl SubscriptionRuntimeApplyResult {
-    pub(super) fn insert_into(self, value: &mut Value) {
-        let Value::Object(map) = value else {
-            return;
-        };
-        map.insert("runtimeApplyRequested".to_owned(), json!(self.requested));
-        map.insert("runtimeReloaded".to_owned(), json!(self.applied));
-        map.insert(
-            "runtimeReload".to_owned(),
-            self.report.unwrap_or(Value::Null),
-        );
-        map.insert("runtimeReloadError".to_owned(), json!(self.error));
-    }
-}
-
 pub(super) fn apply_runtime_after_subscription_change(
     state: &Path,
     config_dir: &Path,

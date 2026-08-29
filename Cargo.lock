@@ -911,6 +911,7 @@ dependencies = [
  "dae-datapath",
  "dae-product-core",
  "dae-product-persistence",
+ "dae-resident-core",
  "fastrand",
  "regex",
  "rusqlite",
