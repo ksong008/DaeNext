@@ -869,8 +869,10 @@ name = "dae-product-http"
 version = "3.1.0"
 dependencies = [
  "dae-product-core",
+ "fastrand",
  "libc",
  "serde_json",
+ "url",
 ]
 
 [[package]]

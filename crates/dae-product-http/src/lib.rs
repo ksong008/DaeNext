@@ -198,6 +198,8 @@ mod listener_readiness;
 mod metrics;
 mod parser;
 mod policy;
+mod response_io;
+mod static_files;
 
 pub use connections::*;
 pub use error::*;
@@ -206,6 +208,8 @@ pub use listener_readiness::*;
 pub use metrics::*;
 pub use parser::*;
 pub use policy::*;
+pub use response_io::*;
+pub use static_files::*;
 
 pub fn http_request_read_error_response(error: &HttpRequestReadError) -> Option<HttpResponse> {
     match error.kind() {
