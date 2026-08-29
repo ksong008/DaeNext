@@ -40,6 +40,28 @@ pub struct GeodataStatusCacheEntry {
     value: Value,
 }
 
+#[derive(Debug, Default)]
+pub struct GeodataStatusCache {
+    geosite: Option<GeodataStatusCacheEntry>,
+    geoip: Option<GeodataStatusCacheEntry>,
+}
+
+impl GeodataStatusCache {
+    pub fn entry(&self, kind: GeodataKind) -> Option<&GeodataStatusCacheEntry> {
+        match kind {
+            GeodataKind::Geosite => self.geosite.as_ref(),
+            GeodataKind::Geoip => self.geoip.as_ref(),
+        }
+    }
+
+    pub fn set_entry(&mut self, kind: GeodataKind, entry: GeodataStatusCacheEntry) {
+        match kind {
+            GeodataKind::Geosite => self.geosite = Some(entry),
+            GeodataKind::Geoip => self.geoip = Some(entry),
+        }
+    }
+}
+
 impl GeodataStatusCacheEntry {
     pub fn capture(dir: &Path, kind: GeodataKind, value: Value) -> io::Result<Self> {
         Ok(Self::new(

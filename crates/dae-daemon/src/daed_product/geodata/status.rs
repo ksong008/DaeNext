@@ -64,11 +64,7 @@ fn geodata_resource_status_cached(app: &AppState, dir: &Path, kind: GeodataKind)
             return geodata_resource_status(dir, kind);
         };
         if let Ok(cache) = app.geodata_status_cache.lock() {
-            let slot = match kind {
-                GeodataKind::Geosite => &cache.geosite,
-                GeodataKind::Geoip => &cache.geoip,
-            };
-            if let Some(entry) = slot.as_ref()
+            if let Some(entry) = cache.entry(kind)
                 && entry.matches(&identity_before)
             {
                 return entry.value().clone();
@@ -99,10 +95,7 @@ fn set_geodata_resource_status_cache_entry(
     let Ok(mut cache) = status_cache.lock() else {
         return;
     };
-    match kind {
-        GeodataKind::Geosite => cache.geosite = Some(entry),
-        GeodataKind::Geoip => cache.geoip = Some(entry),
-    }
+    cache.set_entry(kind, entry);
 }
 
 pub(super) fn update_geodata_resource_status_cache(
