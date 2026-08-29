@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+release_gate_profile="${DAENEXT_RELEASE_GATE_PROFILE:-production-performance}"
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+
+cargo_profile_args=(--profile "$release_gate_profile")
+
 run_step() {
   local name="$1"
   shift
@@ -24,12 +29,12 @@ run_step "large source boundary checker tests" python3 scripts/architecture/test
 run_step "product physical boundaries" python3 scripts/architecture/check_product_boundaries.py
 run_step "product boundary checker tests" python3 scripts/architecture/test_check_product_boundaries.py
 run_step "production dependency surface" scripts/check_production_deps.sh --all-features
-run_step "workspace check" cargo check --workspace --all-targets
-run_step "workspace library tests" cargo test --workspace --lib -- --test-threads=1
-run_step "resident dataplane architecture tests" cargo test -p dae-resident-dataplane --test architecture_boundaries
-run_step "resident transport architecture tests" cargo test -p dae-resident-transport --test architecture_boundaries
-run_step "service contract tests" cargo test -p dae-daemon --test service_contract
-run_step "workspace clippy" cargo clippy --workspace --all-targets -- -D warnings
+run_step "workspace check" cargo check --workspace --all-targets "${cargo_profile_args[@]}"
+run_step "workspace library tests" cargo test --workspace --lib "${cargo_profile_args[@]}" -- --test-threads=1
+run_step "resident dataplane architecture tests" cargo test -p dae-resident-dataplane --test architecture_boundaries "${cargo_profile_args[@]}"
+run_step "resident transport architecture tests" cargo test -p dae-resident-transport --test architecture_boundaries "${cargo_profile_args[@]}"
+run_step "service contract tests" cargo test -p dae-daemon --test service_contract "${cargo_profile_args[@]}"
+run_step "workspace clippy" cargo clippy --workspace --all-targets "${cargo_profile_args[@]}" -- -D warnings
 run_step "resident production panic surface" scripts/check_resident_production_panics.sh
 
 if [[ "${DAENEXT_RELEASE_GATE_AUDIT:-0}" == "1" ]]; then
