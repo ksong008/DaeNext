@@ -35,6 +35,27 @@ impl From<io::Error> for SubscriptionMutationError {
 
 pub struct SubscriptionTagConflict;
 
+pub struct NewSubscriptionRecord<'a> {
+    pub link: &'a str,
+    pub cron_exp: &'a str,
+    pub cron_enable: bool,
+    pub status: &'a str,
+    pub tag: Option<&'a str>,
+    pub use_proxy: bool,
+    pub updated_at: &'a str,
+}
+
+pub struct SubscriptionRecordUpdate<'a> {
+    pub id: i64,
+    pub link: Option<&'a str>,
+    pub tag_present: bool,
+    pub tag: Option<&'a str>,
+    pub cron_exp: Option<&'a str>,
+    pub cron_enable: Option<bool>,
+    pub use_proxy: Option<bool>,
+    pub updated_at: &'a str,
+}
+
 impl SubscriptionTagConflict {
     pub fn matches(error: &rusqlite::Error) -> bool {
         matches!(
@@ -60,30 +81,24 @@ pub fn subscription_tag_exists(conn: &Connection, tag: Option<&str>) -> io::Resu
 
 pub fn create_subscription_record(
     state: &Path,
-    link: &str,
-    cron_exp: &str,
-    cron_enable: bool,
-    status: &str,
-    tag: Option<&str>,
-    use_proxy: bool,
-    updated_at: &str,
+    record: NewSubscriptionRecord<'_>,
 ) -> Result<i64, SubscriptionMutationError> {
     let _guard = subscription_write_guard()?;
     let conn = open_state_connection(state)?;
-    if subscription_tag_exists(&conn, tag)? {
+    if subscription_tag_exists(&conn, record.tag)? {
         return Err(SubscriptionMutationError::TagConflict);
     }
     let result = conn.execute(
         "INSERT INTO subscriptions(updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
-            updated_at,
-            link,
-            cron_exp,
-            cron_enable as i64,
-            status,
+            record.updated_at,
+            record.link,
+            record.cron_exp,
+            record.cron_enable as i64,
+            record.status,
             "",
-            tag,
-            use_proxy as i64
+            record.tag,
+            record.use_proxy as i64
         ],
     );
     match result {
@@ -97,14 +112,7 @@ pub fn create_subscription_record(
 
 pub fn update_subscription_record(
     state: &Path,
-    id: i64,
-    link: Option<&str>,
-    tag_present: bool,
-    tag: Option<&str>,
-    cron_exp: Option<&str>,
-    cron_enable: Option<bool>,
-    use_proxy: Option<bool>,
-    updated_at: &str,
+    update: SubscriptionRecordUpdate<'_>,
 ) -> Result<bool, SubscriptionMutationError> {
     let _guard = subscription_write_guard()?;
     let mut conn = open_state_connection(state)?;
@@ -121,14 +129,14 @@ pub fn update_subscription_record(
              updated_at = ?7
          WHERE id = ?8",
         params![
-            link,
-            tag_present,
-            tag,
-            cron_exp,
-            cron_enable.map(i64::from),
-            use_proxy.map(i64::from),
-            updated_at,
-            id
+            update.link,
+            update.tag_present,
+            update.tag,
+            update.cron_exp,
+            update.cron_enable.map(i64::from),
+            update.use_proxy.map(i64::from),
+            update.updated_at,
+            update.id
         ],
     ) {
         Ok(updated) => updated,

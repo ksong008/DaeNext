@@ -227,7 +227,6 @@ fn run_node_latency_job_inner(
 
     jobs.flush_pending_latency_results(job_id, state);
     let cancelled = cancellation.is_requested();
-    if !cancelled {}
     Ok(LatencyJobRunOutcome {
         completed,
         succeeded,
