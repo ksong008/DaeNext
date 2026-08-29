@@ -3,6 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+panic_gate_profile="${DAENEXT_PANIC_GATE_PROFILE:-production-performance}"
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+
 audit_file="${TMPDIR:-/tmp}/daenext-resident-production-panics.json"
 metadata_file="${TMPDIR:-/tmp}/daenext-resident-metadata.json"
 trap ': > "$audit_file"; : > "$metadata_file"' EXIT
@@ -30,7 +33,8 @@ for package in "${packages[@]}"; do
   cargo_args+=(-p "$package")
 done
 
-if ! cargo clippy "${cargo_args[@]}" --lib --bins --examples --message-format=json -- \
+if ! cargo clippy "${cargo_args[@]}" --lib --bins --examples \
+  --profile "$panic_gate_profile" --message-format=json -- \
   -W clippy::unwrap_used -W clippy::expect_used >"$audit_file" 2>&1; then
   tail -c 12000 "$audit_file" >&2
   exit 1
