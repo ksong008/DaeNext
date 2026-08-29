@@ -386,6 +386,11 @@ def validate_source_imports(
     forbidden = policy.get("forbidden", {})
     for package_name, package in sorted(packages.items()):
         entry = package_policy.get(package_name, {})
+        source_root = pathlib.Path(package["manifest_path"]).parent / "src"
+        if not source_root.is_dir() and source_root.parent.is_dir():
+            errors.append(
+                f"{package_name}: source directory is missing during source import scan"
+            )
         for path, source_kind in source_files(package):
             source = remove_comments(path.read_text(encoding="utf-8"))
             errors.extend(validate_source_path_attributes(package, path, source))
