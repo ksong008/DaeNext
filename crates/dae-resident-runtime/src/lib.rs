@@ -1,7 +1,4 @@
-use std::fmt;
-use std::sync::Arc;
-
-use dae_resident_core::{ActiveGenerationSlot, GenerationGate, GenerationToken, PublicationEpoch};
+use dae_resident_core::GenerationCoordinator;
 
 mod cleanup_inventory;
 mod executor;
@@ -31,74 +28,7 @@ pub use thread_task::{
     spawn_resident_runtime_thread,
 };
 
-pub struct ResidentRuntimeCoordinator<T> {
-    active_generation: ActiveGenerationSlot<T>,
-    generation_gate: Arc<GenerationGate>,
-}
-
-impl<T> Clone for ResidentRuntimeCoordinator<T> {
-    fn clone(&self) -> Self {
-        Self {
-            active_generation: self.active_generation.clone(),
-            generation_gate: Arc::clone(&self.generation_gate),
-        }
-    }
-}
-
-impl<T> ResidentRuntimeCoordinator<T> {
-    pub fn with_gate(
-        active_generation: ActiveGenerationSlot<T>,
-        generation_gate: Arc<GenerationGate>,
-    ) -> Self {
-        Self {
-            active_generation,
-            generation_gate,
-        }
-    }
-
-    pub fn active_generation_slot(&self) -> ActiveGenerationSlot<T> {
-        self.active_generation.clone()
-    }
-
-    pub fn load(&self) -> Arc<T> {
-        self.active_generation.load()
-    }
-
-    pub fn load_versioned(&self) -> (PublicationEpoch, Arc<T>) {
-        self.active_generation.load_versioned()
-    }
-
-    pub fn subscribe_publication(&self) -> tokio::sync::watch::Receiver<PublicationEpoch> {
-        self.active_generation.subscribe_publication()
-    }
-
-    pub fn generation_gate(&self) -> Arc<GenerationGate> {
-        Arc::clone(&self.generation_gate)
-    }
-
-    pub fn is_active(&self, token: GenerationToken) -> bool {
-        self.generation_gate.is_active(token)
-    }
-
-    pub fn publish(&self, token: GenerationToken, generation: Arc<T>) -> Arc<T> {
-        self.generation_gate
-            .publish(token, &self.active_generation, generation)
-    }
-
-    pub fn clear(&self) -> Option<Arc<T>> {
-        self.active_generation.clear()
-    }
-}
-
-impl<T: fmt::Debug> fmt::Debug for ResidentRuntimeCoordinator<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ResidentRuntimeCoordinator")
-            .field("active_generation", &self.active_generation)
-            .field("generation_gate", &self.generation_gate)
-            .finish()
-    }
-}
+pub type ResidentRuntimeCoordinator<T> = GenerationCoordinator<T>;
 
 #[cfg(test)]
 mod tests {
