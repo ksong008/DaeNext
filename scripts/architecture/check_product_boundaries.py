@@ -97,7 +97,11 @@ FORBIDDEN_DAEMON_DEFINITIONS = (
     "run_local_control_wait_ready_command",
     "subscription_node_row_value",
 )
-DAEMON_MODULE_REFERENCE = re.compile(r"\bdae_daemon\s*::\s*daed_product\b")
+DAEMON_CRATE_REFERENCE = re.compile(r"\bdae_daemon\s*::")
+DAEMON_RESIDENT_INTERNAL_REFERENCE = re.compile(
+    r"\bdae_resident_(?:core|dns|plan|tcp|udp|transport)\s*::|"
+    r"\bdae_resident_dataplane\s*::(?!\s*facade\s*::)"
+)
 PRODUCT_CRATE_REFERENCE = re.compile(r"\bdae_product_[A-Za-z0-9_]+\b")
 
 
@@ -137,7 +141,7 @@ def validate(root: pathlib.Path) -> list[str]:
     for source_root in product_roots:
         for path in rust_sources(source_root):
             text = path.read_text(encoding="utf-8")
-            if DAEMON_MODULE_REFERENCE.search(text):
+            if DAEMON_CRATE_REFERENCE.search(text):
                 errors.append(
                     f"product crate references daemon implementation: {path.relative_to(root)}"
                 )
@@ -146,6 +150,10 @@ def validate(root: pathlib.Path) -> list[str]:
     if daemon_root.is_dir():
         for path in rust_sources(daemon_root):
             text = path.read_text(encoding="utf-8")
+            if DAEMON_RESIDENT_INTERNAL_REFERENCE.search(text):
+                errors.append(
+                    f"daemon bypasses resident facade: {path.relative_to(root)}"
+                )
             for name in FORBIDDEN_DAEMON_DEFINITIONS:
                 if re.search(rf"\bfn\s+{re.escape(name)}\b", text):
                     errors.append(
