@@ -16,7 +16,11 @@ mod startup_recovery;
 mod stop;
 mod summary;
 mod traffic;
-pub(super) use traffic::{RuntimeTrafficAvailability, RuntimeTrafficCarry, RuntimeTrafficRead};
+pub(super) use dae_product_runtime::{
+    RuntimeCleanupState, RuntimeTrafficAvailability, RuntimeTrafficCarry, RuntimeTrafficRead,
+};
+use traffic::runtime_traffic_counters;
+type ProductRuntimeState = dae_product_runtime::ProductRuntimeState<ProductRuntimeInstance>;
 
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
 use cleanup::{
@@ -59,83 +63,6 @@ pub(super) struct ProductRuntimeManager {
     runtime_required_for_readiness: AtomicBool,
     #[cfg(test)]
     summary_render_barrier: Mutex<Option<Arc<std::sync::Barrier>>>,
-}
-
-#[derive(Debug, Default)]
-pub(super) struct ProductRuntimeState {
-    pub(super) runtime: Option<ProductRuntimeInstance>,
-    pub(super) config: Option<Arc<Config>>,
-    pub(super) config_content: Option<Arc<str>>,
-    pub(super) last_error: Option<String>,
-    pub(super) last_transition_at: Option<String>,
-    pub(super) runtime_started_at: Option<String>,
-    pub(super) last_report: Option<Arc<Value>>,
-    pub(super) reload_count: u64,
-    pub(super) allocator_publication_id: u64,
-    pub(super) stop_count: u64,
-    pub(super) lifecycle_epoch: u64,
-    pub(super) traffic_carry: RuntimeTrafficCarry,
-    pub(super) cleanup: RuntimeCleanupState,
-    pub(super) apply: RuntimeApplyState,
-    pub(super) active_generation: Option<String>,
-    pub(super) pending_process_transition: Option<Value>,
-    pub(super) transition_identity: Option<RuntimeTransitionIdentity>,
-    pub(super) process_baseline_config: Option<Arc<Config>>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct RuntimeCleanupState {
-    pub(super) running: bool,
-    pub(super) epoch: u64,
-    pub(super) mode: Option<String>,
-    pub(super) started_at: Option<String>,
-    pub(super) finished_at: Option<String>,
-    pub(super) last_report: Option<Arc<Value>>,
-    pub(super) last_error: Option<String>,
-    pub(super) last_start_blocker: Option<String>,
-}
-
-impl RuntimeCleanupState {
-    pub(super) fn begin(&mut self, epoch: u64, mode: &str) {
-        self.running = true;
-        self.epoch = epoch;
-        self.mode = Some(mode.to_owned());
-        self.started_at = Some(now_text());
-        self.finished_at = None;
-        self.last_report = None;
-        self.last_error = None;
-        self.last_start_blocker = None;
-    }
-
-    pub(super) fn finish(&mut self, report: Option<Value>) {
-        self.running = false;
-        self.finished_at = Some(now_text());
-        self.last_error = cleanup_report_error(report.as_ref());
-        self.last_start_blocker = cleanup_start_blocker_from_report(report.as_ref());
-        self.last_report = report.map(Arc::new);
-    }
-
-    fn summary(&self) -> Value {
-        json!({
-            "running": self.running,
-            "state": if self.running {
-                "running"
-            } else if self.last_error.is_some() {
-                "failed"
-            } else if self.finished_at.is_some() {
-                "done"
-            } else {
-                "idle"
-            },
-            "epoch": self.epoch,
-            "mode": self.mode,
-            "startedAt": self.started_at,
-            "finishedAt": self.finished_at,
-            "lastError": self.last_error,
-            "lastStartBlocker": self.last_start_blocker,
-            "lastReport": self.last_report.as_deref(),
-        })
-    }
 }
 
 // Runtime ownership keeps the resident instance inline under the manager mutex;
@@ -748,7 +675,9 @@ fn replace_prepared_product_runtime_with_config_content(
         let previous_runtime_started_at = inner.runtime_started_at.clone();
         let previous_runtime_was_running = previous_runtime.is_some();
         if let Some(runtime) = previous_runtime.as_ref() {
-            inner.traffic_carry = inner.traffic_carry.absorb_runtime(runtime);
+            if let Some(counters) = runtime_traffic_counters(runtime) {
+                inner.traffic_carry = inner.traffic_carry.absorb_counters(counters);
+            }
         }
         if previous_runtime_was_running {
             let cleanup_epoch = inner.lifecycle_epoch;
