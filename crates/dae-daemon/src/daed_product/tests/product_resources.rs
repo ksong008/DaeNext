@@ -1,5 +1,6 @@
 use super::*;
 use base64::Engine;
+use std::net::IpAddr;
 #[test]
 pub(crate) fn storage_paths_match_runtime_contract() {
     let mut storage = "{}".to_owned();

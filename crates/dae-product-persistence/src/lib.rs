@@ -9,6 +9,9 @@ use std::path::{Component, Path, PathBuf};
 mod desired_state;
 pub use desired_state::*;
 
+mod json_storage;
+pub use json_storage::*;
+
 mod state;
 pub use state::*;
 
