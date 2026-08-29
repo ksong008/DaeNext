@@ -26,9 +26,12 @@ impl LatencyProbeSeenLinks {
         self.link_hashes.contains(&runtime_link_hash(link))
     }
 
-    #[cfg(test)]
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.link_hashes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.link_hashes.is_empty()
     }
 }
 
