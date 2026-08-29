@@ -278,6 +278,8 @@
     "dae-product-control": {
       "layer": "product-coordinator",
       "normal": [
+        "dae-config",
+        "dae-product-identity",
         "dae-product-core",
         "dae-product-geodata",
         "dae-product-http",

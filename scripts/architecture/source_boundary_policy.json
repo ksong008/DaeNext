@@ -2,7 +2,7 @@
   "version": 1,
   "packages": {
     "dae-product-control": {
-      "production": 6000,
+      "production": 7000,
       "tests": 700
     },
     "dae-product-core": {
