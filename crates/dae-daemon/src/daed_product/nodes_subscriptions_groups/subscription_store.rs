@@ -4,11 +4,7 @@ pub(super) struct SubscriptionTagConflict;
 
 impl SubscriptionTagConflict {
     pub(super) fn matches(error: &rusqlite::Error) -> bool {
-        matches!(
-            error,
-            rusqlite::Error::SqliteFailure(sqlite_error, _)
-                if sqlite_error.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
-        )
+        dae_product_subscription::SubscriptionTagConflict::matches(error)
     }
 
     pub(super) fn response() -> HttpResponse {
@@ -23,17 +19,6 @@ impl SubscriptionTagConflict {
     }
 }
 
-pub(super) fn subscription_tag_exists(conn: &Connection, tag: Option<&str>) -> io::Result<bool> {
-    let Some(tag) = tag else {
-        return Ok(false);
-    };
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM subscriptions WHERE tag = ?1)",
-        params![tag],
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|exists| exists != 0)
-    .map_err(sqlite_io_error)
-}
+pub(super) use dae_product_subscription::subscription_tag_exists;
 
 pub(super) use dae_product_subscription::subscription_write_guard;
