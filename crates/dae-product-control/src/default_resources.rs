@@ -1,6 +1,22 @@
-use super::*;
-#[cfg(test)]
-pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
+use std::collections::BTreeSet;
+use std::io;
+use std::path::Path;
+
+use dae_product_core::{
+    DEFAULT_GLOBAL_RESOURCE_TEXT, DEFAULT_PRODUCT_CONFIG_NAME, DEFAULT_PRODUCT_DNS_NAME,
+    DEFAULT_PRODUCT_GROUP_NAME, DEFAULT_PRODUCT_GROUP_POLICY, DEFAULT_PRODUCT_MODE,
+    DEFAULT_PRODUCT_ROUTING_NAME, SectionKind, product_preferred_group_names_from_routing,
+};
+use dae_product_http::integer_array;
+use dae_product_persistence::{
+    ProductUserRecord, ensure_state_schema, open_state_connection, selected_id,
+    selected_section_raw, set_json_storage, sqlite_io_error,
+};
+use dae_product_subscription::{apply_group_node_ids, apply_group_subscription_ids};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde_json::{Value, json};
+
+pub fn ensure_default_resources(state: &Path, body: &Value) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let mut conn = open_state_connection(state)?;
     let tx = conn
@@ -11,10 +27,10 @@ pub(crate) fn ensure_default_resources(state: &Path, body: &Value) -> io::Result
     Ok(response)
 }
 
-pub(crate) fn ensure_default_resources_for_user(
+pub fn ensure_default_resources_for_user(
     state: &Path,
     body: &Value,
-    user: &UserRecord,
+    user: &ProductUserRecord,
 ) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let mut conn = open_state_connection(state)?;
@@ -336,7 +352,7 @@ pub(crate) fn existing_group_referenced_by_selected_routing(
     let Some((_, _, routing, _)) = selected_section_raw(conn, SectionKind::Routing)? else {
         return Ok(None);
     };
-    let Some(names) = preferred_group_names_from_routing(&routing) else {
+    let Some(names) = product_preferred_group_names_from_routing(&routing) else {
         return Ok(None);
     };
     for name in names {

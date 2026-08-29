@@ -32,6 +32,8 @@ impl ProductControlRuntimeHooks for NoopProductControlRuntimeHooks {}
 
 mod admission;
 use admission::*;
+mod default_resources;
+pub use default_resources::*;
 mod benchmark;
 pub use benchmark::{ProductControlBenchmarkFixture, product_control_benchmark_fixture};
 mod cancellation;

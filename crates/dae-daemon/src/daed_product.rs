@@ -87,25 +87,6 @@ const PRODUCT_LOG_DIR_ENV: &str = "DAED_PRODUCT_LOG_DIR";
 const PRODUCT_LOG_DIR: &str = "logs";
 const PRODUCT_LOG_FILE: &str = "current.jsonl";
 const RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY: &str = "runtime_active_fingerprint";
-const DEFAULT_PRODUCT_CONFIG_NAME: &str = "global";
-const DEFAULT_PRODUCT_DNS_NAME: &str = "default";
-const DEFAULT_PRODUCT_ROUTING_NAME: &str = "default";
-const DEFAULT_PRODUCT_GROUP_NAME: &str = "default";
-const GROUP_POLICY_RANDOM: &str = "random";
-const GROUP_POLICY_FIXED: &str = "fixed";
-const GROUP_POLICY_MIN: &str = "min";
-const GROUP_POLICY_MIN_AVG10: &str = "min_avg10";
-const GROUP_POLICY_MIN_MOVING_AVG: &str = "min_moving_avg";
-const DEFAULT_PRODUCT_GROUP_POLICY: &str = GROUP_POLICY_RANDOM;
-const SUPPORTED_GROUP_POLICIES: &[&str] = &[
-    GROUP_POLICY_RANDOM,
-    GROUP_POLICY_FIXED,
-    GROUP_POLICY_MIN,
-    GROUP_POLICY_MIN_AVG10,
-    GROUP_POLICY_MIN_MOVING_AVG,
-];
-const DEFAULT_PRODUCT_MODE: &str = "rule";
-const DEFAULT_GLOBAL_RESOURCE_TEXT: &str = "global {}";
 const DEFAULT_SUBSCRIPTION_CRON_EXP: &str = "10 */6 * * *";
 const DEFAULT_SUBSCRIPTION_CRON_ENABLE: bool = true;
 const DEFAULT_SUBSCRIPTION_STATUS: &str = "imported";
@@ -463,6 +444,9 @@ mod auth_storage;
 use self::auth_storage::*;
 use dae_product_control::*;
 pub use dae_product_control::{ProductControlBenchmarkFixture, product_control_benchmark_fixture};
+#[cfg(test)]
+pub use dae_product_control::ensure_default_resources;
+pub use dae_product_control::ensure_default_resources_for_user;
 #[cfg(test)]
 fn product_test_auth_runtime() -> Arc<ProductAuthRuntime> {
     ProductAuthRuntime::start_for_test_config().unwrap()
