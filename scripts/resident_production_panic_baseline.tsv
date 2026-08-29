@@ -2,7 +2,7 @@
 crates/dae-resident-core/src/active_generation_slot.rs	3	InternalInvariant	Published generation slots always contain an active value.
 crates/dae-resident-core/src/metrics.rs	1	InternalInvariant	Static metric JSON values are serializable.
 crates/dae-resident-dataplane/src/plan/check_plans.rs	2	InternalInvariant	Validated probe plans contain at least one target.
-crates/dae-resident-dataplane/src/runtime/executor.rs	1	InternalInvariant	Runtime access precedes explicit owner shutdown.
+crates/dae-resident-runtime/src/executor.rs	3	InternalInvariant	Runtime access precedes explicit owner shutdown.
 crates/dae-resident-dataplane/src/runtime/matrix/source_materialization.rs	2	InternalInvariant	Registry-classified rows have reconciliation and materialization witnesses.
 crates/dae-resident-dataplane/src/runtime/runtime.rs	1	InternalInvariant	Prepared shutdown owns its workload control.
 crates/dae-resident-dataplane/src/runtime_owner/manual_probe_execution.rs	1	InternalInvariant	Manual probe runtime remains owned until shutdown.
