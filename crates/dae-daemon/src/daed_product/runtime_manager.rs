@@ -674,10 +674,10 @@ fn replace_prepared_product_runtime_with_config_content(
         let previous_process_baseline_config = inner.process_baseline_config.clone();
         let previous_runtime_started_at = inner.runtime_started_at.clone();
         let previous_runtime_was_running = previous_runtime.is_some();
-        if let Some(runtime) = previous_runtime.as_ref() {
-            if let Some(counters) = runtime_traffic_counters(runtime) {
-                inner.traffic_carry = inner.traffic_carry.absorb_counters(counters);
-            }
+        if let Some(runtime) = previous_runtime.as_ref()
+            && let Some(counters) = runtime_traffic_counters(runtime)
+        {
+            inner.traffic_carry = inner.traffic_carry.absorb_counters(counters);
         }
         if previous_runtime_was_running {
             let cleanup_epoch = inner.lifecycle_epoch;

@@ -1,4 +1,5 @@
 use super::*;
+use dae_product_subscription::parse_node_link;
 pub(super) use dae_product_subscription::{
     PreparedSubscriptionNode, PreparedSubscriptionNodes, PreparedSubscriptionRefresh,
     RejectedSubscriptionNode,
