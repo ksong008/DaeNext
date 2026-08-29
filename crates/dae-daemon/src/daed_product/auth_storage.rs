@@ -1,6 +1,4 @@
 use super::*;
-mod user_queries;
-pub(super) use self::user_queries::*;
 mod default_resources;
 pub(super) use self::default_resources::*;
 mod jwt;
