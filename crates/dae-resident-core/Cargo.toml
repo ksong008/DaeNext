@@ -12,7 +12,6 @@ test-support = []
 [dependencies]
 arc-swap.workspace = true
 dae-core-types.workspace = true
-h2.workspace = true
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
