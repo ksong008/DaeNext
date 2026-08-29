@@ -1,10 +1,7 @@
 use super::update::update_geodata_with_lease_using;
 use super::*;
 
-mod config;
-use self::config::*;
-mod metrics;
-use self::metrics::*;
+use dae_product_geodata::{ProductGeodataUpdateMetrics, ProductGeodataUpdateRuntimeConfig};
 mod worker;
 use self::worker::*;
 #[cfg(test)]

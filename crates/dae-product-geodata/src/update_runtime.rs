@@ -1,6 +1,56 @@
-use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-pub(super) struct ProductGeodataUpdateMetrics {
+use dae_product_core::{ProductHttpProfile, ProductHttpWorkerConfig};
+use serde_json::{Value, json};
+
+use crate::{GeodataKind, GeodataPreparationMode};
+
+const PRODUCT_GEODATA_UPDATE_WORKERS: usize = 2;
+const PRODUCT_GEODATA_UPDATE_QUEUE_CAPACITY: usize = 2;
+const PRODUCT_GEODATA_UPDATE_WORKER_RECV_TIMEOUT: Duration = Duration::from_millis(100);
+const PRODUCT_GEODATA_UPDATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy, Debug)]
+pub struct ProductGeodataUpdateRuntimeConfig {
+    pub profile: ProductHttpProfile,
+    pub worker_count: usize,
+    pub queue_capacity: usize,
+    pub worker_stack_bytes: usize,
+    pub worker_recv_timeout: Duration,
+    pub shutdown_timeout: Duration,
+    pub preparation_mode: GeodataPreparationMode,
+}
+
+impl ProductGeodataUpdateRuntimeConfig {
+    pub fn from_http_config(http: ProductHttpWorkerConfig) -> Self {
+        Self {
+            profile: http.profile,
+            worker_count: PRODUCT_GEODATA_UPDATE_WORKERS,
+            queue_capacity: PRODUCT_GEODATA_UPDATE_QUEUE_CAPACITY,
+            worker_stack_bytes: http.worker_stack_bytes,
+            worker_recv_timeout: PRODUCT_GEODATA_UPDATE_WORKER_RECV_TIMEOUT,
+            shutdown_timeout: PRODUCT_GEODATA_UPDATE_SHUTDOWN_TIMEOUT,
+            preparation_mode: GeodataPreparationMode::IsolatedProcess,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn for_test() -> Self {
+        Self {
+            profile: ProductHttpProfile::LowMemory,
+            worker_count: PRODUCT_GEODATA_UPDATE_WORKERS,
+            queue_capacity: PRODUCT_GEODATA_UPDATE_QUEUE_CAPACITY,
+            worker_stack_bytes:
+                dae_product_core::PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT,
+            worker_recv_timeout: Duration::from_millis(10),
+            shutdown_timeout: Duration::from_millis(100),
+            preparation_mode: GeodataPreparationMode::Inline,
+        }
+    }
+}
+
+pub struct ProductGeodataUpdateMetrics {
     configured_workers: u64,
     queue_capacity: u64,
     queue_depth: AtomicU64,
@@ -23,7 +73,7 @@ pub(super) struct ProductGeodataUpdateMetrics {
 }
 
 impl ProductGeodataUpdateMetrics {
-    pub(super) fn new(config: ProductGeodataUpdateRuntimeConfig) -> Self {
+    pub fn new(config: ProductGeodataUpdateRuntimeConfig) -> Self {
         Self {
             configured_workers: config.worker_count as u64,
             queue_capacity: config.queue_capacity as u64,
@@ -47,7 +97,7 @@ impl ProductGeodataUpdateMetrics {
         }
     }
 
-    pub(super) fn submitted(&self, kind: GeodataKind) -> u64 {
+    pub fn submitted(&self, kind: GeodataKind) -> u64 {
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.generation(kind).store(generation, Ordering::Relaxed);
         self.phase(kind).store(1, Ordering::Relaxed);
@@ -55,11 +105,11 @@ impl ProductGeodataUpdateMetrics {
         generation
     }
 
-    pub(super) fn enqueued(&self) {
+    pub fn enqueued(&self) {
         self.queue_depth.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn dequeued(&self, kind: GeodataKind, generation: u64) {
+    pub fn dequeued(&self, kind: GeodataKind, generation: u64) {
         decrement_saturating(&self.queue_depth);
         self.active_workers.fetch_add(1, Ordering::Relaxed);
         self.active_kind(kind).store(1, Ordering::Relaxed);
@@ -67,14 +117,14 @@ impl ProductGeodataUpdateMetrics {
         self.phase(kind).store(2, Ordering::Relaxed);
     }
 
-    pub(super) fn dequeue_rollback(&self, kind: GeodataKind, generation: u64) {
+    pub fn dequeue_rollback(&self, kind: GeodataKind, generation: u64) {
         decrement_saturating(&self.queue_depth);
         if self.generation(kind).load(Ordering::Relaxed) == generation {
             self.phase(kind).store(0, Ordering::Relaxed);
         }
     }
 
-    pub(super) fn completed(&self, kind: GeodataKind, generation: u64) {
+    pub fn completed(&self, kind: GeodataKind, generation: u64) {
         decrement_saturating(&self.active_workers);
         self.active_kind(kind).store(0, Ordering::Relaxed);
         if self.generation(kind).load(Ordering::Relaxed) == generation {
@@ -83,33 +133,33 @@ impl ProductGeodataUpdateMetrics {
         self.completed_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn rejected_same_kind(&self) {
+    pub fn rejected_same_kind(&self) {
         self.rejected_same_kind_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn rejected_capacity(&self) {
+    pub fn rejected_capacity(&self) {
         self.rejected_capacity_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn rejected_unavailable(&self) {
+    pub fn rejected_unavailable(&self) {
         self.rejected_unavailable_total
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn worker_panicked(&self) {
+    pub fn worker_panicked(&self) {
         self.worker_panic_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn worker_joined(&self) {
+    pub fn worker_joined(&self) {
         self.workers_joined_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn worker_detached(&self) {
+    pub fn worker_detached(&self) {
         self.workers_detached_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn snapshot(&self, config: ProductGeodataUpdateRuntimeConfig) -> Value {
+    pub fn snapshot(&self, config: ProductGeodataUpdateRuntimeConfig) -> Value {
         json!({
             "profile": config.profile.name(),
             "configuredWorkers": self.configured_workers,
