@@ -17,6 +17,8 @@ pub use auth::*;
 
 mod durable_recovery;
 pub use durable_recovery::recover_product_durable_state;
+mod bundle;
+pub use bundle::{ImportBundleOutcome, export_bundle, import_bundle};
 
 pub trait ProductControlRuntimeHooks: Send + Sync {
     fn on_thread_start(&self) {}

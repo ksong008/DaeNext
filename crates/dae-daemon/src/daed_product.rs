@@ -422,7 +422,7 @@ use self::latency::*;
 mod geodata;
 use self::geodata::*;
 mod bundle;
-use self::bundle::*;
+use self::bundle::{export_bundle, import_bundle};
 fn product_package_context() -> ProductPackageContext {
     ProductPackageContext::new(
         PRIMARY_STATE_STORE,

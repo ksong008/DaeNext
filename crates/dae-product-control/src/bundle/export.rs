@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::daed_product) fn export_bundle(state: &Path, user: &UserRecord) -> io::Result<Value> {
+pub fn export_bundle(state: &Path, user: &UserRecord) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let storage = serde_json::from_str::<Value>(user.json_storage()).unwrap_or_else(|_| json!({}));
