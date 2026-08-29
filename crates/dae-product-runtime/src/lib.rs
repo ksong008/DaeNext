@@ -5,6 +5,7 @@ mod benchmark;
 mod cgroup_memory;
 mod contracts;
 mod coordinator;
+mod domain;
 mod journal;
 mod materialization;
 mod reconcile;
@@ -33,6 +34,7 @@ pub use dae_product_core::{
 pub use dae_product_persistence::{
     RuntimeDesiredStateRevision, runtime_desired_state_revision_from_connection,
 };
+pub use domain::*;
 pub use journal::*;
 pub use materialization::*;
 pub use reconcile::{
