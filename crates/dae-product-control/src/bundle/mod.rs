@@ -3,6 +3,7 @@ use std::io;
 use std::path::Path;
 
 use dae_product_core::{DEFAULT_PRODUCT_MODE, SectionKind, product_now_text as now_text};
+use dae_product_http::integer_array;
 use dae_product_persistence::{
     ProductUserRecord, apply_state_schema, delete_value_at_path, ensure_state_schema,
     open_state_connection, running_runtime_state, selected_id, set_value_at_path, sqlite_io_error,
@@ -15,7 +16,6 @@ use dae_product_subscription::{
     replace_group_policy_params, subscription_node_row_value as node_row_value,
     subscription_row_value,
 };
-use dae_product_http::integer_array;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Map, Value, json};
 
