@@ -311,18 +311,25 @@ def source_files(package: dict[str, Any]) -> list[tuple[pathlib.Path, str]]:
     root = manifest.parent
     files: list[tuple[pathlib.Path, str]] = []
     source_root = root / "src"
-    if source_root.is_dir():
-        for path in sorted(source_root.rglob("*.rs")):
-            relative = path.relative_to(source_root)
-            if "tests" in relative.parts or any(
-                part.endswith("_tests") for part in relative.parts
-            ):
-                continue
-            if path.name in {"tests.rs", "benchmarks.rs"} or path.name.endswith(
-                ("_tests.rs", "_benchmarks.rs")
-            ):
-                continue
-            files.append((path, "normal"))
+    source_roots = ((source_root, "normal"),)
+    for path_root, default_kind in source_roots:
+        if not path_root.is_dir():
+            continue
+        for path in sorted(path_root.rglob("*.rs")):
+            relative = path.relative_to(path_root)
+            is_test_path = (
+                "tests" in relative.parts
+                or any(part.endswith("_tests") for part in relative.parts)
+                or path.name in {"tests.rs", "benchmarks.rs"}
+                or path.name.endswith(("_tests.rs", "_benchmarks.rs"))
+            )
+            files.append((path, "dev" if is_test_path else default_kind))
+    for directory_name in ("tests", "examples", "benches"):
+        path_root = root / directory_name
+        if not path_root.is_dir():
+            continue
+        for path in sorted(path_root.rglob("*.rs")):
+            files.append((path, "dev"))
     build_script = root / "build.rs"
     if build_script.is_file():
         files.append((build_script, "build"))
@@ -387,7 +394,7 @@ def validate_source_imports(
     for package_name, package in sorted(packages.items()):
         entry = package_policy.get(package_name, {})
         source_root = pathlib.Path(package["manifest_path"]).parent / "src"
-        if not source_root.is_dir() and source_root.parent.is_dir():
+        if not source_root.is_dir():
             errors.append(
                 f"{package_name}: source directory is missing during source import scan"
             )

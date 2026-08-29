@@ -11,7 +11,7 @@ The checker validates:
 - exact Cargo metadata edges for all three dependency kinds;
 - cycles in normal/build dependency edges;
 - layer direction and generic same-layer resident-domain boundaries;
-- workspace crate imports in production and build sources;
+- workspace crate imports in production, dev, and build sources;
 - bare, visibility-qualified, grouped, and `extern crate` workspace imports;
 - product domain crates cannot directly depend on another product domain crate;
 - external `#[path]` source embedding, except for explicit test-only compatibility paths.
