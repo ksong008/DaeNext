@@ -10,9 +10,7 @@ pub(crate) use self::manual_probe_index::ResidentManualProbeIndex;
 pub(crate) use self::shutdown::ResidentRuntimeWorkloadShutdown;
 use self::shutdown::shutdown_resident_runtime_owner;
 use self::shutdown::shutdown_resident_runtime_workloads;
-use dae_resident_runtime::{
-    ResidentRuntimeTask, ResidentRuntimeTaskExit, registered_resident_runtime_task,
-};
+use dae_resident_runtime::{ResidentRuntimeTask, registered_resident_runtime_task};
 
 #[cfg(test)]
 fn spawn_resident_runtime_task<F>(

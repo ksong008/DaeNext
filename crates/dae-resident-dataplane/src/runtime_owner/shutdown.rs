@@ -1,14 +1,8 @@
 use super::*;
-const RESIDENT_RUNTIME_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(1);
-
-#[derive(Debug, Default)]
-struct ResidentRuntimeShutdownTasks {
-    joined: usize,
-    panicked: usize,
-    timed_out: usize,
-    results: Vec<Value>,
-    pending: Vec<ResidentRuntimeTask>,
-}
+use dae_resident_runtime::{
+    ResidentRuntimeThreadShutdown, elapsed_nanos, take_resident_async_runtime_tasks,
+    wait_for_resident_runtime_tasks,
+};
 
 pub(crate) struct ResidentRuntimeWorkloadShutdown {
     started: Instant,
@@ -16,7 +10,7 @@ pub(crate) struct ResidentRuntimeWorkloadShutdown {
     elapsed_ns: u64,
     task_count_started: usize,
     async_shutdown: ResidentAsyncRuntimeShutdown,
-    thread_shutdown: ResidentRuntimeShutdownTasks,
+    thread_shutdown: ResidentRuntimeThreadShutdown,
 }
 
 pub(super) fn shutdown_resident_runtime_workloads(
@@ -26,14 +20,20 @@ pub(super) fn shutdown_resident_runtime_workloads(
     let started = Instant::now();
     let deadline = started.checked_add(grace).unwrap_or(started);
     owner.workload_stop.store(true, Ordering::Release);
-    let mut workload_tasks = take_async_tasks(owner, ResidentRuntimeTaskRole::Workload);
-    workload_tasks.extend(take_async_tasks(owner, ResidentRuntimeTaskRole::Generation));
+    let mut workload_tasks = take_resident_async_runtime_tasks(
+        &mut owner.async_tasks,
+        ResidentRuntimeTaskRole::Workload,
+    );
+    workload_tasks.extend(take_resident_async_runtime_tasks(
+        &mut owner.async_tasks,
+        ResidentRuntimeTaskRole::Generation,
+    ));
     let task_count_started = owner.tasks.len().saturating_add(workload_tasks.len());
     let async_shutdown = owner
         .data_plane_executor
         .join_tasks(workload_tasks, deadline);
     let mut thread_shutdown =
-        wait_for_runtime_tasks(std::mem::take(&mut owner.tasks), started, deadline, grace);
+        wait_for_resident_runtime_tasks(std::mem::take(&mut owner.tasks), started, deadline, grace);
     owner.tasks.append(&mut thread_shutdown.pending);
     ResidentRuntimeWorkloadShutdown {
         started,
@@ -63,7 +63,10 @@ pub(super) fn shutdown_resident_runtime_owner(
         .checked_add(grace)
         .unwrap_or(transport_started);
     owner.transport_stop.store(true, Ordering::Release);
-    let transport_tasks = take_async_tasks(owner, ResidentRuntimeTaskRole::Transport);
+    let transport_tasks = take_resident_async_runtime_tasks(
+        &mut owner.async_tasks,
+        ResidentRuntimeTaskRole::Transport,
+    );
     let transport_task_count_started = transport_tasks.len();
     let transport_async_shutdown = owner
         .data_plane_executor
@@ -336,112 +339,6 @@ pub(super) fn shutdown_resident_runtime_owner(
         "event_log": "product-log-sink",
         "tasks": task_results,
     })
-}
-
-fn take_async_tasks(
-    owner: &mut ResidentRuntimeOwner,
-    role: ResidentRuntimeTaskRole,
-) -> Vec<ResidentAsyncRuntimeTask> {
-    let mut selected = Vec::new();
-    let mut remaining = Vec::new();
-    for task in std::mem::take(&mut owner.async_tasks) {
-        if task.role == role {
-            selected.push(task);
-        } else {
-            remaining.push(task);
-        }
-    }
-    owner.async_tasks = remaining;
-    selected
-}
-
-fn wait_for_runtime_tasks(
-    mut pending: Vec<ResidentRuntimeTask>,
-    started: Instant,
-    deadline: Instant,
-    grace: Duration,
-) -> ResidentRuntimeShutdownTasks {
-    let mut shutdown = ResidentRuntimeShutdownTasks {
-        results: Vec::with_capacity(pending.len()),
-        ..ResidentRuntimeShutdownTasks::default()
-    };
-
-    loop {
-        let mut index = 0;
-        while index < pending.len() {
-            let finished = pending[index]
-                .handle
-                .as_ref()
-                .is_none_or(JoinHandle::is_finished);
-            if !finished {
-                index += 1;
-                continue;
-            }
-
-            let mut task = pending.swap_remove(index);
-            let completion = task
-                .completion
-                .as_ref()
-                .and_then(|receiver| receiver.try_recv().ok());
-            let join_started = Instant::now();
-            let join_result = task.handle.take().map(JoinHandle::join).unwrap_or(Ok(()));
-            let join_elapsed_ns = elapsed_nanos(join_started);
-            let panicked =
-                completion == Some(ResidentRuntimeTaskExit::Panicked) || join_result.is_err();
-            if panicked {
-                shutdown.panicked += 1;
-            } else {
-                shutdown.joined += 1;
-            }
-            let completion_wait_elapsed_ns = elapsed_nanos(started);
-            shutdown.results.push(json!({
-                "name": task.name,
-                "kind": task.kind,
-                "role": "workload",
-                "status": if panicked { "panicked" } else { "joined" },
-                "join_elapsed_ns": join_elapsed_ns,
-                "join_elapsed_ms": join_elapsed_ns / 1_000_000,
-                "completion_wait_elapsed_ns": completion_wait_elapsed_ns,
-                "completion_wait_elapsed_ms": completion_wait_elapsed_ns / 1_000_000,
-                "join_grace_ms": duration_millis(grace),
-                "join_exceeded_grace": false,
-            }));
-        }
-
-        if pending.is_empty() || Instant::now() >= deadline {
-            break;
-        }
-        thread::park_timeout(
-            deadline
-                .saturating_duration_since(Instant::now())
-                .min(RESIDENT_RUNTIME_COMPLETION_POLL_INTERVAL),
-        );
-    }
-
-    for task in pending.drain(..) {
-        shutdown.timed_out += 1;
-        let completion_wait_elapsed_ns = elapsed_nanos(started);
-        shutdown.results.push(json!({
-            "name": task.name,
-            "kind": task.kind,
-            "role": "workload",
-            "status": "timed_out",
-            "join_elapsed_ns": Value::Null,
-            "join_elapsed_ms": Value::Null,
-            "completion_wait_elapsed_ns": completion_wait_elapsed_ns,
-            "completion_wait_elapsed_ms": completion_wait_elapsed_ns / 1_000_000,
-            "join_grace_ms": duration_millis(grace),
-            "join_exceeded_grace": false,
-            "aborted": false,
-            "detached": true,
-        }));
-        shutdown.pending.push(task);
-    }
-    shutdown
-}
-
-fn elapsed_nanos(started: Instant) -> u64 {
-    started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]
