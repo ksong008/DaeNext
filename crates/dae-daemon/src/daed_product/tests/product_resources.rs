@@ -652,8 +652,10 @@ fn signed_test_token(user: &UserRecord, alg: &str, payload: Value) -> String {
     let encoded_header = URL_SAFE_NO_PAD.encode(header.as_bytes());
     let encoded_payload = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
     let signing_input = format!("{encoded_header}.{encoded_payload}");
-    let signature =
-        dae_product_identity::hmac_sha256(user.jwt_secret().as_bytes(), signing_input.as_bytes());
+    let signature = dae_product_control::identity::hmac_sha256(
+        user.jwt_secret().as_bytes(),
+        signing_input.as_bytes(),
+    );
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 

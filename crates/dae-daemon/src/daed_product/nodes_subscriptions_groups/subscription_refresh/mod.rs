@@ -2,8 +2,8 @@ use super::*;
 
 mod content {
     #[cfg(test)]
-    pub(crate) use dae_product_subscription::subscription_links_from_content;
-    pub(in crate::daed_product) use dae_product_subscription::{
+    pub(crate) use dae_product_control::subscription::subscription_links_from_content;
+    pub(in crate::daed_product) use dae_product_control::subscription::{
         SubscriptionContentReport, parse_subscription_content,
     };
 }
@@ -12,12 +12,12 @@ mod helper;
 mod http;
 mod node_stage;
 mod outcome {
-    pub(in crate::daed_product) use dae_product_subscription::SubscriptionRefreshOutcome;
+    pub(in crate::daed_product) use dae_product_control::subscription::SubscriptionRefreshOutcome;
 }
 mod source;
 
-use dae_product_subscription::fetch_error;
-use dae_product_subscription::{
+use dae_product_control::subscription::fetch_error;
+use dae_product_control::subscription::{
     SubscriptionRefreshCallbacks, SubscriptionRefreshFetch, SubscriptionRefreshPersist,
     SubscriptionRefreshPersistContent, SubscriptionSourceIdentity,
 };
@@ -37,7 +37,7 @@ pub(crate) use self::http::{
 #[cfg(test)]
 pub(crate) use self::source::fetch_subscription_content;
 
-const SUBSCRIPTION_MAX_BYTES: usize = dae_product_subscription::SUBSCRIPTION_MAX_BYTES;
+const SUBSCRIPTION_MAX_BYTES: usize = dae_product_control::subscription::SUBSCRIPTION_MAX_BYTES;
 
 pub(in crate::daed_product) use helper::run_subscription_prepare_helper_command;
 
@@ -127,7 +127,7 @@ pub(crate) fn refresh_subscription_from_remote(
         #[cfg(not(test))]
         marker: std::marker::PhantomData,
     };
-    let result = dae_product_subscription::refresh_subscription_from_remote_with_callbacks(
+    let result = dae_product_control::subscription::refresh_subscription_from_remote_with_callbacks(
         &callbacks, state, config_dir, id,
     );
     allocator_request_reclaim(AllocatorReclaimReason::SubscriptionRefresh);
@@ -154,15 +154,17 @@ pub(in crate::daed_product) fn apply_subscription_refresh_result(
     links: &[String],
 ) -> io::Result<(bool, Vec<Value>)> {
     let content = content::SubscriptionContentReport::from_links(links);
-    let source = dae_product_subscription::subscription_source_by_id(state, id)?;
+    let source = dae_product_control::subscription::subscription_source_by_id(state, id)?;
     let prepared = node_stage::prepare_subscription_refresh(&content);
-    match dae_product_subscription::apply_prepared_subscription_refresh_report(
+    match dae_product_control::subscription::apply_prepared_subscription_refresh_report(
         state, &source, fetched_at, &prepared, None,
     )? {
-        dae_product_subscription::SubscriptionCommitResult::Applied(applied) => {
+        dae_product_control::subscription::SubscriptionCommitResult::Applied(applied) => {
             Ok((applied.runtime_input_changed, applied.node_import_result))
         }
-        dae_product_subscription::SubscriptionCommitResult::Stale => Ok((false, Vec::new())),
+        dae_product_control::subscription::SubscriptionCommitResult::Stale => {
+            Ok((false, Vec::new()))
+        }
     }
 }
 

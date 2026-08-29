@@ -1,12 +1,14 @@
 use super::*;
 #[cfg(test)]
-use dae_product_subscription::InvalidCronLogTracker;
-use dae_product_subscription::{SubscriptionSchedulerCallbacks, SubscriptionSchedulerRuntimeApply};
+use dae_product_control::subscription::InvalidCronLogTracker;
+use dae_product_control::subscription::{
+    SubscriptionSchedulerCallbacks, SubscriptionSchedulerRuntimeApply,
+};
 
-pub(crate) use dae_product_subscription::validate_subscription_cron_expression;
+pub(crate) use dae_product_control::subscription::validate_subscription_cron_expression;
 
 pub(crate) fn notify_subscription_scheduler() {
-    dae_product_subscription::notify_subscription_scheduler();
+    dae_product_control::subscription::notify_subscription_scheduler();
 }
 
 pub(crate) fn start_subscription_scheduler(
@@ -19,10 +21,10 @@ pub(crate) fn start_subscription_scheduler(
         control_runtime: Arc::clone(&control_runtime),
         runtime: Arc::clone(&runtime),
     });
-    dae_product_subscription::start_subscription_scheduler(state, config_dir, callbacks)
+    dae_product_control::subscription::start_subscription_scheduler(state, config_dir, callbacks)
 }
 
-pub(crate) use dae_product_subscription::SubscriptionSchedulerHandle;
+pub(crate) use dae_product_control::subscription::SubscriptionSchedulerHandle;
 
 #[cfg(test)]
 pub(crate) fn refresh_due_subscriptions_for_scheduler(
@@ -56,7 +58,7 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
         control_runtime,
         runtime,
     };
-    dae_product_subscription::refresh_due_subscriptions_with_callbacks(
+    dae_product_control::subscription::refresh_due_subscriptions_with_callbacks(
         &callbacks,
         state,
         config_dir,

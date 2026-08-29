@@ -1,12 +1,12 @@
 use super::*;
 
-pub(super) use dae_product_runtime::RuntimeActivationIdentity;
+pub(super) use dae_product_control::runtime::RuntimeActivationIdentity;
 
 pub(super) fn persist_recovered_runtime_identity(
     state: &Path,
     identity: &RuntimeActivationIdentity,
 ) -> Result<(), String> {
-    dae_product_runtime::persist_recovered_runtime_identity(state, identity)
+    dae_product_control::runtime::persist_recovered_runtime_identity(state, identity)
 }
 
 #[cfg(test)]

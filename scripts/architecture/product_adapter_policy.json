@@ -87,30 +87,16 @@
   },
   "role_product_imports": {
     "control-adapter": [
-      "dae_product_control",
-      "dae_product_core",
-      "dae_product_geodata",
-      "dae_product_identity",
-      "dae_product_subscription"
+      "dae_product_control"
     ],
     "runtime-adapter": [
-      "dae_product_core",
-      "dae_product_persistence",
-      "dae_product_runtime"
+      "dae_product_control"
     ],
     "host-io": [
-      "dae_product_core",
-      "dae_product_http"
+      "dae_product_control"
     ],
     "tests": [
-      "dae_product_control",
-      "dae_product_core",
-      "dae_product_geodata",
-      "dae_product_http",
-      "dae_product_identity",
-      "dae_product_persistence",
-      "dae_product_runtime",
-      "dae_product_subscription"
+      "dae_product_control"
     ]
   },
   "production_line_limits": {

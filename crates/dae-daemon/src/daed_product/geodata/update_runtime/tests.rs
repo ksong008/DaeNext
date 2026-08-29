@@ -1,5 +1,5 @@
 use super::*;
-use dae_product_geodata::{geodata_source, set_geodata_source_url};
+use dae_product_control::geodata::{geodata_source, set_geodata_source_url};
 
 #[test]
 fn geodata_update_runtime_is_bounded_by_the_two_resource_kinds() {
@@ -67,7 +67,7 @@ fn geodata_update_runtime_detaches_slow_work_and_rejects_same_kind_immediately()
     .unwrap_err();
     assert_eq!(
         rejected.reason,
-        dae_product_geodata::ProductGeodataUpdateSubmissionReason::SameKind
+        dae_product_control::geodata::ProductGeodataUpdateSubmissionReason::SameKind
     );
     assert_eq!(runtime.snapshot()["rejectedSameKindTotal"], json!(1));
 

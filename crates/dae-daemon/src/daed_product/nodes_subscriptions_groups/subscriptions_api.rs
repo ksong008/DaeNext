@@ -1,5 +1,5 @@
 use super::*;
-use dae_product_subscription::{
+use dae_product_control::subscription::{
     NewSubscriptionRecord, SubscriptionRecordUpdate, get_subscription_value,
     list_subscriptions_value,
 };
@@ -42,7 +42,7 @@ pub(crate) fn create_subscription(
         .get("useProxy")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let id = match dae_product_subscription::create_subscription_record(
+    let id = match dae_product_control::subscription::create_subscription_record(
         state,
         NewSubscriptionRecord {
             link,
@@ -61,7 +61,7 @@ pub(crate) fn create_subscription(
         },
     ) {
         Ok(id) => id,
-        Err(dae_product_subscription::SubscriptionMutationError::TagConflict) => {
+        Err(dae_product_control::subscription::SubscriptionMutationError::TagConflict) => {
             return subscription_tag_conflict_response();
         }
         Err(error) => return HttpResponse::json(400, json!({"error": error.to_string()})),
@@ -132,7 +132,7 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
         .get("useProxy")
         .and_then(Value::as_bool)
         .map(|value| value as i64);
-    let updated = match dae_product_subscription::update_subscription_record(
+    let updated = match dae_product_control::subscription::update_subscription_record(
         state,
         SubscriptionRecordUpdate {
             id,
@@ -146,7 +146,7 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
         },
     ) {
         Ok(updated) => updated,
-        Err(dae_product_subscription::SubscriptionMutationError::TagConflict) => {
+        Err(dae_product_control::subscription::SubscriptionMutationError::TagConflict) => {
             return subscription_tag_conflict_response();
         }
         Err(error) => return HttpResponse::json(400, json!({"error": error.to_string()})),

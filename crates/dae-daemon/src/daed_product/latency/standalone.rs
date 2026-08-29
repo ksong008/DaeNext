@@ -52,17 +52,18 @@ impl StandaloneManualProbeJob<'_> {
                 break;
             }
             self.ensure_current()?;
-            let mut results = dae_product_subscription::node_latency_results_for_runtime_snapshots(
-                &chunk_nodes,
-                &node_index,
-                &runtime_snapshots,
-            );
+            let mut results =
+                dae_product_control::subscription::node_latency_results_for_runtime_snapshots(
+                    &chunk_nodes,
+                    &node_index,
+                    &runtime_snapshots,
+                );
             self.config_snapshot.apply_persistence_fence(&mut results);
             if results.is_empty() {
                 continue;
             }
             let (written, written_alive) =
-                dae_product_subscription::write_node_latency_results(self.conn, &results)?;
+                dae_product_control::subscription::write_node_latency_results(self.conn, &results)?;
             self.ensure_current()?;
             if written == 0 {
                 continue;

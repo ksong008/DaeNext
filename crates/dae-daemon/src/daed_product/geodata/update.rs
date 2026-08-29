@@ -3,8 +3,8 @@ use super::status::update_geodata_resource_status_cache;
 use super::update_admission::ProductGeodataUpdateLease;
 use super::*;
 use super::{GeodataKind, GeodataRelease, GeodataSourceMode};
-use dae_product_geodata::geodata_source;
-use dae_product_geodata::{GeodataUpdateCallbacks, summarize_geodata_file};
+use dae_product_control::geodata::geodata_source;
+use dae_product_control::geodata::{GeodataUpdateCallbacks, summarize_geodata_file};
 
 pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
     let context = ProductGeodataUpdateContext::from_app(app);
@@ -26,7 +26,7 @@ pub(super) fn update_geodata_with_lease_using(
     update_lease: ProductGeodataUpdateLease,
     preparation_mode: GeodataPreparationMode,
 ) -> io::Result<Value> {
-    dae_product_geodata::update_geodata_with_lease_using(
+    dae_product_control::geodata::update_geodata_with_lease_using(
         context,
         &context.updates,
         &context.state,
@@ -45,7 +45,7 @@ impl GeodataUpdateCallbacks for ProductGeodataUpdateContext {
         kind: GeodataKind,
         output: &Path,
         mode: GeodataPreparationMode,
-    ) -> io::Result<dae_product_geodata::GeodataPreparedDownload> {
+    ) -> io::Result<dae_product_control::geodata::GeodataPreparedDownload> {
         match mode {
             GeodataPreparationMode::Inline => {
                 prepare_geodata_download_inline(&self.control_runtime, state, kind, output)
@@ -59,7 +59,7 @@ impl GeodataUpdateCallbacks for ProductGeodataUpdateContext {
     fn runtime_input_versions_if_running(
         &self,
         _state: &Path,
-    ) -> io::Result<Option<dae_product_geodata::RuntimeInputVersions>> {
+    ) -> io::Result<Option<dae_product_control::geodata::RuntimeInputVersions>> {
         super::transaction::runtime_input_versions_if_running(self)
     }
 

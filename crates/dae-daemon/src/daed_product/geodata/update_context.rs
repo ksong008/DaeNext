@@ -42,7 +42,7 @@ impl ProductGeodataUpdateContext {
     }
 }
 
-impl dae_product_geodata::GeodataUpdateRuntimeContext for ProductGeodataUpdateContext {
+impl dae_product_control::geodata::GeodataUpdateRuntimeContext for ProductGeodataUpdateContext {
     fn state_path(&self) -> &Path {
         &self.state
     }

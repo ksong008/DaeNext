@@ -1,7 +1,7 @@
 use super::*;
 use super::{GEODATA_REDIRECT_LIMIT, GeodataFileDownload, GeodataKind, GeodataRelease};
 
-use dae_product_geodata::{
+use dae_product_control::geodata::{
     GeodataHttpFileResult, GeodataHttpResult, geodata_http_body, geodata_http_request,
     geodata_http_response_limit, geodata_http_response_to_file_from_bytes,
     parse_geodata_latest_release, read_geodata_http_response, read_geodata_http_response_to_file,

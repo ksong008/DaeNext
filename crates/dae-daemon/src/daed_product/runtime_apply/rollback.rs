@@ -1,6 +1,6 @@
 use super::*;
 use super::{PreparedRuntimeGeneration, sync_directory};
-use dae_product_persistence::create_synced_file;
+use dae_product_control::persistence::create_synced_file;
 
 pub(super) fn rollback_runtime_generation(
     runtime: &ProductRuntimeManager,
@@ -29,7 +29,7 @@ pub(super) fn rollback_runtime_generation(
             None
         }
     };
-    if let Err(err) = dae_product_runtime::restore_runtime_database(
+    if let Err(err) = dae_product_control::runtime::restore_runtime_database(
         state,
         &candidate.database_snapshot,
         restored_probe_generation,

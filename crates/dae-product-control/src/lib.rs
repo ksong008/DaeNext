@@ -12,6 +12,14 @@ use std::time::{Duration, Instant};
 use dae_product_core::*;
 use serde_json::{Value, json};
 
+pub use dae_product_core as core;
+pub use dae_product_geodata as geodata;
+pub use dae_product_http as http;
+pub use dae_product_identity as identity;
+pub use dae_product_persistence as persistence;
+pub use dae_product_runtime as runtime;
+pub use dae_product_subscription as subscription;
+
 pub mod auth;
 pub use auth::*;
 mod auth_storage;

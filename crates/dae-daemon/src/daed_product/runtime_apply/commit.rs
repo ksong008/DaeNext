@@ -36,7 +36,7 @@ pub(super) fn commit_runtime_generation(
 
     let commit_result = if let Some(mut transaction) = candidate.transaction.take() {
         let result = transaction.commit_database(|| {
-            dae_product_runtime::commit_runtime_state(
+            dae_product_control::runtime::commit_runtime_state(
                 state,
                 plan,
                 runtime_log_level,
@@ -48,7 +48,7 @@ pub(super) fn commit_runtime_generation(
         candidate.transaction = Some(transaction);
         result
     } else {
-        dae_product_runtime::commit_runtime_state(
+        dae_product_control::runtime::commit_runtime_state(
             state,
             plan,
             runtime_log_level,

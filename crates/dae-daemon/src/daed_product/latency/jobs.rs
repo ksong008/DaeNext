@@ -1,9 +1,11 @@
 use super::super::*;
 use super::*;
 #[cfg(test)]
-use dae_product_subscription::parse_node_link;
+use dae_product_control::subscription::parse_node_link;
 #[cfg(test)]
-use dae_product_subscription::{NODE_LATENCY_DB_WRITE_BATCH_SIZE, write_node_latency_results};
+use dae_product_control::subscription::{
+    NODE_LATENCY_DB_WRITE_BATCH_SIZE, write_node_latency_results,
+};
 
 pub(crate) fn enqueue_node_latency_job(
     state: &Path,
@@ -68,7 +70,7 @@ fn run_node_latency_job(
     let log_state = state.clone();
     let config_dir = context.config_dir.clone();
     let jobs = Arc::clone(&context.jobs);
-    dae_product_subscription::run_latency_job(
+    dae_product_control::subscription::run_latency_job(
         job_id,
         cancellation,
         jobs,

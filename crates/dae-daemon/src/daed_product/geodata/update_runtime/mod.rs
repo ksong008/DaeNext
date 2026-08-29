@@ -4,7 +4,7 @@ use super::*;
 mod tests;
 
 pub(in crate::daed_product) type ProductGeodataUpdateRuntime =
-    dae_product_geodata::ProductGeodataUpdateRuntime<
+    dae_product_control::geodata::ProductGeodataUpdateRuntime<
         ProductGeodataUpdateContext,
         DaemonGeodataUpdateJob,
     >;
@@ -16,7 +16,7 @@ pub(crate) struct DaemonGeodataUpdateJob {
     http_metrics: Arc<ProductHttpMetrics>,
 }
 
-impl dae_product_geodata::ProductGeodataUpdateJob for DaemonGeodataUpdateJob {
+impl dae_product_control::geodata::ProductGeodataUpdateJob for DaemonGeodataUpdateJob {
     fn complete(self, result: io::Result<Value>) {
         let Self {
             mut stream,
@@ -32,8 +32,10 @@ impl dae_product_geodata::ProductGeodataUpdateJob for DaemonGeodataUpdateJob {
 
 struct DaemonGeodataUpdateWorkerHooks;
 
-impl dae_product_geodata::ProductGeodataUpdateWorkerHooks for DaemonGeodataUpdateWorkerHooks {
-    fn worker_started(&self) -> Box<dyn dae_product_geodata::ProductGeodataUpdateWorker> {
+impl dae_product_control::geodata::ProductGeodataUpdateWorkerHooks
+    for DaemonGeodataUpdateWorkerHooks
+{
+    fn worker_started(&self) -> Box<dyn dae_product_control::geodata::ProductGeodataUpdateWorker> {
         Box::new(DaemonGeodataUpdateWorker {
             inner: allocator_register_reclaim_worker(AllocatorWorkerKind::ControlAux),
         })
@@ -50,7 +52,7 @@ struct DaemonGeodataUpdateWorker {
     inner: AllocatorReclaimWorker,
 }
 
-impl dae_product_geodata::ProductGeodataUpdateWorker for DaemonGeodataUpdateWorker {
+impl dae_product_control::geodata::ProductGeodataUpdateWorker for DaemonGeodataUpdateWorker {
     fn poll(&mut self) {
         self.inner.poll();
     }
@@ -61,9 +63,10 @@ pub(in crate::daed_product) fn start_for_app(
     app: &AppState,
 ) -> io::Result<Arc<ProductGeodataUpdateRuntime>> {
     let context = ProductGeodataUpdateContext::from_app(app);
-    let config =
-        dae_product_geodata::ProductGeodataUpdateRuntimeConfig::from_http_config(http_config);
-    dae_product_geodata::ProductGeodataUpdateRuntime::start(
+    let config = dae_product_control::geodata::ProductGeodataUpdateRuntimeConfig::from_http_config(
+        http_config,
+    );
+    dae_product_control::geodata::ProductGeodataUpdateRuntime::start(
         config,
         context,
         Arc::clone(&app.geodata_updates),
@@ -73,11 +76,11 @@ pub(in crate::daed_product) fn start_for_app(
 
 #[cfg(test)]
 fn start_with_config(
-    config: dae_product_geodata::ProductGeodataUpdateRuntimeConfig,
+    config: dae_product_control::geodata::ProductGeodataUpdateRuntimeConfig,
     context: ProductGeodataUpdateContext,
 ) -> io::Result<Arc<ProductGeodataUpdateRuntime>> {
     let updates = Arc::clone(&context.updates);
-    dae_product_geodata::ProductGeodataUpdateRuntime::start(
+    dae_product_control::geodata::ProductGeodataUpdateRuntime::start(
         config,
         context,
         updates,
@@ -91,8 +94,10 @@ pub(in crate::daed_product) fn submit_update_job(
     stream: TcpStream,
     request: HttpRequest,
     http_metrics: Arc<ProductHttpMetrics>,
-) -> Result<(), Box<dae_product_geodata::ProductGeodataUpdateSubmissionError<DaemonGeodataUpdateJob>>>
-{
+) -> Result<
+    (),
+    Box<dae_product_control::geodata::ProductGeodataUpdateSubmissionError<DaemonGeodataUpdateJob>>,
+> {
     runtime.submit(
         kind,
         DaemonGeodataUpdateJob {
@@ -105,7 +110,9 @@ pub(in crate::daed_product) fn submit_update_job(
 }
 
 pub(in crate::daed_product) fn geodata_submission_rejection(
-    rejection: dae_product_geodata::ProductGeodataUpdateSubmissionError<DaemonGeodataUpdateJob>,
+    rejection: dae_product_control::geodata::ProductGeodataUpdateSubmissionError<
+        DaemonGeodataUpdateJob,
+    >,
 ) -> (TcpStream, HttpRequest, HttpResponse) {
     let DaemonGeodataUpdateJob {
         stream,
@@ -115,13 +122,13 @@ pub(in crate::daed_product) fn geodata_submission_rejection(
     } = rejection.job;
     http_metrics.closed();
     let (status, message) = match rejection.reason {
-        dae_product_geodata::ProductGeodataUpdateSubmissionReason::Unavailable => {
+        dae_product_control::geodata::ProductGeodataUpdateSubmissionReason::Unavailable => {
             (503, "geodata update runtime is unavailable")
         }
-        dae_product_geodata::ProductGeodataUpdateSubmissionReason::SameKind => {
+        dae_product_control::geodata::ProductGeodataUpdateSubmissionReason::SameKind => {
             (409, "geodata update is already in progress")
         }
-        dae_product_geodata::ProductGeodataUpdateSubmissionReason::Capacity => {
+        dae_product_control::geodata::ProductGeodataUpdateSubmissionReason::Capacity => {
             (503, "geodata update queue is full; retry later")
         }
     };

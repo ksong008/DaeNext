@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::daed_product) use dae_product_runtime::ProductRuntimeEventIdentity;
+pub(in crate::daed_product) use dae_product_control::runtime::ProductRuntimeEventIdentity;
 
 impl ProductRuntimeManager {
     pub(in crate::daed_product) fn runtime_event_identity(&self) -> ProductRuntimeEventIdentity {

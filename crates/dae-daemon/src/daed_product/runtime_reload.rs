@@ -20,7 +20,7 @@ pub(in crate::daed_product) struct AppliedRuntimeReload {
     pub(in crate::daed_product) pending_process_transition: Option<Value>,
 }
 
-pub(in crate::daed_product) use dae_product_runtime::{
+pub(in crate::daed_product) use dae_product_control::runtime::{
     CoordinatedRuntimeReloadError, RuntimeReloadPrepareError,
 };
 
