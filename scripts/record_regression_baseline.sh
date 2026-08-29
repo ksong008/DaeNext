@@ -19,7 +19,7 @@ mkdir -p "$(dirname "$report")"
 test_log="$output_root/workspace-tests.log"
 bench_jsonl="$output_root/functional-bench.jsonl"
 test_started="$(date +%s%N)"
-cargo test --workspace --all-targets --quiet >"$test_log" 2>&1
+cargo test --workspace --all-targets --quiet -- --test-threads=1 >"$test_log" 2>&1
 test_finished="$(date +%s%N)"
 test_elapsed_ms="$(((test_finished - test_started) / 1000000))"
 
