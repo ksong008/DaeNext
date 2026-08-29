@@ -75,8 +75,6 @@ const PRODUCT_WEB_ROOT_ENV: &str = "PRODUCT_WEB_ROOT";
 const PRODUCT_WEB_ROOT_LEGACY_ENV: &str = "DAED_WEB_ROOT";
 const PRIMARY_STATE_STORE: &str = crate::service_contract::DAED_PRIMARY_STATE_STORE;
 const LEGACY_IMPORT_STATE_STORE: &str = crate::service_contract::DAED_LEGACY_IMPORT_STATE_STORE;
-const PRODUCT_HTTP_RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-const PRODUCT_HTTP_REJECT_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 const TOKEN_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_LOG_MAX_ENTRIES: i64 = 10_000;
 const DEFAULT_LOG_MAX_BYTES: i64 = 50 * 1024 * 1024;
@@ -454,7 +452,7 @@ fn product_test_auth_runtime() -> Arc<ProductAuthRuntime> {
 fn product_test_control_runtime() -> Arc<ProductControlRuntime> {
     ProductControlRuntime::start(ProductControlRuntimeConfig::for_benchmark()).unwrap()
 }
-mod http_io;
-use self::http_io::*;
+mod cli_help;
+use self::cli_help::*;
 #[cfg(test)]
 mod tests;
