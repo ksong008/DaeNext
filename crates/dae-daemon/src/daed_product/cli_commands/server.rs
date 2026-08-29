@@ -98,7 +98,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         runtime_sampler: Some(runtime_sampler),
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
-        ui_runtime: Arc::new(ProductUiRuntime::default()),
+        ui_runtime: product_ui_runtime(),
         auth_runtime,
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),

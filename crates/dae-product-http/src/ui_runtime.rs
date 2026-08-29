@@ -1,21 +1,54 @@
-use super::*;
+use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-mod registry;
-use self::registry::*;
+use serde_json::{Value, json};
+
+use crate::{HttpRequest, ProductHttpMetrics};
+
 mod activity;
 use self::activity::*;
 mod reclaim;
 use self::reclaim::ProductUiReclaim;
-pub(in crate::daed_product) use self::reclaim::ProductUiReclaimWorker;
+pub use self::reclaim::ProductUiReclaimWorker;
+mod registry;
+use self::registry::*;
 
-pub(super) const PRODUCT_UI_PAGE_HEADER: &str = "x-daed-page-id";
+pub const PRODUCT_UI_PAGE_HEADER: &str = "x-daed-page-id";
 const PRODUCT_UI_SESSION_LIMIT: usize = 64;
 const PRODUCT_UI_SESSION_PER_USER_LIMIT: usize = 8;
 const PRODUCT_UI_SESSION_LEASE: Duration = Duration::from_secs(10);
 const PRODUCT_UI_PAGE_ID_MAX_BYTES: usize = 64;
 
+pub trait ProductUiReclaimHooks: std::fmt::Debug + Send + Sync {
+    fn bind_control_plane_thread(&self) -> Result<Option<u32>, String>;
+    fn flush_current_thread_cache(&self) -> io::Result<()>;
+    fn request_control_plane_reclaim(&self) -> Value;
+}
+
+#[derive(Debug, Default)]
+pub struct NoopProductUiReclaimHooks;
+
+impl ProductUiReclaimHooks for NoopProductUiReclaimHooks {
+    fn bind_control_plane_thread(&self) -> Result<Option<u32>, String> {
+        Ok(None)
+    }
+
+    fn flush_current_thread_cache(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn request_control_plane_reclaim(&self) -> Value {
+        json!({
+            "operation": "control_plane_arena_purge",
+            "status": "requested",
+        })
+    }
+}
+
 #[derive(Debug)]
-pub(super) struct ProductUiRuntime {
+pub struct ProductUiRuntime {
     state: Mutex<ProductUiRegistryState>,
     session_limit: AtomicU64,
     per_user_limit: AtomicU64,
@@ -35,16 +68,40 @@ pub(super) struct ProductUiRuntime {
 
 impl Default for ProductUiRuntime {
     fn default() -> Self {
-        Self::new(
+        Self::with_reclaim_hooks(
             PRODUCT_UI_SESSION_LIMIT,
             PRODUCT_UI_SESSION_PER_USER_LIMIT,
             PRODUCT_UI_SESSION_LEASE,
+            Arc::new(NoopProductUiReclaimHooks),
         )
     }
 }
 
 impl ProductUiRuntime {
-    fn new(session_limit: usize, per_user_limit: usize, lease: Duration) -> Self {
+    pub fn with_default_reclaim_hooks(hooks: Arc<dyn ProductUiReclaimHooks>) -> Self {
+        Self::with_reclaim_hooks(
+            PRODUCT_UI_SESSION_LIMIT,
+            PRODUCT_UI_SESSION_PER_USER_LIMIT,
+            PRODUCT_UI_SESSION_LEASE,
+            hooks,
+        )
+    }
+
+    pub fn new(session_limit: usize, per_user_limit: usize, lease: Duration) -> Self {
+        Self::with_reclaim_hooks(
+            session_limit,
+            per_user_limit,
+            lease,
+            Arc::new(NoopProductUiReclaimHooks),
+        )
+    }
+
+    pub fn with_reclaim_hooks(
+        session_limit: usize,
+        per_user_limit: usize,
+        lease: Duration,
+        hooks: Arc<dyn ProductUiReclaimHooks>,
+    ) -> Self {
         Self {
             state: Mutex::new(ProductUiRegistryState::default()),
             session_limit: AtomicU64::new(session_limit as u64),
@@ -60,28 +117,28 @@ impl ProductUiRuntime {
             headerless_drain_epoch: AtomicU64::new(0),
             reclaim_headerless_drain_epoch: AtomicU64::new(0),
             headerless_reclaim_activity: Mutex::new(ProductUiHeaderlessReclaimActivity::default()),
-            reclaim: Arc::new(ProductUiReclaim::default()),
+            reclaim: Arc::new(ProductUiReclaim::new(hooks)),
         }
     }
 
-    pub(super) fn configure(&self, session_limit: usize, per_user_limit: usize) {
+    pub fn configure(&self, session_limit: usize, per_user_limit: usize) {
         self.session_limit
             .store(session_limit as u64, Ordering::Relaxed);
         self.per_user_limit
             .store(per_user_limit as u64, Ordering::Relaxed);
     }
 
-    pub(super) fn touch(&self, user_id: i64, request: &HttpRequest) -> io::Result<()> {
+    pub fn touch(&self, user_id: i64, request: &HttpRequest) -> io::Result<()> {
         let page_id = page_id_from_request(request)?;
         self.touch_page(user_id, page_id, Instant::now())
     }
 
-    pub(super) fn close_hint(&self, user_id: i64, request: &HttpRequest) -> io::Result<bool> {
+    pub fn close_hint(&self, user_id: i64, request: &HttpRequest) -> io::Result<bool> {
         let page_id = page_id_from_request(request)?;
         self.close_page(user_id, page_id, Instant::now())
     }
 
-    pub(super) fn open_stream(
+    pub fn open_stream(
         self: &Arc<Self>,
         user_id: i64,
         request: &HttpRequest,
@@ -106,19 +163,15 @@ impl ProductUiRuntime {
         }))
     }
 
-    pub(super) fn sweep(&self) {
+    pub fn sweep(&self) {
         self.sweep_at(Instant::now());
     }
 
-    pub(super) fn register_reclaim_worker(&self) -> ProductUiReclaimWorker {
+    pub fn register_reclaim_worker(&self) -> ProductUiReclaimWorker {
         self.reclaim.register()
     }
 
-    pub(super) fn maintain(
-        &self,
-        metrics: &ProductHttpMetrics,
-        worker: &mut ProductUiReclaimWorker,
-    ) {
+    pub fn maintain(&self, metrics: &ProductHttpMetrics, worker: &mut ProductUiReclaimWorker) {
         self.sweep();
         self.request_reclaim_if_drained(metrics);
         self.request_reclaim_if_headerless_idle(metrics);
@@ -163,13 +216,13 @@ impl ProductUiRuntime {
         }
     }
 
-    fn owner_drained(&self, metrics: &ProductHttpMetrics) -> bool {
+    pub(crate) fn owner_drained(&self, metrics: &ProductHttpMetrics) -> bool {
         self.sessions_active.load(Ordering::Acquire) == 0
             && self.requests_active.load(Ordering::Acquire) == 0
             && metrics.is_idle()
     }
 
-    pub(super) fn snapshot(&self) -> Value {
+    pub fn snapshot(&self) -> Value {
         json!({
             "sessionLimit": self.session_limit.load(Ordering::Relaxed),
             "perUserLimit": self.per_user_limit.load(Ordering::Relaxed),
@@ -215,7 +268,7 @@ fn page_id_from_request(request: &HttpRequest) -> io::Result<&str> {
     })
 }
 
-pub(super) struct ProductUiStreamLease {
+pub struct ProductUiStreamLease {
     runtime: Arc<ProductUiRuntime>,
     key: Option<ProductUiSessionKey>,
 }
@@ -228,10 +281,63 @@ impl Drop for ProductUiStreamLease {
     }
 }
 
+pub struct ProductUiRequestLease {
+    runtime: Arc<ProductUiRuntime>,
+    charged_bytes: u64,
+    headerless: bool,
+}
+
+impl Drop for ProductUiRequestLease {
+    fn drop(&mut self) {
+        self.runtime.requests_active.fetch_sub(1, Ordering::Release);
+        let _ = self.runtime.bytes_in_flight.fetch_update(
+            Ordering::Release,
+            Ordering::Relaxed,
+            |bytes| Some(bytes.saturating_sub(self.charged_bytes)),
+        );
+        if self.headerless
+            && self
+                .runtime
+                .headerless_requests_active
+                .fetch_sub(1, Ordering::AcqRel)
+                == 1
+        {
+            if let Ok(mut activity) = self.runtime.headerless_reclaim_activity.lock() {
+                activity.idle_since = Some(Instant::now());
+            }
+            self.runtime
+                .headerless_drain_epoch
+                .fetch_add(1, Ordering::Release);
+        }
+        self.runtime.sweep();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allocator::allocator_take_reclaim_requests;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicUsize;
+
+    #[derive(Debug, Default)]
+    struct TestReclaimHooks {
+        requested: AtomicUsize,
+    }
+
+    impl ProductUiReclaimHooks for TestReclaimHooks {
+        fn bind_control_plane_thread(&self) -> Result<Option<u32>, String> {
+            Ok(None)
+        }
+
+        fn flush_current_thread_cache(&self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn request_control_plane_reclaim(&self) -> Value {
+            self.requested.fetch_add(1, Ordering::Relaxed);
+            json!({"status": "requested"})
+        }
+    }
 
     fn request(page_id: &str) -> HttpRequest {
         HttpRequest {
@@ -298,8 +404,13 @@ mod tests {
 
     #[test]
     fn drained_workers_acknowledge_before_scoped_reclaim_is_coordinated() {
-        let _ = allocator_take_reclaim_requests();
-        let runtime = Arc::new(ProductUiRuntime::new(4, 2, Duration::from_secs(10)));
+        let hooks = Arc::new(TestReclaimHooks::default());
+        let runtime = Arc::new(ProductUiRuntime::with_reclaim_hooks(
+            4,
+            2,
+            Duration::from_secs(10),
+            hooks.clone(),
+        ));
         let metrics = ProductHttpMetrics::default();
         let mut first = runtime.register_reclaim_worker();
         let mut second = runtime.register_reclaim_worker();
@@ -315,32 +426,19 @@ mod tests {
         assert_eq!(reclaim["completedTotal"], json!(1));
         assert_eq!(reclaim["expectedWorkers"], json!(2));
         assert_eq!(reclaim["acknowledgedWorkers"], json!(2));
-        assert_eq!(
-            reclaim.pointer("/last/detail/scope"),
-            Some(&json!("control-plane"))
-        );
         assert_eq!(reclaim.pointer("/last/status"), Some(&json!("requested")));
-        assert_eq!(
-            allocator_pending_reclaim_scope(),
-            Some(AllocatorReclaimScope::ControlPlane)
-        );
-        let batch = allocator_take_reclaim_requests();
-        let scoped = allocator_reclaim_control_plane(
-            batch
-                .primary_reason()
-                .expect("UI reclaim request has a reason"),
-        );
-        assert_eq!(scoped["status"], json!("pass"));
-        assert_eq!(
-            scoped.pointer("/detail/arenaPurgeScope"),
-            Some(&json!("control-plane-only"))
-        );
+        assert_eq!(hooks.requested.load(Ordering::Relaxed), 1);
     }
 
     #[test]
     fn headerless_control_requests_trigger_one_coalesced_idle_reclaim() {
-        let _ = allocator_take_reclaim_requests();
-        let runtime = Arc::new(ProductUiRuntime::new(4, 2, Duration::from_secs(10)));
+        let hooks = Arc::new(TestReclaimHooks::default());
+        let runtime = Arc::new(ProductUiRuntime::with_reclaim_hooks(
+            4,
+            2,
+            Duration::from_secs(10),
+            hooks.clone(),
+        ));
         let metrics = ProductHttpMetrics::default();
         let mut first = runtime.register_reclaim_worker();
         let mut second = runtime.register_reclaim_worker();
@@ -360,7 +458,6 @@ mod tests {
         let snapshot = runtime.snapshot();
         assert_eq!(snapshot["reclaimHeaderlessDrainEpoch"], json!(1));
         assert_eq!(snapshot["reclaim"]["completedTotal"], json!(1));
-        let batch = allocator_take_reclaim_requests();
-        assert_eq!(batch.scope(), AllocatorReclaimScope::ControlPlane);
+        assert_eq!(hooks.requested.load(Ordering::Relaxed), 1);
     }
 }
