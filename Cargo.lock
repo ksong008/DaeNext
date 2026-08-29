@@ -1036,6 +1036,7 @@ name = "dae-resident-plan"
 version = "3.1.0"
 dependencies = [
  "dae-resident-model",
+ "serde_json",
 ]
 
 [[package]]
