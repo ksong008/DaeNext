@@ -266,3 +266,5 @@ mod tests {
         assert_eq!(body, json!({"ids": [1, "2", "invalid"], "names": ["a", 2]}));
     }
 }
+mod route_audit;
+pub use route_audit::*;
