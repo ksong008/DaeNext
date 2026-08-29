@@ -10,10 +10,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use dae_config::Config;
 use dae_config::parser::parse_config;
 use dae_config::schema::build_config;
@@ -28,10 +24,6 @@ use dae_product_subscription::{count_nodes_for_subscription, list_all_nodes_valu
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
 
 use crate::allocator::{
     AllocatorReclaimBusyKind, AllocatorReclaimReason, AllocatorReclaimScope,

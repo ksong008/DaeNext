@@ -652,7 +652,6 @@ dependencies = [
 name = "dae-daemon"
 version = "3.1.0"
 dependencies = [
- "argon2",
  "base64",
  "blake2",
  "boring 5.1.0",
@@ -699,7 +698,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "sha3",
  "socket2",
  "tikv-jemalloc-ctl",
  "tikv-jemalloc-sys",
@@ -891,7 +889,11 @@ dependencies = [
 name = "dae-product-identity"
 version = "3.1.0"
 dependencies = [
+ "argon2",
+ "base64",
  "serde_json",
+ "sha2",
+ "sha3",
 ]
 
 [[package]]
