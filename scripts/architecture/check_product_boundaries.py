@@ -13,6 +13,7 @@ REQUIRED_CRATES = (
     "dae-product-core",
     "dae-product-control",
     "dae-product-http",
+    "dae-product-identity",
     "dae-product-persistence",
     "dae-product-runtime",
     "dae-product-subscription",
@@ -21,6 +22,7 @@ REQUIRED_CRATES = (
 REQUIRED_OWNERSHIP_FILES = (
     "crates/dae-product-control/src/local_control_client.rs",
     "crates/dae-product-control/src/routes.rs",
+    "crates/dae-product-control/src/durable_recovery.rs",
     "crates/dae-product-http/src/job_queue.rs",
     "crates/dae-product-http/src/listener_readiness.rs",
     "crates/dae-product-runtime/src/active_resources.rs",
@@ -28,17 +30,24 @@ REQUIRED_OWNERSHIP_FILES = (
     "crates/dae-product-runtime/src/benchmark.rs",
     "crates/dae-product-http/src/route_audit.rs",
     "crates/dae-product-core/src/package.rs",
+    "crates/dae-product-identity/src/auth.rs",
+    "crates/dae-product-persistence/src/json_storage.rs",
+    "crates/dae-product-persistence/src/state/mod.rs",
     "crates/dae-product-subscription/src/group_store.rs",
     "crates/dae-product-subscription/src/group_summary.rs",
     "crates/dae-product-subscription/src/group_summary_batch.rs",
     "crates/dae-product-subscription/src/node_view.rs",
     "crates/dae-product-subscription/src/scheduler.rs",
     "crates/dae-product-subscription/src/subscription_view.rs",
+    "crates/dae-product-runtime/src/materialization.rs",
+    "crates/dae-product-subscription/src/refresh_node_sync.rs",
+    "crates/dae-product-subscription/src/refresh_transaction.rs",
 )
 FORBIDDEN_DAEMON_PATHS = (
     "control_runtime",
     "auth_runtime",
     "durable_commit",
+    "durable_recovery.rs",
     "http_connections.rs",
     "http_request.rs",
     "http_request",
@@ -56,6 +65,11 @@ FORBIDDEN_DAEMON_PATHS = (
     "resources/global_render.rs",
     "resources/global_config.rs",
     "runtime_apply/coordinator.rs",
+    "runtime_materialization/materialize.rs",
+    "runtime_materialization/queries.rs",
+    "runtime_materialization/render.rs",
+    "nodes_subscriptions_groups/subscription_refresh/node_sync.rs",
+    "nodes_subscriptions_groups/subscription_refresh/transaction.rs",
     "runtime_materialization/metadata.rs",
     "runtime_materialization/active_resources.rs",
     "geodata/file.rs",
@@ -99,7 +113,7 @@ FORBIDDEN_DAEMON_DEFINITIONS = (
 )
 DAEMON_CRATE_REFERENCE = re.compile(r"\bdae_daemon\s*::")
 DAEMON_RESIDENT_INTERNAL_REFERENCE = re.compile(
-    r"\bdae_resident_(?:core|dns|plan|tcp|udp|transport)\s*::|"
+    r"\bdae_resident_(?:core|dns|plan|tcp|udp|transport)\s*(?:::|;)|"
     r"\bdae_resident_dataplane\s*::(?!\s*facade\s*::)"
 )
 PRODUCT_CRATE_REFERENCE = re.compile(r"\bdae_product_[A-Za-z0-9_]+\b")

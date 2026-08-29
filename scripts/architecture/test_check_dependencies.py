@@ -160,6 +160,27 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
         source_errors = [error for error in errors if "source import crosses" in error]
         self.assertEqual(len(source_errors), 3)
 
+    def test_source_import_scans_absolute_and_bare_reexports(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source_root = root / "a" / "src"
+            source_root.mkdir(parents=True)
+            (source_root / "lib.rs").write_text(
+                "use ::b;\n"
+                "pub use ::b::Item;\n"
+                "pub use b;\n",
+                encoding="utf-8",
+            )
+            graph = metadata(("a", []), ("b", []))
+            graph["packages"][0]["manifest_path"] = str(root / "a" / "Cargo.toml")
+            errors = CHECKER.validate(
+                graph,
+                policy(("a", [], [], []), ("b", [], [], [])),
+                scan_sources=True,
+            )
+        source_errors = [error for error in errors if "source import crosses" in error]
+        self.assertEqual(len(source_errors), 3)
+
     def test_forbidden_source_import_is_rejected_when_edge_is_declared(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

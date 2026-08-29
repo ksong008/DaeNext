@@ -22,7 +22,7 @@ USE_STATEMENT = re.compile(
     r"(?m)^[ \t]*(?:(?:pub(?:\s*\([^)]*\))?)\s+)?use\s+(.*?);",
     re.DOTALL,
 )
-USE_PATH_HEAD = re.compile(r"(?:^|[,{])\s*([A-Za-z_][A-Za-z0-9_]*)\b")
+USE_PATH_HEAD = re.compile(r"(?:^|[,{])\s*(?:::)?([A-Za-z_][A-Za-z0-9_]*)\b")
 EXTERN_CRATE_IMPORT = re.compile(
     r"(?m)^[ \t]*extern\s+crate\s+([A-Za-z_][A-Za-z0-9_]*)\b"
 )

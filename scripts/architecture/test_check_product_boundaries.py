@@ -81,6 +81,29 @@ class ProductBoundaryGateTests(unittest.TestCase):
         errors = MODULE.validate(root)
         self.assertTrue(any("bypasses resident facade" in error for error in errors))
 
+    def test_rejects_bare_daemon_resident_import(self) -> None:
+        root = self.fixture()
+        source = root / "crates" / "dae-daemon" / "src" / "resident.rs"
+        source.write_text("use dae_resident_tcp;\n", encoding="utf-8")
+        errors = MODULE.validate(root)
+        self.assertTrue(any("bypasses resident facade" in error for error in errors))
+
+    def test_rejects_old_runtime_materialization_path(self) -> None:
+        root = self.fixture()
+        returned = (
+            root
+            / "crates"
+            / "dae-daemon"
+            / "src"
+            / "daed_product"
+            / "runtime_materialization"
+            / "materialize.rs"
+        )
+        returned.parent.mkdir(parents=True, exist_ok=True)
+        returned.write_text("pub struct Returned;\n", encoding="utf-8")
+        errors = MODULE.validate(root)
+        self.assertTrue(any("returned to daemon" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -831,7 +831,10 @@ version = "3.1.0"
 dependencies = [
  "argon2",
  "dae-product-core",
+ "dae-product-geodata",
  "dae-product-http",
+ "dae-product-runtime",
+ "dae-product-subscription",
  "libc",
  "serde_json",
  "sha2",
@@ -913,6 +916,8 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]

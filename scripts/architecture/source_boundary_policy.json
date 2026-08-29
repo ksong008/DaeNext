@@ -9,6 +9,10 @@
       "production": 1300,
       "tests": 0
     },
+    "dae-product-identity": {
+      "production": 400,
+      "tests": 0
+    },
     "dae-product-geodata": {
       "production": 2800,
       "tests": 0
@@ -22,11 +26,11 @@
       "tests": 0
     },
     "dae-product-runtime": {
-      "production": 4500,
+      "production": 5400,
       "tests": 300
     },
     "dae-product-subscription": {
-      "production": 6500,
+      "production": 7000,
       "tests": 0
     },
     "dae-daemon": {
