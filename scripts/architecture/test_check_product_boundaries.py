@@ -44,6 +44,13 @@ class ProductBoundaryGateTests(unittest.TestCase):
         errors = MODULE.validate(root)
         self.assertTrue(any("source directory is missing" in error for error in errors))
 
+    def test_rejects_missing_product_owner_file(self) -> None:
+        root = self.fixture()
+        target = root / MODULE.REQUIRED_OWNERSHIP_FILES[0]
+        target.unlink()
+        errors = MODULE.validate(root)
+        self.assertTrue(any("required product owner file is missing" in error for error in errors))
+
     def test_rejects_returned_daemon_implementation(self) -> None:
         root = self.fixture()
         returned = root / "crates" / "dae-daemon" / "src" / "daed_product" / "auth_runtime"
