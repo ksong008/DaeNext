@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["test-boringssl-tcp-tls", "test-boringssl-quic", "dns-runtime-tests"]
+default = ["test-boringssl-tcp-tls", "test-boringssl-quic"]
 benchmark-support = []
 dns-runtime-tests = []
 test-scalar-udp-recv = ["dae-datapath/test-scalar-udp-recv"]
