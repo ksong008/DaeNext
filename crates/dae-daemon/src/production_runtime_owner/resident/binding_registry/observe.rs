@@ -294,7 +294,12 @@ pub(super) fn tcx_anchor_matches(
 }
 
 pub(super) fn tc_output_matches_binding(stdout: &str, binding: &ResidentTcBinding) -> bool {
-    let pref = format!("pref {}", binding.priority);
+    let expected_priority = if binding.priority == 0 {
+        49_152
+    } else {
+        u32::from(binding.priority)
+    };
+    let pref = format!("pref {expected_priority}");
     let id = format!("id {}", binding.program_id);
     let handle_hex = format!("0x{:x}", binding.handle);
     let handle_plain = format!("handle {:x}", binding.handle);

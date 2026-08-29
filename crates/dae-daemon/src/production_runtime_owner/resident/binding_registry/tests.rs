@@ -133,6 +133,17 @@ fn tcx_and_tc_netlink_identity_checks_are_exact() {
         "filter protocol all pref 1 bpf chain 0 handle 0x20230002 direct-action id 42 tag 0011223344556677",
         &first,
     ));
+    let mut default_priority = first.clone();
+    default_priority.priority = 0;
+    default_priority.handle = 0x2022_0002;
+    assert!(observe::tc_output_matches_binding(
+        "filter protocol all pref 49152 bpf chain 0 handle 0x20220002 direct-action id 42 tag 0011223344556677",
+        &default_priority,
+    ));
+    assert!(!observe::tc_output_matches_binding(
+        "filter protocol all pref 49151 bpf chain 0 handle 0x20220002 direct-action id 42 tag 0011223344556677",
+        &default_priority,
+    ));
     assert!(!observe::tc_output_matches_binding(
         "filter protocol all pref 1 bpf chain 0 handle 0x20230002 direct-action id 41 tag 0011223344556677",
         &first,
