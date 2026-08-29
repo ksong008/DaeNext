@@ -40,6 +40,9 @@ pub use shutdown::*;
 use dae_config::Config;
 use serde_json::{Value, json};
 
+mod process_metrics;
+pub use process_metrics::*;
+
 const INTERNAL_RUNTIME_NODE_TAG_PREFIX: &str = "__daed_node_";
 pub const DEFAULT_PRODUCT_CONTROL_SOCKET: &str = "/run/daed/control.sock";
 pub const PRODUCT_CONTROL_SOCKET_ENV: &str = "DAED_CONTROL_SOCKET";

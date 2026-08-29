@@ -1,33 +1,36 @@
-use super::*;
+use std::fs;
+use std::io;
+use std::time::Instant;
+
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct ProcessMetrics {
-    pub(super) rss_bytes: u64,
-    pub(super) anonymous_rss_bytes: u64,
-    pub(super) file_rss_bytes: u64,
-    pub(super) vm_data_bytes: u64,
-    pub(super) thread_count: u64,
-    pub(super) cpu_usage_percent: f64,
+pub struct ProcessMetrics {
+    pub rss_bytes: u64,
+    pub anonymous_rss_bytes: u64,
+    pub file_rss_bytes: u64,
+    pub vm_data_bytes: u64,
+    pub thread_count: u64,
+    pub cpu_usage_percent: f64,
 }
 
 impl ProcessMetrics {
-    pub(super) fn heap_alloc_bytes_compat(&self) -> u64 {
+    pub fn heap_alloc_bytes_compat(&self) -> u64 {
         self.anonymous_rss_bytes
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ProcCpuSample {
-    pub(super) total_ticks: u64,
-    pub(super) observed_at: Instant,
+pub struct ProcCpuSample {
+    pub total_ticks: u64,
+    pub observed_at: Instant,
 }
 
 #[derive(Debug, Default)]
-pub(super) struct ProcessCpuTracker {
+pub struct ProcessCpuTracker {
     previous: Option<ProcCpuSample>,
 }
 
 impl ProcessCpuTracker {
-    pub(super) fn sample(&mut self) -> io::Result<ProcessMetrics> {
+    pub fn sample(&mut self) -> io::Result<ProcessMetrics> {
         let mut metrics = process_status_metrics()?;
         let stat = fs::read_to_string("/proc/self/stat")?;
         let total_ticks = proc_stat_total_cpu_ticks(&stat)?;
@@ -42,7 +45,7 @@ impl ProcessCpuTracker {
     }
 }
 
-pub(super) fn process_metrics_lifetime_snapshot() -> ProcessMetrics {
+pub fn process_metrics_lifetime_snapshot() -> ProcessMetrics {
     let mut metrics = process_status_metrics().unwrap_or_default();
     let usage = fs::read_to_string("/proc/self/stat")
         .and_then(|stat| {
@@ -54,7 +57,7 @@ pub(super) fn process_metrics_lifetime_snapshot() -> ProcessMetrics {
     metrics
 }
 
-pub(super) fn process_status_metrics() -> io::Result<ProcessMetrics> {
+pub fn process_status_metrics() -> io::Result<ProcessMetrics> {
     let status = fs::read_to_string("/proc/self/status")?;
     let mut metrics = process_status_metrics_from_str(&status);
     if metrics.rss_bytes == 0 {
@@ -63,7 +66,7 @@ pub(super) fn process_status_metrics() -> io::Result<ProcessMetrics> {
     Ok(metrics)
 }
 
-pub(super) fn process_status_metrics_from_str(status: &str) -> ProcessMetrics {
+pub fn process_status_metrics_from_str(status: &str) -> ProcessMetrics {
     let mut metrics = ProcessMetrics::default();
     for line in status.lines() {
         if let Some(value) = line.strip_prefix("VmRSS:") {
@@ -84,7 +87,7 @@ pub(super) fn process_status_metrics_from_str(status: &str) -> ProcessMetrics {
     metrics
 }
 
-pub(super) fn proc_status_kib_value(value: &str) -> u64 {
+pub fn proc_status_kib_value(value: &str) -> u64 {
     value
         .split_whitespace()
         .next()
@@ -92,7 +95,7 @@ pub(super) fn proc_status_kib_value(value: &str) -> u64 {
         .unwrap_or(0)
 }
 
-pub(super) fn process_cpu_usage_percent_from_samples(
+pub fn process_cpu_usage_percent_from_samples(
     stat: &str,
     total_ticks: u64,
     observed_at: Instant,
@@ -114,7 +117,7 @@ pub(super) fn process_cpu_usage_percent_from_samples(
     Ok(round_percent(usage))
 }
 
-pub(super) fn proc_stat_total_cpu_ticks(stat: &str) -> io::Result<u64> {
+pub fn proc_stat_total_cpu_ticks(stat: &str) -> io::Result<u64> {
     let fields = proc_stat_fields_after_comm(stat)?;
     let utime = fields
         .get(11)
@@ -127,7 +130,7 @@ pub(super) fn proc_stat_total_cpu_ticks(stat: &str) -> io::Result<u64> {
     Ok(utime.saturating_add(stime))
 }
 
-pub(super) fn process_lifetime_cpu_usage_percent(stat: &str, total_ticks: u64) -> io::Result<f64> {
+pub fn process_lifetime_cpu_usage_percent(stat: &str, total_ticks: u64) -> io::Result<f64> {
     let fields = proc_stat_fields_after_comm(stat)?;
     let start_ticks = fields
         .get(19)
@@ -139,7 +142,7 @@ pub(super) fn process_lifetime_cpu_usage_percent(stat: &str, total_ticks: u64) -
     Ok(cpu_ticks_to_percent(total_ticks as f64, elapsed))
 }
 
-pub(super) fn proc_stat_fields_after_comm(stat: &str) -> io::Result<Vec<&str>> {
+pub fn proc_stat_fields_after_comm(stat: &str) -> io::Result<Vec<&str>> {
     let Some((_, tail)) = stat.rsplit_once(") ") else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -149,7 +152,7 @@ pub(super) fn proc_stat_fields_after_comm(stat: &str) -> io::Result<Vec<&str>> {
     Ok(tail.split_whitespace().collect())
 }
 
-pub(super) fn system_uptime_seconds() -> io::Result<f64> {
+pub fn system_uptime_seconds() -> io::Result<f64> {
     let uptime = fs::read_to_string("/proc/uptime")?;
     uptime
         .split_whitespace()
@@ -158,12 +161,12 @@ pub(super) fn system_uptime_seconds() -> io::Result<f64> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid uptime"))
 }
 
-pub(super) fn clock_ticks_per_second() -> u64 {
+pub fn clock_ticks_per_second() -> u64 {
     let value = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if value > 0 { value as u64 } else { 100 }
 }
 
-pub(super) fn cpu_ticks_to_percent(cpu_ticks: f64, elapsed_seconds: f64) -> f64 {
+pub fn cpu_ticks_to_percent(cpu_ticks: f64, elapsed_seconds: f64) -> f64 {
     if elapsed_seconds <= 0.0 {
         return 0.0;
     }
@@ -174,14 +177,14 @@ pub(super) fn cpu_ticks_to_percent(cpu_ticks: f64, elapsed_seconds: f64) -> f64 
     (cpu_ticks / capacity * 100.0).clamp(0.0, 100.0)
 }
 
-pub(super) fn cpu_parallelism() -> usize {
-    thread::available_parallelism()
+pub fn cpu_parallelism() -> usize {
+    std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(1)
         .max(1)
 }
 
-pub(super) fn round_percent(value: f64) -> f64 {
+pub fn round_percent(value: f64) -> f64 {
     if !value.is_finite() {
         0.0
     } else {
@@ -189,7 +192,7 @@ pub(super) fn round_percent(value: f64) -> f64 {
     }
 }
 
-pub(super) fn current_rss_bytes_from_statm() -> u64 {
+pub fn current_rss_bytes_from_statm() -> u64 {
     let Ok(statm) = fs::read_to_string("/proc/self/statm") else {
         return 0;
     };
