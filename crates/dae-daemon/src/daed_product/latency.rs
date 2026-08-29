@@ -20,7 +20,7 @@ pub(crate) use dae_product_subscription::{
 pub(crate) use dae_product_subscription::{
     LatencyProbeSeenLinks, NodeLatencyWrite, RuntimeNodeLatencyIndex,
     list_stored_node_latencies_value, node_latency_results_for_runtime_snapshots,
-    runtime_latency_snapshot_link_hash, stored_successful_node_latency_seed_snapshots,
+    stored_successful_node_latency_seed_snapshots,
 };
 #[cfg(test)]
 pub(crate) use helper::latency_probe_helper_timeout;

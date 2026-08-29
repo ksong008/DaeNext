@@ -34,6 +34,7 @@ use cleanup::{
     spawn_background_cleanup,
 };
 use dae_product_runtime::RuntimeApplyState;
+use dae_product_runtime::runtime_health_seed_snapshots;
 pub(in crate::daed_product) use instance::PreparedProductRuntime;
 #[cfg(test)]
 pub(super) use instance::resident_dataplane_admission_detail;
@@ -51,10 +52,7 @@ use recovery::ProductRuntimeInterfaceRecoverySupervisor;
 #[cfg(test)]
 pub(super) use recovery::resident_interface_recovery_request;
 use startup_recovery::ProductRuntimeStartupRecoverySupervisor;
-use summary::{
-    runtime_health_seed_snapshots, runtime_instance_dns_reload_snapshot,
-    runtime_instance_health_states,
-};
+use summary::{runtime_instance_dns_reload_snapshot, runtime_instance_health_states};
 
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
