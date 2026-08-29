@@ -5,47 +5,6 @@ use dae_product_subscription::parse_node_link;
 #[cfg(test)]
 use dae_product_subscription::{NODE_LATENCY_DB_WRITE_BATCH_SIZE, write_node_latency_results};
 
-pub(crate) fn list_stored_node_latencies_value(state: &Path) -> io::Result<Value> {
-    ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    list_stored_node_latencies_from_conn(&conn)
-}
-
-fn list_stored_node_latencies_from_conn(conn: &Connection) -> io::Result<Value> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT n.id, l.latency_ms, COALESCE(l.alive, 0), COALESCE(l.tested_at, ''), l.message
-             FROM nodes n
-             LEFT JOIN node_latency_results l ON l.node_id = n.id
-             ORDER BY n.id",
-        )
-        .map_err(sqlite_io_error)?;
-    let rows = stmt
-        .query_map([], |row| {
-            let latency_ms = row.get::<_, Option<i64>>(1)?;
-            let alive = row.get::<_, i64>(2)? != 0;
-            let message = if alive && latency_ms.is_some() {
-                None
-            } else {
-                row.get::<_, Option<String>>(4)?
-                    .filter(|value| !value.is_empty())
-            };
-            Ok(json!({
-                "id": row.get::<_, i64>(0)?,
-                "latencyMs": latency_ms,
-                "alive": alive,
-                "testedAt": row.get::<_, String>(3)?,
-                "message": message,
-            }))
-        })
-        .map_err(sqlite_io_error)?;
-    let mut items = Vec::new();
-    for row in rows {
-        items.push(row.map_err(sqlite_io_error)?);
-    }
-    Ok(json!({"items": items}))
-}
-
 pub(crate) fn enqueue_node_latency_job(
     state: &Path,
     config_dir: &Path,
@@ -332,30 +291,6 @@ fn apply_and_persist_runtime_latency_results(
     let alive = results.iter().filter(|result| result.alive).count();
     jobs.queue_and_flush_latency_results(job_id, state, results);
     (results.len(), alive)
-}
-
-pub(super) fn node_latency_results_for_runtime_snapshots(
-    nodes: &[LatencyProbeNode],
-    node_index: &RuntimeNodeLatencyIndex<'_>,
-    runtime_snapshots: &[Value],
-) -> Vec<NodeLatencyWrite> {
-    let (runtime_results, runtime_tested_ids) = node_index.results_for_snapshots(runtime_snapshots);
-    let tested_at = now_text();
-    let fallback_nodes = nodes
-        .iter()
-        .filter(|node| !runtime_tested_ids.contains(&node.id))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut results = runtime_results;
-    let probe_generation = runtime_snapshots
-        .iter()
-        .find_map(|snapshot| snapshot.get("reloadGeneration").and_then(Value::as_u64));
-    results.extend(native_probe_missing_results(
-        &fallback_nodes,
-        &tested_at,
-        probe_generation,
-    ));
-    results
 }
 
 #[cfg(test)]
