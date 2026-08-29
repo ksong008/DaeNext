@@ -1,4 +1,5 @@
-use super::*;
+use super::{display_global_config_text, normalize_global_value};
+use serde_json::Value;
 
 pub struct ProductGlobalNormalizeBenchmarkFixture {
     simple_global: &'static str,

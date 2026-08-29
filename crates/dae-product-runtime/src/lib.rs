@@ -1,5 +1,6 @@
 mod active_resources;
 mod apply_state;
+mod benchmark;
 mod cgroup_memory;
 mod coordinator;
 mod journal;
@@ -9,6 +10,9 @@ mod transition;
 
 pub use active_resources::*;
 pub use apply_state::*;
+pub use benchmark::{
+    ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
+};
 pub use cgroup_memory::*;
 pub use coordinator::*;
 pub use dae_product_core::{

@@ -60,8 +60,7 @@ use crate::production_runtime_owner::{
     start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot,
 };
 
-mod benchmark;
-pub use benchmark::{
+pub use dae_product_runtime::{
     ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
 };
 
