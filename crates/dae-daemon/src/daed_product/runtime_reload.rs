@@ -20,81 +20,9 @@ pub(in crate::daed_product) struct AppliedRuntimeReload {
     pub(in crate::daed_product) pending_process_transition: Option<Value>,
 }
 
-#[derive(Clone, Debug)]
-pub(in crate::daed_product) enum RuntimeReloadPrepareError {
-    Materialize(String),
-    BuildConfig(String),
-    NetworkWait(String),
-    Preflight(String),
-}
-
-impl RuntimeReloadPrepareError {
-    pub(in crate::daed_product) fn http_status(&self) -> u16 {
-        match self {
-            Self::Materialize(_) | Self::BuildConfig(_) => 400,
-            Self::NetworkWait(_) => 503,
-            Self::Preflight(_) => 409,
-        }
-    }
-
-    pub(in crate::daed_product) fn api_log_message(&self) -> &'static str {
-        match self {
-            Self::Materialize(_) => "[Reload] Failed to materialize runtime preview",
-            Self::BuildConfig(_) => "[Reload] Failed to build runtime config",
-            Self::NetworkWait(_) => "[Runtime] Waiting for network before runtime build failed",
-            Self::Preflight(_) => "[Reload] Candidate preflight failed",
-        }
-    }
-}
-
-impl std::fmt::Display for RuntimeReloadPrepareError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Materialize(err)
-            | Self::BuildConfig(err)
-            | Self::NetworkWait(err)
-            | Self::Preflight(err) => formatter.write_str(err),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(in crate::daed_product) enum CoordinatedRuntimeReloadError {
-    Prepare(RuntimeReloadPrepareError),
-    Apply(String),
-}
-
-impl From<String> for CoordinatedRuntimeReloadError {
-    fn from(error: String) -> Self {
-        Self::Apply(error)
-    }
-}
-
-impl CoordinatedRuntimeReloadError {
-    pub(in crate::daed_product) fn http_status(&self) -> u16 {
-        match self {
-            Self::Prepare(err) => err.http_status(),
-            Self::Apply(err) if err.contains("superseded by stop") => 409,
-            Self::Apply(_) => 500,
-        }
-    }
-
-    pub(in crate::daed_product) fn api_log_message(&self) -> &'static str {
-        match self {
-            Self::Prepare(err) => err.api_log_message(),
-            Self::Apply(_) => "[Reload] Failed to reload",
-        }
-    }
-}
-
-impl std::fmt::Display for CoordinatedRuntimeReloadError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Prepare(err) => std::fmt::Display::fmt(err, formatter),
-            Self::Apply(err) => formatter.write_str(err),
-        }
-    }
-}
+pub(in crate::daed_product) use dae_product_runtime::{
+    CoordinatedRuntimeReloadError, RuntimeReloadPrepareError,
+};
 
 #[cfg(test)]
 pub(in crate::daed_product) fn prepare_runtime_reload_config(

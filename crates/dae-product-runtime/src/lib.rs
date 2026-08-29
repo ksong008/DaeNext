@@ -12,6 +12,7 @@ mod journal;
 mod materialization;
 mod read_view;
 mod reconcile;
+mod reload_errors;
 mod rendering;
 mod resource_pools;
 mod state;
@@ -47,6 +48,7 @@ pub use reconcile::{
     ProductRuntimeReconcileAdmission, ProductRuntimeReconcileFollower, ProductRuntimeReconcileLead,
     ProductRuntimeReconcileRequest, ProductRuntimeReconciler,
 };
+pub use reload_errors::{CoordinatedRuntimeReloadError, RuntimeReloadPrepareError};
 pub use rendering::*;
 pub use resource_pools::*;
 pub use state::*;
