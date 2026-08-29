@@ -1,5 +1,8 @@
 use super::*;
-use dae_product_subscription::{get_subscription_value, list_subscriptions_value};
+use dae_product_subscription::{
+    NewSubscriptionRecord, SubscriptionRecordUpdate, get_subscription_value,
+    list_subscriptions_value,
+};
 
 pub(crate) fn list_subscriptions(state: &Path, request: &HttpRequest) -> HttpResponse {
     let expand_nodes = request
@@ -41,17 +44,21 @@ pub(crate) fn create_subscription(
         .unwrap_or(false);
     let id = match dae_product_subscription::create_subscription_record(
         state,
-        link,
-        body.get("cronExp")
-            .and_then(Value::as_str)
-            .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_EXP),
-        body.get("cronEnable")
-            .and_then(Value::as_bool)
-            .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_ENABLE),
-        DEFAULT_SUBSCRIPTION_STATUS,
-        tag,
-        use_proxy,
-        &now_text(),
+        NewSubscriptionRecord {
+            link,
+            cron_exp: body
+                .get("cronExp")
+                .and_then(Value::as_str)
+                .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_EXP),
+            cron_enable: body
+                .get("cronEnable")
+                .and_then(Value::as_bool)
+                .unwrap_or(DEFAULT_SUBSCRIPTION_CRON_ENABLE),
+            status: DEFAULT_SUBSCRIPTION_STATUS,
+            tag,
+            use_proxy,
+            updated_at: &now_text(),
+        },
     ) {
         Ok(id) => id,
         Err(dae_product_subscription::SubscriptionMutationError::TagConflict) => {
@@ -127,14 +134,16 @@ pub(crate) fn update_subscription(state: &Path, request: &HttpRequest, id: i64) 
         .map(|value| value as i64);
     let updated = match dae_product_subscription::update_subscription_record(
         state,
-        id,
-        link,
-        tag_present,
-        tag,
-        cron_exp,
-        cron_enable.map(|value| value != 0),
-        use_proxy.map(|value| value != 0),
-        &now_text(),
+        SubscriptionRecordUpdate {
+            id,
+            link,
+            tag_present,
+            tag,
+            cron_exp,
+            cron_enable: cron_enable.map(|value| value != 0),
+            use_proxy: use_proxy.map(|value| value != 0),
+            updated_at: &now_text(),
+        },
     ) {
         Ok(updated) => updated,
         Err(dae_product_subscription::SubscriptionMutationError::TagConflict) => {

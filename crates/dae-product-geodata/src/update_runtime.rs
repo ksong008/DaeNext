@@ -224,16 +224,16 @@ where
         }
         let mut started = Vec::with_capacity(self.config.worker_count);
         for index in 0..self.config.worker_count {
-            match start_product_geodata_update_worker(
-                index,
-                self.config,
-                self.context.clone(),
-                Arc::clone(&self.updates),
-                Arc::clone(&self.receiver),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.stopping),
-                Arc::clone(&self.hooks),
-            ) {
+            let worker = ProductGeodataUpdateWorkerStart {
+                config: self.config,
+                context: self.context.clone(),
+                updates: Arc::clone(&self.updates),
+                receiver: Arc::clone(&self.receiver),
+                metrics: Arc::clone(&self.metrics),
+                stopping: Arc::clone(&self.stopping),
+                hooks: Arc::clone(&self.hooks),
+            };
+            match start_product_geodata_update_worker(index, worker) {
                 Ok(worker) => started.push(worker),
                 Err(error) => {
                     self.stopping.store(true, Ordering::Release);
@@ -433,8 +433,7 @@ fn join_product_geodata_update_workers(
     }
 }
 
-fn start_product_geodata_update_worker<C, J>(
-    index: usize,
+struct ProductGeodataUpdateWorkerStart<C, J> {
     config: ProductGeodataUpdateRuntimeConfig,
     context: C,
     updates: Arc<ProductGeodataUpdateCoordinator>,
@@ -442,11 +441,25 @@ fn start_product_geodata_update_worker<C, J>(
     metrics: Arc<ProductGeodataUpdateMetrics>,
     stopping: Arc<AtomicBool>,
     hooks: Arc<dyn ProductGeodataUpdateWorkerHooks>,
+}
+
+fn start_product_geodata_update_worker<C, J>(
+    index: usize,
+    worker: ProductGeodataUpdateWorkerStart<C, J>,
 ) -> io::Result<ProductGeodataUpdateWorkerHandle>
 where
     C: GeodataUpdateRuntimeContext + Clone + Send + Sync + 'static,
     J: ProductGeodataUpdateJob + 'static,
 {
+    let ProductGeodataUpdateWorkerStart {
+        config,
+        context,
+        updates,
+        receiver,
+        metrics,
+        stopping,
+        hooks,
+    } = worker;
     let (completed_sender, completed) = std::sync::mpsc::sync_channel(1);
     let join = thread::Builder::new()
         .name(format!("daed-geodata-update-{index}"))
@@ -552,8 +565,8 @@ fn run_product_geodata_update_job<C, J>(
             update_geodata_with_lease_using(
                 context,
                 updates,
-                &context.state_path(),
-                &context.directory(),
+                context.state_path(),
+                context.directory(),
                 kind,
                 lease,
                 preparation_mode,
