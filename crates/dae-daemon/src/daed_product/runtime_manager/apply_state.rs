@@ -11,7 +11,7 @@ pub(in crate::daed_product) struct ProductRuntimeApplySnapshot {
 
 impl ProductRuntimeManager {
     pub(in crate::daed_product) fn begin_apply_generation(&self) -> String {
-        if let Ok(mut inner) = self.inner.lock() {
+        if let Ok(mut inner) = self.inner().lock() {
             return inner.apply.begin();
         }
         RuntimeApplyState::default().begin()
@@ -22,7 +22,7 @@ impl ProductRuntimeManager {
         generation: &str,
         phase: &str,
     ) {
-        if let Ok(mut inner) = self.inner.lock() {
+        if let Ok(mut inner) = self.inner().lock() {
             inner.apply.set_phase(generation, phase);
         }
     }
@@ -34,7 +34,7 @@ impl ProductRuntimeManager {
         failure: Option<(&str, &str)>,
         reconciliation_required: bool,
     ) {
-        if let Ok(mut inner) = self.inner.lock()
+        if let Ok(mut inner) = self.inner().lock()
             && inner.apply.finish(
                 generation,
                 phase,
@@ -51,7 +51,7 @@ impl ProductRuntimeManager {
     }
 
     pub(in crate::daed_product) fn commit_runtime_generation_publication(&self) {
-        let Ok(inner) = self.inner.lock() else {
+        let Ok(inner) = self.inner().lock() else {
             return;
         };
         if let Some(ProductRuntimeInstance::Resident(runtime)) = inner.runtime.as_ref() {
@@ -64,7 +64,7 @@ impl ProductRuntimeManager {
         prepared: &PreparedProductRuntime,
     ) -> Result<ProductRuntimeApplySnapshot, String> {
         let inner = self
-            .inner
+            .inner()
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
         let transition = match (inner.runtime.as_ref(), inner.config.as_deref()) {
@@ -106,12 +106,12 @@ impl ProductRuntimeManager {
     ) -> Result<(), String> {
         if let Some(generation) = snapshot.resident_generation.as_ref() {
             let _lifecycle = self
-                .lifecycle
+                .lifecycle()
                 .lock()
                 .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
             let (same_physical_runtime, restored) = {
                 let mut inner = self
-                    .inner
+                    .inner()
                     .lock()
                     .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
                 match inner.runtime.as_mut() {
@@ -149,8 +149,8 @@ impl ProductRuntimeManager {
                 .ok_or_else(|| "running runtime snapshot has no config".to_owned())?;
             let prepared = prepare_product_runtime_candidate(config)?;
             reload_prepared_product_runtime_with_config_content(
-                &self.lifecycle,
-                &self.inner,
+                self.lifecycle(),
+                self.inner(),
                 prepared,
                 snapshot.config_content.clone(),
                 "runtime-apply-rollback",

@@ -16,14 +16,14 @@ impl ProductRuntimeManager {
         &self,
     ) -> Result<PreparedProductRuntimeStop<'_>, String> {
         let started = Instant::now();
-        self.reconciler.cancel_preparation_for_stop();
-        let coordinator = self.reconciler.begin_stop()?;
+        self.reconciler().cancel_preparation_for_stop();
+        let coordinator = self.reconciler().begin_stop()?;
         let lifecycle = self
-            .lifecycle
+            .lifecycle()
             .lock()
             .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
         let inner = self
-            .inner
+            .inner()
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
         Ok(PreparedProductRuntimeStop {
@@ -54,11 +54,11 @@ impl ProductRuntimeManager {
     ) -> Result<Value, String> {
         let started = Instant::now();
         let lifecycle = self
-            .lifecycle
+            .lifecycle()
             .lock()
             .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
         let mut inner = self
-            .inner
+            .inner()
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
         if inner.runtime.is_some() {
@@ -173,7 +173,7 @@ impl<'a> PreparedProductRuntimeStop<'a> {
     ) {
         let (stopped_runtime, was_running, cleanup_epoch) =
             reset_runtime_state(&mut self.inner, cleanup_mode);
-        let manager_inner = Arc::clone(&self.manager.inner);
+        let manager_inner = Arc::clone(self.manager.inner());
         let started = self.started;
         let coordinator = self.coordinator;
         drop(self.inner);
