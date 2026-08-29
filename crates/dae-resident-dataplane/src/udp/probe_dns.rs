@@ -8,10 +8,6 @@ use dae_resident_transport::encode_dns_qname;
 const RESIDENT_PROXY_UDP_BRIDGE_PACKET_CAPACITY: usize = 64 * 1024;
 
 mod shutdown;
-#[cfg(test)]
-mod test_observation;
-#[cfg(test)]
-pub use self::test_observation::ResidentProxyUdpBridgeTestObservation;
 
 pub struct ResidentProxyUdpBridge {
     local_addr: SocketAddr,
@@ -116,49 +112,8 @@ pub async fn open_resident_proxy_udp_bridge_async(
         juicity_owner_registry,
     )
     .with_anytls(anytls_owner_registry);
-    #[cfg(test)]
-    {
-        open_resident_proxy_udp_bridge_inner(
-            binding,
-            original_dst,
-            owner_registries,
-            owner_deadline,
-            None,
-        )
+    open_resident_proxy_udp_bridge_inner(binding, original_dst, owner_registries, owner_deadline)
         .await
-    }
-    #[cfg(not(test))]
-    {
-        open_resident_proxy_udp_bridge_inner(
-            binding,
-            original_dst,
-            owner_registries,
-            owner_deadline,
-        )
-        .await
-    }
-}
-
-#[cfg(test)]
-pub async fn open_resident_proxy_udp_bridge_with_test_observation_async(
-    proxy: Arc<ResidentProxyPlan>,
-    original_dst: SocketAddr,
-    observation: Arc<ResidentProxyUdpBridgeTestObservation>,
-) -> Result<ResidentProxyUdpBridge, String> {
-    let generation = proxy.execution_plan().runtime_generation();
-    let binding = if generation.get() == 0 {
-        ResidentProxyBinding::control_plane(proxy)
-    } else {
-        ResidentProxyBinding::resident(proxy, generation)
-    }?;
-    open_resident_proxy_udp_bridge_inner(
-        binding,
-        original_dst,
-        ResidentTransportOwnerRegistries::default(),
-        None,
-        Some(observation),
-    )
-    .await
 }
 
 async fn open_resident_proxy_udp_bridge_inner(
@@ -166,7 +121,6 @@ async fn open_resident_proxy_udp_bridge_inner(
     original_dst: SocketAddr,
     owner_registries: ResidentTransportOwnerRegistries,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
-    #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) -> Result<ResidentProxyUdpBridge, String> {
     let socket = tokio::net::UdpSocket::bind(resident_proxy_udp_bridge_bind_addr())
         .await
@@ -181,35 +135,7 @@ async fn open_resident_proxy_udp_bridge_inner(
     let tuic_owner_registry = owner_registries.tuic();
     let juicity_owner_registry = owner_registries.juicity();
     let anytls_owner_registry = owner_registries.anytls();
-    #[cfg(test)]
-    let socket_guard = test_observation
-        .as_ref()
-        .map(ResidentProxyUdpBridgeTestObservation::socket_guard);
-    #[cfg(test)]
-    let task_guard = test_observation
-        .as_ref()
-        .map(ResidentProxyUdpBridgeTestObservation::task_guard);
     let task = tokio::spawn(inherit_quic_endpoint_observation(async move {
-        #[cfg(test)]
-        let _socket_guard = socket_guard;
-        #[cfg(test)]
-        let _task_guard = task_guard;
-        #[cfg(test)]
-        resident_proxy_udp_bridge_loop(
-            binding,
-            original_dst,
-            socket,
-            shutdown_rx,
-            task_error,
-            hysteria2_owner_registry,
-            tuic_owner_registry,
-            juicity_owner_registry,
-            anytls_owner_registry,
-            owner_deadline,
-            test_observation,
-        )
-        .await;
-        #[cfg(not(test))]
         resident_proxy_udp_bridge_loop(
             binding,
             original_dst,
@@ -248,7 +174,6 @@ async fn resident_proxy_udp_bridge_loop(
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
-    #[cfg(test)] test_observation: Option<Arc<ResidentProxyUdpBridgeTestObservation>>,
 ) {
     let mut executor = UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
         binding.clone(),
@@ -278,12 +203,6 @@ async fn resident_proxy_udp_bridge_loop(
                 };
                 last_peer = Some(peer);
                 let payload = buf[..read].to_vec();
-                #[cfg(test)]
-                let execution = test_observation::observe_execution(
-                    test_observation.as_ref(),
-                    executor.execute_proxy_packet(&binding, original_dst, &payload),
-                ).await;
-                #[cfg(not(test))]
                 let execution = executor
                     .execute_proxy_packet(&binding, original_dst, &payload)
                     .await;
@@ -488,15 +407,6 @@ async fn wait_for_udp_probe_response(
         .wait_response_with_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, "receive UDP probe response")
         .await
         .map(|(_, response)| response)
-}
-
-#[cfg(test)]
-pub async fn probe_resident_proxy_dns_udp_with_forwarder_async(
-    forwarder: Arc<dyn dae_resident_dns::ResidentDnsProxyUdpForwarder>,
-    lookup_host: &str,
-) -> Result<(), String> {
-    dae_resident_dns::probe_resident_proxy_dns_udp_with_forwarder_async(forwarder, lookup_host)
-        .await
 }
 
 fn take_udp_response_for_fixed_target(

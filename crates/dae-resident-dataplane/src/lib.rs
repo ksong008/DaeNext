@@ -81,11 +81,7 @@ pub(crate) use self::tcp::resident_dns_proxy_tcp_transport;
 pub(crate) use self::transport::dns_tcp_wire::read_dns_tcp_payload_async;
 pub(crate) use self::transport::dns_tcp_wire::{DnsTcpFrameReader, write_dns_tcp_payload_async};
 #[cfg(test)]
-pub(crate) use self::transport::quic_endpoint::open_marked_quic_endpoint_for_remote;
-#[cfg(test)]
 pub(crate) use self::transport::quic_endpoint::quic_endpoint_metrics_snapshot;
-#[cfg(test)]
-pub(crate) use self::udp::probe_resident_proxy_dns_udp_with_forwarder_async;
 pub(crate) use self::udp::resident_dns_proxy_udp_transport;
 pub(crate) use dae_resident_core::*;
 pub(crate) use dae_resident_dns::ResidentDnsUdpRuntimeConfig;
