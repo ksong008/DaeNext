@@ -16,7 +16,7 @@ use self::validation::validate_imported_materialization;
 pub(super) fn commit_dae_file_import(
     state: &Path,
     name_prefix: &str,
-    user: &UserRecord,
+    user: &ProductUserRecord,
     staged: StagedDaeFile,
 ) -> io::Result<DaeFileImportOutcome> {
     ensure_state_schema(state)?;

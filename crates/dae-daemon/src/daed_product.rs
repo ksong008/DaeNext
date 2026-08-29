@@ -13,7 +13,9 @@ use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 use dae_config::Config;
+#[cfg(test)]
 use dae_config::parser::parse_config;
+#[cfg(test)]
 use dae_config::schema::build_config;
 pub use dae_product_core::*;
 use dae_product_core::{product_iso8601_utc as iso8601_utc, product_now_text as now_text};
@@ -91,9 +93,6 @@ const DEFAULT_SUBSCRIPTION_CRON_EXP: &str = "10 */6 * * *";
 const DEFAULT_SUBSCRIPTION_CRON_ENABLE: bool = true;
 const DEFAULT_SUBSCRIPTION_STATUS: &str = "imported";
 const DEFAULT_IMPORTED_CONFIG_NAME_PREFIX: &str = "imported";
-const IMPORTED_CONFIG_NAME_SUFFIX: &str = "global";
-const IMPORTED_DNS_NAME_SUFFIX: &str = "dns";
-const IMPORTED_ROUTING_NAME_SUFFIX: &str = "routing";
 const PRODUCT_HTTP_WORKER_RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const PRODUCT_HTTP_SSE_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const PRODUCT_MALLOC_ARENA_MAX_ENV: &str = "MALLOC_ARENA_MAX";
@@ -425,8 +424,6 @@ mod geodata;
 use self::geodata::*;
 mod bundle;
 use self::bundle::*;
-mod dae_file_import;
-use self::dae_file_import::*;
 fn product_package_context() -> ProductPackageContext {
     ProductPackageContext::new(
         PRIMARY_STATE_STORE,
