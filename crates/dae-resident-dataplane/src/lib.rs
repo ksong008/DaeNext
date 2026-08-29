@@ -113,6 +113,10 @@ pub(crate) use dae_resident_plan::{
     redacted_link_source,
 };
 pub(crate) use dae_resident_runtime::ResidentRuntimeCoordinator;
+pub(crate) use dae_resident_runtime::{
+    ResidentAsyncRuntimeShutdown, ResidentAsyncRuntimeTask, ResidentRuntimeExecutor,
+    ResidentRuntimeExecutorConfig, ResidentRuntimeTaskRole, registered_resident_async_runtime_task,
+};
 pub(crate) use dae_resident_transport::resolve_host_addrs_with_configured_fallback_dns_ttl;
 pub(crate) use dae_resident_transport::{
     ProxyDnsPendingRequestBytes, ProxyDnsQueuedRequestBytes, ProxyDnsRequestContext,
@@ -147,9 +151,6 @@ use self::generation_drain_policy::*;
 mod read_view;
 pub(crate) use self::read_view::ResidentDataplaneReadHandle;
 use self::read_view::ResidentRuntimeOwnerReadHandle;
-#[path = "runtime/executor.rs"]
-mod executor;
-use self::executor::*;
 #[path = "runtime/group_selector_summary.rs"]
 mod group_selector_summary;
 pub(crate) use self::group_selector_summary::*;
