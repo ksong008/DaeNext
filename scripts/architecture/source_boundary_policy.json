@@ -26,7 +26,7 @@
       "tests": 0
     },
     "dae-product-runtime": {
-      "production": 6000,
+      "production": 6500,
       "tests": 300
     },
     "dae-product-subscription": {
