@@ -15,11 +15,6 @@ use std::time::{Duration, Instant};
 use dae_config::Config;
 use dae_config::parser::parse_config;
 use dae_config::schema::build_config;
-use dae_datapath::{
-    ANYFROM_TIMEOUT_MS, DEFAULT_NAT_TIMEOUT_MS, DEFAULT_UDP_ENDPOINT_POOL_MAX_ENTRIES,
-    DNS_NAT_TIMEOUT_MS, MAX_RETRY, PACKET_SNIFFER_POOL_MAX_ENTRIES, PACKET_SNIFFER_TTL_MS,
-    UDP_TASK_POOL_MAX_QUEUES, UDP_TASK_QUEUE_LENGTH, udp_endpoint_pool_trim_target,
-};
 pub use dae_product_core::*;
 use dae_product_core::{product_iso8601_utc as iso8601_utc, product_now_text as now_text};
 #[cfg(test)]

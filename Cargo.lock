@@ -905,6 +905,7 @@ name = "dae-product-runtime"
 version = "3.1.0"
 dependencies = [
  "dae-config",
+ "dae-datapath",
  "dae-product-core",
  "dae-product-persistence",
  "fastrand",

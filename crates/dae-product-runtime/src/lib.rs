@@ -5,6 +5,7 @@ mod cgroup_memory;
 mod coordinator;
 mod journal;
 mod rendering;
+mod resource_pools;
 mod traffic;
 mod transition;
 
@@ -24,6 +25,7 @@ pub use dae_product_persistence::{
 };
 pub use journal::*;
 pub use rendering::*;
+pub use resource_pools::*;
 pub use traffic::*;
 pub use transition::*;
 mod global_config;
