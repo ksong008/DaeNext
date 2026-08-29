@@ -38,6 +38,7 @@ mod groups;
 pub use groups::*;
 mod group_filter_preview;
 pub use group_filter_preview::*;
+pub mod auth_crypto;
 mod nodes;
 pub use nodes::*;
 mod section_parsers;
