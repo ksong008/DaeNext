@@ -18,6 +18,8 @@ WORKSPACE_CRATE_PATH = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*::")
 WORKSPACE_CRATE_IMPORT = re.compile(
     r"\b(?:extern\s+crate|(?:pub\s+)?use)\s+([A-Za-z_][A-Za-z0-9_]*)\b"
 )
+PATH_ATTRIBUTE = re.compile(r"#\[\s*path\s*=\s*\"([^\"]+)\"\s*\]")
+CFG_ATTRIBUTE = re.compile(r"#\[\s*cfg\s*\(([^\n]*)\)\]")
 BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 LINE_COMMENT = re.compile(r"//[^\n]*")
 
@@ -244,6 +246,47 @@ def remove_comments(source: str) -> str:
     return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", source))
 
 
+def path_attribute_is_test_only(attributes: list[str]) -> bool:
+    if not attributes:
+        return False
+    cfg = " ".join(attributes)
+    return bool(re.search(r"\btest\b", cfg)) and not bool(
+        re.search(r"\bnot\s*\(\s*test\s*\)", cfg)
+    ) and not bool(re.search(r"\bany\s*\([^\n]*\btest\b", cfg))
+
+
+def validate_source_path_attributes(
+    package: dict[str, Any], path: pathlib.Path, source: str
+) -> list[str]:
+    package_root = pathlib.Path(package["manifest_path"]).parent.resolve()
+    errors: list[str] = []
+    pending_attributes: list[str] = []
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        cfg_match = CFG_ATTRIBUTE.fullmatch(stripped)
+        path_match = PATH_ATTRIBUTE.fullmatch(stripped)
+        if cfg_match:
+            pending_attributes.append(cfg_match.group(1))
+            continue
+        if path_match:
+            target = (path.parent / path_match.group(1)).resolve()
+            try:
+                target.relative_to(package_root)
+            except ValueError:
+                if not path_attribute_is_test_only(pending_attributes):
+                    errors.append(
+                        "production source embeds an external crate with #[path]: "
+                        f"{package['name']} {path.relative_to(package_root)}:{line_number} "
+                        f"uses {path_match.group(1)!r}; external paths require a test-only cfg"
+                    )
+            pending_attributes.clear()
+            continue
+        if stripped.startswith("#"):
+            continue
+        pending_attributes.clear()
+    return errors
+
+
 def validate_source_imports(
     packages: dict[str, dict[str, Any]],
     policy: dict[str, Any],
@@ -258,6 +301,7 @@ def validate_source_imports(
         entry = package_policy.get(package_name, {})
         for path, source_kind in source_files(package):
             source = remove_comments(path.read_text(encoding="utf-8"))
+            errors.extend(validate_source_path_attributes(package, path, source))
             for line_number, line in enumerate(source.splitlines(), start=1):
                 module_names = set(WORKSPACE_CRATE_PATH.findall(line))
                 module_names.update(WORKSPACE_CRATE_IMPORT.findall(line))

@@ -10,7 +10,8 @@ The checker validates:
 - workspace membership and package/layer coverage;
 - exact Cargo metadata edges for all three dependency kinds;
 - cycles in normal/build dependency edges;
-- workspace crate imports in production and build sources.
+- workspace crate imports in production and build sources;
+- external `#[path]` source embedding, except for explicit test-only compatibility paths.
 
 Run it locally with:
 
