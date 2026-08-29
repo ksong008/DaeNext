@@ -69,11 +69,11 @@ fn bundle_import_validation_failure_does_not_mutate_database_or_storage() {
     assert_eq!(
         conn.query_row(
             "SELECT json_storage FROM users WHERE id = ?1",
-            params![user.id],
+            params![user.id()],
             |row| { row.get::<_, String>(0) }
         )
         .unwrap(),
-        user.json_storage
+        user.json_storage()
     );
 }
 
@@ -116,11 +116,11 @@ fn bundle_import_user_storage_failure_rolls_back_resource_replacement() {
     assert_eq!(
         conn.query_row(
             "SELECT json_storage FROM users WHERE id = ?1",
-            params![user.id],
+            params![user.id()],
             |row| { row.get::<_, String>(0) }
         )
         .unwrap(),
-        user.json_storage
+        user.json_storage()
     );
 }
 
@@ -191,7 +191,7 @@ fn bundle_null_defaults_clear_previous_user_defaults() {
         .connection()
         .query_row(
             "SELECT json_storage FROM users WHERE id = ?1",
-            params![user.id],
+            params![user.id()],
             |row| row.get(0),
         )
         .unwrap();
@@ -238,7 +238,7 @@ fn bundle_group_sort_state_round_trips_as_structured_data() {
         .connection()
         .query_row(
             "SELECT json_storage FROM users WHERE id = ?1",
-            params![target_user.id],
+            params![target_user.id()],
             |row| row.get(0),
         )
         .unwrap();
@@ -273,7 +273,7 @@ fn legacy_bundle_without_group_sort_state_preserves_existing_server_order() {
         .connection()
         .query_row(
             "SELECT json_storage FROM users WHERE id = ?1",
-            params![target_user.id],
+            params![target_user.id()],
             |row| row.get(0),
         )
         .unwrap();

@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn prepare_user_storage(body: &Value, user: &UserRecord) -> io::Result<String> {
     let mut storage =
-        serde_json::from_str::<Value>(&user.json_storage).unwrap_or_else(|_| json!({}));
+        serde_json::from_str::<Value>(user.json_storage()).unwrap_or_else(|_| json!({}));
     if !storage.is_object() {
         storage = json!({});
     }

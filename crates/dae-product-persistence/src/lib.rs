@@ -8,13 +8,87 @@ use std::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Debug)]
 pub struct ProductUserRecord {
-    pub id: i64,
-    pub username: String,
-    pub password_hash: String,
-    pub jwt_secret: String,
-    pub json_storage: String,
-    pub avatar: Option<String>,
-    pub name: Option<String>,
+    id: i64,
+    username: String,
+    password_hash: String,
+    jwt_secret: String,
+    json_storage: String,
+    avatar: Option<String>,
+    name: Option<String>,
+}
+
+impl ProductUserRecord {
+    pub fn new(
+        id: i64,
+        username: String,
+        password_hash: String,
+        jwt_secret: String,
+        json_storage: String,
+        avatar: Option<String>,
+        name: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            username,
+            password_hash,
+            jwt_secret,
+            json_storage,
+            avatar,
+            name,
+        }
+    }
+
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    pub fn password_hash(&self) -> &str {
+        &self.password_hash
+    }
+
+    pub fn jwt_secret(&self) -> &str {
+        &self.jwt_secret
+    }
+
+    pub fn json_storage(&self) -> &str {
+        &self.json_storage
+    }
+
+    pub fn json_storage_mut(&mut self) -> &mut String {
+        &mut self.json_storage
+    }
+
+    pub fn avatar(&self) -> Option<&str> {
+        self.avatar.as_deref()
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn set_username(&mut self, username: String) {
+        self.username = username;
+    }
+
+    pub fn set_password_hash(&mut self, password_hash: String) {
+        self.password_hash = password_hash;
+    }
+
+    pub fn set_jwt_secret(&mut self, jwt_secret: String) {
+        self.jwt_secret = jwt_secret;
+    }
+
+    pub fn set_avatar(&mut self, avatar: Option<String>) {
+        self.avatar = avatar;
+    }
+
+    pub fn set_name(&mut self, name: Option<String>) {
+        self.name = name;
+    }
 }
 
 mod desired_state;

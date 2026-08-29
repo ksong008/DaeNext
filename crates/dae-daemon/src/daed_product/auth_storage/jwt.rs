@@ -10,14 +10,14 @@ pub(crate) fn signed_token(user: &UserRecord) -> io::Result<String> {
     let header = json!({"alg": "HS256", "typ": "JWT"}).to_string();
     let payload = json!({
         "role": "admin",
-        "sub": user.username,
+        "sub": user.username(),
         "exp": exp,
     })
     .to_string();
     let encoded_header = URL_SAFE_NO_PAD.encode(header.as_bytes());
     let encoded_payload = URL_SAFE_NO_PAD.encode(payload.as_bytes());
     let signing_input = format!("{encoded_header}.{encoded_payload}");
-    let signature = hmac_sha256(user.jwt_secret.as_bytes(), signing_input.as_bytes());
+    let signature = hmac_sha256(user.jwt_secret().as_bytes(), signing_input.as_bytes());
     Ok(format!(
         "{signing_input}.{}",
         URL_SAFE_NO_PAD.encode(signature)
@@ -70,7 +70,7 @@ pub(crate) fn verify_token(state: &Path, token: &str) -> io::Result<Option<UserR
         return Ok(None);
     };
     let signing_input = format!("{header}.{payload}");
-    let expected = hmac_sha256(user.jwt_secret.as_bytes(), signing_input.as_bytes());
+    let expected = hmac_sha256(user.jwt_secret().as_bytes(), signing_input.as_bytes());
     let Ok(actual) = URL_SAFE_NO_PAD.decode(signature.as_bytes()) else {
         return Ok(None);
     };

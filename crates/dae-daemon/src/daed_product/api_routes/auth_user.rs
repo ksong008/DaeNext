@@ -105,21 +105,27 @@ pub(in crate::daed_product) fn apply_user_profile_update(
         .get("username")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .unwrap_or_else(|| user.username.clone());
-    let name = patched_optional_user_field(body, "name", "clearName", user.name.clone());
-    let avatar = patched_optional_user_field(body, "avatar", "clearAvatar", user.avatar.clone());
+        .unwrap_or_else(|| user.username().to_owned());
+    let name =
+        patched_optional_user_field(body, "name", "clearName", user.name().map(str::to_owned));
+    let avatar = patched_optional_user_field(
+        body,
+        "avatar",
+        "clearAvatar",
+        user.avatar().map(str::to_owned),
+    );
     let updated = conn
         .execute(
             "UPDATE users SET username = ?1, name = ?2, avatar = ?3 WHERE id = ?4",
-            params![username, name, avatar, user.id],
+            params![username, name, avatar, user.id()],
         )
         .map_err(sqlite_io_error)?;
     if updated == 0 {
         return Err(io::Error::new(io::ErrorKind::NotFound, "user not found"));
     }
-    user.username = username;
-    user.name = name;
-    user.avatar = avatar;
+    user.set_username(username);
+    user.set_name(name);
+    user.set_avatar(avatar);
     Ok(())
 }
 
@@ -166,7 +172,7 @@ pub(super) fn api_update_password(
         }
     };
     let state = app.state.clone();
-    let username = user.username.clone();
+    let username = user.username().to_owned();
     let current = current.to_owned();
     let new_password = new_password.to_owned();
     execute_auth_request(app, context, &username, move || {
@@ -180,7 +186,7 @@ fn update_password_auth_job(
     current: &str,
     new_password: &str,
 ) -> ProductAuthJobOutcome {
-    if !verify_password_hash(&user.password_hash, user.jwt_secret.as_bytes(), current) {
+    if !verify_password_hash(user.password_hash(), user.jwt_secret().as_bytes(), current) {
         return ProductAuthJobOutcome::credential_failure(HttpResponse::json(
             400,
             json!({"error": "incorrect password"}),
@@ -210,14 +216,14 @@ fn update_password_auth_job(
     };
     if let Err(err) = conn.execute(
         "UPDATE users SET password_hash = ?1, jwt_secret = ?2 WHERE id = ?3",
-        params![password_hash, secret, user.id],
+        params![password_hash, secret, user.id()],
     ) {
         return ProductAuthJobOutcome::neutral(HttpResponse::json(
             400,
             json!({"error": err.to_string()}),
         ));
     }
-    user.jwt_secret = secret;
+    user.set_jwt_secret(secret);
     match signed_token(&user) {
         Ok(token) => {
             ProductAuthJobOutcome::success(HttpResponse::json(200, json!({"token": token})))

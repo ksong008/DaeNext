@@ -1353,15 +1353,15 @@ pub(crate) fn running_bundle_import_marks_existing_selected_resources_modified()
     assert!(!runtime_modified(&conn, true).unwrap());
     drop(conn);
 
-    let user = UserRecord {
-        id: 1,
-        username: "tester".to_owned(),
-        password_hash: String::new(),
-        jwt_secret: String::new(),
-        json_storage: "{}".to_owned(),
-        avatar: None,
-        name: None,
-    };
+    let user = UserRecord::new(
+        1,
+        "tester".to_owned(),
+        String::new(),
+        String::new(),
+        "{}".to_owned(),
+        None,
+        None,
+    );
     let bundle = json!({
         "schemaVersion": 1,
         "mode": "rule",

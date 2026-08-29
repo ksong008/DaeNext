@@ -10,7 +10,7 @@ pub(super) fn update_imported_defaults(
     group_id: Option<i64>,
 ) -> io::Result<()> {
     let mut storage =
-        serde_json::from_str::<Value>(&user.json_storage).unwrap_or_else(|_| json!({}));
+        serde_json::from_str::<Value>(user.json_storage()).unwrap_or_else(|_| json!({}));
     if !storage.is_object() {
         storage = json!({});
     }
@@ -33,7 +33,7 @@ pub(super) fn update_imported_defaults(
     let updated = tx
         .execute(
             "UPDATE users SET json_storage = ?1 WHERE id = ?2",
-            params![storage.to_string(), user.id],
+            params![storage.to_string(), user.id()],
         )
         .map_err(sqlite_io_error)?;
     if updated != 1 {
