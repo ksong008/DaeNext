@@ -2,7 +2,7 @@
   "version": 1,
   "packages": {
     "dae-product-control": {
-      "production": 3200,
+      "production": 4000,
       "tests": 700
     },
     "dae-product-core": {
@@ -26,11 +26,11 @@
       "tests": 0
     },
     "dae-product-runtime": {
-      "production": 5600,
+      "production": 6000,
       "tests": 300
     },
     "dae-product-subscription": {
-      "production": 7000,
+      "production": 7200,
       "tests": 0
     },
     "dae-daemon": {
