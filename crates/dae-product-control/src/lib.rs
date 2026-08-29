@@ -50,6 +50,8 @@ mod cancellation;
 pub use cancellation::*;
 mod config;
 pub use config::*;
+mod file_import;
+pub use file_import::*;
 mod metrics;
 use metrics::*;
 mod local_control_client;

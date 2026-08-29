@@ -1,4 +1,32 @@
-use super::*;
+use std::collections::{BTreeMap, HashSet};
+use std::io;
+use std::path::Path;
+
+use dae_config::Config;
+use dae_config::parser::parse_config;
+use dae_config::schema::build_config;
+use dae_product_core::{
+    DEFAULT_PRODUCT_GROUP_POLICY, DEFAULT_PRODUCT_MODE, GROUP_POLICY_FIXED,
+    SUPPORTED_GROUP_POLICIES, SectionKind, product_now_text as now_text,
+};
+use dae_product_persistence::{
+    ProductUserRecord, ensure_state_schema, open_state_connection, set_value_at_path,
+    sqlite_io_error,
+};
+use dae_product_runtime::{build_runtime_config_from_content, render_generated_config};
+use dae_product_subscription::{
+    ParsedNodeLink, StableNodeKey, get_group_value_with_conn, parse_node_link,
+    subscription_node_row_value as node_row_value,
+};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde_json::{Value, json};
+
+type UserRecord = ProductUserRecord;
+
+const DEFAULT_IMPORTED_CONFIG_NAME_PREFIX: &str = "imported";
+const IMPORTED_CONFIG_NAME_SUFFIX: &str = "global";
+const IMPORTED_DNS_NAME_SUFFIX: &str = "dns";
+const IMPORTED_ROUTING_NAME_SUFFIX: &str = "routing";
 
 mod commit;
 mod parse;
@@ -9,32 +37,32 @@ use self::parse::parse_dae_file;
 use self::stage::stage_dae_file;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct DaeFileImportOutcome {
-    pub(super) config_id: i64,
-    pub(super) dns_id: i64,
-    pub(super) routing_id: i64,
-    pub(super) group_ids: Vec<i64>,
-    pub(super) node_ids: Vec<i64>,
-    pub(super) warnings: Vec<String>,
+pub struct DaeFileImportOutcome {
+    pub config_id: i64,
+    pub dns_id: i64,
+    pub routing_id: i64,
+    pub group_ids: Vec<i64>,
+    pub node_ids: Vec<i64>,
+    pub warnings: Vec<String>,
 }
 
-pub(super) struct DaeFilePreview {
-    pub(super) bundle: Value,
-    pub(super) warnings: Vec<String>,
+pub struct DaeFilePreview {
+    pub bundle: Value,
+    pub warnings: Vec<String>,
 }
 
-pub(super) fn import_dae_file(
+pub fn import_dae_file(
     state: &Path,
     content: &str,
     name_prefix: &str,
-    user: &UserRecord,
+    user: &ProductUserRecord,
 ) -> io::Result<DaeFileImportOutcome> {
     let parsed = parse_dae_file(content)?;
     let staged = stage_dae_file(parsed)?;
     commit_dae_file_import(state, name_prefix, user, staged)
 }
 
-pub(super) fn preview_dae_file(content: &str, name_prefix: &str) -> io::Result<DaeFilePreview> {
+pub fn preview_dae_file(content: &str, name_prefix: &str) -> io::Result<DaeFilePreview> {
     let parsed = parse_dae_file(content)?;
     let staged = stage_dae_file(parsed)?;
     let prefix = name_prefix.trim();
