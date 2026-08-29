@@ -3,10 +3,10 @@ use super::status::{
 };
 use super::*;
 use super::{GEOIP_FILE, GEOSITE_FILE, GeodataSourceMode};
-use dae_product_geodata::{
+use dae_product_control::geodata::{
     GeodataHttpFileResult, read_geodata_http_response, read_geodata_http_response_to_file,
 };
-use dae_product_geodata::{
+use dae_product_control::geodata::{
     GeodataSourceUrlUpdate, geodata_source, geodata_source_status, reset_geodata_source_url,
     set_geodata_source_url, set_geodata_source_use_proxy, update_geodata_source_settings,
 };

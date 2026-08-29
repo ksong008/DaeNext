@@ -4,7 +4,7 @@ use super::super::transaction::{
     recover_geodata_transaction, write_geodata_journal,
 };
 use super::*;
-use dae_product_geodata::{sha256_file, summarize_geodata_file};
+use dae_product_control::geodata::{sha256_file, summarize_geodata_file};
 
 mod faults;
 mod recovery;

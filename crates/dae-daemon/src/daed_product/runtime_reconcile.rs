@@ -1,16 +1,17 @@
 use super::*;
 
-pub(in crate::daed_product) type RuntimeReconciler = dae_product_runtime::ProductRuntimeReconciler<
-    AppliedRuntimeReload,
-    CoordinatedRuntimeReloadError,
->;
+pub(in crate::daed_product) type RuntimeReconciler =
+    dae_product_control::runtime::ProductRuntimeReconciler<
+        AppliedRuntimeReload,
+        CoordinatedRuntimeReloadError,
+    >;
 pub(in crate::daed_product) type RuntimeReconcileRequest =
-    dae_product_runtime::ProductRuntimeReconcileRequest<
+    dae_product_control::runtime::ProductRuntimeReconcileRequest<
         AppliedRuntimeReload,
         CoordinatedRuntimeReloadError,
     >;
 pub(in crate::daed_product) type RuntimeReconcileAdmission =
-    dae_product_runtime::ProductRuntimeReconcileAdmission<
+    dae_product_control::runtime::ProductRuntimeReconcileAdmission<
         AppliedRuntimeReload,
         CoordinatedRuntimeReloadError,
     >;

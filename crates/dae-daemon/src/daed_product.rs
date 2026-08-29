@@ -17,10 +17,10 @@ use dae_config::Config;
 use dae_config::parser::parse_config;
 #[cfg(test)]
 use dae_config::schema::build_config;
-pub use dae_product_core::*;
-use dae_product_core::{product_iso8601_utc as iso8601_utc, product_now_text as now_text};
+pub use dae_product_control::core::*;
+use dae_product_control::core::{product_iso8601_utc as iso8601_utc, product_now_text as now_text};
 #[cfg(test)]
-use dae_product_subscription::{count_nodes_for_subscription, list_all_nodes_value};
+use dae_product_control::subscription::{count_nodes_for_subscription, list_all_nodes_value};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Map, Value, json};
 
@@ -56,7 +56,7 @@ use crate::production_runtime_owner::{
     start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot,
 };
 
-pub use dae_product_runtime::{
+pub use dae_product_control::runtime::{
     ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
 };
 
@@ -383,7 +383,7 @@ mod cli_commands;
 pub use self::cli_commands::*;
 mod service_metadata;
 use self::service_metadata::*;
-use dae_product_http::*;
+use dae_product_control::http::*;
 mod http_server;
 use self::http_server::*;
 mod sse_runtime;
@@ -406,10 +406,10 @@ mod runtime_materialization;
 use self::runtime_materialization::*;
 mod runtime_reload;
 use self::runtime_reload::*;
-use dae_product_runtime::*;
+use dae_product_control::runtime::*;
 mod runtime_reconcile;
 use self::runtime_reconcile::*;
-use dae_product_persistence::*;
+use dae_product_control::persistence::*;
 type UserRecord = ProductUserRecord;
 mod runtime_apply;
 use self::runtime_apply::*;

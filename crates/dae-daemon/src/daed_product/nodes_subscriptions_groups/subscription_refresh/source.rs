@@ -1,10 +1,10 @@
 use super::http::fetch_http_url_with_proxy_config;
 use super::*;
-pub(crate) use dae_product_subscription::subscription_file_path;
-pub(super) use dae_product_subscription::{
+pub(crate) use dae_product_control::subscription::subscription_file_path;
+pub(super) use dae_product_control::subscription::{
     FetchedSubscriptionContent, persist_subscription_path, write_persisted_subscription,
 };
-use dae_product_subscription::{read_subscription_file, subscription_url_with_scheme};
+use dae_product_control::subscription::{read_subscription_file, subscription_url_with_scheme};
 
 #[cfg(test)]
 pub(crate) fn fetch_subscription_content(

@@ -1,6 +1,6 @@
 use super::*;
-pub(in crate::daed_product) use dae_product_geodata::geodata_dir_for_web_root;
-use dae_product_geodata::{
+pub(in crate::daed_product) use dae_product_control::geodata::geodata_dir_for_web_root;
+use dae_product_control::geodata::{
     GeodataResourceIdentity, GeodataStatusCacheEntry,
     geodata_resource_status as domain_geodata_resource_status,
 };

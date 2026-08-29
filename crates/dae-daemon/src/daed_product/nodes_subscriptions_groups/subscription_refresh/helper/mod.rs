@@ -6,6 +6,6 @@ mod command;
 
 pub(in crate::daed_product) use command::run_subscription_prepare_helper_command;
 #[cfg(not(test))]
-pub(super) use dae_product_subscription::{
+pub(super) use dae_product_control::subscription::{
     SubscriptionHelperOutcome, prepare_subscription_with_helper,
 };

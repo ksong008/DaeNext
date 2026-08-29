@@ -1,6 +1,6 @@
 use super::super::update::prepare_geodata_download_inline;
 use super::*;
-use dae_product_geodata::{
+use dae_product_control::geodata::{
     GEODATA_HELPER_MAX_REQUEST_BYTES, GeodataHelperRequest, decode_geodata_helper_request,
     encode_geodata_helper_failure, encode_geodata_helper_success,
 };

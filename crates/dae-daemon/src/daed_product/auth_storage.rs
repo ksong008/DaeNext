@@ -64,7 +64,7 @@ fn record_password_execution_thread(password: &str) {
 }
 
 #[cfg(test)]
-pub(crate) use dae_product_identity::legacy_password_hash_for_test;
+pub(crate) use dae_product_control::identity::legacy_password_hash_for_test;
 
 #[cfg(test)]
 mod password {

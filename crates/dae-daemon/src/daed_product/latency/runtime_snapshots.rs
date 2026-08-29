@@ -1,5 +1,5 @@
 use super::super::*;
-pub(crate) use dae_product_subscription::{
+pub(crate) use dae_product_control::subscription::{
     node_name_from_link, runtime_execution_identity, runtime_link_hash,
     runtime_link_identity_value, runtime_redacted_link_source,
 };

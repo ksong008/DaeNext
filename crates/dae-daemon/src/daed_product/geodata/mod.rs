@@ -6,7 +6,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 mod transaction;
-pub use dae_product_geodata::*;
+pub use dae_product_control::geodata::*;
 mod update;
 mod update_admission;
 mod update_context;

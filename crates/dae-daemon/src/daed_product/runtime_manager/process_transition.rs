@@ -13,7 +13,7 @@ impl ProductRuntimeManager {
     ) -> Option<Value> {
         let active_http = self.process_http_config.lock().ok()?.as_ref().copied();
         let active_process_config = self.inner().lock().ok()?.process_baseline_config.clone();
-        dae_product_runtime::process_transition_for_config(
+        dae_product_control::runtime::process_transition_for_config(
             active_http,
             active_process_config.as_deref(),
             config,

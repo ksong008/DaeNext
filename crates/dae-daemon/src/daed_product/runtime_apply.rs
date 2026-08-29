@@ -6,7 +6,7 @@ mod journal;
 mod reconcile;
 mod rollback;
 
-pub(super) use dae_product_runtime::{
+pub(super) use dae_product_control::runtime::{
     PreparedRuntimeGeneration, RuntimeApplyCheckpoint, prepare_runtime_generation, sync_directory,
 };
 

@@ -14,12 +14,13 @@ mod startup_recovery;
 mod stop;
 mod summary;
 mod traffic;
-pub(super) use dae_product_runtime::{
+pub(super) use dae_product_control::runtime::{
     RuntimeCleanupState, RuntimeTrafficAvailability, RuntimeTrafficCarry, RuntimeTrafficRead,
 };
 use traffic::runtime_traffic_counters;
-type ProductRuntimeState = dae_product_runtime::ProductRuntimeState<ProductRuntimeInstance>;
-type ProductRuntimeDomain = dae_product_runtime::ProductRuntimeDomain<
+type ProductRuntimeState =
+    dae_product_control::runtime::ProductRuntimeState<ProductRuntimeInstance>;
+type ProductRuntimeDomain = dae_product_control::runtime::ProductRuntimeDomain<
     ProductRuntimeInstance,
     AppliedRuntimeReload,
     CoordinatedRuntimeReloadError,
@@ -31,8 +32,8 @@ use cleanup::{
     cleanup_start_blocker_from_report, ensure_cleanup_allows_start_for_inner,
     spawn_background_cleanup,
 };
-use dae_product_runtime::RuntimeApplyState;
-use dae_product_runtime::runtime_health_seed_snapshots;
+use dae_product_control::runtime::RuntimeApplyState;
+use dae_product_control::runtime::runtime_health_seed_snapshots;
 pub(in crate::daed_product) use instance::PreparedProductRuntime;
 #[cfg(test)]
 pub(super) use instance::resident_dataplane_admission_detail;
@@ -928,22 +929,25 @@ impl ProductRuntimeManager {
         let backend = match inner.runtime.as_ref() {
             Some(ProductRuntimeInstance::Resident(runtime)) => {
                 let handle = runtime.read_handle();
-                dae_product_runtime::RuntimeReadBackend::Resident(Box::new(move || {
+                dae_product_control::runtime::RuntimeReadBackend::Resident(Box::new(move || {
                     handle.product_state_summary()
                 }))
             }
             Some(ProductRuntimeInstance::Fake(fake)) => {
-                dae_product_runtime::RuntimeReadBackend::Fake {
+                dae_product_control::runtime::RuntimeReadBackend::Fake {
                     started_at: fake.started_at.clone(),
                     tproxy_port: fake.tproxy_port,
                 }
             }
-            None => dae_product_runtime::RuntimeReadBackend::Stopped {
+            None => dae_product_control::runtime::RuntimeReadBackend::Stopped {
                 fake_runtime_enabled,
             },
         };
-        let snapshot =
-            dae_product_runtime::ProductRuntimeReadSnapshot::capture(&inner, coordinator, backend);
+        let snapshot = dae_product_control::runtime::ProductRuntimeReadSnapshot::capture(
+            &inner,
+            coordinator,
+            backend,
+        );
         drop(inner);
         #[cfg(test)]
         if let Some(barrier) = render_barrier {

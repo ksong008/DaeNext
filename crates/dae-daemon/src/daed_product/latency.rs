@@ -6,19 +6,19 @@ mod standalone;
 
 use config_snapshot::ManualProbeConfigSnapshot;
 #[cfg(test)]
-pub(crate) use dae_product_subscription::{
+pub(crate) use dae_product_control::subscription::{
     LatencyJobAdmissionKind, runtime_node_latency_results_for_nodes, store_node_latency_result,
 };
-pub(crate) use dae_product_subscription::{
+pub(crate) use dae_product_control::subscription::{
     LatencyJobCancelError, LatencyJobCancellation, LatencyJobManager, LatencyJobRunOutcome,
     cancel_node_latency_job_value,
 };
-pub(crate) use dae_product_subscription::{
+pub(crate) use dae_product_control::subscription::{
     LatencyProbeNode, current_latency_probe_nodes, latency_probe_link_chunks,
     latency_probe_nodes_for_ids, latency_probe_nodes_for_links, latency_probe_unique_link_count,
     latency_probe_unique_links,
 };
-pub(crate) use dae_product_subscription::{
+pub(crate) use dae_product_control::subscription::{
     LatencyProbeSeenLinks, NodeLatencyWrite, RuntimeNodeLatencyIndex,
     list_stored_node_latencies_value, node_latency_results_for_runtime_snapshots,
     stored_successful_node_latency_seed_snapshots,

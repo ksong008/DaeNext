@@ -1,5 +1,5 @@
 use super::*;
-use dae_product_subscription::{
+use dae_product_control::subscription::{
     SUBSCRIPTION_HELPER_MAX_REQUEST_BYTES, SubscriptionHelperRequest,
     decode_subscription_helper_request, encode_subscription_helper_failure,
     encode_subscription_helper_success,

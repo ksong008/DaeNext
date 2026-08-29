@@ -5,7 +5,7 @@ pub(crate) fn replace_subscription_nodes(
     links: &[String],
 ) -> std::io::Result<Vec<serde_json::Value>> {
     let prepared = super::node_stage::prepare_subscription_nodes(links);
-    dae_product_subscription::replace_prepared_subscription_nodes(
+    dae_product_control::subscription::replace_prepared_subscription_nodes(
         conn,
         subscription_id,
         &prepared.admitted,

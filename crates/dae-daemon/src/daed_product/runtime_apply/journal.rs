@@ -14,7 +14,7 @@ pub(super) fn write_runtime_apply_journal(
     let runtime_dir = output
         .parent()
         .ok_or_else(|| "runtime materialization path has no parent".to_owned())?;
-    let parts = dae_product_runtime::prepare_runtime_apply_transaction(
+    let parts = dae_product_control::runtime::prepare_runtime_apply_transaction(
         runtime_dir,
         &candidate.generation,
         output,
