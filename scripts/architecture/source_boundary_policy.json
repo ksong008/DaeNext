@@ -12,6 +12,10 @@
     "dae-resident-dataplane": {
       "production": 34000,
       "tests": 29000
+    },
+    "dae-resident-transport": {
+      "production": 36000,
+      "tests": 6500
     }
   }
 }
