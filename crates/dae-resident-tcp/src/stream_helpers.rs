@@ -95,37 +95,6 @@ pub fn simple_obfs_tls_application_data_header(payload_len: usize) -> Result<[u8
     Ok([0x17, 0x03, 0x03, len_high, len_low])
 }
 
-pub struct AsyncPrefixTcpReader<'a, S> {
-    pub prefix: CursorBytes,
-    pub stream: &'a mut S,
-}
-
-impl<'a, S> AsyncPrefixTcpReader<'a, S> {
-    pub fn new(prefix: Vec<u8>, stream: &'a mut S) -> Self {
-        Self {
-            prefix: CursorBytes::new(prefix),
-            stream,
-        }
-    }
-}
-
-impl<S> AsyncRead for AsyncPrefixTcpReader<'_, S>
-where
-    S: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        self.prefix.drain_to_read_buf(buf);
-        if buf.remaining() == 0 || !self.prefix.is_empty() {
-            return Poll::Ready(Ok(()));
-        }
-        Pin::new(&mut *self.stream).poll_read(cx, buf)
-    }
-}
-
 pub struct AsyncSimpleObfsTlsAppDataReader<'a, S> {
     pub prefix: CursorBytes,
     pub frame: CursorBytes,

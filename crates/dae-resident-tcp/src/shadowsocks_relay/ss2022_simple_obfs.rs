@@ -43,7 +43,7 @@ pub async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
     }
     drop((initial, obfs_request, response_head, initial_payload));
 
-    let mut proxy_reader = AsyncPrefixTcpReader::new(response_leftover, proxy);
+    let mut proxy_reader = AsyncPrefixedStream::new(response_leftover, proxy);
     let (mut decoder, start) =
         ss2022_tcp_server_stream_decoder_async(&mut proxy_reader, cipher, password, &client_salt)
             .await
@@ -81,7 +81,7 @@ pub async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
                 match inbound_read {
                     Ok(0) => {
                         inbound_closed = true;
-                        let _ = proxy_reader.stream.shutdown().await;
+                        let _ = proxy_reader.shutdown().await;
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         reset_resident_relay_idle_deadline(
                             close_drain_deadline.as_mut(),
@@ -94,7 +94,6 @@ pub async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
                             format!("encrypt Shadowsocks 2022 simple-obfs upload chunk: {err}")
                         })?;
                         proxy_reader
-                            .stream
                             .write_all(&inbound_buf[..wire_len])
                             .await
                             .map_err(|err| {
@@ -106,7 +105,7 @@ pub async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
                     }
                     Err(err) if is_graceful_stream_close_error(&err) => {
                         inbound_closed = true;
-                        let _ = proxy_reader.stream.shutdown().await;
+                        let _ = proxy_reader.shutdown().await;
                         reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
                         reset_resident_relay_idle_deadline(
                             close_drain_deadline.as_mut(),

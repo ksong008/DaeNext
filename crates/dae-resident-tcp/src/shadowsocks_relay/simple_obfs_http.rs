@@ -55,7 +55,7 @@ pub async fn relay_tcp_over_shadowsocks_simple_obfs_http_async(
     ));
 
     let (mut proxy_read, mut proxy_write) = proxy.split();
-    let mut proxy_reader = AsyncPrefixTcpReader::new(response_leftover, &mut proxy_read);
+    let mut proxy_reader = AsyncPrefixedStream::new(response_leftover, &mut proxy_read);
     let mut server_salt = vec![0_u8; salt_len];
     proxy_reader
         .read_exact(&mut server_salt)
