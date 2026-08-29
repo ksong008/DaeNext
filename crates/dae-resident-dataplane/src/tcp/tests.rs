@@ -377,9 +377,9 @@ async fn simple_obfs_tls_app_data_reader_unwraps_followup_frames() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn prefix_tcp_reader_drains_prefix_then_stream() {
+async fn prefixed_stream_drains_prefix_then_stream() {
     let mut stream = TestAsyncRead::new(b"tail".to_vec());
-    let mut reader = AsyncPrefixTcpReader::new(b"head".to_vec(), &mut stream);
+    let mut reader = AsyncPrefixedStream::new(b"head".to_vec(), &mut stream);
     let mut out = [0_u8; 8];
     reader.read_exact(&mut out).await.unwrap();
     assert_eq!(&out, b"headtail");
