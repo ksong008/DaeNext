@@ -10,12 +10,22 @@ pub(super) fn apply_runtime_after_subscription_change(
     if !runtime_input_changed || !runtime.is_running() {
         return SubscriptionRuntimeApplyResult::default();
     }
-    match runtime_modified_for_running_runtime(state, runtime) {
+    let conn = match open_state_connection(state) {
+        Ok(conn) => conn,
+        Err(error) => {
+            return SubscriptionRuntimeApplyResult {
+                requested: true,
+                error: Some(error.to_string()),
+                ..SubscriptionRuntimeApplyResult::default()
+            };
+        }
+    };
+    match runtime_modified(&conn, true) {
         Ok(false) => return SubscriptionRuntimeApplyResult::default(),
         Err(error) => {
             return SubscriptionRuntimeApplyResult {
                 requested: true,
-                error: Some(error),
+                error: Some(error.to_string()),
                 ..SubscriptionRuntimeApplyResult::default()
             };
         }
