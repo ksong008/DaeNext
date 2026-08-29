@@ -114,6 +114,9 @@ pub use desired_state::*;
 mod json_storage;
 pub use json_storage::*;
 
+mod user_queries;
+pub use user_queries::*;
+
 mod state;
 pub use state::*;
 

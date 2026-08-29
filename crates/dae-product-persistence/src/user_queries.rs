@@ -1,32 +1,36 @@
-use super::*;
+use crate::{ProductUserRecord, ensure_state_schema, open_state_connection, sqlite_io_error};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::{Map, Value, json};
+use std::io;
+use std::path::Path;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static USER_QUERY_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
-pub(crate) fn reset_user_query_count_for_current_thread() {
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_user_query_count_for_current_thread() {
     USER_QUERY_COUNT.set(0);
 }
 
-#[cfg(test)]
-pub(crate) fn user_query_count_for_current_thread() -> usize {
+#[cfg(any(test, feature = "test-support"))]
+pub fn user_query_count_for_current_thread() -> usize {
     USER_QUERY_COUNT.get()
 }
 
-pub(crate) fn load_user_by_username(
+pub fn load_user_by_username(
     state: &Path,
     username: &str,
-) -> io::Result<Option<UserRecord>> {
+) -> io::Result<Option<ProductUserRecord>> {
     ensure_state_schema(state)?;
     load_user_by_username_without_schema_check(state, username)
 }
 
-pub(crate) fn load_user_by_username_without_schema_check(
+pub fn load_user_by_username_without_schema_check(
     state: &Path,
     username: &str,
-) -> io::Result<Option<UserRecord>> {
+) -> io::Result<Option<ProductUserRecord>> {
     let conn = open_state_connection(state)?;
     query_user(
         &conn,
@@ -35,8 +39,8 @@ pub(crate) fn load_user_by_username_without_schema_check(
     )
 }
 
-#[cfg(test)]
-pub(crate) fn load_user_by_id(state: &Path, id: i64) -> io::Result<Option<UserRecord>> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn load_user_by_id(state: &Path, id: i64) -> io::Result<Option<ProductUserRecord>> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     query_user(
@@ -46,15 +50,15 @@ pub(crate) fn load_user_by_id(state: &Path, id: i64) -> io::Result<Option<UserRe
     )
 }
 
-pub(crate) fn query_user<P>(
+pub fn query_user<P>(
     conn: &Connection,
     sql: &str,
     params: P,
-) -> io::Result<Option<UserRecord>>
+) -> io::Result<Option<ProductUserRecord>>
 where
     P: rusqlite::Params,
 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     USER_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
 
     conn.query_row(sql, params, |row| {
@@ -73,7 +77,7 @@ where
     .map_err(sqlite_io_error)
 }
 
-pub(crate) fn user_resource(user: &UserRecord) -> Value {
+pub fn user_resource(user: &ProductUserRecord) -> Value {
     let mut map = Map::new();
     map.insert("username".to_owned(), json!(user.username()));
     if let Some(name) = user.name() {
