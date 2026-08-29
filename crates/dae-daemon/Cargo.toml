@@ -94,31 +94,19 @@ dae-routing.workspace = true
 dae-sniffing.workspace = true
 dae-tls.workspace = true
 boring.workspace = true
-boring-sys.workspace = true
 brotli.workspace = true
 base64.workspace = true
-blake2.workspace = true
 bytes.workspace = true
 fastrand.workspace = true
 flate2.workspace = true
-foreign-types.workspace = true
-futures-util.workspace = true
-getrandom.workspace = true
-h2.workspace = true
-h3.workspace = true
-h3-quinn.workspace = true
 http.workspace = true
 libc.workspace = true
-quinn.workspace = true
-quinn-boring.workspace = true
 udp.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-socket2.workspace = true
-tls-parser.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tokio-boring.workspace = true
 tikv-jemallocator = { workspace = true, optional = true }
