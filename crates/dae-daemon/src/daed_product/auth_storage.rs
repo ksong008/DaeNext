@@ -1,9 +1,38 @@
 use super::*;
 
 pub(crate) use dae_product_control::auth_crypto::{
-    password_hash_needs_migration, random_secret_hex, secure_random_index, signed_token,
-    validate_password_strength, verify_token,
+    random_secret_hex, signed_token, validate_password_strength, verify_token,
 };
+
+pub(crate) fn create_user_with_auth_worker(
+    state: &Path,
+    username: &str,
+    password: &str,
+) -> io::Result<String> {
+    dae_product_control::create_user_with_crypto(
+        state,
+        username,
+        password,
+        hash_password,
+        random_secret_hex,
+        signed_token,
+    )
+}
+
+pub(crate) fn issue_token_with_auth_worker(
+    state: &Path,
+    username: &str,
+    password: &str,
+) -> io::Result<String> {
+    dae_product_control::issue_token_with_crypto(
+        state,
+        username,
+        password,
+        verify_password_hash,
+        hash_password,
+        signed_token,
+    )
+}
 
 pub(crate) fn hash_password(salt: &[u8], password: &str) -> String {
     let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Auth);

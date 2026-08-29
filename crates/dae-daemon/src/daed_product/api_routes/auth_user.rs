@@ -28,10 +28,12 @@ pub(super) fn api_create_user(
     let username_owned = username.to_owned();
     let password = password.to_owned();
     execute_auth_request(app, context, username, move || {
-        ProductAuthJobOutcome::neutral(match create_user(&state, &username_owned, &password) {
-            Ok(token) => HttpResponse::json(201, json!({"token": token})),
-            Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
-        })
+        ProductAuthJobOutcome::neutral(
+            match create_user_with_auth_worker(&state, &username_owned, &password) {
+                Ok(token) => HttpResponse::json(201, json!({"token": token})),
+                Err(err) => HttpResponse::json(400, json!({"error": err.to_string()})),
+            },
+        )
     })
 }
 
@@ -55,8 +57,11 @@ pub(super) fn api_issue_token(
     let state = app.state.clone();
     let username_owned = username.to_owned();
     let password = password.to_owned();
-    execute_auth_request(app, context, username, move || {
-        match issue_token(&state, &username_owned, &password) {
+    execute_auth_request(
+        app,
+        context,
+        username,
+        move || match issue_token_with_auth_worker(&state, &username_owned, &password) {
             Ok(token) => {
                 ProductAuthJobOutcome::success(HttpResponse::json(200, json!({"token": token})))
             }
@@ -70,8 +75,8 @@ pub(super) fn api_issue_token(
                 401,
                 json!({"error": err.to_string()}),
             )),
-        }
-    })
+        },
+    )
 }
 
 pub(super) fn api_patch_user(
