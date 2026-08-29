@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use dae_resident_core::{ActiveGenerationSlot, GenerationGate, GenerationToken, PublicationEpoch};
 
+mod cleanup_inventory;
 mod executor;
 mod generation_drain;
 mod task;
 mod thread_task;
 
+pub use cleanup_inventory::{ResidentRuntimeCleanupInventory, ResidentRuntimeCleanupReporter};
 pub use executor::{
     ResidentRuntimeAllocatorHooks, ResidentRuntimeExecutor, ResidentRuntimeExecutorConfig,
 };

@@ -1,12 +1,10 @@
 use super::plan::ResidentProtocolOwnerSpecs;
 use super::*;
 
-mod cleanup_inventory;
 mod manual_probe_execution;
 mod manual_probe_index;
 mod shutdown;
 
-use self::cleanup_inventory::*;
 use self::manual_probe_execution::{ManualProbeExecution, ManualProbeRuntime};
 pub(crate) use self::manual_probe_index::ResidentManualProbeIndex;
 pub(crate) use self::shutdown::ResidentRuntimeWorkloadShutdown;
