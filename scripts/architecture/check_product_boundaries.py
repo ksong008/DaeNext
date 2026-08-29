@@ -41,6 +41,8 @@ REQUIRED_OWNERSHIP_FILES = (
     "crates/dae-product-subscription/src/subscription_view.rs",
     "crates/dae-product-control/src/groups.rs",
     "crates/dae-product-control/src/groups.rs",
+    "crates/dae-product-control/src/group_filter_preview.rs",
+    "crates/dae-product-control/src/file_import/mod.rs",
     "crates/dae-product-runtime/src/materialization.rs",
     "crates/dae-product-subscription/src/refresh_node_sync.rs",
     "crates/dae-product-subscription/src/refresh_transaction.rs",
@@ -77,6 +79,8 @@ FORBIDDEN_DAEMON_PATHS = (
     "nodes_subscriptions_groups/subscription_refresh/transaction.rs",
     "runtime_materialization/metadata.rs",
     "runtime_materialization/active_resources.rs",
+    "dae_file_import.rs",
+    "dae_file_import",
     "geodata/file.rs",
     "geodata/source.rs",
     "geodata/status_cache.rs",
@@ -88,6 +92,8 @@ FORBIDDEN_DAEMON_PATHS = (
     "nodes_subscriptions_groups/group_summary.rs",
     "nodes_subscriptions_groups/group_summary_batch.rs",
     "nodes_subscriptions_groups/groups.rs",
+    "nodes_subscriptions_groups/subscription_delete.rs",
+    "nodes_subscriptions_groups/subscription_filter_preview.rs",
     "nodes_subscriptions_groups/groups.rs",
     "nodes_subscriptions_groups/scheduler/invalid_cron.rs",
     "nodes_subscriptions_groups/subscription_import_result.rs",
@@ -118,7 +124,9 @@ FORBIDDEN_DAEMON_DEFINITIONS = (
     "run_local_control_wait_ready_command",
     "subscription_node_row_value",
 )
-DAEMON_CRATE_REFERENCE = re.compile(r"\bdae_daemon\s*::")
+DAEMON_CRATE_REFERENCE = re.compile(
+    r"\b(?:dae_daemon\s*::|(?:pub\s+)?use\s+dae_daemon\b|extern\s+crate\s+dae_daemon\b)"
+)
 DAEMON_RESIDENT_INTERNAL_REFERENCE = re.compile(
     r"\bdae_resident_(?:core|dns|plan|tcp|udp|transport)\s*(?:::|;)|"
     r"\bdae_resident_dataplane\s*::(?!\s*facade\s*::)"
