@@ -54,7 +54,7 @@ fn build_prepared_runtime_reload(
     );
     if wait_for_network && !config.global.disable_waiting_network && !config.subscription.is_empty()
     {
-        wait_for_network_before_subscriptions(&config)
+        crate::service_contract::wait_for_network_before_subscriptions()
             .map_err(RuntimeReloadPrepareError::NetworkWait)?;
     }
     let runtime_candidate = prepare_product_runtime_candidate(Arc::clone(&config))
@@ -294,114 +294,4 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
 
 fn elapsed_nanos(started: Instant) -> u64 {
     started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
-}
-
-const NETWORK_WAIT_LINKS: &[&str] = &[
-    "http://edge.microsoft.com/captiveportal/generate_204",
-    "http://www.gstatic.com/generate_204",
-    "http://www.qualcomm.cn/generate_204",
-];
-const NETWORK_WAIT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const NETWORK_WAIT_RETRY_DELAY: Duration = Duration::from_secs(5);
-
-/// Resolve a probe host with a hard deadline.
-///
-/// Delegates to the shared bounded resolver in `service_contract`, which runs
-/// a single process-lifetime resolver thread: `ToSocketAddrs` (getaddrinfo)
-/// has no built-in timeout and can block far longer than the connect timeout
-/// on a stalled resolver.  A per-call detached thread would be leaked on
-/// timeout; the shared resolver queues stuck resolutions instead and never
-/// leaks threads.  The caller gives up after the deadline and fails the
-/// probe, which is correct since the network is not usable.
-fn resolve_probe_addresses(host: &str, port: u16) -> Vec<std::net::SocketAddr> {
-    crate::service_contract::resolve_probe_addresses_bounded(host, port)
-}
-
-/// Match legacy's pre-subscription network gate without coupling it to the
-/// resident dataplane.  Startup waits until one of the captive-portal probes
-/// returns an HTTP status below 500.  The retry budget is bounded by default
-/// (60 probe attempts, one every `NETWORK_WAIT_RETRY_DELAY` plus probe time)
-/// so an unreachable network fails the reload with a clear error instead of
-/// permanently occupying the HTTP worker thread; `DAED_NETWORK_WAIT_MAX_ATTEMPTS`
-/// overrides the budget and an explicit 0 opts back into the legacy unbounded
-/// behavior.
-fn wait_for_network_before_subscriptions(config: &Config) -> Result<(), String> {
-    // A probe that already succeeded for this process is authoritative:
-    // re-probing here would only re-block the HTTP worker on a network that
-    // was reachable.
-    if crate::service_contract::network_ready_cached() {
-        return Ok(());
-    }
-    let max_attempts = std::env::var("DAED_NETWORK_WAIT_MAX_ATTEMPTS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .unwrap_or(60);
-    let mut attempts = 0_u32;
-    loop {
-        attempts = attempts.saturating_add(1);
-        for link in NETWORK_WAIT_LINKS {
-            let Ok(url) = url::Url::parse(link) else {
-                continue;
-            };
-            let Some(host) = url.host_str() else {
-                continue;
-            };
-            let port = url.port_or_known_default().unwrap_or(80);
-            let addresses = resolve_probe_addresses(host, port);
-            for address in addresses {
-                let Ok(mut stream) =
-                    TcpStream::connect_timeout(&address, NETWORK_WAIT_CONNECT_TIMEOUT)
-                else {
-                    continue;
-                };
-                // Bound the whole probe: a peer that accepts the connection
-                // but never responds must not wedge the HTTP worker thread.
-                let _ = stream.set_read_timeout(Some(NETWORK_WAIT_CONNECT_TIMEOUT));
-                let _ = stream.set_write_timeout(Some(NETWORK_WAIT_CONNECT_TIMEOUT));
-                let request = format!(
-                    "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-                    url.path(),
-                    host
-                );
-                if stream.write_all(request.as_bytes()).is_err() {
-                    continue;
-                }
-                let mut response = [0_u8; 128];
-                let Ok(read) = stream.read(&mut response) else {
-                    continue;
-                };
-                let status_ok = std::str::from_utf8(&response[..read])
-                    .ok()
-                    .and_then(|line| line.strip_prefix("HTTP/"))
-                    .and_then(|line| line.split_whitespace().nth(1))
-                    .and_then(|status| status.parse::<u16>().ok())
-                    .is_some_and(|status| (200..500).contains(&status));
-                if status_ok {
-                    crate::service_contract::mark_network_ready();
-                    return Ok(());
-                }
-            }
-        }
-        if max_attempts != 0 && attempts >= max_attempts {
-            return Err(format!(
-                "network did not become ready after {attempts} probe attempts (max_attempts={max_attempts})"
-            ));
-        }
-        thread::sleep(NETWORK_WAIT_RETRY_DELAY);
-        // Keep the parameter in the contract even though the current direct
-        // resolver owns its own fallback resolver; callers still get a clear
-        // diagnostic when a malformed fallback is supplied.
-        let _ = &config.global.fallback_resolver;
-    }
-}
-
-pub(in crate::daed_product) fn runtime_modified_for_running_runtime(
-    state: &Path,
-    runtime: &ProductRuntimeManager,
-) -> Result<bool, String> {
-    if !runtime.is_running() {
-        return Ok(false);
-    }
-    let conn = open_state_connection(state).map_err(|err| err.to_string())?;
-    runtime_modified(&conn, true).map_err(|err| err.to_string())
 }
