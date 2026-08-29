@@ -10,14 +10,13 @@ use write::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::daed_product) struct ImportBundleOutcome {
-    pub(in crate::daed_product) imported: bool,
-    pub(in crate::daed_product) runtime_reload_required: bool,
+pub struct ImportBundleOutcome {
+    pub imported: bool,
+    pub runtime_reload_required: bool,
 }
 
-pub(in crate::daed_product) fn import_bundle(
+pub fn import_bundle(
     state: &Path,
-    config_dir: &Path,
     body: &Value,
     user: &UserRecord,
 ) -> io::Result<ImportBundleOutcome> {
@@ -38,12 +37,6 @@ pub(in crate::daed_product) fn import_bundle(
     write_user_storage(&tx, user.id(), &prepared.user_storage)?;
     tx.commit().map_err(sqlite_io_error)?;
 
-    let _ = append_log_for_config(
-        config_dir,
-        state,
-        "info",
-        "DAE bundle imported by Rust daed",
-    );
     Ok(ImportBundleOutcome {
         imported: true,
         runtime_reload_required: running_state.is_some(),
