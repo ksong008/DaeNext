@@ -137,6 +137,7 @@ DAEMON_RESIDENT_INTERNAL_REFERENCE = re.compile(
     r"\bdae_resident_dataplane\s*::(?!\s*facade\s*::)"
 )
 PRODUCT_CRATE_REFERENCE = re.compile(r"\bdae_product_[A-Za-z0-9_]+\b")
+DAEMON_PRODUCT_REFERENCE = re.compile(r"\b(dae_product_[A-Za-z0-9_]+)\b")
 
 
 def rust_sources(root: pathlib.Path) -> list[pathlib.Path]:
@@ -193,6 +194,12 @@ def validate(root: pathlib.Path) -> list[str]:
                     errors.append(
                         f"extracted product function returned to daemon: "
                         f"{path.relative_to(root)} ({name})"
+                    )
+            for imported in sorted(set(DAEMON_PRODUCT_REFERENCE.findall(text))):
+                if imported != "dae_product_control":
+                    errors.append(
+                        f"daemon bypasses product coordinator with {imported}: "
+                        f"{path.relative_to(root)}"
                     )
             if path.parent == daemon_product and path.name == "daed_product.rs":
                 continue

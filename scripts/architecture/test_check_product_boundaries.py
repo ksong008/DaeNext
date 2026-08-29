@@ -88,6 +88,13 @@ class ProductBoundaryGateTests(unittest.TestCase):
         errors = MODULE.validate(root)
         self.assertTrue(any("bypasses resident facade" in error for error in errors))
 
+    def test_rejects_daemon_bypassing_product_coordinator(self) -> None:
+        root = self.fixture()
+        source = root / "crates" / "dae-daemon" / "src" / "product.rs"
+        source.write_text("use dae_product_runtime::State;\n", encoding="utf-8")
+        errors = MODULE.validate(root)
+        self.assertTrue(any("bypasses product coordinator" in error for error in errors))
+
     def test_rejects_old_runtime_materialization_path(self) -> None:
         root = self.fixture()
         returned = (
