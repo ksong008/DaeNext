@@ -8,11 +8,9 @@ pub(super) use dae_product_control::{
 };
 pub(crate) use dae_product_subscription::{
     SubscriptionRuntimeApplyResult, apply_group_node_ids, apply_group_subscription_ids,
-    compile_subscription_name_filter as compile_name_filter, get_subscription_value,
-    group_policy_params_value, list_subscriptions_value, parse_node_link,
+    get_subscription_value, group_policy_params_value, list_subscriptions_value, parse_node_link,
     replace_group_policy_params, subscription_node_row_value as node_row_value,
     subscription_row_value,
-    visit_subscription_nodes_matching_filter as visit_subscription_nodes_matching_name_filter,
 };
 #[cfg(test)]
 pub(crate) use dae_product_subscription::{decode_node_label, get_node_value, list_nodes_value};
@@ -38,5 +36,6 @@ pub(crate) use dae_product_control::{
 pub(crate) fn list_group_summaries_value(state: &Path) -> io::Result<Value> {
     list_group_summaries_value_with_runtime_selection(state, &BTreeMap::new())
 }
-mod subscription_filter_preview;
-pub(super) use self::subscription_filter_preview::*;
+#[cfg(test)]
+pub(crate) use dae_product_control::group_subscription_filter_preview_value;
+pub(super) use dae_product_control::preview_group_subscription_filter;
