@@ -7,6 +7,7 @@ use dae_resident_core::{ActiveGenerationSlot, GenerationGate, GenerationToken, P
 mod executor;
 mod generation_drain;
 mod task;
+mod thread_task;
 
 pub use executor::{
     ResidentRuntimeAllocatorHooks, ResidentRuntimeExecutor, ResidentRuntimeExecutorConfig,
@@ -18,6 +19,10 @@ pub use generation_drain::{
 pub use task::{
     ResidentAsyncRuntimeShutdown, ResidentAsyncRuntimeTask, ResidentRuntimeTaskRole,
     registered_resident_async_runtime_task,
+};
+pub use thread_task::{
+    ResidentRuntimeTask, ResidentRuntimeTaskExit, registered_resident_runtime_task,
+    spawn_resident_runtime_thread,
 };
 
 pub struct ResidentRuntimeCoordinator<T> {

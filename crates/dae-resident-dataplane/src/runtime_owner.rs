@@ -5,7 +5,6 @@ mod cleanup_inventory;
 mod manual_probe_execution;
 mod manual_probe_index;
 mod shutdown;
-mod task;
 
 use self::cleanup_inventory::*;
 use self::manual_probe_execution::{ManualProbeExecution, ManualProbeRuntime};
@@ -13,9 +12,28 @@ pub(crate) use self::manual_probe_index::ResidentManualProbeIndex;
 pub(crate) use self::shutdown::ResidentRuntimeWorkloadShutdown;
 use self::shutdown::shutdown_resident_runtime_owner;
 use self::shutdown::shutdown_resident_runtime_workloads;
+use dae_resident_runtime::{
+    ResidentRuntimeTask, ResidentRuntimeTaskExit, registered_resident_runtime_task,
+};
+
 #[cfg(test)]
-use self::task::spawn_resident_runtime_task;
-use self::task::{ResidentRuntimeTask, ResidentRuntimeTaskExit, registered_resident_runtime_task};
+fn spawn_resident_runtime_task<F>(
+    name: &'static str,
+    kind: &'static str,
+    stack_bytes: Option<usize>,
+    run: F,
+) -> ResidentRuntimeTask
+where
+    F: FnOnce() + Send + 'static,
+{
+    dae_resident_runtime::spawn_resident_runtime_thread(
+        name,
+        kind,
+        ResidentRuntimeTaskRole::Workload,
+        stack_bytes,
+        run,
+    )
+}
 
 #[derive(Debug)]
 struct ResidentAllocatorRuntimeHooksAdapter {
