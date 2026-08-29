@@ -8,6 +8,11 @@
     "resident-domain",
     "resident-transport",
     "resident-coordinator",
+    "product-core",
+    "product-persistence",
+    "product-interface",
+    "product-domain",
+    "product-coordinator",
     "product"
   ],
   "layer_dependencies": {
@@ -34,6 +39,43 @@
       "resident-domain",
       "resident-coordinator"
     ],
+    "product-core": ["foundation", "platform", "product-core"],
+    "product-persistence": [
+      "foundation",
+      "platform",
+      "product-core",
+      "product-persistence"
+    ],
+    "product-interface": [
+      "foundation",
+      "platform",
+      "product-core",
+      "product-interface"
+    ],
+    "product-domain": [
+      "foundation",
+      "platform",
+      "resident-shared",
+      "resident-transport",
+      "resident-domain",
+      "resident-coordinator",
+      "product-core",
+      "product-persistence",
+      "product-domain"
+    ],
+    "product-coordinator": [
+      "foundation",
+      "platform",
+      "resident-shared",
+      "resident-transport",
+      "resident-domain",
+      "resident-coordinator",
+      "product-core",
+      "product-persistence",
+      "product-interface",
+      "product-domain",
+      "product-coordinator"
+    ],
     "product": [
       "foundation",
       "platform",
@@ -41,10 +83,15 @@
       "resident-transport",
       "resident-domain",
       "resident-coordinator",
+      "product-core",
+      "product-persistence",
+      "product-interface",
+      "product-domain",
+      "product-coordinator",
       "product"
     ]
   },
-  "forbidden_same_layer": ["resident-domain"],
+  "forbidden_same_layer": ["resident-domain", "product-domain"],
   "forbidden": {
     "dae-resident-dns": ["dae-resident-tcp", "dae-resident-udp"],
     "dae-resident-tcp": ["dae-resident-dns", "dae-resident-udp"],
@@ -217,43 +264,43 @@
       "dev": []
     },
     "dae-product-geodata": {
-      "layer": "product",
+      "layer": "product-domain",
       "normal": ["dae-geodata", "dae-product-core", "dae-product-persistence"],
       "build": [],
       "dev": []
     },
     "dae-product-core": {
-      "layer": "product",
+      "layer": "product-core",
       "normal": ["dae-config"],
       "build": [],
       "dev": []
     },
     "dae-product-control": {
-      "layer": "product",
+      "layer": "product-coordinator",
       "normal": ["dae-product-core", "dae-product-http"],
       "build": [],
       "dev": []
     },
     "dae-product-http": {
-      "layer": "product",
+      "layer": "product-interface",
       "normal": ["dae-product-core"],
       "build": [],
       "dev": []
     },
     "dae-product-persistence": {
-      "layer": "product",
+      "layer": "product-persistence",
       "normal": ["dae-config", "dae-product-core"],
       "build": [],
       "dev": []
     },
     "dae-product-runtime": {
-      "layer": "product",
+      "layer": "product-domain",
       "normal": ["dae-config", "dae-datapath", "dae-product-core", "dae-product-persistence"],
       "build": [],
       "dev": []
     },
     "dae-product-subscription": {
-      "layer": "product",
+      "layer": "product-domain",
       "normal": ["dae-outbound", "dae-product-core", "dae-product-persistence", "dae-tls"],
       "build": [],
       "dev": []

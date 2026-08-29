@@ -39,6 +39,8 @@ def policy(*packages: tuple[str, list[str], list[str], list[str]]) -> dict:
         "version": 1,
         "default_deny": True,
         "layers": ["test"],
+        "layer_dependencies": {"test": ["test"]},
+        "forbidden_same_layer": [],
         "packages": {
             name: {"layer": "test", "normal": normal, "build": build, "dev": dev}
             for name, normal, build, dev in packages
@@ -136,6 +138,27 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
             )
         source_errors = [error for error in errors if "source import crosses" in error]
         self.assertEqual(len(source_errors), 2)
+
+    def test_source_import_scans_visibility_and_grouped_forms(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source_root = root / "a" / "src"
+            source_root.mkdir(parents=True)
+            (source_root / "lib.rs").write_text(
+                "pub(crate) use b::Item;\n"
+                "use {b::First, b::Second};\n"
+                "extern crate b;\n",
+                encoding="utf-8",
+            )
+            graph = metadata(("a", []), ("b", []))
+            graph["packages"][0]["manifest_path"] = str(root / "a" / "Cargo.toml")
+            errors = CHECKER.validate(
+                graph,
+                policy(("a", [], [], []), ("b", [], [], [])),
+                scan_sources=True,
+            )
+        source_errors = [error for error in errors if "source import crosses" in error]
+        self.assertEqual(len(source_errors), 3)
 
     def test_forbidden_source_import_is_rejected_when_edge_is_declared(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

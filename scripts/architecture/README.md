@@ -12,6 +12,8 @@ The checker validates:
 - cycles in normal/build dependency edges;
 - layer direction and generic same-layer resident-domain boundaries;
 - workspace crate imports in production and build sources;
+- bare, visibility-qualified, grouped, and `extern crate` workspace imports;
+- product domain crates cannot directly depend on another product domain crate;
 - external `#[path]` source embedding, except for explicit test-only compatibility paths.
 - production/test line budgets for the large daemon, resident assembly, and outbound boundaries.
 - daemon access to resident implementations is restricted to the resident façade.

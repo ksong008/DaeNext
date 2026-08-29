@@ -18,8 +18,13 @@ FORBIDDEN_DEFAULT_FEATURES = frozenset(
     {"test-support", "benchmark-support", "dns-runtime-tests"}
 )
 WORKSPACE_CRATE_PATH = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*::")
-WORKSPACE_CRATE_IMPORT = re.compile(
-    r"\b(?:extern\s+crate|(?:pub\s+)?use)\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+USE_STATEMENT = re.compile(
+    r"(?m)^[ \t]*(?:(?:pub(?:\s*\([^)]*\))?)\s+)?use\s+(.*?);",
+    re.DOTALL,
+)
+USE_PATH_HEAD = re.compile(r"(?:^|[,{])\s*([A-Za-z_][A-Za-z0-9_]*)\b")
+EXTERN_CRATE_IMPORT = re.compile(
+    r"(?m)^[ \t]*extern\s+crate\s+([A-Za-z_][A-Za-z0-9_]*)\b"
 )
 PATH_ATTRIBUTE = re.compile(r"#\[\s*path\s*=\s*\"([^\"]+)\"\s*\]")
 CFG_ATTRIBUTE = re.compile(r"#\[\s*cfg\s*\(([^\n]*)\)\]")
@@ -152,6 +157,25 @@ def validate_policy_shape(
                     errors.append(
                         f"{source}: forbidden policy names non-workspace dependency {target}"
                     )
+    layer_dependencies = policy.get("layer_dependencies")
+    if not isinstance(layer_dependencies, dict):
+        errors.append("architecture policy layer_dependencies must be an object")
+    else:
+        for layer in sorted(known_layers):
+            allowed = layer_dependencies.get(layer)
+            if not isinstance(allowed, list) or not all(
+                isinstance(target, str) and target in known_layers for target in allowed
+            ):
+                errors.append(
+                    f"architecture policy layer {layer!r} has invalid dependency rule"
+                )
+    forbidden_same_layer = policy.get("forbidden_same_layer", [])
+    if not isinstance(forbidden_same_layer, list) or not all(
+        isinstance(layer, str) and layer in known_layers for layer in forbidden_same_layer
+    ):
+        errors.append(
+            "architecture policy forbidden_same_layer must name known layers"
+        )
     return errors
 
 
@@ -365,9 +389,18 @@ def validate_source_imports(
         for path, source_kind in source_files(package):
             source = remove_comments(path.read_text(encoding="utf-8"))
             errors.extend(validate_source_path_attributes(package, path, source))
+            imports_by_line: dict[int, set[str]] = defaultdict(set)
             for line_number, line in enumerate(source.splitlines(), start=1):
-                module_names = set(WORKSPACE_CRATE_PATH.findall(line))
-                module_names.update(WORKSPACE_CRATE_IMPORT.findall(line))
+                imports_by_line[line_number].update(WORKSPACE_CRATE_PATH.findall(line))
+            for match in USE_STATEMENT.finditer(source):
+                imports_by_line[source.count("\n", 0, match.start()) + 1].update(
+                    USE_PATH_HEAD.findall(match.group(1))
+                )
+            for match in EXTERN_CRATE_IMPORT.finditer(source):
+                imports_by_line[source.count("\n", 0, match.start()) + 1].add(
+                    match.group(1)
+                )
+            for line_number, module_names in sorted(imports_by_line.items()):
                 for module_name in module_names:
                     target = module_to_package.get(module_name)
                     if target is None or target == package_name:
