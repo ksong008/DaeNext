@@ -1,25 +1,21 @@
-use super::*;
+use std::collections::{HashMap, HashSet};
+use std::io;
 
-#[cfg(test)]
-pub(crate) fn replace_subscription_nodes(
-    conn: &Connection,
-    subscription_id: i64,
-    links: &[String],
-) -> io::Result<Vec<Value>> {
-    let prepared = super::node_stage::prepare_subscription_nodes(links);
-    replace_prepared_subscription_nodes(conn, subscription_id, &prepared.admitted)
-        .map(|result| result.items)
+use dae_product_persistence::sqlite_io_error;
+use rusqlite::{Connection, params};
+use serde_json::{Value, json};
+
+use crate::{ParsedNodeLink, PreparedSubscriptionNode, StableNodeKey};
+
+pub struct SubscriptionNodeSyncResult {
+    pub runtime_input_changed: bool,
+    pub items: Vec<Value>,
 }
 
-pub(super) struct SubscriptionNodeSyncResult {
-    pub(super) runtime_input_changed: bool,
-    pub(super) items: Vec<Value>,
-}
-
-pub(super) fn replace_prepared_subscription_nodes(
+pub fn replace_prepared_subscription_nodes(
     conn: &Connection,
     subscription_id: i64,
-    candidates: &[super::node_stage::PreparedSubscriptionNode],
+    candidates: &[PreparedSubscriptionNode],
 ) -> io::Result<SubscriptionNodeSyncResult> {
     let existing_nodes = existing_subscription_nodes(conn, subscription_id)?;
     let mut existing_name_counts = HashMap::<String, usize>::new();
@@ -229,16 +225,16 @@ pub(super) fn replace_prepared_subscription_nodes(
 }
 
 #[derive(Clone)]
-pub(crate) struct ExistingSubscriptionNode {
-    pub(super) id: i64,
-    pub(super) link: String,
-    pub(super) display_name: String,
-    pub(super) address: String,
-    pub(super) protocol: String,
-    pub(super) stable_key: StableNodeKey,
+pub struct ExistingSubscriptionNode {
+    pub id: i64,
+    pub link: String,
+    pub display_name: String,
+    pub address: String,
+    pub protocol: String,
+    pub stable_key: StableNodeKey,
 }
 
-pub(crate) fn subscription_node_changed(
+pub fn subscription_node_changed(
     current: &ExistingSubscriptionNode,
     next_link: &str,
     next: &ParsedNodeLink,
@@ -249,7 +245,7 @@ pub(crate) fn subscription_node_changed(
         || current.protocol != next.protocol
 }
 
-pub(crate) fn subscription_node_probe_target_changed(
+pub fn subscription_node_probe_target_changed(
     current: &ExistingSubscriptionNode,
     next: &ParsedNodeLink,
 ) -> bool {
@@ -258,7 +254,7 @@ pub(crate) fn subscription_node_probe_target_changed(
         || current.stable_key != next.stable_key
 }
 
-pub(crate) fn existing_subscription_nodes(
+pub fn existing_subscription_nodes(
     conn: &Connection,
     subscription_id: i64,
 ) -> io::Result<Vec<ExistingSubscriptionNode>> {
@@ -291,7 +287,7 @@ pub(crate) fn existing_subscription_nodes(
     Ok(out)
 }
 
-pub(crate) fn bump_group_versions_for_node(conn: &Connection, node_id: i64) -> io::Result<()> {
+pub fn bump_group_versions_for_node(conn: &Connection, node_id: i64) -> io::Result<()> {
     conn.execute(
         "UPDATE groups
          SET version = version + 1
@@ -302,7 +298,7 @@ pub(crate) fn bump_group_versions_for_node(conn: &Connection, node_id: i64) -> i
     Ok(())
 }
 
-pub(crate) fn bump_group_versions_for_subscription(
+pub fn bump_group_versions_for_subscription(
     conn: &Connection,
     subscription_id: i64,
 ) -> io::Result<()> {

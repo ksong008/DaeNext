@@ -1,4 +1,4 @@
-use super::prepare::PreparedRuntimeGeneration;
+use super::PreparedRuntimeGeneration;
 use super::*;
 
 pub(super) fn commit_runtime_generation(

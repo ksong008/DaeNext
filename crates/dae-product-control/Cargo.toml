@@ -6,8 +6,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+dae-product-geodata.workspace = true
 dae-product-core.workspace = true
 dae-product-http.workspace = true
+dae-product-runtime.workspace = true
+dae-product-subscription.workspace = true
 libc.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

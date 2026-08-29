@@ -1,14 +1,10 @@
 use super::http::{fetch_geodata_latest_release, fetch_geodata_url_to_file};
 use super::status::update_geodata_resource_status_cache;
-use super::transaction::{
-    PreparedGeodataGeneration, commit_geodata_generation, recover_geodata_transaction,
-    runtime_input_versions_if_running,
-};
 use super::update_admission::ProductGeodataUpdateLease;
 use super::*;
 use super::{GeodataKind, GeodataRelease, GeodataSourceMode};
 use dae_product_geodata::geodata_source;
-use dae_product_geodata::{advise_file_dontneed, summarize_geodata_file};
+use dae_product_geodata::{GeodataUpdateCallbacks, summarize_geodata_file};
 
 pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
     let context = ProductGeodataUpdateContext::from_app(app);
@@ -27,64 +23,49 @@ pub(super) fn update_geodata_with_lease(
 pub(super) fn update_geodata_with_lease_using(
     context: &ProductGeodataUpdateContext,
     kind: GeodataKind,
-    _update_lease: ProductGeodataUpdateLease,
+    update_lease: ProductGeodataUpdateLease,
     preparation_mode: GeodataPreparationMode,
 ) -> io::Result<Value> {
-    let dir = context.dir.clone();
-    fs::create_dir_all(&dir)?;
-    recover_geodata_transaction(&dir, &context.state, kind)?;
-    let tmp_path = context
-        .updates
-        .reserve_staging_path(&dir, kind, "download")?;
-    let prepared = match preparation_mode {
-        GeodataPreparationMode::Inline => prepare_geodata_download_inline(
-            &context.control_runtime,
-            &context.state,
-            kind,
-            &tmp_path,
-        ),
-        GeodataPreparationMode::IsolatedProcess => {
-            prepare_geodata_with_helper(&context.updates, &context.state, &dir, kind, &tmp_path)
-        }
-    };
-    let prepared = match prepared {
-        Ok(prepared) => prepared,
-        Err(err) => {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(err);
-        }
-    };
-    let input_versions_before = match runtime_input_versions_if_running(context) {
-        Ok(version) => version,
-        Err(error) => {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(error);
-        }
-    };
-    let committed = commit_geodata_generation(
+    dae_product_geodata::update_geodata_with_lease_using(
+        context,
         &context.updates,
         &context.state,
-        &dir,
+        &context.dir,
         kind,
-        PreparedGeodataGeneration {
-            data_stage: tmp_path,
-            version: prepared.version,
-            summary: prepared.summary,
-            sha256: prepared.sha256,
-            input_versions_before,
-        },
-    )?;
-    let path = dir.join(kind.file_name());
-    let _ = advise_file_dontneed(&path);
-    let status = committed.status;
-    update_geodata_resource_status_cache(context, kind, status.clone());
-    let mut response_object = serde_json::Map::new();
-    response_object.insert(kind.response_key().to_owned(), status);
-    response_object.insert("updated".to_owned(), json!(kind.response_key()));
-    if committed.runtime_reload_required {
-        response_object.insert("runtimeReloadRequired".to_owned(), json!(true));
+        update_lease,
+        preparation_mode,
+    )
+}
+
+impl GeodataUpdateCallbacks for ProductGeodataUpdateContext {
+    fn prepare_download(
+        &self,
+        state: &Path,
+        dir: &Path,
+        kind: GeodataKind,
+        output: &Path,
+        mode: GeodataPreparationMode,
+    ) -> io::Result<dae_product_geodata::GeodataPreparedDownload> {
+        match mode {
+            GeodataPreparationMode::Inline => {
+                prepare_geodata_download_inline(&self.control_runtime, state, kind, output)
+            }
+            GeodataPreparationMode::IsolatedProcess => {
+                prepare_geodata_with_helper(&self.updates, state, dir, kind, output)
+            }
+        }
     }
-    Ok(Value::Object(response_object))
+
+    fn runtime_input_versions_if_running(
+        &self,
+        _state: &Path,
+    ) -> io::Result<Option<dae_product_geodata::RuntimeInputVersions>> {
+        super::transaction::runtime_input_versions_if_running(self)
+    }
+
+    fn update_status_cache(&self, kind: GeodataKind, status: Value) {
+        update_geodata_resource_status_cache(self, kind, status);
+    }
 }
 
 pub(super) fn prepare_geodata_download_inline(

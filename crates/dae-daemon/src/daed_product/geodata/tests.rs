@@ -10,6 +10,7 @@ use dae_product_geodata::{
     GeodataSourceUrlUpdate, geodata_source, geodata_source_status, reset_geodata_source_url,
     set_geodata_source_url, set_geodata_source_use_proxy, update_geodata_source_settings,
 };
+use sha2::{Digest, Sha256};
 
 mod status_cache;
 mod transaction;

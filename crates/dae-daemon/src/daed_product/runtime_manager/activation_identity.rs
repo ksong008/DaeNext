@@ -1,73 +1,19 @@
 use super::*;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct RuntimeActivationIdentity {
-    pub(super) product_generation: String,
-    pub(super) probe_generation: Option<u64>,
-}
+pub(super) use dae_product_runtime::RuntimeActivationIdentity;
 
 pub(super) fn persist_recovered_runtime_identity(
     state: &Path,
     identity: &RuntimeActivationIdentity,
 ) -> Result<(), String> {
-    let mut conn = open_state_connection(state)
-        .map_err(|err| format!("open runtime state for interface recovery identity: {err}"))?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|err| format!("begin interface recovery identity commit: {err}"))?;
-    let running = tx
-        .query_row(
-            "SELECT running FROM systems ORDER BY id LIMIT 1",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(|err| format!("read running runtime state for interface recovery: {err}"))?;
-    if running != Some(1) {
-        return Err("interface recovery identity commit requires a running runtime".to_owned());
-    }
-    let persisted_product_generation = tx
-        .query_row(
-            "SELECT value FROM daed_product_metadata WHERE key = ?1",
-            params![RUNTIME_GENERATION_METADATA_KEY],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|err| format!("read interface recovery product generation: {err}"))?;
-    if persisted_product_generation.as_deref() != Some(identity.product_generation.as_str()) {
-        return Err(format!(
-            "interface recovery product generation changed before identity commit: expected {:?}, persisted {:?}",
-            identity.product_generation, persisted_product_generation
-        ));
-    }
-    write_probe_generation(&tx, identity.probe_generation)?;
-    tx.commit()
-        .map_err(|err| format!("commit interface recovery identity: {err}"))
+    dae_product_runtime::persist_recovered_runtime_identity(state, identity)
 }
 
 pub(in crate::daed_product) fn write_probe_generation(
     tx: &rusqlite::Transaction<'_>,
     generation: Option<u64>,
 ) -> Result<(), String> {
-    match generation {
-        Some(generation) => tx
-            .execute(
-                "INSERT OR REPLACE INTO daed_product_metadata(key, value) VALUES(?1, ?2)",
-                params![
-                    RUNTIME_PROBE_GENERATION_METADATA_KEY,
-                    generation.to_string()
-                ],
-            )
-            .map(|_| ())
-            .map_err(|err| format!("set runtime probe generation: {err}")),
-        None => tx
-            .execute(
-                "DELETE FROM daed_product_metadata WHERE key = ?1",
-                params![RUNTIME_PROBE_GENERATION_METADATA_KEY],
-            )
-            .map(|_| ())
-            .map_err(|err| format!("clear runtime probe generation: {err}")),
-    }
+    dae_product_runtime::write_probe_generation(tx, generation)
 }
 
 #[cfg(test)]

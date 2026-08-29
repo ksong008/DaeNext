@@ -13,6 +13,7 @@ pub const GEODATA_HTTP_BODY_LIMIT: usize = 64 * 1024 * 1024;
 pub const GEODATA_REDIRECT_LIMIT: usize = 5;
 
 mod admission;
+mod commit;
 mod file;
 mod helper;
 mod http_wire;
@@ -20,8 +21,10 @@ mod source;
 mod status;
 mod status_cache;
 mod transaction;
+mod update;
 
 pub use admission::*;
+pub use commit::*;
 pub use file::*;
 pub use helper::*;
 pub use http_wire::*;
@@ -29,6 +32,7 @@ pub use source::*;
 pub use status::*;
 pub use status_cache::*;
 pub use transaction::*;
+pub use update::*;
 
 pub struct GeodataRelease {
     pub version: Option<String>,

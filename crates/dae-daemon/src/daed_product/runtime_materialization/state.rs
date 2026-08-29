@@ -218,63 +218,6 @@ fn metadata_value_from_connection(conn: &Connection, key: &str) -> io::Result<Op
     .map_err(sqlite_io_error)
 }
 
-pub(in crate::daed_product) fn runtime_modified(
-    conn: &Connection,
-    running: bool,
-) -> io::Result<bool> {
-    if !running {
-        return Ok(false);
-    }
-    if let Some(active_fingerprint) =
-        metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
-    {
-        let desired = prepare_runtime_materialization_plan_with_connection(conn)?;
-        return Ok(desired.active_fingerprint.as_str() != active_fingerprint);
-    }
-    legacy_runtime_modified(conn)
-}
-
-pub(super) fn runtime_modified_with_prepared_plan(
-    conn: &Connection,
-    running: bool,
-    plan: &RuntimeMaterializationPlan,
-) -> io::Result<bool> {
-    if !running {
-        return Ok(false);
-    }
-    if let Some(active_fingerprint) =
-        metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
-    {
-        return Ok(plan.active_fingerprint.as_str() != active_fingerprint);
-    }
-    legacy_runtime_modified(conn)
-}
-
-fn legacy_runtime_modified(conn: &Connection) -> io::Result<bool> {
-    let Some(config) = selected_section_state(conn, SectionKind::Config)? else {
-        return Ok(true);
-    };
-    let Some(dns) = selected_section_state(conn, SectionKind::Dns)? else {
-        return Ok(true);
-    };
-    let Some(routing) = selected_section_state(conn, SectionKind::Routing)? else {
-        return Ok(true);
-    };
-    let Some(running_state) = running_runtime_state(conn)? else {
-        return Ok(true);
-    };
-
-    Ok(running_state.config_id != Some(config.id)
-        || running_state.config_version != config.version
-        || running_state.dns_id != Some(dns.id)
-        || running_state.dns_version != dns.version
-        || running_state.routing_id != Some(routing.id)
-        || running_state.routing_version != routing.version
-        || running_state.group_version_sum != group_version_sum(conn)?
-        || running_state.group_ids != group_ids_text(conn)?
-        || running_state.external_input_version != current_runtime_external_input_version(conn)?)
-}
-
 pub(in crate::daed_product) fn mark_runtime_process_stopped(state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
     let mut conn = open_state_connection(state)?;

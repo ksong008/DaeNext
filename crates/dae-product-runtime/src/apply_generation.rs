@@ -1,57 +1,100 @@
-use super::*;
-use dae_product_persistence::{
-    DurableTransaction, ensure_private_directory, reserve_private_file,
-    sync_directory as sync_durable_directory,
-};
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
-pub(super) struct PreparedRuntimeGeneration {
-    pub(super) generation: String,
-    pub(super) candidate_path: Option<PathBuf>,
-    pub(super) output_path: Option<PathBuf>,
-    pub(super) previous_content: Option<Vec<u8>>,
-    pub(super) database_snapshot: RuntimeDatabaseSnapshot,
-    pub(super) journal_path: Option<PathBuf>,
-    pub(super) backup_path: Option<PathBuf>,
-    pub(super) transaction: Option<DurableTransaction>,
+use dae_product_persistence::{
+    DurableTransaction, ensure_private_directory, ensure_state_schema, open_state_connection,
+    reserve_private_file, sync_directory as sync_durable_directory,
+};
+use rusqlite::{OptionalExtension, params};
+
+use crate::{
+    RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY, RUNTIME_GENERATION_METADATA_KEY,
+    RUNTIME_PROBE_GENERATION_METADATA_KEY, RUNTIME_PROCESS_TRANSITION_METADATA_KEY,
+};
+use dae_product_core::path_string;
+
+pub const RUNTIME_RUNNING_METADATA_KEY: &str = "runtime_running";
+pub const RUNTIME_TRANSITION_PHASE_METADATA_KEY: &str = "runtime_transition_phase";
+pub const LAST_MATERIALIZED_AT_METADATA_KEY: &str = "last_materialized_at";
+pub const LAST_GENERATED_CONFIG_PATH_METADATA_KEY: &str = "last_generated_config_path";
+pub const RUNTIME_LOG_LEVEL_METADATA_KEY: &str = "runtime_log_level";
+pub const RUNTIME_LAST_APPLY_ERROR_METADATA_KEY: &str = "runtime_last_apply_error";
+
+pub const RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS: &[&str] = &[
+    RUNTIME_GENERATION_METADATA_KEY,
+    RUNTIME_PROBE_GENERATION_METADATA_KEY,
+    RUNTIME_RUNNING_METADATA_KEY,
+    RUNTIME_TRANSITION_PHASE_METADATA_KEY,
+    LAST_MATERIALIZED_AT_METADATA_KEY,
+    LAST_GENERATED_CONFIG_PATH_METADATA_KEY,
+    RUNTIME_LOG_LEVEL_METADATA_KEY,
+    RUNTIME_LAST_APPLY_ERROR_METADATA_KEY,
+    RUNTIME_PROCESS_TRANSITION_METADATA_KEY,
+    RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY,
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeApplyCheckpoint {
+    CreateDirectory,
+    WriteCandidate,
+    SyncCandidate,
+    StartCandidate,
+    CommitPostStart,
+    RenameCandidate,
+    CommitDatabase,
+    PublishLogPolicy,
+    Rollback,
+}
+
+pub struct PreparedRuntimeGeneration {
+    pub generation: String,
+    pub candidate_path: Option<PathBuf>,
+    pub output_path: Option<PathBuf>,
+    pub previous_content: Option<Vec<u8>>,
+    pub database_snapshot: RuntimeDatabaseSnapshot,
+    pub journal_path: Option<PathBuf>,
+    pub backup_path: Option<PathBuf>,
+    pub transaction: Option<DurableTransaction>,
     probe_generation: Option<u64>,
     committed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct RuntimeDatabaseSnapshot {
-    pub(super) system: Option<RuntimeSystemSnapshot>,
-    pub(super) metadata: Vec<(String, Option<String>)>,
+pub struct RuntimeDatabaseSnapshot {
+    pub system: Option<RuntimeSystemSnapshot>,
+    pub metadata: Vec<(String, Option<String>)>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct RuntimeSystemSnapshot {
-    pub(super) running: i64,
-    pub(super) config_version: i64,
-    pub(super) dns_version: i64,
-    pub(super) routing_version: i64,
-    pub(super) group_version_sum: i64,
-    pub(super) group_ids: String,
-    pub(super) config_id: i64,
-    pub(super) dns_id: i64,
-    pub(super) routing_id: i64,
-    pub(super) external_input_version: i64,
+pub struct RuntimeSystemSnapshot {
+    pub running: i64,
+    pub config_version: i64,
+    pub dns_version: i64,
+    pub routing_version: i64,
+    pub group_version_sum: i64,
+    pub group_ids: String,
+    pub config_id: i64,
+    pub dns_id: i64,
+    pub routing_id: i64,
+    pub external_input_version: i64,
 }
 
 impl PreparedRuntimeGeneration {
-    pub(super) fn set_probe_generation(&mut self, generation: Option<u64>) {
+    pub fn set_probe_generation(&mut self, generation: Option<u64>) {
         self.probe_generation = generation;
     }
 
-    pub(super) fn probe_generation(&self) -> Option<u64> {
+    pub fn probe_generation(&self) -> Option<u64> {
         self.probe_generation
     }
 
-    pub(super) fn mark_committed(&mut self) {
+    pub fn mark_committed(&mut self) {
         self.committed = true;
         self.candidate_path = None;
     }
 
-    pub(super) fn discard_rollback_state(&mut self) {
+    pub fn discard_rollback_state(&mut self) {
         self.previous_content = None;
         self.database_snapshot = RuntimeDatabaseSnapshot::default();
     }
@@ -67,14 +110,14 @@ impl Drop for PreparedRuntimeGeneration {
     }
 }
 
-pub(super) fn prepare_runtime_generation(
+pub fn prepare_runtime_generation(
     state: &Path,
     config_dir: Option<&Path>,
-    plan: &RuntimeMaterializationPlan,
+    plan: &crate::RuntimeMaterializationPlan,
     generation: &str,
-    checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
+    checkpoints: &mut dyn dae_product_persistence::FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<PreparedRuntimeGeneration, String> {
-    ensure_state_schema(state).map_err(|err| format!("prepare runtime state: {err}"))?;
+    ensure_state_schema(state).map_err(|error| format!("prepare runtime state: {error}"))?;
     let database_snapshot = snapshot_runtime_database(state)?;
     let Some(config_dir) = config_dir else {
         return Ok(PreparedRuntimeGeneration {
@@ -93,20 +136,20 @@ pub(super) fn prepare_runtime_generation(
     let runtime_dir = config_dir.join("runtime");
     checkpoints
         .checkpoint(RuntimeApplyCheckpoint::CreateDirectory)
-        .map_err(|err| format!("prepare runtime directory checkpoint: {err}"))?;
-    ensure_private_directory(&runtime_dir).map_err(|err| {
+        .map_err(|error| format!("prepare runtime directory checkpoint: {error}"))?;
+    ensure_private_directory(&runtime_dir).map_err(|error| {
         format!(
-            "create runtime directory {}: {err}",
+            "create runtime directory {}: {error}",
             path_string(&runtime_dir)
         )
     })?;
     let output_path = runtime_dir.join("generated.dae");
     let previous_content = match fs::read(&output_path) {
         Ok(content) => Some(content),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(err) => {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
             return Err(format!(
-                "read previous runtime materialization {}: {err}",
+                "read previous runtime materialization {}: {error}",
                 path_string(&output_path)
             ));
         }
@@ -114,7 +157,7 @@ pub(super) fn prepare_runtime_generation(
     let candidate_path = runtime_dir.join(format!(".generated.dae.{generation}.candidate"));
     checkpoints
         .checkpoint(RuntimeApplyCheckpoint::WriteCandidate)
-        .map_err(|err| format!("write runtime candidate checkpoint: {err}"))?;
+        .map_err(|error| format!("write runtime candidate checkpoint: {error}"))?;
     let candidate = PreparedRuntimeGeneration {
         generation: generation.to_owned(),
         candidate_path: Some(candidate_path),
@@ -130,25 +173,25 @@ pub(super) fn prepare_runtime_generation(
     let candidate_path = candidate
         .candidate_path
         .as_ref()
-        .expect("prepared runtime candidate path is present");
-    let mut file = reserve_private_file(candidate_path).map_err(|err| {
+        .ok_or_else(|| "prepared runtime candidate path is missing".to_owned())?;
+    let mut file = reserve_private_file(candidate_path).map_err(|error| {
         format!(
-            "create runtime candidate {}: {err}",
+            "create runtime candidate {}: {error}",
             path_string(candidate_path)
         )
     })?;
-    file.write_all(plan.content.as_bytes()).map_err(|err| {
+    file.write_all(plan.content.as_bytes()).map_err(|error| {
         format!(
-            "write runtime candidate {}: {err}",
+            "write runtime candidate {}: {error}",
             path_string(candidate_path)
         )
     })?;
     checkpoints
         .checkpoint(RuntimeApplyCheckpoint::SyncCandidate)
-        .map_err(|err| format!("sync runtime candidate checkpoint: {err}"))?;
-    file.sync_all().map_err(|err| {
+        .map_err(|error| format!("sync runtime candidate checkpoint: {error}"))?;
+    file.sync_all().map_err(|error| {
         format!(
-            "sync runtime candidate {}: {err}",
+            "sync runtime candidate {}: {error}",
             path_string(candidate_path)
         )
     })?;
@@ -158,7 +201,7 @@ pub(super) fn prepare_runtime_generation(
 
 fn snapshot_runtime_database(state: &Path) -> Result<RuntimeDatabaseSnapshot, String> {
     let conn = open_state_connection(state)
-        .map_err(|err| format!("open runtime state for snapshot: {err}"))?;
+        .map_err(|error| format!("open runtime state for snapshot: {error}"))?;
     let system = conn
         .query_row(
             "SELECT running, running_config_version, running_dns_version,
@@ -183,7 +226,7 @@ fn snapshot_runtime_database(state: &Path) -> Result<RuntimeDatabaseSnapshot, St
             },
         )
         .optional()
-        .map_err(|err| format!("snapshot running runtime state: {err}"))?;
+        .map_err(|error| format!("snapshot running runtime state: {error}"))?;
     let mut metadata = Vec::with_capacity(RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS.len());
     for key in RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS {
         let value = conn
@@ -193,13 +236,13 @@ fn snapshot_runtime_database(state: &Path) -> Result<RuntimeDatabaseSnapshot, St
                 |row| row.get::<_, String>(0),
             )
             .optional()
-            .map_err(|err| format!("snapshot runtime metadata {key}: {err}"))?;
+            .map_err(|error| format!("snapshot runtime metadata {key}: {error}"))?;
         metadata.push(((*key).to_owned(), value));
     }
     Ok(RuntimeDatabaseSnapshot { system, metadata })
 }
 
-pub(super) fn sync_directory(path: &Path) -> Result<(), String> {
+pub fn sync_directory(path: &Path) -> Result<(), String> {
     sync_durable_directory(path)
-        .map_err(|err| format!("sync directory {}: {err}", path_string(path)))
+        .map_err(|error| format!("sync directory {}: {error}", path_string(path)))
 }

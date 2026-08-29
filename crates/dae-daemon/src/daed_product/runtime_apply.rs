@@ -3,47 +3,21 @@ use super::*;
 mod activate;
 mod commit;
 mod journal;
-mod prepare;
 mod reconcile;
 mod rollback;
 
+pub(super) use dae_product_runtime::{
+    LAST_GENERATED_CONFIG_PATH_METADATA_KEY, LAST_MATERIALIZED_AT_METADATA_KEY,
+    PreparedRuntimeGeneration, RUNTIME_LAST_APPLY_ERROR_METADATA_KEY,
+    RUNTIME_LOG_LEVEL_METADATA_KEY, RUNTIME_RUNNING_METADATA_KEY,
+    RUNTIME_TRANSITION_PHASE_METADATA_KEY, RuntimeApplyCheckpoint, RuntimeDatabaseSnapshot,
+    prepare_runtime_generation, sync_directory,
+};
+
 use self::activate::activate_runtime_generation;
 use self::commit::commit_runtime_generation;
-use self::prepare::prepare_runtime_generation;
 use self::reconcile::{record_apply_failure, record_apply_success};
 use self::rollback::rollback_runtime_generation;
-
-const RUNTIME_RUNNING_METADATA_KEY: &str = "runtime_running";
-const RUNTIME_TRANSITION_PHASE_METADATA_KEY: &str = "runtime_transition_phase";
-const LAST_MATERIALIZED_AT_METADATA_KEY: &str = "last_materialized_at";
-const LAST_GENERATED_CONFIG_PATH_METADATA_KEY: &str = "last_generated_config_path";
-const RUNTIME_LOG_LEVEL_METADATA_KEY: &str = "runtime_log_level";
-const RUNTIME_LAST_APPLY_ERROR_METADATA_KEY: &str = "runtime_last_apply_error";
-const RUNTIME_APPLY_SNAPSHOT_METADATA_KEYS: &[&str] = &[
-    RUNTIME_GENERATION_METADATA_KEY,
-    RUNTIME_PROBE_GENERATION_METADATA_KEY,
-    RUNTIME_RUNNING_METADATA_KEY,
-    RUNTIME_TRANSITION_PHASE_METADATA_KEY,
-    LAST_MATERIALIZED_AT_METADATA_KEY,
-    LAST_GENERATED_CONFIG_PATH_METADATA_KEY,
-    RUNTIME_LOG_LEVEL_METADATA_KEY,
-    RUNTIME_LAST_APPLY_ERROR_METADATA_KEY,
-    RUNTIME_PROCESS_TRANSITION_METADATA_KEY,
-    RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY,
-];
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::daed_product) enum RuntimeApplyCheckpoint {
-    CreateDirectory,
-    WriteCandidate,
-    SyncCandidate,
-    StartCandidate,
-    CommitPostStart,
-    RenameCandidate,
-    CommitDatabase,
-    PublishLogPolicy,
-    Rollback,
-}
 
 pub(in crate::daed_product) fn apply_runtime_generation(
     runtime: &ProductRuntimeManager,

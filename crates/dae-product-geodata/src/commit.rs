@@ -1,14 +1,49 @@
-use super::external_input::ensure_runtime_input_versions_bumped;
-use super::files::{
-    backup_live_file, remove_paths_best_effort, sync_directory, write_version_stage,
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use dae_product_persistence::{
+    FaultCheckpoints, copy_regular_file_synced, remove_file_if_exists, sync_directory,
+    write_reserved_file_synced,
 };
-use super::*;
-use dae_product_geodata::{
-    GeodataJournalPhase, GeodataUpdateJournal, finalize_committed_geodata_journal,
+use serde_json::Value;
+
+use crate::{
+    GeodataJournalPhase, GeodataKind, GeodataUpdateJournal, ProductGeodataUpdateCoordinator,
+    RuntimeInputVersions, ensure_runtime_input_versions_bumped, finalize_committed_geodata_journal,
+    geodata_resource_status_from_staged_parts, is_valid_geodata_release_version,
     rollback_geodata_journal, write_geodata_journal,
 };
 
-pub(in crate::daed_product::geodata) fn commit_geodata_generation(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeodataTransactionCheckpoint {
+    WriteVersionStage,
+    BackupLiveFiles,
+    WriteActivatingJournal,
+    RenameData,
+    RenameVersion,
+    SyncActivatedDirectory,
+    WriteFilesActivatedJournal,
+    BumpExternalInput,
+    CleanupCommitted,
+}
+
+#[derive(Debug)]
+pub struct GeodataCommitResult {
+    pub status: Value,
+    pub runtime_reload_required: bool,
+}
+
+#[derive(Debug)]
+pub struct PreparedGeodataGeneration {
+    pub data_stage: PathBuf,
+    pub version: String,
+    pub summary: dae_geodata::GeoDataSummary,
+    pub sha256: String,
+    pub input_versions_before: Option<RuntimeInputVersions>,
+}
+
+pub fn commit_geodata_generation(
     coordinator: &ProductGeodataUpdateCoordinator,
     state: &Path,
     dir: &Path,
@@ -26,7 +61,7 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation(
     )
 }
 
-pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoints(
+pub fn commit_geodata_generation_with_checkpoints(
     coordinator: &ProductGeodataUpdateCoordinator,
     state: &Path,
     dir: &Path,
@@ -52,7 +87,7 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoin
             return Err(error);
         }
     };
-    let status = match dae_product_geodata::geodata_resource_status_from_staged_parts(
+    let status = match geodata_resource_status_from_staged_parts(
         &data_stage,
         kind,
         summary,
@@ -151,6 +186,53 @@ pub(in crate::daed_product::geodata) fn commit_geodata_generation_with_checkpoin
     })
 }
 
+fn write_version_stage(
+    coordinator: &ProductGeodataUpdateCoordinator,
+    dir: &Path,
+    kind: GeodataKind,
+    version: &str,
+) -> io::Result<PathBuf> {
+    if !is_valid_geodata_release_version(version) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid geodata release version: {version}"),
+        ));
+    }
+    let path = coordinator.reserve_staging_path(dir, kind, "version")?;
+    let result = write_reserved_file_synced(&path, format!("{version}\n").as_bytes());
+    if let Err(error) = result {
+        let _ = remove_file_if_exists(&path);
+        return Err(error);
+    }
+    Ok(path)
+}
+
+fn backup_live_file(
+    coordinator: &ProductGeodataUpdateCoordinator,
+    dir: &Path,
+    kind: GeodataKind,
+    live_path: &Path,
+    purpose: &str,
+) -> io::Result<Option<PathBuf>> {
+    match fs::metadata(live_path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    }
+    let backup_path = coordinator.reserve_staging_path(dir, kind, purpose)?;
+    if let Err(error) = copy_regular_file_synced(live_path, &backup_path) {
+        let _ = remove_file_if_exists(&backup_path);
+        return Err(error);
+    }
+    Ok(Some(backup_path))
+}
+
+fn remove_paths_best_effort(paths: impl IntoIterator<Item = PathBuf>) {
+    for path in paths {
+        let _ = remove_file_if_exists(&path);
+    }
+}
+
 fn activate_files(
     dir: &Path,
     kind: GeodataKind,
@@ -192,5 +274,13 @@ fn rollback_after_failure(
                 "geodata activation failed: {error}; rollback failed: {rollback_error}; recovery is required"
             ),
         )),
+    }
+}
+
+struct NoopFaultCheckpoints;
+
+impl<Point: Copy> FaultCheckpoints<Point> for NoopFaultCheckpoints {
+    fn checkpoint(&mut self, _point: Point) -> io::Result<()> {
+        Ok(())
     }
 }
