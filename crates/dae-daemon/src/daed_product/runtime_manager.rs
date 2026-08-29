@@ -21,6 +21,11 @@ pub(super) use dae_product_runtime::{
 };
 use traffic::runtime_traffic_counters;
 type ProductRuntimeState = dae_product_runtime::ProductRuntimeState<ProductRuntimeInstance>;
+type ProductRuntimeDomain = dae_product_runtime::ProductRuntimeDomain<
+    ProductRuntimeInstance,
+    AppliedRuntimeReload,
+    CoordinatedRuntimeReloadError,
+>;
 
 pub(in crate::daed_product) use apply_state::ProductRuntimeApplySnapshot;
 use cleanup::{
@@ -53,6 +58,7 @@ use summary::{
 
 #[derive(Debug)]
 pub(super) struct ProductRuntimeManager {
+    _domain: ProductRuntimeDomain,
     reconciler: RuntimeReconciler,
     lifecycle: Arc<Mutex<()>>,
     pub(super) inner: Arc<Mutex<ProductRuntimeState>>,
@@ -342,9 +348,10 @@ impl ProductRuntimeManager {
 
     fn new_with_state(state: Option<PathBuf>) -> Self {
         let coordinator = RuntimeApplyCoordinator::new();
-        let reconciler = RuntimeReconciler::new(coordinator.clone());
-        let lifecycle = Arc::new(Mutex::new(()));
-        let inner = Arc::new(Mutex::new(ProductRuntimeState::default()));
+        let domain = ProductRuntimeDomain::new(coordinator.clone());
+        let reconciler = domain.reconciler();
+        let lifecycle = domain.lifecycle().clone();
+        let inner = domain.state().clone();
         let interface_recovery = ProductRuntimeInterfaceRecoverySupervisor::start(
             coordinator.clone(),
             Arc::clone(&lifecycle),
@@ -352,6 +359,7 @@ impl ProductRuntimeManager {
             state,
         );
         Self {
+            _domain: domain,
             reconciler,
             lifecycle,
             inner,
