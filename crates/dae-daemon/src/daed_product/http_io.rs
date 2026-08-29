@@ -371,32 +371,6 @@ fn local_interface_ips() -> Vec<std::net::IpAddr> {
     addrs
 }
 
-pub(super) fn json_body(request: &HttpRequest) -> Result<Value, String> {
-    if request.body.is_empty() {
-        return Ok(json!({}));
-    }
-    serde_json::from_slice(&request.body).map_err(|err| format!("invalid json body: {err}"))
-}
-
-pub(super) fn required_str<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
-    body.get(key)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-}
-
-pub(super) fn string_array(body: &Value, key: &str) -> Vec<String> {
-    body.get(key)
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 pub(super) fn set_private_runtime_file_permissions(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {

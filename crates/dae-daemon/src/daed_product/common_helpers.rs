@@ -1,19 +1,4 @@
 use super::*;
-pub(super) fn integer_array(body: &Value, key: &str) -> Vec<i64> {
-    body.get(key)
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| {
-                    value
-                        .as_i64()
-                        .or_else(|| value.as_str().and_then(|value| value.parse::<i64>().ok()))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 pub(super) fn now_text() -> String {
     dae_product_core::product_now_text()
