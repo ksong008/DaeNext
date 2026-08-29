@@ -56,19 +56,6 @@ struct LatencyJobRuntimeContext {
     jobs: Arc<LatencyJobManager>,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct LatencyJobRunOutcome {
-    completed: usize,
-    succeeded: usize,
-    cancelled: bool,
-}
-
-impl LatencyJobRunOutcome {
-    fn failed(self) -> usize {
-        self.completed.saturating_sub(self.succeeded)
-    }
-}
-
 fn run_node_latency_job(
     job_id: u64,
     cancellation: LatencyJobCancellation,
@@ -77,49 +64,29 @@ fn run_node_latency_job(
 ) {
     let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::ManualLatency);
     debug_assert_eq!(cancellation.job_id(), job_id);
-    context.jobs.mark_running(job_id);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_node_latency_job_inner(job_id, &cancellation, &context, &nodes)
-    }));
-    match result {
-        Ok(Ok(outcome)) if outcome.cancelled || cancellation.is_requested() => {
-            context.jobs.mark_cancelled(
-                job_id,
-                outcome.completed,
-                outcome.succeeded,
-                outcome.failed(),
+    let state = context.state.clone();
+    let log_state = state.clone();
+    let config_dir = context.config_dir.clone();
+    let jobs = Arc::clone(&context.jobs);
+    dae_product_subscription::run_latency_job(
+        job_id,
+        cancellation,
+        jobs,
+        state,
+        nodes,
+        move |cancellation, nodes| {
+            run_node_latency_job_inner(job_id, cancellation, &context, nodes)
+        },
+        move || {
+            let _ = append_log_for_config(
+                &config_dir,
+                &log_state,
+                "info",
+                "node latency probe updated by Rust daed",
             );
-        }
-        Ok(Ok(outcome)) => {
-            context.jobs.mark_finished(
-                job_id,
-                outcome.completed,
-                outcome.succeeded,
-                outcome.failed(),
-            );
-        }
-        Ok(Err(err)) => context.jobs.mark_failed(job_id, err.to_string()),
-        Err(payload) => context.jobs.mark_failed(
-            job_id,
-            format!(
-                "manual latency probe panicked: {}",
-                panic_payload_message(payload.as_ref())
-            ),
-        ),
-    }
-    drop(nodes);
-    drop(context);
+        },
+    );
     allocator_request_reclaim(AllocatorReclaimReason::ManualLatencyProbe);
-}
-
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        return (*message).to_owned();
-    }
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-    "unknown panic payload".to_owned()
 }
 
 fn run_node_latency_job_inner(
@@ -130,10 +97,10 @@ fn run_node_latency_job_inner(
 ) -> io::Result<LatencyJobRunOutcome> {
     let LatencyJobRuntimeContext {
         state,
-        config_dir,
         control_runtime,
         runtime,
         jobs,
+        ..
     } = context;
     let mut conn = open_state_connection(state)?;
     let mut completed = 0usize;
@@ -260,14 +227,7 @@ fn run_node_latency_job_inner(
 
     jobs.flush_pending_latency_results(job_id, state);
     let cancelled = cancellation.is_requested();
-    if !cancelled {
-        let _ = append_log_for_config(
-            config_dir,
-            state,
-            "info",
-            "node latency probe updated by Rust daed",
-        );
-    }
+    if !cancelled {}
     Ok(LatencyJobRunOutcome {
         completed,
         succeeded,
@@ -337,15 +297,6 @@ mod tests {
             ],
         )
         .unwrap();
-    }
-
-    #[test]
-    fn panic_payload_message_preserves_string_payloads() {
-        let literal = "latency panic literal";
-        let owned = "latency panic string".to_owned();
-
-        assert_eq!(panic_payload_message(&literal), literal);
-        assert_eq!(panic_payload_message(&owned), owned);
     }
 
     #[test]
