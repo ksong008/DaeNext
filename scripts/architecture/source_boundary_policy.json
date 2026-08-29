@@ -14,7 +14,7 @@
       "tests": 0
     },
     "dae-product-geodata": {
-      "production": 3000,
+      "production": 3500,
       "tests": 0
     },
     "dae-product-http": {
@@ -30,7 +30,7 @@
       "tests": 300
     },
     "dae-product-subscription": {
-      "production": 7300,
+      "production": 7800,
       "tests": 0
     },
     "dae-daemon": {
