@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -255,9 +256,20 @@ impl DurableArtifactSet {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurableTransactionPhase {
+    Prepared,
+    IntentWritten,
+    Activated,
+    DatabaseCommitted,
+    RecoveryRequired,
+    Cleaned,
+}
+
 #[derive(Debug)]
 pub struct DurableTransaction {
     artifacts: DurableArtifactSet,
+    phase: Cell<DurableTransactionPhase>,
     activated: bool,
     database_committed: bool,
     finished: bool,
@@ -268,6 +280,7 @@ impl DurableTransaction {
     pub fn new(artifacts: DurableArtifactSet) -> Self {
         Self {
             artifacts,
+            phase: Cell::new(DurableTransactionPhase::Prepared),
             activated: false,
             database_committed: false,
             finished: false,
@@ -279,14 +292,22 @@ impl DurableTransaction {
         &self.artifacts
     }
 
+    pub fn phase(&self) -> DurableTransactionPhase {
+        self.phase.get()
+    }
+
     pub fn write_intent<T: Serialize>(&self, max_bytes: u64, value: &T) -> io::Result<()> {
-        write_json_journal(
+        let result = write_json_journal(
             self.artifacts.directory(),
             &self.artifacts.journal,
             &self.artifacts.journal_next,
             max_bytes,
             value,
-        )
+        );
+        if result.is_ok() {
+            self.phase.set(DurableTransactionPhase::IntentWritten);
+        }
+        result
     }
 
     pub fn activate(&mut self) -> io::Result<()> {
@@ -295,6 +316,7 @@ impl DurableTransaction {
             self.artifacts.target.path_in(self.artifacts.directory()),
         )?;
         self.activated = true;
+        self.phase.set(DurableTransactionPhase::Activated);
         sync_directory(self.artifacts.directory())?;
         Ok(())
     }
@@ -302,6 +324,7 @@ impl DurableTransaction {
     pub fn commit_database<R, E>(&mut self, commit: impl FnOnce() -> Result<R, E>) -> Result<R, E> {
         let result = commit()?;
         self.database_committed = true;
+        self.phase.set(DurableTransactionPhase::DatabaseCommitted);
         Ok(result)
     }
 
@@ -311,6 +334,7 @@ impl DurableTransaction {
 
     pub fn preserve_for_recovery(&mut self) {
         self.rollback_failed = true;
+        self.phase.set(DurableTransactionPhase::RecoveryRequired);
     }
 
     pub fn finish(mut self) -> io::Result<()> {
@@ -322,6 +346,9 @@ impl DurableTransaction {
         self.database_committed = true;
         let result = cleanup_transaction_artifacts(&self.artifacts, true);
         self.finished = result.is_ok();
+        if self.finished {
+            self.phase.set(DurableTransactionPhase::Cleaned);
+        }
         result
     }
 
@@ -341,6 +368,11 @@ impl DurableTransaction {
         }
         self.finished = errors.is_empty();
         self.rollback_failed = !errors.is_empty();
+        self.phase.set(if errors.is_empty() {
+            DurableTransactionPhase::Cleaned
+        } else {
+            DurableTransactionPhase::RecoveryRequired
+        });
         if errors.is_empty() {
             Ok(())
         } else {
@@ -747,6 +779,51 @@ mod tests {
         }
         assert_eq!(fs::read(directory.join("target")).unwrap(), b"old");
         assert!(!directory.join("backup").exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn transaction_phase_tracks_the_shared_commit_lifecycle() {
+        let directory = temp_dir("phase-lifecycle");
+        fs::write(directory.join("target"), b"old").unwrap();
+        fs::rename(directory.join("target"), directory.join("backup")).unwrap();
+        fs::write(directory.join("candidate"), b"new").unwrap();
+        let mut transaction = DurableTransaction::new(transaction_artifacts(&directory));
+
+        assert_eq!(transaction.phase(), DurableTransactionPhase::Prepared);
+        transaction.write_intent(1024, &vec!["intent"]).unwrap();
+        assert_eq!(transaction.phase(), DurableTransactionPhase::IntentWritten);
+        transaction.activate().unwrap();
+        assert_eq!(transaction.phase(), DurableTransactionPhase::Activated);
+        transaction
+            .commit_database(|| Ok::<_, io::Error>(()))
+            .unwrap();
+        assert_eq!(
+            transaction.phase(),
+            DurableTransactionPhase::DatabaseCommitted
+        );
+        transaction.finish_in_place().unwrap();
+        assert_eq!(transaction.phase(), DurableTransactionPhase::Cleaned);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_rollback_enters_recovery_required_phase() {
+        let directory = temp_dir("phase-recovery");
+        fs::write(directory.join("backup"), b"old").unwrap();
+        fs::write(directory.join("candidate"), b"new").unwrap();
+        let mut transaction = DurableTransaction::new(transaction_artifacts(&directory));
+        transaction.activate().unwrap();
+        fs::remove_file(directory.join("target")).unwrap();
+        fs::create_dir(directory.join("target")).unwrap();
+
+        assert!(transaction.rollback().is_err());
+        assert_eq!(
+            transaction.phase(),
+            DurableTransactionPhase::RecoveryRequired
+        );
+
         fs::remove_dir_all(directory).unwrap();
     }
 
