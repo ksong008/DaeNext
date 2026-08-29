@@ -18,7 +18,8 @@ pub(crate) use dae_product_subscription::{
     latency_probe_unique_links,
 };
 pub(crate) use dae_product_subscription::{
-    LatencyProbeSeenLinks, NodeLatencyWrite, RuntimeNodeLatencyIndex, native_probe_missing_results,
+    LatencyProbeSeenLinks, NodeLatencyWrite, RuntimeNodeLatencyIndex,
+    list_stored_node_latencies_value, node_latency_results_for_runtime_snapshots,
     runtime_latency_snapshot_link_hash, stored_successful_node_latency_seed_snapshots,
 };
 #[cfg(test)]
@@ -33,7 +34,6 @@ pub(crate) use helper::{
 pub(crate) use jobs::node_latency_results_for_runtime_snapshots_only;
 pub(crate) use jobs::{
     add_node_latency_job_value, current_node_latency_job_value, enqueue_node_latency_job,
-    list_stored_node_latencies_value,
 };
 #[cfg(test)]
 pub(crate) use runtime_snapshots::fake_runtime_tcp_latency_snapshot;

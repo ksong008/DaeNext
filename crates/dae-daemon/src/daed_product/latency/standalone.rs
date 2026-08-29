@@ -52,7 +52,7 @@ impl StandaloneManualProbeJob<'_> {
                 break;
             }
             self.ensure_current()?;
-            let mut results = super::jobs::node_latency_results_for_runtime_snapshots(
+            let mut results = dae_product_subscription::node_latency_results_for_runtime_snapshots(
                 &chunk_nodes,
                 &node_index,
                 &runtime_snapshots,
