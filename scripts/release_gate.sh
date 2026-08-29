@@ -28,6 +28,8 @@ run_step "large source boundary gate" python3 scripts/architecture/check_source_
 run_step "large source boundary checker tests" python3 scripts/architecture/test_check_source_boundaries.py
 run_step "product physical boundaries" python3 scripts/architecture/check_product_boundaries.py
 run_step "product boundary checker tests" python3 scripts/architecture/test_check_product_boundaries.py
+run_step "product adapter boundary" python3 scripts/architecture/check_product_adapters.py
+run_step "product adapter boundary checker tests" python3 scripts/architecture/test_check_product_adapters.py
 run_step "production dependency surface" scripts/check_production_deps.sh --all-features
 run_step "workspace check" cargo check --workspace --all-targets "${cargo_profile_args[@]}"
 run_step "workspace library tests" cargo test --workspace --lib "${cargo_profile_args[@]}" -- --test-threads=1
