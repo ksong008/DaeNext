@@ -181,6 +181,19 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
         source_errors = [error for error in errors if "source import crosses" in error]
         self.assertEqual(len(source_errors), 3)
 
+    def test_missing_source_directory_is_rejected_when_manifest_root_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            (root / "a").mkdir()
+            graph = metadata(("a", []), ("b", []))
+            graph["packages"][0]["manifest_path"] = str(root / "a" / "Cargo.toml")
+            errors = CHECKER.validate(
+                graph,
+                policy(("a", [], [], []), ("b", [], [], [])),
+                scan_sources=True,
+            )
+        self.assertTrue(any("source directory is missing" in error for error in errors))
+
     def test_forbidden_source_import_is_rejected_when_edge_is_declared(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
