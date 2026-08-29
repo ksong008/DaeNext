@@ -8,6 +8,7 @@ mod cleanup_inventory;
 mod executor;
 mod generation_drain;
 mod task;
+mod thread_shutdown;
 mod thread_task;
 
 pub use cleanup_inventory::{ResidentRuntimeCleanupInventory, ResidentRuntimeCleanupReporter};
@@ -21,6 +22,10 @@ pub use generation_drain::{
 pub use task::{
     ResidentAsyncRuntimeShutdown, ResidentAsyncRuntimeTask, ResidentRuntimeTaskRole,
     registered_resident_async_runtime_task,
+};
+pub use thread_shutdown::{
+    ResidentRuntimeThreadShutdown, elapsed_nanos, take_resident_async_runtime_tasks,
+    wait_for_resident_runtime_tasks,
 };
 pub use thread_task::{
     ResidentRuntimeTask, ResidentRuntimeTaskExit, registered_resident_runtime_task,
