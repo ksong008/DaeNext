@@ -1,12 +1,19 @@
-use super::*;
+use std::collections::HashSet;
+use std::io;
+use std::path::Path;
 
-pub(crate) const GROUP_SUBSCRIPTION_FILTER_PREVIEW_PER_SUBSCRIPTION_SAMPLE_LIMIT: usize = 8;
-pub(crate) const GROUP_SUBSCRIPTION_FILTER_PREVIEW_TOTAL_SAMPLE_LIMIT: usize = 64;
+use dae_product_http::{HttpRequest, HttpResponse, integer_array, json_body};
+use dae_product_persistence::open_state_connection;
+use dae_product_subscription::{
+    compile_subscription_name_filter as compile_name_filter,
+    visit_subscription_nodes_matching_filter as visit_subscription_nodes_matching_name_filter,
+};
+use serde_json::{Value, json};
 
-pub(crate) fn preview_group_subscription_filter(
-    state: &Path,
-    request: &HttpRequest,
-) -> HttpResponse {
+pub const GROUP_SUBSCRIPTION_FILTER_PREVIEW_PER_SUBSCRIPTION_SAMPLE_LIMIT: usize = 8;
+pub const GROUP_SUBSCRIPTION_FILTER_PREVIEW_TOTAL_SAMPLE_LIMIT: usize = 64;
+
+pub fn preview_group_subscription_filter(state: &Path, request: &HttpRequest) -> HttpResponse {
     let body = match json_body(request) {
         Ok(body) => body,
         Err(err) => return HttpResponse::json(400, json!({"error": err})),
@@ -31,7 +38,7 @@ pub(crate) fn preview_group_subscription_filter(
     }
 }
 
-pub(crate) fn group_subscription_filter_preview_value(
+pub fn group_subscription_filter_preview_value(
     state: &Path,
     subscription_ids: &[i64],
     name_filter_regex: Option<&str>,
