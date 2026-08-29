@@ -3,6 +3,7 @@ mod apply_generation;
 mod apply_state;
 mod benchmark;
 mod cgroup_memory;
+mod commit_state;
 mod contracts;
 mod coordinator;
 mod domain;
@@ -27,6 +28,7 @@ pub use benchmark::{
     ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
 };
 pub use cgroup_memory::*;
+pub use commit_state::*;
 pub use contracts::*;
 pub use coordinator::*;
 pub use dae_product_core::{

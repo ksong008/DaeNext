@@ -9,13 +9,6 @@ pub(super) fn persist_recovered_runtime_identity(
     dae_product_runtime::persist_recovered_runtime_identity(state, identity)
 }
 
-pub(in crate::daed_product) fn write_probe_generation(
-    tx: &rusqlite::Transaction<'_>,
-    generation: Option<u64>,
-) -> Result<(), String> {
-    dae_product_runtime::write_probe_generation(tx, generation)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
