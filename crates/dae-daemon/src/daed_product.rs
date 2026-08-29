@@ -479,7 +479,5 @@ fn product_test_auth_runtime() -> Arc<ProductAuthRuntime> {
 fn product_test_control_runtime() -> Arc<ProductControlRuntime> {
     ProductControlRuntime::start(ProductControlRuntimeConfig::for_benchmark()).unwrap()
 }
-mod cli_help;
-use self::cli_help::*;
 #[cfg(test)]
 mod tests;
