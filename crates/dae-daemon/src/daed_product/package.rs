@@ -336,23 +336,3 @@ exec /usr/bin/daed run -c /etc/daed --listen "${{{PRODUCT_LISTEN_ENV}:-${{{PRODU
 "#
     )
 }
-
-pub(super) fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
-    let sql = match table {
-        "configs" => "SELECT COUNT(*) FROM configs",
-        "dns" => "SELECT COUNT(*) FROM dns",
-        "routings" => "SELECT COUNT(*) FROM routings",
-        "groups" => "SELECT COUNT(*) FROM groups",
-        "nodes" => "SELECT COUNT(*) FROM nodes",
-        "subscriptions" => "SELECT COUNT(*) FROM subscriptions",
-        "node_latency_results" => "SELECT COUNT(*) FROM node_latency_results",
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("unsupported table count: {table}"),
-            ));
-        }
-    };
-    conn.query_row(sql, [], |row| row.get::<_, i64>(0))
-        .map_err(sqlite_io_error)
-}

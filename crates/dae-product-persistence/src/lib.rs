@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::ffi::OsStr;
@@ -8,6 +9,26 @@ use std::path::{Component, Path, PathBuf};
 
 pub fn sqlite_io_error(error: rusqlite::Error) -> io::Error {
     io::Error::other(error)
+}
+
+pub fn count_table(conn: &Connection, table: &str) -> io::Result<i64> {
+    let sql = match table {
+        "configs" => "SELECT COUNT(*) FROM configs",
+        "dns" => "SELECT COUNT(*) FROM dns",
+        "routings" => "SELECT COUNT(*) FROM routings",
+        "groups" => "SELECT COUNT(*) FROM groups",
+        "nodes" => "SELECT COUNT(*) FROM nodes",
+        "subscriptions" => "SELECT COUNT(*) FROM subscriptions",
+        "node_latency_results" => "SELECT COUNT(*) FROM node_latency_results",
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unsupported table count: {table}"),
+            ));
+        }
+    };
+    conn.query_row(sql, [], |row| row.get::<_, i64>(0))
+        .map_err(sqlite_io_error)
 }
 
 pub fn set_private_runtime_file_permissions(path: &Path) -> io::Result<()> {
