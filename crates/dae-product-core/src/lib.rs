@@ -48,6 +48,46 @@ const INTERNAL_RUNTIME_NODE_TAG_PREFIX: &str = "__daed_node_";
 pub const DEFAULT_PRODUCT_CONTROL_SOCKET: &str = "/run/daed/control.sock";
 pub const PRODUCT_CONTROL_SOCKET_ENV: &str = "DAED_CONTROL_SOCKET";
 pub const RUNTIME_PROBE_GENERATION_METADATA_KEY: &str = "runtime_probe_generation";
+pub const PRODUCT_LISTEN_ENV: &str = "PRODUCT_LISTEN";
+pub const PRODUCT_LISTEN_LEGACY_ENV: &str = "DAED_LISTEN";
+
+pub fn systemd_unit_text() -> String {
+    r#"[Unit]
+Description=daed is a integration solution of dae, API and UI.
+Documentation=https://github.com/ksong008/DaeNext
+After=network-online.target docker.service systemd-sysctl.service
+Wants=network-online.target
+Conflicts=dae.service
+
+[Service]
+Type=simple
+User=root
+LimitNPROC=512
+LimitNOFILE=1048576
+RuntimeDirectory=daed
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/daed validate -c /etc/daed/
+ExecStart=/usr/bin/daed run -c /etc/daed/
+ExecReload=/usr/bin/daed reload --timeout 60s
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+"#
+    .to_owned()
+}
+
+pub fn docker_entrypoint_text() -> String {
+    format!(
+        r#"#!/bin/sh
+set -eu
+# Runtime defaults are owned by the binary; user-provided environment remains optional.
+/usr/bin/daed validate -c /etc/daed/ >/dev/null
+exec /usr/bin/daed run -c /etc/daed --listen "${{{PRODUCT_LISTEN_ENV}:-${{{PRODUCT_LISTEN_LEGACY_ENV}:-0.0.0.0:2023}}}}" "$@"
+"#
+    )
+}
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RuntimeNodeTag(String);
