@@ -59,6 +59,14 @@ pub(crate) fn finish_password_execution_probe() -> Vec<String> {
 }
 
 #[cfg(test)]
+fn record_password_execution_thread(password: &str) {
+    password::record_password_execution_thread(password);
+}
+
+#[cfg(test)]
+pub(crate) use dae_product_identity::legacy_password_hash_for_test;
+
+#[cfg(test)]
 mod password {
     use super::*;
 
@@ -102,11 +110,3 @@ mod password {
             .push(thread::current().name().unwrap_or("unnamed").to_owned());
     }
 }
-
-#[cfg(test)]
-fn record_password_execution_thread(password: &str) {
-    password::record_password_execution_thread(password);
-}
-
-#[cfg(test)]
-pub(crate) use dae_product_identity::legacy_password_hash_for_test;

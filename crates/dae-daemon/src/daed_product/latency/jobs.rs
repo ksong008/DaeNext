@@ -1,6 +1,8 @@
 use super::super::*;
 use super::*;
 #[cfg(test)]
+use dae_product_subscription::parse_node_link;
+#[cfg(test)]
 use dae_product_subscription::{NODE_LATENCY_DB_WRITE_BATCH_SIZE, write_node_latency_results};
 
 pub(crate) fn list_stored_node_latencies_value(state: &Path) -> io::Result<Value> {

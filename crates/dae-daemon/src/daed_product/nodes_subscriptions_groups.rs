@@ -6,14 +6,12 @@ use self::subscription_store::{
 pub(super) use dae_product_control::{
     delete_node_by_id, delete_nodes, get_node, import_nodes, list_nodes_for_request, update_node,
 };
-pub(crate) use dae_product_subscription::{
-    SubscriptionRuntimeApplyResult, apply_group_node_ids, apply_group_subscription_ids,
-    get_subscription_value, group_policy_params_value, list_subscriptions_value, parse_node_link,
-    replace_group_policy_params, subscription_node_row_value as node_row_value,
-    subscription_row_value,
-};
+pub(crate) use dae_product_subscription::SubscriptionRuntimeApplyResult;
 #[cfg(test)]
-pub(crate) use dae_product_subscription::{decode_node_label, get_node_value, list_nodes_value};
+pub(crate) use dae_product_subscription::{
+    apply_group_node_ids, decode_node_label, get_node_value, get_subscription_value,
+    list_nodes_value, list_subscriptions_value, parse_node_link,
+};
 #[cfg(test)]
 pub(crate) use dae_product_subscription::{get_group_value, list_groups_value};
 mod subscriptions_api;
