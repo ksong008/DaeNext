@@ -1,14 +1,12 @@
 name: Rust CI
 
 on:
-  # Temporarily disabled. Re-enable these triggers after CI runtime and cache
-  # behavior have been observed on the default branch.
-  # push:
-  #   branches:
-  #     - work/boringssl
-  # pull_request:
-  #   branches:
-  #     - work/boringssl
+  push:
+    branches:
+      - work/boringssl
+  pull_request:
+    branches:
+      - work/boringssl
   workflow_dispatch:
 
 permissions:

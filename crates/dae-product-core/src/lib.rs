@@ -43,6 +43,8 @@ use serde_json::{Value, json};
 
 mod process_metrics;
 pub use process_metrics::*;
+mod package;
+pub use package::*;
 
 const INTERNAL_RUNTIME_NODE_TAG_PREFIX: &str = "__daed_node_";
 pub const DEFAULT_PRODUCT_CONTROL_SOCKET: &str = "/run/daed/control.sock";

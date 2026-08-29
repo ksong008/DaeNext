@@ -12,7 +12,7 @@ pub(super) fn api_section_resource(
         return api_section_preview(request, api_path);
     }
     if api_path == "/configs/flat-desc" {
-        return HttpResponse::json(200, product_flatdesc());
+        return HttpResponse::json(200, product_package_context().flatdesc());
     }
     let Some(kind) = SectionKind::from_path(api_path) else {
         return HttpResponse::json(404, json!({"error": "unknown section resource"}));

@@ -204,6 +204,54 @@ def validate_forbidden_edges(
     return errors
 
 
+def validate_layer_edges(
+    edges: dict[str, dict[str, set[str]]], policy: dict[str, Any]
+) -> list[str]:
+    errors: list[str] = []
+    package_policy = policy.get("packages", {})
+    layer_dependencies = policy.get("layer_dependencies", {})
+    if not isinstance(layer_dependencies, dict):
+        return ["architecture policy layer_dependencies must be an object"]
+    if not layer_dependencies:
+        return []
+    for source in sorted(edges):
+        source_layer = package_policy.get(source, {}).get("layer")
+        allowed_layers = layer_dependencies.get(source_layer)
+        if not isinstance(allowed_layers, list) or not all(
+            isinstance(layer, str) for layer in allowed_layers
+        ):
+            errors.append(
+                f"{source}: layer {source_layer!r} has no valid dependency rule"
+            )
+            continue
+        for kind in DEPENDENCY_KINDS:
+            for target in sorted(edges[source][kind]):
+                target_layer = package_policy.get(target, {}).get("layer")
+                if target_layer not in allowed_layers:
+                    errors.append(
+                        "architecture dependency violates layer direction: "
+                        + format_edge(source, target, kind, package_policy)
+                    )
+    forbidden_same_layer = policy.get("forbidden_same_layer", [])
+    if not isinstance(forbidden_same_layer, list) or not all(
+        isinstance(layer, str) for layer in forbidden_same_layer
+    ):
+        return errors + ["architecture policy forbidden_same_layer must be a list of layers"]
+    for source in sorted(edges):
+        source_layer = package_policy.get(source, {}).get("layer")
+        if source_layer not in forbidden_same_layer:
+            continue
+        for kind in DEPENDENCY_KINDS:
+            for target in sorted(edges[source][kind]):
+                target_layer = package_policy.get(target, {}).get("layer")
+                if target_layer == source_layer:
+                    errors.append(
+                        "architecture dependency crosses a forbidden same-layer boundary: "
+                        + format_edge(source, target, kind, package_policy)
+                    )
+    return errors
+
+
 def dependency_cycles(edges: dict[str, dict[str, set[str]]]) -> list[str]:
     graph = {
         source: set(edges[source]["normal"]) | set(edges[source]["build"])
@@ -356,6 +404,7 @@ def validate(
     edges = workspace_edges(packages)
     errors.extend(validate_declared_edges(edges, policy))
     errors.extend(validate_forbidden_edges(edges, policy))
+    errors.extend(validate_layer_edges(edges, policy))
     for cycle in dependency_cycles(edges):
         errors.append(f"workspace architecture dependency cycle: {cycle}")
     if scan_sources:

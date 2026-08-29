@@ -97,6 +97,28 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
 
         self.assertTrue(any("forbidden architecture dependency" in error for error in errors))
 
+    def test_forbidden_same_layer_boundary_is_generic(self) -> None:
+        graph = metadata(("a", [("b", None)]), ("b", []))
+        fixture_policy = policy(("a", ["b"], [], []), ("b", [], [], []))
+        fixture_policy["forbidden_same_layer"] = ["test"]
+        fixture_policy["layer_dependencies"] = {"test": ["test"]}
+
+        errors = CHECKER.validate(graph, fixture_policy, scan_sources=False)
+
+        self.assertTrue(any("forbidden same-layer boundary" in error for error in errors))
+
+    def test_layer_direction_rejects_upward_dependency(self) -> None:
+        graph = metadata(("a", [("b", None)]), ("b", []))
+        fixture_policy = policy(("a", ["b"], [], []), ("b", [], [], []))
+        fixture_policy["packages"]["a"]["layer"] = "upper"
+        fixture_policy["packages"]["b"]["layer"] = "lower"
+        fixture_policy["layers"] = ["upper", "lower"]
+        fixture_policy["layer_dependencies"] = {"upper": [], "lower": ["upper", "lower"]}
+
+        errors = CHECKER.validate(graph, fixture_policy, scan_sources=False)
+
+        self.assertTrue(any("violates layer direction" in error for error in errors))
+
     def test_source_import_must_have_declared_edge(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

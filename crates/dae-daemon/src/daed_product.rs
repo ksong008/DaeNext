@@ -454,8 +454,18 @@ mod bundle;
 use self::bundle::*;
 mod dae_file_import;
 use self::dae_file_import::*;
-mod package;
-use self::package::*;
+fn product_package_context() -> ProductPackageContext {
+    ProductPackageContext::new(
+        PRIMARY_STATE_STORE,
+        LEGACY_IMPORT_STATE_STORE,
+        DEFAULT_WEB_ROOT,
+        production_admission(),
+        product_runtime_defaults(),
+        runtime_state_gate_evidence(),
+        runtime_state_blockers(),
+        webui_route_audit_report(),
+    )
+}
 mod common_helpers;
 use self::common_helpers::*;
 mod auth_storage;
