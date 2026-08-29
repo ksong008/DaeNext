@@ -27,6 +27,7 @@ REQUIRED_OWNERSHIP_FILES = (
     "crates/dae-product-runtime/src/global_config.rs",
     "crates/dae-product-runtime/src/benchmark.rs",
     "crates/dae-product-http/src/route_audit.rs",
+    "crates/dae-product-core/src/package.rs",
     "crates/dae-product-subscription/src/group_store.rs",
     "crates/dae-product-subscription/src/group_summary.rs",
     "crates/dae-product-subscription/src/group_summary_batch.rs",

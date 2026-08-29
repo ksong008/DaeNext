@@ -10,6 +10,41 @@
     "resident-coordinator",
     "product"
   ],
+  "layer_dependencies": {
+    "foundation": ["foundation"],
+    "platform": ["foundation", "platform"],
+    "resident-shared": ["foundation", "platform", "resident-shared"],
+    "resident-domain": [
+      "foundation",
+      "platform",
+      "resident-shared",
+      "resident-transport"
+    ],
+    "resident-transport": [
+      "foundation",
+      "platform",
+      "resident-shared",
+      "resident-transport"
+    ],
+    "resident-coordinator": [
+      "foundation",
+      "platform",
+      "resident-shared",
+      "resident-transport",
+      "resident-domain",
+      "resident-coordinator"
+    ],
+    "product": [
+      "foundation",
+      "platform",
+      "resident-shared",
+      "resident-transport",
+      "resident-domain",
+      "resident-coordinator",
+      "product"
+    ]
+  },
+  "forbidden_same_layer": ["resident-domain"],
   "forbidden": {
     "dae-resident-dns": ["dae-resident-tcp", "dae-resident-udp"],
     "dae-resident-tcp": ["dae-resident-dns", "dae-resident-udp"],
@@ -64,7 +99,7 @@
       "dev": ["dae-golden"]
     },
     "dae-config": {
-      "layer": "product",
+      "layer": "platform",
       "normal": ["dae-config-util"],
       "build": [],
       "dev": ["dae-golden"]

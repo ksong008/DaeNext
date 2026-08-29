@@ -846,7 +846,7 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
         json!("shared Arc<ResidentProxyGroupPlan>")
     );
 
-    let manifest = product_package_manifest();
+    let manifest = product_package_context().package_manifest();
     assert_eq!(
         manifest["runtime"]["defaults"]["http"]["workerStackBytes"]["default"]
             .as_u64()
