@@ -20,9 +20,7 @@ default = [
 product-api = [
     "resident-runtime",
     "service-contract",
-    "dep:argon2",
     "dep:rusqlite",
-    "dep:sha3",
 ]
 resident-runtime = ["service-contract"]
 service-contract = []
@@ -95,7 +93,6 @@ dae-product-geodata.workspace = true
 dae-routing.workspace = true
 dae-sniffing.workspace = true
 dae-tls.workspace = true
-argon2 = { workspace = true, optional = true }
 boring.workspace = true
 boring-sys.workspace = true
 brotli.workspace = true
@@ -120,7 +117,6 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-sha3 = { workspace = true, optional = true }
 socket2.workspace = true
 tls-parser.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }

@@ -1,5 +1,9 @@
 use serde_json::{Value, json};
 
+mod auth;
+
+pub use auth::*;
+
 pub const PRODUCT_IDENTITY_CRATE_NAME: &str = "dae-product-identity";
 pub const DAEMON_CRATE_NAME: &str = "dae-daemon";
 pub const PRODUCT_BINARY_NAME: &str = "daed";
