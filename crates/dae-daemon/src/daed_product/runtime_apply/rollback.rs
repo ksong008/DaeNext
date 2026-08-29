@@ -1,5 +1,5 @@
 use super::*;
-use super::{PreparedRuntimeGeneration, RuntimeDatabaseSnapshot, sync_directory};
+use super::{PreparedRuntimeGeneration, sync_directory};
 use dae_product_persistence::create_synced_file;
 
 pub(super) fn rollback_runtime_generation(
@@ -29,7 +29,7 @@ pub(super) fn rollback_runtime_generation(
             None
         }
     };
-    if let Err(err) = restore_runtime_database(
+    if let Err(err) = dae_product_runtime::restore_runtime_database(
         state,
         &candidate.database_snapshot,
         restored_probe_generation,
@@ -49,71 +49,6 @@ pub(super) fn rollback_runtime_generation(
     } else {
         Err(errors.join("; "))
     }
-}
-
-fn restore_runtime_database(
-    state: &Path,
-    snapshot: &RuntimeDatabaseSnapshot,
-    restored_probe_generation: Option<Option<u64>>,
-) -> Result<(), String> {
-    let mut conn = open_state_connection(state)
-        .map_err(|err| format!("open runtime state for rollback: {err}"))?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|err| format!("begin runtime state rollback: {err}"))?;
-    tx.execute("DELETE FROM systems", [])
-        .map_err(|err| format!("clear failed runtime state: {err}"))?;
-    if let Some(system) = snapshot.system.as_ref() {
-        tx.execute(
-            "INSERT INTO systems(
-                running, running_config_version, running_dns_version,
-                running_routing_version, running_group_version_sum, running_group_ids,
-                running_config_id, running_dns_id, running_routing_id,
-                running_external_input_version
-             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                system.running,
-                system.config_version,
-                system.dns_version,
-                system.routing_version,
-                system.group_version_sum,
-                &system.group_ids,
-                system.config_id,
-                system.dns_id,
-                system.routing_id,
-                system.external_input_version,
-            ],
-        )
-        .map_err(|err| format!("restore previous runtime state: {err}"))?;
-    }
-    for (key, value) in &snapshot.metadata {
-        if key == RUNTIME_PROBE_GENERATION_METADATA_KEY
-            && let Some(generation) = restored_probe_generation
-        {
-            super::super::runtime_manager::activation_identity::write_probe_generation(
-                &tx, generation,
-            )?;
-            continue;
-        }
-        match value {
-            Some(value) => {
-                tx.execute(
-                    "INSERT OR REPLACE INTO daed_product_metadata(key, value) VALUES(?1, ?2)",
-                    params![key, value],
-                )
-                .map_err(|err| format!("restore runtime metadata {key}: {err}"))?;
-            }
-            None => {
-                tx.execute(
-                    "DELETE FROM daed_product_metadata WHERE key = ?1",
-                    params![key],
-                )
-                .map_err(|err| format!("remove failed runtime metadata {key}: {err}"))?;
-            }
-        }
-    }
-    tx.commit()
-        .map_err(|err| format!("commit runtime state rollback: {err}"))
 }
 
 fn restore_previous_materialization(

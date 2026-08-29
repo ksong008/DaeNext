@@ -7,11 +7,7 @@ mod reconcile;
 mod rollback;
 
 pub(super) use dae_product_runtime::{
-    LAST_GENERATED_CONFIG_PATH_METADATA_KEY, LAST_MATERIALIZED_AT_METADATA_KEY,
-    PreparedRuntimeGeneration, RUNTIME_LAST_APPLY_ERROR_METADATA_KEY,
-    RUNTIME_LOG_LEVEL_METADATA_KEY, RUNTIME_RUNNING_METADATA_KEY,
-    RUNTIME_TRANSITION_PHASE_METADATA_KEY, RuntimeApplyCheckpoint, RuntimeDatabaseSnapshot,
-    prepare_runtime_generation, sync_directory,
+    PreparedRuntimeGeneration, RuntimeApplyCheckpoint, prepare_runtime_generation, sync_directory,
 };
 
 use self::activate::activate_runtime_generation;
