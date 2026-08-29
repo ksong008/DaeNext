@@ -63,12 +63,11 @@ fn geodata_resource_status_cached(app: &AppState, dir: &Path, kind: GeodataKind)
         let Ok(identity_before) = GeodataResourceIdentity::capture(dir, kind) else {
             return geodata_resource_status(dir, kind);
         };
-        if let Ok(cache) = app.geodata_status_cache.lock() {
-            if let Some(entry) = cache.entry(kind)
-                && entry.matches(&identity_before)
-            {
-                return entry.value().clone();
-            }
+        if let Ok(cache) = app.geodata_status_cache.lock()
+            && let Some(entry) = cache.entry(kind)
+            && entry.matches(&identity_before)
+        {
+            return entry.value().clone();
         }
 
         let value = geodata_resource_status(dir, kind);
