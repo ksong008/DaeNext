@@ -121,6 +121,44 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
             any("source import crosses forbidden architecture edge" in error for error in errors)
         )
 
+    def test_external_path_embedding_requires_test_only_cfg(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source_root = root / "a" / "src"
+            source_root.mkdir(parents=True)
+            (root / "b" / "src").mkdir(parents=True)
+            (source_root / "lib.rs").write_text(
+                '#[path = "../../b/src/lib.rs"]\nmod b;\n', encoding="utf-8"
+            )
+            graph = metadata(("a", []), ("b", []))
+            graph["packages"][0]["manifest_path"] = str(root / "a" / "Cargo.toml")
+            errors = CHECKER.validate(
+                graph,
+                policy(("a", [], [], []), ("b", [], [], [])),
+                scan_sources=True,
+            )
+        self.assertTrue(any("external crate with #[path]" in error for error in errors))
+
+    def test_external_path_embedding_is_allowed_only_for_test_cfg(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source_root = root / "a" / "src"
+            source_root.mkdir(parents=True)
+            (root / "b" / "src").mkdir(parents=True)
+            (source_root / "lib.rs").write_text(
+                '#[cfg(all(test, feature = "fixture"))]\n'
+                '#[path = "../../b/src/lib.rs"]\nmod b;\n',
+                encoding="utf-8",
+            )
+            graph = metadata(("a", []), ("b", []))
+            graph["packages"][0]["manifest_path"] = str(root / "a" / "Cargo.toml")
+            errors = CHECKER.validate(
+                graph,
+                policy(("a", [], [], []), ("b", [], [], [])),
+                scan_sources=True,
+            )
+        self.assertFalse(any("external crate with #[path]" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()
