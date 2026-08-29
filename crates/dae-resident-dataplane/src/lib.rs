@@ -142,7 +142,8 @@ mod generation_builder;
 use self::generation_builder::*;
 pub(crate) use dae_resident_runtime::{
     ResidentDrainControl, ResidentDrainableGeneration, ResidentGenerationDrain,
-    ResidentGenerationDrainHooks, ResidentGenerationDrainPolicy,
+    ResidentGenerationDrainHooks, ResidentGenerationDrainPolicy, ResidentRuntimeCleanupInventory,
+    ResidentRuntimeCleanupReporter,
 };
 #[path = "runtime/read_view.rs"]
 mod read_view;
