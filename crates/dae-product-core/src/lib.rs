@@ -67,6 +67,25 @@ pub use package::*;
 
 const INTERNAL_RUNTIME_NODE_TAG_PREFIX: &str = "__daed_node_";
 pub const DEFAULT_PRODUCT_CONTROL_SOCKET: &str = "/run/daed/control.sock";
+pub const DEFAULT_PRODUCT_CONFIG_NAME: &str = "global";
+pub const DEFAULT_PRODUCT_DNS_NAME: &str = "default";
+pub const DEFAULT_PRODUCT_ROUTING_NAME: &str = "default";
+pub const DEFAULT_PRODUCT_GROUP_NAME: &str = "default";
+pub const GROUP_POLICY_RANDOM: &str = "random";
+pub const GROUP_POLICY_FIXED: &str = "fixed";
+pub const GROUP_POLICY_MIN: &str = "min";
+pub const GROUP_POLICY_MIN_AVG10: &str = "min_avg10";
+pub const GROUP_POLICY_MIN_MOVING_AVG: &str = "min_moving_avg";
+pub const DEFAULT_PRODUCT_GROUP_POLICY: &str = GROUP_POLICY_RANDOM;
+pub const DEFAULT_PRODUCT_MODE: &str = "rule";
+pub const DEFAULT_GLOBAL_RESOURCE_TEXT: &str = "global {}";
+pub const SUPPORTED_GROUP_POLICIES: &[&str] = &[
+    GROUP_POLICY_RANDOM,
+    GROUP_POLICY_FIXED,
+    GROUP_POLICY_MIN,
+    GROUP_POLICY_MIN_AVG10,
+    GROUP_POLICY_MIN_MOVING_AVG,
+];
 pub const PRODUCT_CONTROL_SOCKET_ENV: &str = "DAED_CONTROL_SOCKET";
 pub const RUNTIME_PROBE_GENERATION_METADATA_KEY: &str = "runtime_probe_generation";
 pub const PRODUCT_LISTEN_ENV: &str = "PRODUCT_LISTEN";

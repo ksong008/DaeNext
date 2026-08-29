@@ -9,9 +9,11 @@ repository.workspace = true
 dae-product-geodata.workspace = true
 dae-product-core.workspace = true
 dae-product-http.workspace = true
+dae-product-persistence.workspace = true
 dae-product-runtime.workspace = true
 dae-product-subscription.workspace = true
 libc.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json.workspace = true
 sha2.workspace = true
 socket2.workspace = true
