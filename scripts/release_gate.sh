@@ -25,7 +25,7 @@ run_step "product physical boundaries" python3 scripts/architecture/check_produc
 run_step "product boundary checker tests" python3 scripts/architecture/test_check_product_boundaries.py
 run_step "production dependency surface" scripts/check_production_deps.sh --all-features
 run_step "workspace check" cargo check --workspace --all-targets
-run_step "workspace library tests" cargo test --workspace --lib
+run_step "workspace library tests" cargo test --workspace --lib -- --test-threads=1
 run_step "resident dataplane architecture tests" cargo test -p dae-resident-dataplane --test architecture_boundaries
 run_step "resident transport architecture tests" cargo test -p dae-resident-transport --test architecture_boundaries
 run_step "service contract tests" cargo test -p dae-daemon --test service_contract
