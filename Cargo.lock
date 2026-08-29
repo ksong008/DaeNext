@@ -834,6 +834,7 @@ dependencies = [
  "dae-product-core",
  "dae-product-geodata",
  "dae-product-http",
+ "dae-product-identity",
  "dae-product-persistence",
  "dae-product-runtime",
  "dae-product-subscription",

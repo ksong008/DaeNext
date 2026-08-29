@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 dae-config.workspace = true
+dae-product-identity.workspace = true
 dae-product-geodata.workspace = true
 dae-product-core.workspace = true
 dae-product-http.workspace = true
