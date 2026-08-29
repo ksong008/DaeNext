@@ -439,11 +439,11 @@ where
 impl<T, E> Drop for ProductRuntimeReconcileLead<T, E> {
     fn drop(&mut self) {
         if !self.finished {
-            if let Ok(result) = self.flight.result.lock() {
-                if result.is_none() {
-                    self.flight.abandoned.store(true, Ordering::Release);
-                    self.flight.completed.notify_all();
-                }
+            if let Ok(result) = self.flight.result.lock()
+                && result.is_none()
+            {
+                self.flight.abandoned.store(true, Ordering::Release);
+                self.flight.completed.notify_all();
             }
             if let Ok(mut state) = self.reconciler.inner.state.lock() {
                 state.preparing.remove(&self.request_id);
