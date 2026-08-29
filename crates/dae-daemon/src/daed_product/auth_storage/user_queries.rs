@@ -58,7 +58,7 @@ where
     USER_QUERY_COUNT.with(|count| count.set(count.get().saturating_add(1)));
 
     conn.query_row(sql, params, |row| {
-        Ok(UserRecord {
+        Ok(ProductUserRecord {
             id: row.get(0)?,
             username: row.get(1)?,
             password_hash: row.get(2)?,

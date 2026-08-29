@@ -400,17 +400,6 @@ fn production_admission() -> Value {
 mod runtime_manager;
 use self::runtime_manager::*;
 
-#[derive(Clone, Debug)]
-struct UserRecord {
-    id: i64,
-    username: String,
-    password_hash: String,
-    jwt_secret: String,
-    json_storage: String,
-    avatar: Option<String>,
-    name: Option<String>,
-}
-
 mod cli_commands;
 pub use self::cli_commands::*;
 mod service_metadata;
@@ -448,6 +437,7 @@ use self::runtime_reconcile::*;
 mod durable_recovery;
 use self::durable_recovery::*;
 use dae_product_persistence::*;
+type UserRecord = ProductUserRecord;
 mod runtime_apply;
 use self::runtime_apply::*;
 mod logs;

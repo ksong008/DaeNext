@@ -6,6 +6,17 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+#[derive(Clone, Debug)]
+pub struct ProductUserRecord {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: String,
+    pub jwt_secret: String,
+    pub json_storage: String,
+    pub avatar: Option<String>,
+    pub name: Option<String>,
+}
+
 mod desired_state;
 pub use desired_state::*;
 
