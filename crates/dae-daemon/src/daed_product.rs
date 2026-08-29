@@ -240,12 +240,6 @@ fn start_product_control_helper_runtime(
     ProductControlRuntime::start_with_config_and_hooks(config, hooks)
 }
 
-#[derive(Debug, Default)]
-struct GeodataStatusCache {
-    geosite: Option<geodata::GeodataStatusCacheEntry>,
-    geoip: Option<geodata::GeodataStatusCacheEntry>,
-}
-
 fn product_runtime_defaults() -> Value {
     let available_parallelism = thread::available_parallelism()
         .map(usize::from)
