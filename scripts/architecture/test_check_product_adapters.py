@@ -25,6 +25,10 @@ class ProductAdapterGateTests(unittest.TestCase):
         policy = {
             "root": "crates/dae-daemon/src/daed_product",
             "allowed_top_level": ["api_routes", "api_routes.rs", "tests"],
+            "adapter_roles": {
+                "control-adapter": ["api_routes", "api_routes.rs"],
+                "tests": ["tests"],
+            },
             "production_line_limits": {"api_routes": 2, "api_routes.rs": 2},
         }
         return root, policy
@@ -52,6 +56,18 @@ class ProductAdapterGateTests(unittest.TestCase):
         )
         errors = MODULE.validate(root, policy)
         self.assertTrue(any("grew" in error for error in errors))
+
+    def test_rejects_unowned_allowlisted_path(self) -> None:
+        root, policy = self.fixture()
+        policy["adapter_roles"] = {"control-adapter": ["api_routes"]}
+        errors = MODULE.validate(root, policy)
+        self.assertTrue(any("missing an ownership role" in error for error in errors))
+
+    def test_rejects_role_path_outside_allowlist(self) -> None:
+        root, policy = self.fixture()
+        policy["adapter_roles"]["control-adapter"].append("not-allowed")
+        errors = MODULE.validate(root, policy)
+        self.assertTrue(any("unapproved path" in error for error in errors))
 
 
 if __name__ == "__main__":
