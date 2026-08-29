@@ -20,8 +20,7 @@ pub(crate) use dae_product_subscription::{decode_node_label, get_node_value, lis
 pub(crate) use dae_product_subscription::{get_group_value, list_groups_value};
 mod subscriptions_api;
 pub(super) use self::subscriptions_api::*;
-mod subscription_delete;
-pub(super) use self::subscription_delete::*;
+pub(super) use dae_product_subscription::{delete_subscription, delete_subscriptions_by_ids};
 mod subscription_runtime_apply;
 use self::subscription_runtime_apply::*;
 use dae_product_subscription as subscription_import_result;
