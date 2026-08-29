@@ -297,6 +297,12 @@ impl DurableTransaction {
     }
 
     pub fn write_intent<T: Serialize>(&self, max_bytes: u64, value: &T) -> io::Result<()> {
+        if self.phase.get() != DurableTransactionPhase::Prepared {
+            return Err(invalid_transaction_transition(
+                DurableTransactionPhase::Prepared,
+                self.phase.get(),
+            ));
+        }
         let result = write_json_journal(
             self.artifacts.directory(),
             &self.artifacts.journal,
@@ -311,6 +317,12 @@ impl DurableTransaction {
     }
 
     pub fn activate(&mut self) -> io::Result<()> {
+        if self.phase.get() != DurableTransactionPhase::IntentWritten {
+            return Err(invalid_transaction_transition(
+                DurableTransactionPhase::IntentWritten,
+                self.phase.get(),
+            ));
+        }
         fs::rename(
             self.artifacts.candidate.path_in(self.artifacts.directory()),
             self.artifacts.target.path_in(self.artifacts.directory()),
@@ -321,7 +333,16 @@ impl DurableTransaction {
         Ok(())
     }
 
-    pub fn commit_database<R, E>(&mut self, commit: impl FnOnce() -> Result<R, E>) -> Result<R, E> {
+    pub fn commit_database<R, E>(&mut self, commit: impl FnOnce() -> Result<R, E>) -> Result<R, E>
+    where
+        E: From<io::Error>,
+    {
+        if self.phase.get() != DurableTransactionPhase::Activated {
+            return Err(E::from(invalid_transaction_transition(
+                DurableTransactionPhase::Activated,
+                self.phase.get(),
+            )));
+        }
         let result = commit()?;
         self.database_committed = true;
         self.phase.set(DurableTransactionPhase::DatabaseCommitted);
@@ -338,11 +359,16 @@ impl DurableTransaction {
     }
 
     pub fn finish(mut self) -> io::Result<()> {
-        self.database_committed = true;
         self.finish_in_place()
     }
 
     pub fn finish_in_place(&mut self) -> io::Result<()> {
+        if self.phase.get() != DurableTransactionPhase::DatabaseCommitted {
+            return Err(invalid_transaction_transition(
+                DurableTransactionPhase::DatabaseCommitted,
+                self.phase.get(),
+            ));
+        }
         self.database_committed = true;
         let result = cleanup_transaction_artifacts(&self.artifacts, true);
         self.finished = result.is_ok();
@@ -397,6 +423,16 @@ impl DurableTransaction {
     pub fn recover(artifacts: DurableArtifactSet, database_committed: bool) -> io::Result<()> {
         Self::reconcile(artifacts, database_committed)
     }
+}
+
+fn invalid_transaction_transition(
+    expected: DurableTransactionPhase,
+    actual: DurableTransactionPhase,
+) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("invalid durable transaction transition: expected {expected:?}, got {actual:?}"),
+    )
 }
 
 impl Drop for DurableTransaction {
@@ -774,6 +810,7 @@ mod tests {
         fs::write(directory.join("candidate"), b"new").unwrap();
         {
             let mut transaction = DurableTransaction::new(transaction_artifacts(&directory));
+            transaction.write_intent(1024, &vec!["intent"]).unwrap();
             transaction.activate().unwrap();
             assert_eq!(fs::read(directory.join("target")).unwrap(), b"new");
         }
@@ -809,11 +846,46 @@ mod tests {
     }
 
     #[test]
+    fn transaction_rejects_phase_skips_and_repeated_intents() {
+        let directory = temp_dir("phase-contract");
+        let mut transaction = DurableTransaction::new(transaction_artifacts(&directory));
+
+        assert_eq!(
+            transaction.activate().unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        let mut callback_called = false;
+        assert_eq!(
+            transaction
+                .commit_database(|| {
+                    callback_called = true;
+                    Ok::<_, io::Error>(())
+                })
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(!callback_called);
+
+        transaction.write_intent(1024, &vec!["intent"]).unwrap();
+        assert_eq!(
+            transaction
+                .write_intent(1024, &vec!["duplicate"])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn failed_rollback_enters_recovery_required_phase() {
         let directory = temp_dir("phase-recovery");
         fs::write(directory.join("backup"), b"old").unwrap();
         fs::write(directory.join("candidate"), b"new").unwrap();
         let mut transaction = DurableTransaction::new(transaction_artifacts(&directory));
+        transaction.write_intent(1024, &vec!["intent"]).unwrap();
         transaction.activate().unwrap();
         fs::remove_file(directory.join("target")).unwrap();
         fs::create_dir(directory.join("target")).unwrap();
@@ -833,6 +905,7 @@ mod tests {
         fs::write(directory.join("backup"), b"old").unwrap();
         fs::write(directory.join("candidate"), b"new").unwrap();
         let mut transaction = DurableTransaction::new(transaction_artifacts(&directory));
+        transaction.write_intent(1024, &vec!["intent"]).unwrap();
         transaction.activate().unwrap();
         fs::remove_file(directory.join("target")).unwrap();
         fs::create_dir(directory.join("target")).unwrap();

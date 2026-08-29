@@ -25,6 +25,10 @@ impl GenerationGate {
         self.active() == Some(generation)
     }
 
+    pub fn resource<T>(self: &Arc<Self>, state: T) -> GenerationFence<T> {
+        GenerationFence::new(Arc::clone(self), state)
+    }
+
     pub fn clear(&self) -> Option<GenerationToken> {
         self.active
             .lock()
@@ -210,6 +214,29 @@ mod tests {
         gate.switch(second, || Ok::<_, ()>(())).unwrap();
         assert!(gate.acquire_write(first).is_none());
         assert_eq!(gate.acquire_write(second).unwrap().generation(), second);
+    }
+
+    #[test]
+    fn resource_factory_keeps_resources_on_the_same_generation_gate() {
+        let first = generation(1);
+        let second = generation(2);
+        let gate = Arc::new(GenerationGate::new(Some(first)));
+        let first_resource = gate.resource(0_u32);
+        let second_resource = gate.resource(0_u32);
+
+        assert_eq!(
+            first_resource.with_active(first, |_| Ok::<_, ()>(())),
+            Ok(Some(()))
+        );
+        gate.switch(second, || Ok::<_, ()>(())).unwrap();
+        assert_eq!(
+            first_resource.with_active(first, |_| Ok::<_, ()>(())),
+            Ok(None)
+        );
+        assert_eq!(
+            second_resource.with_active(second, |_| Ok::<_, ()>(())),
+            Ok(Some(()))
+        );
     }
 
     #[test]

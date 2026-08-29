@@ -118,7 +118,10 @@ impl PreparedSubscriptionPersist {
         Ok(())
     }
 
-    pub fn commit_database<R, E>(&mut self, commit: impl FnOnce() -> Result<R, E>) -> Result<R, E> {
+    pub fn commit_database<R, E>(&mut self, commit: impl FnOnce() -> Result<R, E>) -> Result<R, E>
+    where
+        E: From<io::Error>,
+    {
         self.transaction.commit_database(commit)
     }
 
