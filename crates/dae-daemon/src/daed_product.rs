@@ -21,6 +21,7 @@ use dae_datapath::{
     UDP_TASK_POOL_MAX_QUEUES, UDP_TASK_QUEUE_LENGTH, udp_endpoint_pool_trim_target,
 };
 pub use dae_product_core::*;
+use dae_product_core::{product_iso8601_utc as iso8601_utc, product_now_text as now_text};
 #[cfg(test)]
 use dae_product_subscription::{count_nodes_for_subscription, list_all_nodes_value};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};

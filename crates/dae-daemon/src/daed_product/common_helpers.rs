@@ -1,13 +1,5 @@
 use super::*;
 
-pub(super) fn now_text() -> String {
-    dae_product_core::product_now_text()
-}
-
-pub(super) fn iso8601_utc(timestamp: u64) -> String {
-    dae_product_core::product_iso8601_utc(timestamp)
-}
-
 pub(super) fn reset_all_user_passwords(state: &Path) -> io::Result<Value> {
     ensure_state_schema(state)?;
     let mut conn = open_state_connection(state)?;
