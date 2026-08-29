@@ -126,6 +126,24 @@ pub fn integer_array(body: &Value, key: &str) -> Vec<i64> {
         .unwrap_or_default()
 }
 
+pub fn status_reason(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
+        _ => "Unknown Status",
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProductHttpRequestContext {
     pub peer_ip: Option<IpAddr>,

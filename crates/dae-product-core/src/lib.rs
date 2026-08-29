@@ -31,6 +31,7 @@ impl DaedProductOutput {
     }
 }
 
+use std::path::Path;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -295,6 +296,36 @@ pub fn product_civil_from_days(days: i64) -> (i64, i64, i64) {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = mp + if mp < 10 { 3 } else { -9 };
     (year + i64::from(month <= 2), month, day)
+}
+
+pub fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+pub fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+pub fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+pub fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 pub const PRODUCT_HTTP_WORKERS_ENV: &str = "HTTP_WORKERS";
