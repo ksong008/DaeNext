@@ -442,11 +442,11 @@ mod common_helpers;
 use self::common_helpers::*;
 mod auth_storage;
 use self::auth_storage::*;
-use dae_product_control::*;
-pub use dae_product_control::{ProductControlBenchmarkFixture, product_control_benchmark_fixture};
 #[cfg(test)]
 pub use dae_product_control::ensure_default_resources;
 pub use dae_product_control::ensure_default_resources_for_user;
+use dae_product_control::*;
+pub use dae_product_control::{ProductControlBenchmarkFixture, product_control_benchmark_fixture};
 #[cfg(test)]
 fn product_test_auth_runtime() -> Arc<ProductAuthRuntime> {
     ProductAuthRuntime::start_for_test_config().unwrap()
