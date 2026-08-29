@@ -208,20 +208,19 @@ fn product_http_worker_loop(
         match queue.receive_timeout(PRODUCT_HTTP_WORKER_RECV_TIMEOUT) {
             Ok(job) => {
                 metrics.dequeued();
+                let _connection = match connections.register(&job.stream) {
+                    Ok(connection) => connection,
+                    Err(_) => {
+                        let _ = write_http_shutting_down(job.stream);
+                        continue;
+                    }
+                };
                 metrics.opened();
                 if app.shutdown.is_requested() {
                     let _ = write_http_shutting_down(job.stream);
                     metrics.closed();
                     continue;
                 }
-                let _connection = match connections.register(&job.stream) {
-                    Ok(connection) => connection,
-                    Err(_) => {
-                        let _ = write_http_shutting_down(job.stream);
-                        metrics.closed();
-                        continue;
-                    }
-                };
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     handle_stream(
                         job.stream,

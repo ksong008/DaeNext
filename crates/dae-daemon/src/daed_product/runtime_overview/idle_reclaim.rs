@@ -276,6 +276,7 @@ pub(crate) struct ProductAllocatorIdleReclaimMonitor {
 impl ProductAllocatorIdleReclaimMonitor {
     pub(crate) fn shutdown(mut self) -> io::Result<()> {
         if let Some(join) = self.join.take() {
+            allocator_notify_reclaim_monitor();
             join.join()
                 .map_err(|_| io::Error::other("allocator idle reclaim monitor panicked"))?;
         }
