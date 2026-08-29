@@ -2,7 +2,6 @@ mod config_snapshot;
 mod helper;
 mod jobs;
 mod runtime_snapshots;
-mod seen;
 mod standalone;
 
 use config_snapshot::ManualProbeConfigSnapshot;
@@ -19,7 +18,7 @@ pub(crate) use dae_product_subscription::{
     latency_probe_unique_links,
 };
 pub(crate) use dae_product_subscription::{
-    NodeLatencyWrite, RuntimeNodeLatencyIndex, native_probe_missing_results,
+    LatencyProbeSeenLinks, NodeLatencyWrite, RuntimeNodeLatencyIndex, native_probe_missing_results,
     runtime_latency_snapshot_link_hash, stored_successful_node_latency_seed_snapshots,
 };
 #[cfg(test)]
@@ -42,5 +41,4 @@ pub(crate) use runtime_snapshots::{
     fake_runtime_probe_node_latencies, node_name_from_link, runtime_link_hash,
     runtime_link_identity_value, runtime_redacted_link_source,
 };
-pub(crate) use seen::LatencyProbeSeenLinks;
 use standalone::StandaloneManualProbeJob;
