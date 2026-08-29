@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import sys
 from typing import Any
 
@@ -18,6 +19,20 @@ def is_test_path(path: pathlib.Path) -> bool:
         or path.name.endswith("_tests.rs")
         or any(part.endswith("_tests") for part in path.parts)
     )
+
+
+PRODUCT_CRATE_IMPORT = re.compile(r"\b(dae_product_[A-Za-z0-9_]+)\b")
+
+
+def product_crate_imports(source: str) -> set[str]:
+    imports: set[str] = set()
+    for line in source.splitlines():
+        stripped = line.split("//", 1)[0]
+        if re.search(r"\b(?:use|extern\s+crate)\b", stripped):
+            imports.update(PRODUCT_CRATE_IMPORT.findall(stripped))
+        elif re.search(r"\bdae_product_[A-Za-z0-9_]+\s*::", stripped):
+            imports.update(PRODUCT_CRATE_IMPORT.findall(stripped))
+    return imports
 
 
 def validate(root: pathlib.Path, policy: dict[str, Any]) -> list[str]:
@@ -60,6 +75,17 @@ def validate(root: pathlib.Path, policy: dict[str, Any]) -> list[str]:
         f"product adapter path is missing an ownership role: {path}"
         for path in missing_roles
     )
+    role_imports = policy.get("role_product_imports", {})
+    if not isinstance(role_imports, dict):
+        errors.append("product adapter policy role_product_imports must be an object")
+        role_imports = {}
+    for role, allowed_imports in role_imports.items():
+        if not isinstance(role, str) or not isinstance(allowed_imports, list) or not all(
+            isinstance(item, str) for item in allowed_imports
+        ):
+            errors.append(
+                "product adapter policy role_product_imports must map names to string arrays"
+            )
     buckets: dict[str, int] = {}
     for entry in sorted(adapter_root.iterdir()):
         if entry.is_dir() and not any(entry.rglob("*.rs")):
@@ -85,8 +111,17 @@ def validate(root: pathlib.Path, policy: dict[str, Any]) -> list[str]:
             )
             continue
         if not is_test_path(path):
+            role = role_paths.get(bucket)
+            allowed_imports = set(role_imports.get(role, []))
+            source = path.read_text(encoding="utf-8")
+            for imported in sorted(product_crate_imports(source)):
+                if imported not in allowed_imports:
+                    errors.append(
+                        f"product adapter {path.relative_to(root)} imports {imported}, "
+                        f"which is not allowed for role {role!r}"
+                    )
             buckets[bucket] = buckets.get(bucket, 0) + len(
-                path.read_text(encoding="utf-8").splitlines()
+                source.splitlines()
             )
 
     for bucket, actual in sorted(buckets.items()):
