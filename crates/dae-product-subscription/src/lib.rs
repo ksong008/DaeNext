@@ -24,6 +24,7 @@ mod refresh_node_sync;
 mod refresh_transaction;
 mod runtime_apply;
 mod scheduler;
+mod source;
 mod subscription_view;
 mod wire_http;
 
@@ -50,6 +51,7 @@ pub use refresh_node_sync::*;
 pub use refresh_transaction::*;
 pub use runtime_apply::*;
 pub use scheduler::*;
+pub use source::*;
 pub use subscription_view::*;
 pub use wire_http::*;
 

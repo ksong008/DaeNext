@@ -2,6 +2,7 @@ use super::*;
 
 mod external_input;
 
+#[cfg(test)]
 pub(super) use dae_product_geodata::PreparedGeodataGeneration;
 pub(super) use dae_product_geodata::recover_geodata_transaction;
 pub(super) use external_input::runtime_input_versions_if_running;
