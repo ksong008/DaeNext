@@ -11,3 +11,4 @@ test-support = ["dae-resident-model/test-support"]
 
 [dependencies]
 dae-resident-model.workspace = true
+serde_json.workspace = true

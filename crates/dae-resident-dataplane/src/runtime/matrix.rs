@@ -333,7 +333,7 @@ pub(super) fn resident_matrix_status_counts(rows: &[Value]) -> Value {
 }
 
 pub(super) fn resident_matrix_solver_value(
-    entry: &adapter_matrix::ResidentLiveAdapterMatrixEntry,
+    entry: &dae_resident_plan::ResidentLiveAdapterMatrixEntry,
     candidate_count: usize,
     admitted_count: usize,
     blocked_count: usize,
@@ -505,7 +505,7 @@ fn udp_component_matches_agreement(
 
 pub(super) fn resident_matrix_candidate_report(
     config: &Config,
-    entry: &adapter_matrix::ResidentLiveAdapterMatrixEntry,
+    entry: &dae_resident_plan::ResidentLiveAdapterMatrixEntry,
     node: &plan::ResidentNodeLinkShape,
 ) -> Value {
     match plan::build_resident_proxy_plan_for_node(

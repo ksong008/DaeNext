@@ -12,6 +12,6 @@ pub use self::evidence::*;
 mod readiness;
 pub use self::readiness::*;
 mod entries;
-pub(crate) use self::entries::*;
+pub use self::entries::*;
 #[cfg(test)]
 mod tests;

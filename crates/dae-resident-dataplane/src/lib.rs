@@ -16,11 +16,6 @@ use dae_outbound::{
 };
 use serde_json::{Value, json};
 
-pub(crate) use self::adapter_matrix::{
-    resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
-    resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
-    resident_live_matrix_evidence_from_env,
-};
 use self::events::ResidentEventWriterHandle;
 pub(crate) use self::events::ResidentEventWriterRuntime;
 use self::events::{append_event, path_string};
@@ -31,8 +26,12 @@ use self::tcp::{ResidentTcpRouter, ResidentTcpRuntimeConfig, resident_tcp_accept
 use self::udp::{
     probe_resident_proxy_udp_async, resident_udp_loop_async, resident_udp_proxy_handler_name,
 };
+pub(crate) use dae_resident_plan::{
+    resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
+    resident_live_adapter_matrix_contract, resident_live_adapter_matrix_entries,
+    resident_live_matrix_evidence_from_env,
+};
 
-mod adapter_matrix;
 mod allocator_hooks;
 mod client;
 mod control_transport_owners;
