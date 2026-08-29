@@ -958,7 +958,9 @@ async fn build_h2_carrier(
         .remaining_at(Instant::now())
         .ok_or_else(|| "HTTP/2 carrier handshake deadline elapsed".to_owned())?;
     let mut h2_builder = h2::client::Builder::new();
-    owner.resources.configure_client_builder(&mut h2_builder);
+    h2_builder
+        .initial_window_size(owner.resources.stream_receive_window_bytes())
+        .initial_connection_window_size(owner.resources.connection_receive_window_bytes());
     let (sender, connection) = time::timeout(remaining, h2_builder.handshake(client))
         .await
         .map_err(|_| "HTTP/2 carrier handshake deadline elapsed".to_owned())?

@@ -107,7 +107,10 @@ async fn open_xhttp_h2_sender(
     client: AsyncResidentTlsClient,
 ) -> Result<(h2::client::SendRequest<Bytes>, tokio::task::JoinHandle<()>), String> {
     let mut h2_builder = h2::client::Builder::new();
-    H2CarrierOwnerResourceProfile::selected().configure_client_builder(&mut h2_builder);
+    let resources = H2CarrierOwnerResourceProfile::selected();
+    h2_builder
+        .initial_window_size(resources.stream_receive_window_bytes())
+        .initial_connection_window_size(resources.connection_receive_window_bytes());
     let (sender, connection) =
         time::timeout(RESIDENT_CONNECT_TIMEOUT, h2_builder.handshake(client))
             .await

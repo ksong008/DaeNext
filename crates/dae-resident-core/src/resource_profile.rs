@@ -985,12 +985,6 @@ impl H2CarrierOwnerResourceProfile {
     pub const fn connection_receive_window_bytes(self) -> u32 {
         self.connection_receive_window_bytes
     }
-
-    pub fn configure_client_builder(self, builder: &mut h2::client::Builder) {
-        builder
-            .initial_window_size(self.stream_receive_window_bytes)
-            .initial_connection_window_size(self.connection_receive_window_bytes);
-    }
 }
 
 impl AnyTlsOwnerResourceProfile {
