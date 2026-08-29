@@ -27,7 +27,6 @@ mod dns_tcp_wire;
 mod grpc_common;
 mod h2_carrier_owner;
 mod h2_stream;
-mod http_connect_head;
 mod hysteria2_failure;
 mod hysteria2_owner;
 mod hysteria2_port_hopping;

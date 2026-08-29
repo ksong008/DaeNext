@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 use tokio::time;
 
 const HTTP_HEAD_READ_BUFFER_BYTES: usize = 512;
@@ -84,6 +85,63 @@ where
         if response.len() > options.max_bytes {
             return Err(HttpHeadReadError::TooLarge);
         }
+    }
+}
+
+const HTTP_CONNECT_HEAD_LIMIT: usize = 8 * 1024;
+const HTTP_CONNECT_PEEK_CHUNK: usize = 512;
+
+pub(crate) async fn read_http_connect_head_without_overread(
+    stream: &mut TcpStream,
+) -> Result<Vec<u8>, String> {
+    let mut head = Vec::with_capacity(HTTP_CONNECT_PEEK_CHUNK);
+    let mut delimiter_match = 0_u8;
+    let mut peek = [0_u8; HTTP_CONNECT_PEEK_CHUNK];
+
+    loop {
+        let available = stream
+            .peek(&mut peek)
+            .await
+            .map_err(|err| format!("peek HTTP CONNECT response: {err}"))?;
+        if available == 0 {
+            return Err("incomplete HTTP CONNECT response".to_owned());
+        }
+
+        let mut consume = available;
+        let mut complete = false;
+        for (index, byte) in peek[..available].iter().copied().enumerate() {
+            delimiter_match = next_http_head_delimiter_match(delimiter_match, byte);
+            if delimiter_match == 4 {
+                consume = index + 1;
+                complete = true;
+                break;
+            }
+        }
+
+        if head.len().saturating_add(consume) > HTTP_CONNECT_HEAD_LIMIT {
+            return Err("HTTP CONNECT response too large".to_owned());
+        }
+        stream
+            .read_exact(&mut peek[..consume])
+            .await
+            .map_err(|err| format!("read HTTP CONNECT response: {err}"))?;
+        head.extend_from_slice(&peek[..consume]);
+
+        if complete {
+            return Ok(head);
+        }
+    }
+}
+
+fn next_http_head_delimiter_match(state: u8, byte: u8) -> u8 {
+    match (state, byte) {
+        (0, b'\r') => 1,
+        (1, b'\n') => 2,
+        (1, b'\r') => 1,
+        (2, b'\r') => 3,
+        (3, b'\n') => 4,
+        (3, b'\r') => 1,
+        _ => 0,
     }
 }
 
@@ -194,6 +252,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use super::*;
 
@@ -375,5 +434,29 @@ mod tests {
         let state = state.lock().unwrap();
         assert_eq!(state.calls, 1);
         assert_eq!(state.bytes, b"headerpayload");
+    }
+
+    #[tokio::test]
+    async fn http_connect_head_reader_does_not_consume_tunnel_payload() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\nraw-tunnel")
+                .await
+                .unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let head = read_http_connect_head_without_overread(&mut client)
+            .await
+            .unwrap();
+        assert_eq!(head, b"HTTP/1.1 200 Connection Established\r\n\r\n");
+        let mut payload = Vec::new();
+        client.read_to_end(&mut payload).await.unwrap();
+        assert_eq!(payload, b"raw-tunnel");
+        server.await.unwrap();
     }
 }

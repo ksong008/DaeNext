@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time;
 
-use crate::http_connect_head::read_plain_http_connect_head_without_overread;
+use crate::stream_io::read_http_connect_head_without_overread;
 
 pub async fn socks5_connect_async(
     stream: &mut TcpStream,
@@ -88,7 +88,7 @@ pub async fn http_proxy_connect_plain_async(
             .write_all(&request)
             .await
             .map_err(|err| format!("write HTTP CONNECT request: {err}"))?;
-        let response = read_plain_http_connect_head_without_overread(stream).await?;
+        let response = read_http_connect_head_without_overread(stream).await?;
         let status = http_request::parse_connect_response(&response)
             .map_err(|err| format!("parse HTTP CONNECT response: {err}"))?;
         if status != 200 {
