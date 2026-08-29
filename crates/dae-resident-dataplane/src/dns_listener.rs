@@ -21,7 +21,7 @@ use super::dns::{
 #[cfg(test)]
 use super::dns::{
     DNS_TRANSPORT_OUTCOME_SUCCESS, DNS_TRANSPORT_ROUTE_DIRECT, DNS_TRANSPORT_TARGET_FAMILY_IPV4,
-    DNS_TRANSPORT_TARGET_FAMILY_IPV6,
+    DNS_TRANSPORT_TARGET_FAMILY_IPV6, build_resident_dns_plan_with_refresh_interval,
 };
 use super::events::{ResidentEventKind, ResidentEventMetadata, append_event_with_metadata};
 use super::*;
@@ -1192,7 +1192,6 @@ mod tests {
     use std::time::Duration;
 
     use crate::ResidentGeodataStore;
-    use crate::dns::build_resident_dns_plan;
     use dae_dns::{
         DNS_DEFAULT_PORT, DNS_FLAG_RESPONSE, DNS_HEADER_LEN, DNS_RCODE_MASK, DNS_RCODE_SERVFAIL,
         DnsPacketView,
@@ -1284,7 +1283,8 @@ mod tests {
         let response_bytes = request_bytes.saturating_add(DNS_HEADER_LEN);
         let sent_bytes = Some(response_bytes);
         let transport_target = local_addr.to_string();
-        let mut trace = ResidentDnsTraceSummary::new_for_test(qname.clone(), qtype, qclass);
+        let trace_plan = ResidentDnsPlan::asis(0);
+        let mut trace = ResidentDnsTraceSummary::from_request(&trace_plan, &request).unwrap();
         trace.upstream = upstream.clone();
         trace.upstream_scheme = upstream_scheme;
         trace.upstream_chain = upstream_chain.clone();
@@ -1466,7 +1466,14 @@ mod tests {
         let sections = dae_config::parser::parse_config(&input).unwrap();
         let config = dae_config::schema::build_config(&sections).unwrap();
         let geodata = ResidentGeodataStore::new(Vec::<PathBuf>::new());
-        let dns = Arc::new(build_resident_dns_plan(&config, &geodata).unwrap());
+        let dns = Arc::new(
+            build_resident_dns_plan_with_refresh_interval(
+                &config,
+                &geodata,
+                Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap();

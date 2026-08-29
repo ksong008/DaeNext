@@ -132,7 +132,9 @@ fn resident_tcp_router_for_test_shared(
 ) -> Result<ResidentTcpRouter, String> {
     ResidentTcpRouter::new_for_test(
         super::plan::ResidentTcpProxyGroupSelector::shared(proxies),
-        ResidentTcpDnsResolverPort::shared(ResidentDnsResolver::asis(so_mark_from_dae)),
+        ResidentTcpDnsResolverPort::shared(ResidentDnsResolver::new(Arc::new(
+            dae_resident_dns::ResidentDnsPlan::asis(so_mark_from_dae),
+        ))),
         routing_matcher,
         dial_mode,
         sniffing_timeout,

@@ -34,6 +34,8 @@ pub use proxy_transport::{
     exchange_resident_proxy_dns_tcp_stream, run_resident_proxy_dns_tcp_connection,
 };
 pub use runtime::{
+    DNS_TRANSPORT_OUTCOME_ERROR, DNS_TRANSPORT_OUTCOME_SUCCESS, DNS_TRANSPORT_ROUTE_DIRECT,
+    DNS_TRANSPORT_ROUTE_PROXY, DNS_TRANSPORT_TARGET_FAMILY_IPV4, DNS_TRANSPORT_TARGET_FAMILY_IPV6,
     DnsRequestIdAllocator, ResidentDnsDispatcher, ResidentDnsPlan, ResidentDnsQueryResult,
     ResidentDnsReloadHandle, ResidentDnsReloadSnapshot, ResidentDnsResolver,
     ResidentDnsTraceSummary, ResidentDnsTransportTrace, ResidentDnsUdpActorCompletion,
