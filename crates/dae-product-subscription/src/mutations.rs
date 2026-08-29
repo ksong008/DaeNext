@@ -8,6 +8,31 @@ use dae_product_persistence::{
 };
 use rusqlite::{Connection, TransactionBehavior, params};
 
+#[derive(Debug)]
+pub enum SubscriptionMutationError {
+    Io(io::Error),
+    Database(rusqlite::Error),
+    TagConflict,
+}
+
+impl std::fmt::Display for SubscriptionMutationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(formatter),
+            Self::Database(error) => error.fmt(formatter),
+            Self::TagConflict => formatter.write_str("subscription tag already exists"),
+        }
+    }
+}
+
+impl std::error::Error for SubscriptionMutationError {}
+
+impl From<io::Error> for SubscriptionMutationError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
 pub struct SubscriptionTagConflict;
 
 impl SubscriptionTagConflict {
@@ -31,6 +56,89 @@ pub fn subscription_tag_exists(conn: &Connection, tag: Option<&str>) -> io::Resu
     )
     .map(|exists| exists != 0)
     .map_err(sqlite_io_error)
+}
+
+pub fn create_subscription_record(
+    state: &Path,
+    link: &str,
+    cron_exp: &str,
+    cron_enable: bool,
+    status: &str,
+    tag: Option<&str>,
+    use_proxy: bool,
+    updated_at: &str,
+) -> Result<i64, SubscriptionMutationError> {
+    let _guard = subscription_write_guard()?;
+    let conn = open_state_connection(state)?;
+    if subscription_tag_exists(&conn, tag)? {
+        return Err(SubscriptionMutationError::TagConflict);
+    }
+    let result = conn.execute(
+        "INSERT INTO subscriptions(updated_at, link, cron_exp, cron_enable, status, info, tag, use_proxy) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            updated_at,
+            link,
+            cron_exp,
+            cron_enable as i64,
+            status,
+            "",
+            tag,
+            use_proxy as i64
+        ],
+    );
+    match result {
+        Ok(_) => Ok(conn.last_insert_rowid()),
+        Err(error) if SubscriptionTagConflict::matches(&error) => {
+            Err(SubscriptionMutationError::TagConflict)
+        }
+        Err(error) => Err(SubscriptionMutationError::Database(error)),
+    }
+}
+
+pub fn update_subscription_record(
+    state: &Path,
+    id: i64,
+    link: Option<&str>,
+    tag_present: bool,
+    tag: Option<&str>,
+    cron_exp: Option<&str>,
+    cron_enable: Option<bool>,
+    use_proxy: Option<bool>,
+    updated_at: &str,
+) -> Result<bool, SubscriptionMutationError> {
+    let _guard = subscription_write_guard()?;
+    let mut conn = open_state_connection(state)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(SubscriptionMutationError::Database)?;
+    let updated = match tx.execute(
+        "UPDATE subscriptions
+         SET link = COALESCE(?1, link),
+             tag = CASE WHEN ?2 THEN ?3 ELSE tag END,
+             cron_exp = COALESCE(?4, cron_exp),
+             cron_enable = COALESCE(?5, cron_enable),
+             use_proxy = COALESCE(?6, use_proxy),
+             updated_at = ?7
+         WHERE id = ?8",
+        params![
+            link,
+            tag_present,
+            tag,
+            cron_exp,
+            cron_enable.map(i64::from),
+            use_proxy.map(i64::from),
+            updated_at,
+            id
+        ],
+    ) {
+        Ok(updated) => updated,
+        Err(error) if SubscriptionTagConflict::matches(&error) => {
+            return Err(SubscriptionMutationError::TagConflict);
+        }
+        Err(error) => return Err(SubscriptionMutationError::Database(error)),
+    };
+    tx.commit().map_err(SubscriptionMutationError::Database)?;
+    Ok(updated != 0)
 }
 
 pub fn delete_subscription(state: &Path, id: i64) -> io::Result<usize> {
