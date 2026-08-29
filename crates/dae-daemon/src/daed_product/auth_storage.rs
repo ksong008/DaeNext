@@ -7,5 +7,3 @@ mod jwt;
 pub(super) use self::jwt::*;
 mod password;
 pub(super) use self::password::*;
-mod json_storage;
-pub(super) use self::json_storage::*;

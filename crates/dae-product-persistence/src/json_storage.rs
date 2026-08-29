@@ -1,5 +1,11 @@
-use super::*;
-pub(crate) fn query_json_storage(storage: &str, paths: &[String]) -> Vec<String> {
+use rusqlite::params;
+use serde_json::{Value, json};
+use std::io;
+use std::path::Path;
+
+use super::open_state_connection;
+
+pub fn query_json_storage(storage: &str, paths: &[String]) -> Vec<String> {
     if paths.is_empty() {
         return vec![storage.to_owned()];
     }
@@ -14,7 +20,7 @@ pub(crate) fn query_json_storage(storage: &str, paths: &[String]) -> Vec<String>
         .collect()
 }
 
-pub(crate) fn set_json_storage(
+pub fn set_json_storage(
     storage: &mut String,
     paths: &[String],
     values: &[String],
@@ -30,7 +36,7 @@ pub(crate) fn set_json_storage(
     Ok(paths.len() as i32)
 }
 
-pub(crate) fn remove_json_storage(storage: &mut String, paths: &[String]) -> Result<i32, String> {
+pub fn remove_json_storage(storage: &mut String, paths: &[String]) -> Result<i32, String> {
     if paths.is_empty() {
         *storage = "{}".to_owned();
         return Ok(1);
@@ -43,7 +49,7 @@ pub(crate) fn remove_json_storage(storage: &mut String, paths: &[String]) -> Res
     Ok(paths.len() as i32)
 }
 
-pub(crate) fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+pub fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     let mut current = value;
     for segment in path.split('.').filter(|segment| !segment.is_empty()) {
         current = current.get(segment)?;
@@ -51,7 +57,7 @@ pub(crate) fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Valu
     Some(current)
 }
 
-pub(crate) fn set_value_at_path(root: &mut Value, path: &str, value: Value) -> Result<(), String> {
+pub fn set_value_at_path(root: &mut Value, path: &str, value: Value) -> Result<(), String> {
     let segments = path
         .split('.')
         .filter(|segment| !segment.is_empty())
@@ -79,7 +85,7 @@ pub(crate) fn set_value_at_path(root: &mut Value, path: &str, value: Value) -> R
     Ok(())
 }
 
-pub(crate) fn delete_value_at_path(root: &mut Value, path: &str) -> Result<(), String> {
+pub fn delete_value_at_path(root: &mut Value, path: &str) -> Result<(), String> {
     let segments = path
         .split('.')
         .filter(|segment| !segment.is_empty())
@@ -100,7 +106,7 @@ pub(crate) fn delete_value_at_path(root: &mut Value, path: &str) -> Result<(), S
     Ok(())
 }
 
-pub(crate) fn value_to_storage_string(value: &Value) -> String {
+pub fn value_to_storage_string(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         Value::String(value) => value.clone(),
@@ -108,12 +114,46 @@ pub(crate) fn value_to_storage_string(value: &Value) -> String {
     }
 }
 
-pub(crate) fn save_json_storage(state: &Path, user_id: i64, storage: &str) -> io::Result<()> {
+pub fn save_json_storage(state: &Path, user_id: i64, storage: &str) -> io::Result<()> {
     let conn = open_state_connection(state)?;
     conn.execute(
         "UPDATE users SET json_storage = ?1 WHERE id = ?2",
         params![storage, user_id],
     )
-    .map_err(sqlite_io_error)?;
+    .map_err(io::Error::other)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_storage_round_trips_nested_values() {
+        let mut storage = r#"{"profile":{"name":"old"},"keep":true}"#.to_owned();
+        let paths = vec!["profile.name".to_owned(), "profile.id".to_owned()];
+        let values = vec!["new".to_owned(), "42".to_owned()];
+
+        assert_eq!(set_json_storage(&mut storage, &paths, &values), Ok(2));
+        assert_eq!(
+            query_json_storage(&storage, &paths),
+            vec!["new".to_owned(), "42".to_owned()]
+        );
+        assert_eq!(
+            remove_json_storage(&mut storage, &[paths[0].clone()]),
+            Ok(1)
+        );
+        assert_eq!(
+            query_json_storage(&storage, &[paths[0].clone()]),
+            vec![String::new()]
+        );
+        assert_eq!(query_json_storage(&storage, &[]), vec![storage]);
+    }
+
+    #[test]
+    fn json_storage_rejects_empty_paths() {
+        let mut root = json!({});
+        assert!(set_value_at_path(&mut root, "", json!(true)).is_err());
+        assert!(delete_value_at_path(&mut root, "").is_err());
+    }
 }
