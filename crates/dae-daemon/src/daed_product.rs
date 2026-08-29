@@ -463,7 +463,6 @@ fn product_package_context() -> ProductPackageContext {
         product_runtime_defaults(),
         runtime_state_gate_evidence(),
         runtime_state_blockers(),
-        webui_route_audit_report(),
     )
 }
 mod common_helpers;
