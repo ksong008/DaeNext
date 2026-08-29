@@ -39,6 +39,52 @@
     "tests",
     "tests.rs"
   ],
+  "adapter_roles": {
+    "control-adapter": [
+      "api_routes",
+      "api_routes.rs",
+      "auth_storage.rs",
+      "bundle.rs",
+      "cli_commands",
+      "cli_commands.rs",
+      "geodata",
+      "latency",
+      "latency.rs",
+      "nodes_subscriptions_groups",
+      "nodes_subscriptions_groups.rs",
+      "resources.rs"
+    ],
+    "runtime-adapter": [
+      "runtime_api",
+      "runtime_api.rs",
+      "runtime_apply",
+      "runtime_apply.rs",
+      "runtime_manager",
+      "runtime_manager.rs",
+      "runtime_materialization",
+      "runtime_materialization.rs",
+      "runtime_overview",
+      "runtime_overview.rs",
+      "runtime_reconcile",
+      "runtime_reconcile.rs",
+      "runtime_reload.rs"
+    ],
+    "host-io": [
+      "common_helpers.rs",
+      "http_server",
+      "http_server.rs",
+      "local_control.rs",
+      "logs",
+      "logs.rs",
+      "product_net.rs",
+      "service_metadata.rs",
+      "sse_runtime"
+    ],
+    "tests": [
+      "tests",
+      "tests.rs"
+    ]
+  },
   "production_line_limits": {
     "api_routes": 800,
     "api_routes.rs": 30,

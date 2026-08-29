@@ -34,6 +34,32 @@ def validate(root: pathlib.Path, policy: dict[str, Any]) -> list[str]:
     if not isinstance(limits, dict):
         return ["product adapter policy production_line_limits must be an object"]
     allowed_set = set(allowed)
+    roles = policy.get("adapter_roles")
+    if not isinstance(roles, dict) or not roles:
+        return ["product adapter policy adapter_roles must be a non-empty object"]
+    role_paths: dict[str, str] = {}
+    for role, paths in roles.items():
+        if not isinstance(role, str) or not isinstance(paths, list) or not all(
+            isinstance(path, str) for path in paths
+        ):
+            errors.append("product adapter policy adapter_roles must map names to string arrays")
+            continue
+        for path in paths:
+            if path in role_paths:
+                errors.append(
+                    f"product adapter path {path!r} is assigned to multiple roles: "
+                    f"{role_paths[path]} and {role}"
+                )
+            role_paths[path] = role
+            if path not in allowed_set:
+                errors.append(
+                    f"product adapter role {role!r} names an unapproved path: {path}"
+                )
+    missing_roles = sorted(allowed_set - set(role_paths))
+    errors.extend(
+        f"product adapter path is missing an ownership role: {path}"
+        for path in missing_roles
+    )
     buckets: dict[str, int] = {}
     for entry in sorted(adapter_root.iterdir()):
         if entry.is_dir() and not any(entry.rglob("*.rs")):
@@ -41,6 +67,11 @@ def validate(root: pathlib.Path, policy: dict[str, Any]) -> list[str]:
         if entry.name not in allowed_set:
             errors.append(
                 f"unapproved daemon product adapter surface: "
+                f"{entry.relative_to(root)}"
+            )
+        elif entry.name not in role_paths:
+            errors.append(
+                f"product adapter path has no ownership role: "
                 f"{entry.relative_to(root)}"
             )
 
