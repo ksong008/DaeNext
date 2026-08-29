@@ -1,8 +1,12 @@
-use super::*;
+use std::io;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
+
+use super::ProductUiRuntime;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ProductUiSessionKey {
-    user_id: i64,
+    pub(super) user_id: i64,
     page_id: String,
 }
 
@@ -24,7 +28,7 @@ pub(super) struct ProductUiSession {
 
 #[derive(Debug, Default)]
 pub(super) struct ProductUiRegistryState {
-    pub(super) sessions: HashMap<ProductUiSessionKey, ProductUiSession>,
+    pub(super) sessions: std::collections::HashMap<ProductUiSessionKey, ProductUiSession>,
 }
 
 impl ProductUiRuntime {

@@ -1,9 +1,17 @@
-use super::*;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use super::{ProductUiReclaimHooks, ProductUiRuntime};
+use crate::ProductHttpMetrics;
 
 const PRODUCT_UI_RECLAIM_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct ProductUiReclaim {
+    hooks: Arc<dyn ProductUiReclaimHooks>,
     desired_epoch: AtomicU64,
     completed_epoch: AtomicU64,
     finishing_epoch: AtomicU64,
@@ -26,6 +34,25 @@ struct ProductUiReclaimState {
 }
 
 impl ProductUiReclaim {
+    pub(super) fn new(hooks: Arc<dyn ProductUiReclaimHooks>) -> Self {
+        Self {
+            hooks,
+            desired_epoch: AtomicU64::new(0),
+            completed_epoch: AtomicU64::new(0),
+            finishing_epoch: AtomicU64::new(0),
+            active_workers: AtomicU64::new(0),
+            expected_workers: AtomicU64::new(0),
+            acknowledged_workers: AtomicU64::new(0),
+            flush_failures: AtomicU64::new(0),
+            requested_total: AtomicU64::new(0),
+            completed_total: AtomicU64::new(0),
+            partial_total: AtomicU64::new(0),
+            partial_epoch: AtomicU64::new(0),
+            owner_retry: AtomicBool::new(false),
+            state: Mutex::new(ProductUiReclaimState::default()),
+        }
+    }
+
     pub(super) fn request(&self) -> bool {
         let desired = self.desired_epoch.load(Ordering::Acquire);
         if desired != self.completed_epoch.load(Ordering::Acquire) {
@@ -50,7 +77,7 @@ impl ProductUiReclaim {
 
     pub(super) fn register(self: &Arc<Self>) -> ProductUiReclaimWorker {
         let last_epoch = self.desired_epoch.load(Ordering::Acquire);
-        let binding = allocator_bind_control_plane_thread();
+        let binding = self.hooks.bind_control_plane_thread();
         self.active_workers.fetch_add(1, Ordering::AcqRel);
         ProductUiReclaimWorker {
             reclaim: Arc::clone(self),
@@ -129,7 +156,7 @@ impl ProductUiReclaim {
         let flush_failures = self.flush_failures.load(Ordering::Relaxed);
         let owner_drained = runtime.owner_drained(metrics);
         let (status, detail) = if owner_drained && flush_failures == 0 {
-            let request = allocator_request_control_plane_reclaim();
+            let request = self.hooks.request_control_plane_reclaim();
             let status = if request.get("status").and_then(Value::as_str) == Some("requested") {
                 "requested"
             } else {
@@ -199,18 +226,18 @@ impl ProductUiReclaim {
     }
 }
 
-pub(in crate::daed_product) struct ProductUiReclaimWorker {
+pub struct ProductUiReclaimWorker {
     reclaim: Arc<ProductUiReclaim>,
     last_epoch: u64,
     binding: Result<Option<u32>, String>,
 }
 
 impl ProductUiReclaimWorker {
-    pub(super) fn poll(&mut self, runtime: &ProductUiRuntime, metrics: &ProductHttpMetrics) {
+    pub fn poll(&mut self, runtime: &ProductUiRuntime, metrics: &ProductHttpMetrics) {
         let epoch = self.reclaim.desired_epoch.load(Ordering::Acquire);
         if epoch > self.last_epoch {
             let flush_failed =
-                self.binding.is_err() || allocator_flush_current_thread_cache().is_err();
+                self.binding.is_err() || self.reclaim.hooks.flush_current_thread_cache().is_err();
             self.last_epoch = epoch;
             self.reclaim
                 .acknowledge(runtime, metrics, epoch, flush_failed);

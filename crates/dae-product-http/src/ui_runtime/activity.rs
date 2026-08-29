@@ -1,7 +1,13 @@
-use super::*;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use crate::{HttpRequest, ProductHttpMetrics};
+
+use super::{ProductUiRequestLease, ProductUiRuntime, optional_page_id_from_request};
 
 pub(super) const PRODUCT_UI_HEADERLESS_RECLAIM_QUIET: Duration = Duration::from_millis(250);
-const PRODUCT_UI_HEADERLESS_RECLAIM_COOLDOWN: Duration = PRODUCT_UI_SESSION_LEASE;
+const PRODUCT_UI_HEADERLESS_RECLAIM_COOLDOWN: Duration = super::PRODUCT_UI_SESSION_LEASE;
 
 #[derive(Debug, Default)]
 pub(super) struct ProductUiHeaderlessReclaimActivity {
@@ -10,10 +16,7 @@ pub(super) struct ProductUiHeaderlessReclaimActivity {
 }
 
 impl ProductUiRuntime {
-    pub(in crate::daed_product) fn request_lease(
-        self: &Arc<Self>,
-        request: &HttpRequest,
-    ) -> Option<ProductUiRequestLease> {
+    pub fn request_lease(self: &Arc<Self>, request: &HttpRequest) -> Option<ProductUiRequestLease> {
         let page_id = optional_page_id_from_request(request).ok().flatten();
         let headerless = page_id.is_none();
         let charged_bytes = request
@@ -89,37 +92,5 @@ impl ProductUiRuntime {
                 Ordering::Acquire,
             );
         }
-    }
-}
-
-pub(in crate::daed_product) struct ProductUiRequestLease {
-    runtime: Arc<ProductUiRuntime>,
-    charged_bytes: u64,
-    headerless: bool,
-}
-
-impl Drop for ProductUiRequestLease {
-    fn drop(&mut self) {
-        self.runtime.requests_active.fetch_sub(1, Ordering::Release);
-        let _ = self.runtime.bytes_in_flight.fetch_update(
-            Ordering::Release,
-            Ordering::Relaxed,
-            |bytes| Some(bytes.saturating_sub(self.charged_bytes)),
-        );
-        if self.headerless
-            && self
-                .runtime
-                .headerless_requests_active
-                .fetch_sub(1, Ordering::AcqRel)
-                == 1
-        {
-            if let Ok(mut activity) = self.runtime.headerless_reclaim_activity.lock() {
-                activity.idle_since = Some(Instant::now());
-            }
-            self.runtime
-                .headerless_drain_epoch
-                .fetch_add(1, Ordering::Release);
-        }
-        self.runtime.sweep();
     }
 }

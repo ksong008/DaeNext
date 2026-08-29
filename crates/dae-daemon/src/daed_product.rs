@@ -31,17 +31,16 @@ use sha2::{Digest, Sha256};
 use crate::allocator::{
     AllocatorReclaimBusyKind, AllocatorReclaimReason, AllocatorReclaimScope,
     AllocatorReclaimWorker, AllocatorRuntimeReclaimHooks, AllocatorStatsSnapshot,
-    AllocatorWorkerKind, allocator_bind_control_plane_thread, allocator_derived_stats_json_from,
-    allocator_effective_configuration_json, allocator_flush_current_thread_cache,
+    AllocatorWorkerKind, allocator_derived_stats_json_from, allocator_effective_configuration_json,
     allocator_notify_reclaim_monitor, allocator_pending_reclaim_scope, allocator_profile,
     allocator_reclaim, allocator_reclaim_busy, allocator_reclaim_busy_completion_count,
     allocator_reclaim_busy_count, allocator_reclaim_control_plane,
     allocator_reclaim_request_wake_epoch, allocator_reclaim_snapshot_json,
     allocator_reclaimable_page_bytes, allocator_record_publication_reclaim,
     allocator_record_trailing_reclaim_evaluation, allocator_register_reclaim_worker,
-    allocator_request_control_plane_reclaim, allocator_request_reclaim,
-    allocator_request_reclaim_for_publication, allocator_restore_reclaim_requests,
-    allocator_stats_json_from, allocator_stats_snapshot, allocator_wait_for_reclaim_request_since,
+    allocator_request_reclaim, allocator_request_reclaim_for_publication,
+    allocator_restore_reclaim_requests, allocator_stats_json_from, allocator_stats_snapshot,
+    allocator_wait_for_reclaim_request_since,
 };
 use crate::allocator_bootstrap::{
     JEMALLOC_AUTOMATIC_ARENA_MAX, JEMALLOC_BUILD_CONF_ENV, JEMALLOC_BUILD_CONF_SOURCE,
@@ -184,6 +183,29 @@ struct AppState {
     geodata_status_cache: Arc<Mutex<GeodataStatusCache>>,
     geodata_update_runtime: Option<Arc<geodata::ProductGeodataUpdateRuntime>>,
     control_runtime: Arc<ProductControlRuntime>,
+}
+
+#[derive(Debug)]
+struct ProductUiAllocatorHooks;
+
+impl ProductUiReclaimHooks for ProductUiAllocatorHooks {
+    fn bind_control_plane_thread(&self) -> Result<Option<u32>, String> {
+        crate::allocator::allocator_bind_control_plane_thread()
+    }
+
+    fn flush_current_thread_cache(&self) -> io::Result<()> {
+        crate::allocator::allocator_flush_current_thread_cache().map_err(io::Error::other)
+    }
+
+    fn request_control_plane_reclaim(&self) -> Value {
+        crate::allocator::allocator_request_control_plane_reclaim()
+    }
+}
+
+fn product_ui_runtime() -> Arc<ProductUiRuntime> {
+    Arc::new(ProductUiRuntime::with_default_reclaim_hooks(Arc::new(
+        ProductUiAllocatorHooks,
+    )))
 }
 
 struct ProductControlAllocatorHooks {
@@ -392,8 +414,6 @@ pub use self::cli_commands::*;
 mod service_metadata;
 use self::service_metadata::*;
 use dae_product_http::*;
-mod ui_runtime;
-use self::ui_runtime::*;
 mod http_server;
 use self::http_server::*;
 mod sse_runtime;

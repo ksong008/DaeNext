@@ -35,7 +35,7 @@ fn start_test_product_server(scope: &str) -> TestProductServer {
         runtime_sampler: None,
         latency_jobs: Arc::new(LatencyJobManager::default()),
         http_metrics: Arc::new(ProductHttpMetrics::default()),
-        ui_runtime: Arc::new(ProductUiRuntime::default()),
+        ui_runtime: product_ui_runtime(),
         auth_runtime: product_test_auth_runtime(),
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
