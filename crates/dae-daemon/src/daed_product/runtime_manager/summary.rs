@@ -55,24 +55,6 @@ pub(super) fn runtime_health_seed_snapshots(values: impl IntoIterator<Item = Val
     by_link_hash.into_values().collect()
 }
 
-pub(super) fn apply_runtime_traffic_metric_carry(metrics: &mut Value, key: &str, carry: u64) {
-    if carry == 0 {
-        return;
-    }
-    metrics[key] = json!(runtime_traffic_metric_u64(metrics, key).saturating_add(carry));
-}
-
-pub(super) fn runtime_traffic_metric_u64(metrics: &Value, key: &str) -> u64 {
-    metrics
-        .get(key)
-        .and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
-        })
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

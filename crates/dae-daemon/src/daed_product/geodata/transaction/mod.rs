@@ -4,7 +4,6 @@ mod external_input;
 
 pub(super) use dae_product_geodata::PreparedGeodataGeneration;
 pub(super) use dae_product_geodata::recover_geodata_transaction;
-pub(in crate::daed_product) use dae_product_geodata::recover_geodata_transactions;
 pub(super) use external_input::runtime_input_versions_if_running;
 
 #[cfg(test)]

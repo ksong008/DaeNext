@@ -2,6 +2,42 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use dae_product_core::product_iso8601_utc;
+pub use dae_resident_core::ResidentTrafficCounters as RuntimeTrafficCounters;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RuntimeTrafficAvailability {
+    Active,
+    TemporarilyUnavailable,
+    #[default]
+    RuntimeStopped,
+}
+
+impl RuntimeTrafficAvailability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::TemporarilyUnavailable => "temporarily-unavailable",
+            Self::RuntimeStopped => "runtime-stopped",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeTrafficRead {
+    pub epoch: u64,
+    pub counters: RuntimeTrafficCounters,
+    pub availability: RuntimeTrafficAvailability,
+}
+
+impl RuntimeTrafficRead {
+    pub fn runtime_stopped(epoch: u64) -> Self {
+        Self {
+            epoch,
+            counters: RuntimeTrafficCounters::default(),
+            availability: RuntimeTrafficAvailability::RuntimeStopped,
+        }
+    }
+}
 use serde_json::{Value, json};
 
 #[derive(Debug, Default)]
@@ -42,11 +78,126 @@ pub struct RuntimeTrafficRateSample {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct RuntimeTrafficCounters {
+pub struct RuntimeTrafficCarry {
     pub upload_total: u64,
     pub download_total: u64,
-    pub active_tcp_connections: u64,
-    pub active_udp_sessions: u64,
+    pub packet_total: u64,
+    pub request_total: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn carry_applies_only_to_monotonic_totals() {
+        let counters = RuntimeTrafficCounters {
+            upload_total: 25,
+            download_total: 50,
+            packet_total: 75,
+            request_total: 100,
+            queue_depth: 4,
+            inflight_work: 5,
+            active_tcp_connections: 3,
+            active_udp_sessions: 2,
+        };
+        let carried = RuntimeTrafficCarry {
+            upload_total: 500,
+            download_total: 700,
+            packet_total: 900,
+            request_total: 1_100,
+        }
+        .apply_to_counters(counters);
+
+        assert_eq!(carried.upload_total, 525);
+        assert_eq!(carried.download_total, 750);
+        assert_eq!(carried.packet_total, 975);
+        assert_eq!(carried.request_total, 1_200);
+        assert_eq!(carried.queue_depth, 4);
+        assert_eq!(carried.inflight_work, 5);
+        assert_eq!(carried.active_tcp_connections, 3);
+        assert_eq!(carried.active_udp_sessions, 2);
+    }
+
+    #[test]
+    fn carry_saturates_without_changing_active_gauges() {
+        let counters = RuntimeTrafficCounters {
+            upload_total: u64::MAX - 1,
+            download_total: u64::MAX,
+            packet_total: u64::MAX - 2,
+            request_total: u64::MAX - 3,
+            queue_depth: 4,
+            inflight_work: 5,
+            active_tcp_connections: 7,
+            active_udp_sessions: 8,
+        };
+        let carried = RuntimeTrafficCarry {
+            upload_total: 2,
+            download_total: 1,
+            packet_total: 4,
+            request_total: 6,
+        }
+        .apply_to_counters(counters);
+
+        assert_eq!(carried.upload_total, u64::MAX);
+        assert_eq!(carried.download_total, u64::MAX);
+        assert_eq!(carried.packet_total, u64::MAX);
+        assert_eq!(carried.request_total, u64::MAX);
+        assert_eq!(carried.active_tcp_connections, 7);
+        assert_eq!(carried.active_udp_sessions, 8);
+    }
+}
+
+impl RuntimeTrafficCarry {
+    pub fn absorb_counters(self, counters: RuntimeTrafficCounters) -> Self {
+        Self {
+            upload_total: self.upload_total.saturating_add(counters.upload_total),
+            download_total: self.download_total.saturating_add(counters.download_total),
+            packet_total: self.packet_total.saturating_add(counters.packet_total),
+            request_total: self.request_total.saturating_add(counters.request_total),
+        }
+    }
+
+    pub fn apply_to_metrics(self, metrics: &mut Value) {
+        if self.upload_total == 0 && self.download_total == 0 {
+            return;
+        }
+        apply_runtime_traffic_metric_carry(metrics, "uploadTotal", self.upload_total);
+        apply_runtime_traffic_metric_carry(metrics, "downloadTotal", self.download_total);
+    }
+
+    pub fn apply_to_runtime_summary(self, summary: &mut Value) {
+        if let Some(metrics) = summary.pointer_mut("/residentDataplane/metrics") {
+            self.apply_to_metrics(metrics);
+        }
+    }
+
+    pub fn apply_to_counters(self, counters: RuntimeTrafficCounters) -> RuntimeTrafficCounters {
+        RuntimeTrafficCounters {
+            upload_total: counters.upload_total.saturating_add(self.upload_total),
+            download_total: counters.download_total.saturating_add(self.download_total),
+            packet_total: counters.packet_total.saturating_add(self.packet_total),
+            request_total: counters.request_total.saturating_add(self.request_total),
+            ..counters
+        }
+    }
+}
+
+fn apply_runtime_traffic_metric_carry(metrics: &mut Value, key: &str, carry: u64) {
+    if carry == 0 {
+        return;
+    }
+    metrics[key] = json!(
+        metrics
+            .get(key)
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+            })
+            .unwrap_or(0)
+            .saturating_add(carry)
+    );
 }
 
 pub fn calculate_runtime_traffic_observation(

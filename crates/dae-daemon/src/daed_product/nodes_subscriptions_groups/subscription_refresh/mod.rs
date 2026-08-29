@@ -39,12 +39,13 @@ pub(crate) use self::source::fetch_subscription_content;
 
 const SUBSCRIPTION_MAX_BYTES: usize = dae_product_subscription::SUBSCRIPTION_MAX_BYTES;
 
-pub(in crate::daed_product) use dae_product_subscription::recover_subscription_persist_transaction;
 pub(in crate::daed_product) use helper::run_subscription_prepare_helper_command;
 
 struct DaemonSubscriptionRefreshCallbacks<'a> {
     #[cfg(test)]
     control_runtime: &'a ProductControlRuntime,
+    #[cfg(not(test))]
+    marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl SubscriptionRefreshCallbacks for DaemonSubscriptionRefreshCallbacks<'_> {
@@ -75,7 +76,7 @@ impl SubscriptionRefreshCallbacks for DaemonSubscriptionRefreshCallbacks<'_> {
                         None
                     };
                     Ok(SubscriptionRefreshFetch::Prepared {
-                        prepared: prepared.prepared,
+                        prepared: prepared.prepared.clone(),
                         persist,
                     })
                 }
@@ -123,6 +124,8 @@ pub(crate) fn refresh_subscription_from_remote(
     let callbacks = DaemonSubscriptionRefreshCallbacks {
         #[cfg(test)]
         control_runtime,
+        #[cfg(not(test))]
+        marker: std::marker::PhantomData,
     };
     let result = dae_product_subscription::refresh_subscription_from_remote_with_callbacks(
         &callbacks, state, config_dir, id,

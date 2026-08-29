@@ -10,6 +10,7 @@ mod materialization;
 mod reconcile;
 mod rendering;
 mod resource_pools;
+mod state;
 mod traffic;
 mod transition;
 
@@ -40,6 +41,7 @@ pub use reconcile::{
 };
 pub use rendering::*;
 pub use resource_pools::*;
+pub use state::*;
 pub use traffic::*;
 pub use transition::*;
 mod global_config;

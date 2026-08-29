@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 dae-config.workspace = true
 dae-datapath.workspace = true
+dae-resident-core.workspace = true
 dae-product-core.workspace = true
 dae-product-persistence.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }

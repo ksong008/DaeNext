@@ -301,7 +301,7 @@
     },
     "dae-product-runtime": {
       "layer": "product-domain",
-      "normal": ["dae-config", "dae-datapath", "dae-product-core", "dae-product-persistence"],
+      "normal": ["dae-config", "dae-datapath", "dae-product-core", "dae-product-persistence", "dae-resident-core"],
       "build": [],
       "dev": []
     },

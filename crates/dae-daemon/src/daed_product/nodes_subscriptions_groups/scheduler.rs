@@ -43,6 +43,7 @@ pub(crate) fn refresh_due_subscriptions_for_scheduler(
     )
 }
 
+#[cfg(test)]
 fn refresh_due_subscriptions_for_scheduler_with_tracker(
     control_runtime: &ProductControlRuntime,
     state: &Path,
@@ -64,6 +65,7 @@ fn refresh_due_subscriptions_for_scheduler_with_tracker(
     )
 }
 
+#[cfg(test)]
 struct DaemonSubscriptionSchedulerCallbacks<'a> {
     control_runtime: &'a ProductControlRuntime,
     runtime: &'a ProductRuntimeManager,
@@ -74,6 +76,7 @@ struct OwnedDaemonSubscriptionSchedulerCallbacks {
     runtime: Arc<ProductRuntimeManager>,
 }
 
+#[cfg(test)]
 impl SubscriptionSchedulerCallbacks for DaemonSubscriptionSchedulerCallbacks<'_> {
     fn refresh_subscription(
         &self,

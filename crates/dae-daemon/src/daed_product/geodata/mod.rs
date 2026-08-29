@@ -15,7 +15,6 @@ mod update_runtime;
 pub(in crate::daed_product) use helper::run_geodata_prepare_helper_command;
 use helper::{GeodataPreparationMode, GeodataPreparedDownload, prepare_geodata_with_helper};
 pub(in crate::daed_product) use status::{geodata_dir_for_web_root, geodata_status};
-pub(in crate::daed_product) use transaction::recover_geodata_transactions;
 use update::update_geodata;
 pub(in crate::daed_product) use update_admission::ProductGeodataUpdateCoordinator;
 use update_context::ProductGeodataUpdateContext;
