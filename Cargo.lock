@@ -858,6 +858,7 @@ name = "dae-product-core"
 version = "3.1.0"
 dependencies = [
  "dae-config",
+ "libc",
  "serde_json",
 ]
 

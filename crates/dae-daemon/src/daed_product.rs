@@ -446,8 +446,6 @@ mod dae_file_import;
 use self::dae_file_import::*;
 mod package;
 use self::package::*;
-mod process_metrics;
-use self::process_metrics::*;
 mod common_helpers;
 use self::common_helpers::*;
 mod auth_storage;
