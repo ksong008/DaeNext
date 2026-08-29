@@ -9,7 +9,6 @@ pub struct ProductPackageContext {
     runtime_defaults: Value,
     runtime_state_gate_evidence: Value,
     remaining_admission: Vec<String>,
-    route_audit: Value,
 }
 
 impl ProductPackageContext {
@@ -21,7 +20,6 @@ impl ProductPackageContext {
         runtime_defaults: Value,
         runtime_state_gate_evidence: Value,
         remaining_admission: Vec<String>,
-        route_audit: Value,
     ) -> Self {
         Self {
             primary_state_store: primary_state_store.into(),
@@ -31,7 +29,6 @@ impl ProductPackageContext {
             runtime_defaults,
             runtime_state_gate_evidence,
             remaining_admission,
-            route_audit,
         }
     }
 
@@ -141,7 +138,7 @@ impl ProductPackageContext {
         })
     }
 
-    pub fn admission_report(&self) -> Value {
+    pub fn admission_report(&self, route_audit: &Value) -> Value {
         json!({
             "schemaVersion": 1,
             "productSurface": "native-product",
@@ -166,7 +163,7 @@ impl ProductPackageContext {
                 "tcpLatencyProbe": true,
                 "resetpassParity": true,
                 "packageManifest": true,
-                "webuiRouteAuditPass": self.route_audit["pass"].as_bool().unwrap_or(false),
+                "webuiRouteAuditPass": route_audit["pass"].as_bool().unwrap_or(false),
                 "runtimeDefaultsExplicit": true,
             },
             "packageArtifacts": {

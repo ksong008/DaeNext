@@ -17,7 +17,7 @@ pub(crate) fn run_export_command(args: &[String]) -> DaedProductOutput {
         )),
         Some("admission-report") if args.len() == 1 => DaedProductOutput::ok(format!(
             "{}\n",
-            product_package_context().admission_report()
+            product_package_context().admission_report(&webui_route_audit_report())
         )),
         Some("webui-route-audit") if args.len() == 1 => {
             DaedProductOutput::ok(format!("{}\n", webui_route_audit_report()))
