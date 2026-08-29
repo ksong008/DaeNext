@@ -4,6 +4,17 @@ use std::sync::Arc;
 
 use dae_resident_core::{ActiveGenerationSlot, GenerationGate, GenerationToken, PublicationEpoch};
 
+mod executor;
+mod task;
+
+pub use executor::{
+    ResidentRuntimeAllocatorHooks, ResidentRuntimeExecutor, ResidentRuntimeExecutorConfig,
+};
+pub use task::{
+    ResidentAsyncRuntimeShutdown, ResidentAsyncRuntimeTask, ResidentRuntimeTaskRole,
+    registered_resident_async_runtime_task,
+};
+
 pub struct ResidentRuntimeCoordinator<T> {
     active_generation: ActiveGenerationSlot<T>,
     generation_gate: Arc<GenerationGate>,

@@ -14,54 +14,6 @@ pub(super) struct ResidentRuntimeTask {
     pub(super) role: ResidentRuntimeTaskRole,
 }
 
-pub(crate) struct ResidentAsyncRuntimeTask {
-    pub(crate) name: &'static str,
-    pub(crate) kind: &'static str,
-    pub(crate) role: ResidentRuntimeTaskRole,
-    pub(crate) handle: tokio::task::JoinHandle<()>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResidentRuntimeTaskRole {
-    Workload,
-    Generation,
-    Transport,
-}
-
-impl ResidentRuntimeTaskRole {
-    pub(crate) const fn name(self) -> &'static str {
-        match self {
-            Self::Workload => "workload",
-            Self::Generation => "generation",
-            Self::Transport => "transport",
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct ResidentAsyncRuntimeShutdown {
-    pub(crate) joined: usize,
-    pub(crate) cancelled: usize,
-    pub(crate) panicked: usize,
-    pub(crate) timed_out: usize,
-    pub(crate) results: Vec<Value>,
-    pub(crate) pending: Vec<ResidentAsyncRuntimeTask>,
-}
-
-pub(crate) fn registered_resident_async_runtime_task(
-    name: &'static str,
-    kind: &'static str,
-    role: ResidentRuntimeTaskRole,
-    handle: tokio::task::JoinHandle<()>,
-) -> ResidentAsyncRuntimeTask {
-    ResidentAsyncRuntimeTask {
-        name,
-        kind,
-        role,
-        handle,
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ResidentRuntimeTaskExit {
     #[cfg(test)]

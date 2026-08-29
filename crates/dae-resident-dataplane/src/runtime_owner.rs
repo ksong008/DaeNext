@@ -15,18 +15,37 @@ use self::shutdown::shutdown_resident_runtime_owner;
 use self::shutdown::shutdown_resident_runtime_workloads;
 #[cfg(test)]
 use self::task::spawn_resident_runtime_task;
-pub(super) use self::task::{
-    ResidentAsyncRuntimeShutdown, ResidentAsyncRuntimeTask, ResidentRuntimeTaskRole,
-    registered_resident_async_runtime_task,
-};
 use self::task::{ResidentRuntimeTask, ResidentRuntimeTaskExit, registered_resident_runtime_task};
+
+#[derive(Debug)]
+struct ResidentAllocatorRuntimeHooksAdapter {
+    inner: Arc<dyn ResidentAllocatorRuntimeHooks>,
+}
+
+impl dae_resident_runtime::ResidentRuntimeAllocatorHooks for ResidentAllocatorRuntimeHooksAdapter {
+    fn thread_start(&self) {
+        self.inner.thread_start();
+    }
+
+    fn thread_stop(&self) {
+        self.inner.thread_stop();
+    }
+
+    fn activate(&self, handle: tokio::runtime::Handle) {
+        self.inner.activate(handle);
+    }
+
+    fn deactivate(&self) {
+        self.inner.deactivate();
+    }
+}
 
 pub(crate) struct ResidentRuntimeOwner {
     workload_stop: SharedResidentStopSignal,
     transport_stop: SharedResidentStopSignal,
     tasks: Vec<ResidentRuntimeTask>,
     async_tasks: Vec<ResidentAsyncRuntimeTask>,
-    data_plane_executor: ResidentDataPlaneExecutor,
+    data_plane_executor: ResidentRuntimeExecutor,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     reload_generation: u64,
@@ -89,7 +108,23 @@ impl ResidentRuntimeOwner {
         resource_config: ResidentRuntimeResourceConfig,
         udp_payload_admission: ResidentUdpPayloadAdmission,
     ) -> Result<Self, String> {
-        let data_plane_executor = ResidentDataPlaneExecutor::new(&resource_config)?;
+        let allocator_reclaim = resident_allocator_runtime_hooks(
+            ResidentAllocatorWorkerKind::ResidentData,
+            resource_config.tcp_runtime_workers.value(),
+        );
+        let worker_stack_bytes = resource_config
+            .tcp_flow_stack_bytes
+            .value()
+            .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN);
+        let data_plane_executor = ResidentRuntimeExecutor::new(
+            ResidentRuntimeExecutorConfig::new(
+                resource_config.tcp_runtime_workers.value(),
+                worker_stack_bytes,
+            ),
+            Arc::new(ResidentAllocatorRuntimeHooksAdapter {
+                inner: allocator_reclaim,
+            }),
+        )?;
         let event_writer = ResidentEventWriterRuntime::start(
             event_file.clone(),
             Arc::clone(&event_lock),
