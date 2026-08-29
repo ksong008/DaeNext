@@ -1,6 +1,12 @@
-use super::*;
+use std::fs;
+use std::io::{self, Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
-use std::net::Shutdown;
+use serde_json::{Value, json};
 
 const PPROF_ACCEPT_POLL: Duration = Duration::from_millis(50);
 const PPROF_READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -48,10 +54,7 @@ struct PprofState {
     listener: Option<PprofListener>,
 }
 
-/// Small, dependency-free localhost pprof owner.  It implements the standard
-/// discovery/cmdline/symbol endpoints and a bounded diagnostic profile
-/// response; binding and lifecycle semantics match legacy net/http/pprof.
-pub(super) struct ProductPprofRuntime {
+pub struct ProductPprofRuntime {
     state: Mutex<PprofState>,
 }
 
@@ -73,7 +76,7 @@ impl Default for ProductPprofRuntime {
 }
 
 impl ProductPprofRuntime {
-    pub(super) fn apply_port(&self, requested_port: u16) -> Result<(), String> {
+    pub fn apply_port(&self, requested_port: u16) -> Result<(), String> {
         let old = {
             let mut state = self
                 .state
@@ -86,10 +89,6 @@ impl ProductPprofRuntime {
             {
                 return Ok(());
             }
-            // Bind the replacement before stopping the old owner.  The
-            // externally visible lifecycle matches legacy reload, while this
-            // ordering also preserves the old listener when the new port is
-            // unavailable.
             let replacement = if requested_port == 0 {
                 None
             } else {
@@ -105,7 +104,7 @@ impl ProductPprofRuntime {
         Ok(())
     }
 
-    pub(super) fn port(&self) -> u16 {
+    pub fn port(&self) -> u16 {
         self.state
             .lock()
             .ok()
@@ -113,7 +112,7 @@ impl ProductPprofRuntime {
             .unwrap_or(0)
     }
 
-    pub(super) fn status(&self) -> Value {
+    pub fn status(&self) -> Value {
         let port = self.port();
         json!({
             "configuredPort": port,

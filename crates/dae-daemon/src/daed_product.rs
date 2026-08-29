@@ -407,8 +407,6 @@ use self::runtime_materialization::*;
 mod runtime_reload;
 use self::runtime_reload::*;
 use dae_product_runtime::*;
-mod pprof_runtime;
-use self::pprof_runtime::*;
 mod runtime_reconcile;
 use self::runtime_reconcile::*;
 use dae_product_persistence::*;
