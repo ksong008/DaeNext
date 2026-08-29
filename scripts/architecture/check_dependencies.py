@@ -14,6 +14,9 @@ from typing import Any
 
 
 DEPENDENCY_KINDS = ("normal", "build", "dev")
+FORBIDDEN_DEFAULT_FEATURES = frozenset(
+    {"test-support", "benchmark-support", "dns-runtime-tests"}
+)
 WORKSPACE_CRATE_PATH = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*::")
 WORKSPACE_CRATE_IMPORT = re.compile(
     r"\b(?:extern\s+crate|(?:pub\s+)?use)\s+([A-Za-z_][A-Za-z0-9_]*)\b"
@@ -47,6 +50,18 @@ def workspace_packages(metadata: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for package in metadata["packages"]
         if package["id"] in workspace_ids
     }
+
+
+def validate_default_features(packages: dict[str, dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    for package_name, package in sorted(packages.items()):
+        features = package.get("features", {})
+        default_features = features.get("default", []) if isinstance(features, dict) else []
+        for feature in sorted(set(default_features) & FORBIDDEN_DEFAULT_FEATURES):
+            errors.append(
+                f"{package_name}: test-only feature {feature!r} must not be enabled by default"
+            )
+    return errors
 
 
 def dependency_kind(dependency: dict[str, Any]) -> str:
@@ -337,6 +352,7 @@ def validate(
 ) -> list[str]:
     packages = workspace_packages(metadata)
     errors = validate_policy_shape(policy, packages)
+    errors.extend(validate_default_features(packages))
     edges = workspace_edges(packages)
     errors.extend(validate_declared_edges(edges, policy))
     errors.extend(validate_forbidden_edges(edges, policy))

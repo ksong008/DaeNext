@@ -55,6 +55,16 @@ class ArchitectureDependencyCheckerTests(unittest.TestCase):
         )
         self.assertTrue(any("undeclared architecture dependency" in error for error in errors))
 
+    def test_test_only_default_feature_is_rejected(self) -> None:
+        graph = metadata(("a", []), ("b", []))
+        graph["packages"][0]["features"] = {"default": ["test-support"]}
+        errors = CHECKER.validate(
+            graph,
+            policy(("a", [], [], []), ("b", [], [], [])),
+            scan_sources=False,
+        )
+        self.assertTrue(any("must not be enabled by default" in error for error in errors))
+
     def test_dev_dependency_has_separate_policy_slot(self) -> None:
         graph = metadata(("a", [("b", "dev")]), ("b", []))
         allowed = CHECKER.validate(
