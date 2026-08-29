@@ -131,6 +131,7 @@ pub(super) fn build_resident_dataplane_generation(
     health_scheduler_report["runtime"]["executor"] = json!("process-owned-shared-multi-thread");
     let (health_resuscitation, health_resuscitation_rx) =
         resident_health_resuscitation_channel(Arc::clone(&metrics));
+    let health_resuscitation: Arc<dyn ResidentHealthResuscitation> = Arc::new(health_resuscitation);
     let udp_proxy_groups = Arc::clone(&proxy_groups);
     let generation_id = next_resident_dataplane_generation_id();
     let generation_token = GenerationToken::new(physical_runtime_id, generation_id);
@@ -146,7 +147,7 @@ pub(super) fn build_resident_dataplane_generation(
         routing_matcher.clone(),
         crate::plan::ResidentDnsProxyGroupSelector::shared(Arc::clone(&udp_proxy_groups)),
         so_mark_from_dae,
-        Some(Arc::new(health_resuscitation.clone())),
+        Some(Arc::clone(&health_resuscitation)),
     ));
     let dns_udp_runtime = udp_runtime_config.dns_udp_runtime_config();
     let dns_udp_executor = Arc::new(dns::ResidentDnsUdpActorExecutor::new_on(
@@ -203,7 +204,7 @@ pub(super) fn build_resident_dataplane_generation(
         sniffing_timeout,
         so_mark_from_dae,
         config.global.mptcp,
-        Arc::new(health_resuscitation.clone()),
+        Arc::clone(&health_resuscitation),
         owner.hysteria2_owner_registry(),
         owner.tuic_owner_registry(),
         owner.juicity_owner_registry(),

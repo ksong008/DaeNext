@@ -101,7 +101,7 @@ impl ResidentUdpGenerationPlan {
         so_mark_from_dae: u32,
         dns: ResidentDnsDispatcher,
         runtime_config: ResidentUdpRuntimeConfig,
-        health_resuscitation: ResidentHealthResuscitationHandle,
+        health_resuscitation: Arc<dyn ResidentHealthResuscitation>,
         hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
         tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
         juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,

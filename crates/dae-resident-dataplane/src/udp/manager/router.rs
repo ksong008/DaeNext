@@ -31,7 +31,7 @@ pub(super) struct ResidentUdpRouter {
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
     so_mark_from_dae: u32,
-    resuscitator: Option<ResidentHealthResuscitationHandle>,
+    resuscitator: Option<Arc<dyn ResidentHealthResuscitation>>,
 }
 
 impl ResidentUdpRouter {
@@ -42,7 +42,7 @@ impl ResidentUdpRouter {
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         so_mark_from_dae: u32,
-        resuscitator: ResidentHealthResuscitationHandle,
+        resuscitator: Arc<dyn ResidentHealthResuscitation>,
     ) -> Result<Self, String> {
         let routing_tuple_map_id = routing_tuple_map_id.ok_or_else(|| {
             "resident UDP router needs routing_tuples_map id for compatible per-packet outbound selection"
@@ -93,7 +93,7 @@ impl ResidentUdpRouter {
         routing_matcher: RoutingMatcher,
         dial_mode: TcpDialMode,
         so_mark_from_dae: u32,
-        resuscitator: Option<ResidentHealthResuscitationHandle>,
+        resuscitator: Option<Arc<dyn ResidentHealthResuscitation>>,
     ) -> Result<Self, String> {
         if proxy_groups.is_empty() {
             return Err("resident UDP router needs at least one proxy outbound".to_owned());
@@ -275,7 +275,7 @@ impl ResidentUdpRouter {
                         && err.no_alive
                         && let Some(resuscitator) = self.resuscitator.as_ref()
                     {
-                        resuscitator.trigger(outbound, network_type);
+                        resuscitator.trigger(outbound, network_type.into());
                     }
                     return Err(err.message);
                 }
