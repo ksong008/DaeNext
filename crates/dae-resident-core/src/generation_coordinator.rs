@@ -1,7 +1,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{ActiveGenerationSlot, GenerationGate, GenerationToken, PublicationEpoch};
+use crate::{
+    ActiveGenerationSlot, GenerationFence, GenerationGate, GenerationToken, PublicationEpoch,
+};
 
 pub struct GenerationCoordinator<T> {
     active_generation: ActiveGenerationSlot<T>,
@@ -46,6 +48,10 @@ impl<T> GenerationCoordinator<T> {
 
     pub fn generation_gate(&self) -> Arc<GenerationGate> {
         Arc::clone(&self.generation_gate)
+    }
+
+    pub fn resource_fence<U>(&self, state: U) -> GenerationFence<U> {
+        self.generation_gate.resource(state)
     }
 
     pub fn is_active(&self, token: GenerationToken) -> bool {

@@ -63,7 +63,7 @@ impl Default for ResidentDomainRoutingGenerationFence {
 impl ResidentDomainRoutingGenerationFence {
     pub fn with_gate(gate: Arc<GenerationGate>) -> Self {
         Self {
-            inner: GenerationFence::new(gate, ResidentDomainRoutingGenerationFenceState::default()),
+            inner: gate.resource(ResidentDomainRoutingGenerationFenceState::default()),
         }
     }
 
@@ -307,13 +307,10 @@ impl ResidentDomainRoutingGenerationFence {
     #[cfg(test)]
     fn with_gate_and_map(gate: Arc<GenerationGate>, map_id: u32) -> Self {
         Self {
-            inner: GenerationFence::new(
-                gate,
-                ResidentDomainRoutingGenerationFenceState {
-                    map_id: Some(map_id),
-                    tracker: DomainRoutingTracker::default(),
-                },
-            ),
+            inner: gate.resource(ResidentDomainRoutingGenerationFenceState {
+                map_id: Some(map_id),
+                tracker: DomainRoutingTracker::default(),
+            }),
         }
     }
 

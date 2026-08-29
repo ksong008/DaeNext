@@ -44,9 +44,10 @@ pub(super) fn commit_runtime_generation(
                 candidate,
                 checkpoints,
             )
+            .map_err(io::Error::other)
         });
         candidate.transaction = Some(transaction);
-        result
+        result.map_err(|error| error.to_string())
     } else {
         dae_product_control::runtime::commit_runtime_state(
             state,
