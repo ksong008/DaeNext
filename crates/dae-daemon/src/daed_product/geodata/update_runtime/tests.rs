@@ -18,7 +18,7 @@ fn geodata_update_runtime_starts_workers_only_when_submitted() {
     ));
     fs::create_dir_all(&dir).unwrap();
     let control_runtime = product_test_control_runtime();
-    let runtime = ProductGeodataUpdateRuntime::start_with_config(
+    let runtime = start_with_config(
         ProductGeodataUpdateRuntimeConfig::for_test(),
         ProductGeodataUpdateContext::new(
             dir.join("daed.db"),
@@ -46,26 +46,29 @@ fn geodata_update_runtime_detaches_slow_work_and_rejects_same_kind_immediately()
     let (first_server_stream, mut first_client_stream) = connected_streams();
     http_metrics.opened();
 
-    runtime
-        .submit(
-            GeodataKind::Geosite,
-            first_server_stream,
-            update_request(GeodataKind::Geosite),
-            Arc::clone(&http_metrics),
-        )
-        .unwrap();
+    submit_update_job(
+        &runtime,
+        GeodataKind::Geosite,
+        first_server_stream,
+        update_request(GeodataKind::Geosite),
+        Arc::clone(&http_metrics),
+    )
+    .unwrap();
     fixture.wait_until_download_started();
 
     let (second_server_stream, _second_client_stream) = connected_streams();
-    let rejected = runtime
-        .submit(
-            GeodataKind::Geosite,
-            second_server_stream,
-            update_request(GeodataKind::Geosite),
-            Arc::clone(&http_metrics),
-        )
-        .unwrap_err();
-    assert_eq!(rejected.response.status, 409);
+    let rejected = submit_update_job(
+        &runtime,
+        GeodataKind::Geosite,
+        second_server_stream,
+        update_request(GeodataKind::Geosite),
+        Arc::clone(&http_metrics),
+    )
+    .unwrap_err();
+    assert_eq!(
+        rejected.reason,
+        dae_product_geodata::ProductGeodataUpdateSubmissionReason::SameKind
+    );
     assert_eq!(runtime.snapshot()["rejectedSameKindTotal"], json!(1));
 
     fixture.release_download();
@@ -86,7 +89,7 @@ fn authenticated_http_geodata_update_releases_the_general_worker_before_download
     let fixture = GeodataUpdateRuntimeFixture::new("http-detach");
     let token = create_user(&fixture.state, "admin", "abc12345").unwrap();
     let mut app = fixture.test_app();
-    let runtime = ProductGeodataUpdateRuntime::start_with_config(
+    let runtime = start_with_config(
         ProductGeodataUpdateRuntimeConfig::for_test(),
         ProductGeodataUpdateContext::from_app(&app),
     )
@@ -130,14 +133,14 @@ fn geodata_update_runtime_shutdown_detaches_a_bounded_blocking_worker_truthfully
     let http_metrics = Arc::new(ProductHttpMetrics::default());
     let (server_stream, mut client_stream) = connected_streams();
     http_metrics.opened();
-    runtime
-        .submit(
-            GeodataKind::Geosite,
-            server_stream,
-            update_request(GeodataKind::Geosite),
-            Arc::clone(&http_metrics),
-        )
-        .unwrap();
+    submit_update_job(
+        &runtime,
+        GeodataKind::Geosite,
+        server_stream,
+        update_request(GeodataKind::Geosite),
+        Arc::clone(&http_metrics),
+    )
+    .unwrap();
     fixture.wait_until_download_started();
 
     let started = Instant::now();
@@ -222,11 +225,7 @@ impl GeodataUpdateRuntimeFixture {
             Arc::new(ProductGeodataUpdateCoordinator::default()),
             Arc::new(Mutex::new(GeodataStatusCache::default())),
         );
-        ProductGeodataUpdateRuntime::start_with_config(
-            ProductGeodataUpdateRuntimeConfig::for_test(),
-            context,
-        )
-        .unwrap()
+        start_with_config(ProductGeodataUpdateRuntimeConfig::for_test(), context).unwrap()
     }
 
     fn test_app(&self) -> AppState {

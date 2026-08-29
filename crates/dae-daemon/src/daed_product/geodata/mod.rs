@@ -18,7 +18,10 @@ pub(in crate::daed_product) use status::{geodata_dir_for_web_root, geodata_statu
 use update::update_geodata;
 pub(in crate::daed_product) use update_admission::ProductGeodataUpdateCoordinator;
 use update_context::ProductGeodataUpdateContext;
-pub(in crate::daed_product) use update_runtime::ProductGeodataUpdateRuntime;
+pub(in crate::daed_product) use update_runtime::{
+    ProductGeodataUpdateRuntime, geodata_submission_rejection,
+    start_for_app as start_geodata_update_runtime_for_app, submit_update_job,
+};
 
 pub(in crate::daed_product) fn api_geodata_status(app: &AppState) -> HttpResponse {
     match geodata_status(app) {

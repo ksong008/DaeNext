@@ -436,15 +436,11 @@ fn detach_geodata_update_stream(
     runtime: &ProductGeodataUpdateRuntime,
     metrics: Arc<ProductHttpMetrics>,
 ) -> io::Result<ProductHttpConnectionResult> {
-    match runtime.submit(kind, stream, request, metrics) {
+    match geodata::submit_update_job(runtime, kind, stream, request, metrics) {
         Ok(()) => Ok(ProductHttpConnectionResult::Detached),
-        Err(mut rejection) => {
-            write_http_response_for_request(
-                &mut rejection.stream,
-                &rejection.request,
-                &rejection.response,
-                false,
-            )?;
+        Err(rejection) => {
+            let (mut stream, request, response) = geodata::geodata_submission_rejection(*rejection);
+            write_http_response_for_request(&mut stream, &request, &response, false)?;
             Ok(ProductHttpConnectionResult::Closed)
         }
     }

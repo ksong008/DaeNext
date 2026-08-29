@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Debug)]
-pub(super) struct ProductGeodataUpdateContext {
+pub(crate) struct ProductGeodataUpdateContext {
     pub(super) state: PathBuf,
     pub(super) dir: PathBuf,
     pub(super) runtime: Arc<ProductRuntimeManager>,
@@ -39,5 +39,15 @@ impl ProductGeodataUpdateContext {
             updates,
             status_cache,
         }
+    }
+}
+
+impl dae_product_geodata::GeodataUpdateRuntimeContext for ProductGeodataUpdateContext {
+    fn state_path(&self) -> &Path {
+        &self.state
+    }
+
+    fn directory(&self) -> &Path {
+        &self.dir
     }
 }
