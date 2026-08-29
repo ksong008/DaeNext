@@ -30,7 +30,7 @@
       "tests": 300
     },
     "dae-product-subscription": {
-      "production": 7200,
+      "production": 7300,
       "tests": 0
     },
     "dae-daemon": {
