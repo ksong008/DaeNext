@@ -14,6 +14,7 @@ The checker validates:
 - workspace crate imports in production and build sources;
 - external `#[path]` source embedding, except for explicit test-only compatibility paths.
 - production/test line budgets for the large daemon, resident assembly, and outbound boundaries.
+- daemon access to resident implementations is restricted to the resident façade.
 
 Run it locally with:
 

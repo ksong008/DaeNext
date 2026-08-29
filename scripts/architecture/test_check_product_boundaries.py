@@ -74,6 +74,13 @@ class ProductBoundaryGateTests(unittest.TestCase):
         errors = MODULE.validate(root)
         self.assertTrue(any("references daemon" in error for error in errors))
 
+    def test_rejects_daemon_bypassing_resident_facade(self) -> None:
+        root = self.fixture()
+        source = root / "crates" / "dae-daemon" / "src" / "resident.rs"
+        source.write_text("use dae_resident_tcp::State;\n", encoding="utf-8")
+        errors = MODULE.validate(root)
+        self.assertTrue(any("bypasses resident facade" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()
