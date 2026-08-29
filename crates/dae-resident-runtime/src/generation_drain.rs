@@ -1,6 +1,36 @@
-use super::*;
+use dae_resident_core::{LogicalGenerationId, SharedResidentStopSignal};
+use serde_json::{Value, json};
+use std::fmt;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-trait ResidentDrainControl: std::fmt::Debug + Send + Sync {
+const LOW_MEMORY_MAXIMUM_RETIRED_GENERATIONS: usize = 1;
+const BALANCED_MAXIMUM_RETIRED_GENERATIONS: usize = 2;
+const HIGH_PERFORMANCE_MAXIMUM_RETIRED_GENERATIONS: usize = 4;
+const LOW_MEMORY_GENERATION_MAXIMUM_AGE_SECONDS: u64 =
+    dae_resident_core::RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX.as_secs() * 3;
+const BALANCED_GENERATION_MAXIMUM_AGE_SECONDS: u64 =
+    dae_resident_core::RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX.as_secs() * 6;
+const HIGH_PERFORMANCE_GENERATION_MAXIMUM_AGE_SECONDS: u64 =
+    dae_resident_core::RESIDENT_UDP_SESSION_IDLE_TIMEOUT_MAX.as_secs() * 12;
+
+pub trait ResidentGenerationDrainHooks: fmt::Debug + Send + Sync {
+    fn request_reclaim(&self);
+    fn lifetime_counts(&self) -> (u64, u64, u64);
+}
+
+#[derive(Debug)]
+struct NoopResidentGenerationDrainHooks;
+
+impl ResidentGenerationDrainHooks for NoopResidentGenerationDrainHooks {
+    fn request_reclaim(&self) {}
+
+    fn lifetime_counts(&self) -> (u64, u64, u64) {
+        (0, 0, 0)
+    }
+}
+
+pub trait ResidentDrainControl: fmt::Debug + Send + Sync {
     fn id(&self) -> LogicalGenerationId;
     fn close_admission(&self);
     fn reopen_admission(&self) -> Result<(), String>;
@@ -12,69 +42,64 @@ trait ResidentDrainControl: std::fmt::Debug + Send + Sync {
     fn request_force_stop(&self);
 }
 
-impl ResidentDrainControl for ResidentGenerationDrainControl {
-    fn id(&self) -> LogicalGenerationId {
-        ResidentGenerationDrainControl::id(self)
-    }
-
-    fn close_admission(&self) {
-        ResidentGenerationDrainControl::close_admission(self);
-    }
-
-    fn reopen_admission(&self) -> Result<(), String> {
-        ResidentGenerationDrainControl::reopen_admission(self)
-    }
-
-    fn stop_is_requested(&self) -> bool {
-        ResidentGenerationDrainControl::stop_is_requested(self)
-    }
-
-    fn flow_stop_is_requested(&self) -> bool {
-        ResidentGenerationDrainControl::flow_stop_is_requested(self)
-    }
-
-    fn udp_stop_is_requested(&self) -> bool {
-        ResidentGenerationDrainControl::udp_stop_is_requested(self)
-    }
-
-    fn udp_router_is_retained(&self) -> bool {
-        ResidentGenerationDrainControl::udp_router_is_retained(self)
-    }
-
-    fn udp_dns_runtime_is_retained(&self) -> bool {
-        ResidentGenerationDrainControl::udp_dns_runtime_is_retained(self)
-    }
-
-    fn request_force_stop(&self) {
-        ResidentGenerationDrainControl::request_force_stop(self);
-    }
-}
-
-trait ResidentDrainableGeneration: std::fmt::Debug + Send + Sync {
+pub trait ResidentDrainableGeneration: fmt::Debug + Send + Sync {
     fn drain_control(&self) -> Arc<dyn ResidentDrainControl>;
     fn retire_workloads(&self);
     fn request_force_stop(&self);
 }
 
-impl ResidentDrainableGeneration for ResidentDataplaneGeneration {
-    fn drain_control(&self) -> Arc<dyn ResidentDrainControl> {
-        Arc::clone(&self.drain_control) as Arc<dyn ResidentDrainControl>
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResidentGenerationDrainPolicy {
+    pub maximum_age: Duration,
+    pub maximum_retired: usize,
+    pub source: &'static str,
+}
+
+impl ResidentGenerationDrainPolicy {
+    pub fn selected() -> Self {
+        Self::from_runtime_profile(
+            dae_resident_core::ResidentRuntimeProfileSelection::selected().profile,
+        )
     }
 
-    fn retire_workloads(&self) {
-        ResidentDataplaneGeneration::retire_workloads(self);
+    pub const fn from_runtime_profile(profile: dae_resident_core::ResidentRuntimeProfile) -> Self {
+        let (maximum_age_seconds, maximum_retired) = match profile {
+            dae_resident_core::ResidentRuntimeProfile::LowMemory => (
+                LOW_MEMORY_GENERATION_MAXIMUM_AGE_SECONDS,
+                LOW_MEMORY_MAXIMUM_RETIRED_GENERATIONS,
+            ),
+            dae_resident_core::ResidentRuntimeProfile::Balanced => (
+                BALANCED_GENERATION_MAXIMUM_AGE_SECONDS,
+                BALANCED_MAXIMUM_RETIRED_GENERATIONS,
+            ),
+            dae_resident_core::ResidentRuntimeProfile::HighPerformance => (
+                HIGH_PERFORMANCE_GENERATION_MAXIMUM_AGE_SECONDS,
+                HIGH_PERFORMANCE_MAXIMUM_RETIRED_GENERATIONS,
+            ),
+        };
+        Self {
+            maximum_age: Duration::from_secs(maximum_age_seconds),
+            maximum_retired,
+            source: "runtime-profile",
+        }
     }
 
-    fn request_force_stop(&self) {
-        ResidentDataplaneGeneration::request_stop(self);
+    #[cfg(test)]
+    const fn for_test(maximum_age: Duration, maximum_retired: usize) -> Self {
+        Self {
+            maximum_age,
+            maximum_retired,
+            source: "test",
+        }
     }
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ResidentGenerationDrain {
+pub struct ResidentGenerationDrain {
     state: Arc<Mutex<ResidentGenerationDrainState>>,
     wake: Arc<tokio::sync::Notify>,
     policy: ResidentGenerationDrainPolicy,
+    hooks: Arc<dyn ResidentGenerationDrainHooks>,
 }
 
 #[derive(Debug, Default)]
@@ -167,28 +192,36 @@ impl ResidentGenerationStopTarget {
 }
 
 impl ResidentGenerationDrain {
-    pub(super) fn new(policy: ResidentGenerationDrainPolicy) -> Self {
+    pub fn new(policy: ResidentGenerationDrainPolicy) -> Self {
+        Self::with_hooks(policy, Arc::new(NoopResidentGenerationDrainHooks))
+    }
+
+    pub fn with_hooks(
+        policy: ResidentGenerationDrainPolicy,
+        hooks: Arc<dyn ResidentGenerationDrainHooks>,
+    ) -> Self {
         assert!(policy.maximum_retired > 0);
         Self {
             state: Arc::new(Mutex::new(ResidentGenerationDrainState::default())),
             wake: Arc::new(tokio::sync::Notify::new()),
             policy,
+            hooks,
         }
     }
 
-    pub(super) fn prepare_publication(&self) -> Result<(), String> {
+    pub fn prepare_publication(&self) -> Result<(), String> {
         self.prepare_publication_at(Instant::now())
     }
 
-    pub(super) fn retire(&self, generation: Arc<ResidentDataplaneGeneration>) {
+    pub fn retire(&self, generation: Arc<dyn ResidentDrainableGeneration>) {
         self.retire_shared_at(generation, Instant::now());
     }
 
-    pub(super) fn finalize_retirement(&self, generation_id: LogicalGenerationId) {
+    pub fn finalize_retirement(&self, generation_id: LogicalGenerationId) {
         self.finalize_matching_retirements(Some(generation_id));
     }
 
-    pub(super) fn commit_retirements(&self) {
+    pub fn commit_retirements(&self) {
         self.reap(Instant::now());
     }
 
@@ -201,7 +234,7 @@ impl ResidentGenerationDrain {
             let mut targets = Vec::new();
             let mut finalized = 0_u64;
             for retired in &mut state.retired {
-                if generation_id.is_none_or(|generation_id| retired.id() == generation_id)
+                if generation_id.is_none_or(|id| retired.id() == id)
                     && retired.stop_reason.is_none()
                 {
                     retired.stop_reason = Some(ResidentGenerationStopReason::Finalized);
@@ -219,7 +252,7 @@ impl ResidentGenerationDrain {
         self.reap(Instant::now());
     }
 
-    pub(super) fn reactivate(&self, generation_id: LogicalGenerationId) -> Result<(), String> {
+    pub fn reactivate(&self, generation_id: LogicalGenerationId) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
@@ -250,14 +283,14 @@ impl ResidentGenerationDrain {
         Ok(())
     }
 
-    pub(super) async fn run(self, stop: SharedResidentStopSignal) {
+    pub async fn run(self, stop: SharedResidentStopSignal) {
         let mut stop_listener = stop.listener();
         loop {
             if self.has_pending_retirements() {
                 tokio::select! {
                     _ = stop_listener.cancelled() => break,
                     _ = self.wake.notified() => self.reap(Instant::now()),
-                    _ = tokio::time::sleep(RESIDENT_IDLE_SLEEP) => self.reap(Instant::now()),
+                    _ = tokio::time::sleep(dae_resident_core::RESIDENT_IDLE_SLEEP) => self.reap(Instant::now()),
                 }
             } else {
                 tokio::select! {
@@ -269,7 +302,7 @@ impl ResidentGenerationDrain {
         self.stop_all();
     }
 
-    pub(super) fn stop_all(&self) {
+    pub fn stop_all(&self) {
         let retired = {
             let mut state = self
                 .state
@@ -282,10 +315,10 @@ impl ResidentGenerationDrain {
         }
     }
 
-    pub(super) fn snapshot(&self) -> Value {
+    pub fn snapshot(&self) -> Value {
         let now = Instant::now();
         let (process_live_generations, generations_created_total, generations_dropped_total) =
-            resident_dataplane_generation_lifetime_counts();
+            self.hooks.lifetime_counts();
         let state = self
             .state
             .lock()
@@ -347,7 +380,7 @@ impl ResidentGenerationDrain {
         })
     }
 
-    fn prepare_publication_at(&self, now: Instant) -> Result<(), String> {
+    pub fn prepare_publication_at(&self, now: Instant) -> Result<(), String> {
         self.reap(now);
         let pressure_eviction = {
             let mut state = self
@@ -366,11 +399,11 @@ impl ResidentGenerationDrain {
         };
         pressure_eviction.0.request_force_stop();
         drop(pressure_eviction.1);
-        request_retired_generation_reclaim();
+        self.hooks.request_reclaim();
         Ok(())
     }
 
-    fn retire_shared_at(
+    pub fn retire_shared_at(
         &self,
         generation: Arc<dyn ResidentDrainableGeneration>,
         retired_at: Instant,
@@ -461,19 +494,11 @@ impl ResidentGenerationDrain {
         let released_any = !released.is_empty();
         drop(released);
         if detached_any || released_any {
-            request_retired_generation_reclaim();
+            self.hooks.request_reclaim();
         }
     }
 }
 
-#[cfg(not(test))]
-fn request_retired_generation_reclaim() {
-    resident_allocator_request_reclaim(ResidentAllocatorReclaimReason::RetiredGenerationReleased);
-}
-
 #[cfg(test)]
-fn request_retired_generation_reclaim() {}
-
-#[cfg(test)]
-#[path = "generation_drain/tests.rs"]
+#[path = "generation_drain_tests.rs"]
 mod tests;

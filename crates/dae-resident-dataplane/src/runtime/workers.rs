@@ -1,4 +1,5 @@
 use super::*;
+use crate::generation::ResidentDataplaneGenerationDrainHooks;
 
 pub struct ResidentDataplaneStartContext<'a> {
     pub handoff: &'a LiveLoadedTproxyListenSocketMap,
@@ -228,7 +229,10 @@ pub fn start_resident_dataplane_workers(
         ActiveGenerationSlot::new(built_generation.generation),
         Arc::clone(&generation_gate),
     );
-    let generation_drain = ResidentGenerationDrain::new(ResidentGenerationDrainPolicy::selected());
+    let generation_drain = ResidentGenerationDrain::with_hooks(
+        ResidentGenerationDrainPolicy::selected(),
+        Arc::new(ResidentDataplaneGenerationDrainHooks),
+    );
     {
         let stop = owner.stop_handle();
         let drain = generation_drain.clone();
