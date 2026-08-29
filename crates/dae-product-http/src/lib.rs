@@ -84,6 +84,48 @@ pub struct HttpRequest {
     pub body: Vec<u8>,
 }
 
+pub fn json_body(request: &HttpRequest) -> Result<Value, String> {
+    if request.body.is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_slice(&request.body).map_err(|err| format!("invalid json body: {err}"))
+}
+
+pub fn required_str<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
+    body.get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+pub fn string_array(body: &Value, key: &str) -> Vec<String> {
+    body.get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn integer_array(body: &Value, key: &str) -> Vec<i64> {
+    body.get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| {
+                    value
+                        .as_i64()
+                        .or_else(|| value.as_str().and_then(|value| value.parse::<i64>().ok()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProductHttpRequestContext {
     pub peer_ip: Option<IpAddr>,
@@ -175,10 +217,28 @@ pub fn http_request_read_error_response(error: &HttpRequestReadError) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use super::ProductHttpRequestContext;
+    use super::{HttpRequest, ProductHttpRequestContext, integer_array, json_body, string_array};
+    use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn request_context_defaults_without_peer_identity() {
         assert_eq!(ProductHttpRequestContext::default().peer_ip, None);
+    }
+
+    #[test]
+    fn request_body_helpers_preserve_product_parsing_contracts() {
+        let request = HttpRequest {
+            method: "POST".to_owned(),
+            path: "/api/test".to_owned(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: br#"{"ids":[1,"2","invalid"],"names":["a",2]}"#.to_vec(),
+        };
+        let body = json_body(&request).unwrap();
+        assert_eq!(integer_array(&body, "ids"), vec![1, 2]);
+        assert_eq!(string_array(&body, "names"), vec!["a"]);
+        assert_eq!(super::required_str(&body, "missing"), None);
+        assert_eq!(body, json!({"ids": [1, "2", "invalid"], "names": ["a", 2]}));
     }
 }
