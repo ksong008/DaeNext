@@ -1,9 +1,8 @@
 use super::*;
 use serde_json::json;
 
-pub(crate) const RESIDENT_LIVE_MATRIX_EVIDENCE_ENV: &str = "RESIDENT_LIVE_MATRIX_EVIDENCE";
-pub(crate) const RESIDENT_LIVE_MATRIX_EVIDENCE_LEGACY_ENV: &str =
-    "DAE_RESIDENT_LIVE_MATRIX_EVIDENCE";
+pub const RESIDENT_LIVE_MATRIX_EVIDENCE_ENV: &str = "RESIDENT_LIVE_MATRIX_EVIDENCE";
+pub const RESIDENT_LIVE_MATRIX_EVIDENCE_LEGACY_ENV: &str = "DAE_RESIDENT_LIVE_MATRIX_EVIDENCE";
 
 pub(crate) const REMOTE_LIVE_MATRIX_MISSING: &str =
     "remote live matrix evidence not recorded by live-evidence-ledger";

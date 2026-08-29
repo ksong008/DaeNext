@@ -1,8 +1,4 @@
 pub use super::RESIDENT_MANUAL_PROBE_TASK_NAME;
-pub use super::adapter_matrix::{
-    resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
-    resident_live_adapter_matrix_contract, resident_live_matrix_evidence_from_env,
-};
 pub use super::allocator_hooks::{
     ResidentAllocatorBusyKind, ResidentAllocatorHooks, ResidentAllocatorReclaimReason,
     ResidentAllocatorRuntimeHooks, ResidentAllocatorWorkerKind, set_resident_allocator_hooks,
@@ -53,6 +49,10 @@ pub use dae_resident_core::ResidentTrafficCounters;
 pub use dae_resident_core::{
     effective_process_memory_capacity, resident_datapath_postflight_interval_seconds_default,
     selected_resident_runtime_profile_name,
+};
+pub use dae_resident_plan::{
+    resident_live_adapter_entry_missing, resident_live_adapter_entry_remote_live_matrix_ready,
+    resident_live_adapter_matrix_contract, resident_live_matrix_evidence_from_env,
 };
 
 #[cfg(any(test, feature = "test-support"))]
