@@ -55,6 +55,39 @@ class GenerationFenceChecksTest(unittest.TestCase):
 
             self.assertEqual(validate(root), [])
 
+    def test_local_active_generation_storage_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates" / "dae-resident-tcp" / "src"
+            source.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                "struct LocalOwner {\n"
+                "    active_generation: std::sync::RwLock<Option<u64>>,\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            errors = validate(root)
+
+            self.assertEqual(len(errors), 1)
+            self.assertIn("active_generation", errors[0])
+            self.assertIn("not core-owned", errors[0])
+
+    def test_core_generation_storage_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates" / "dae-resident-udp" / "src"
+            source.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                "use dae_resident_core::ActiveGenerationSlot;\n"
+                "struct LocalOwner<T> {\n"
+                "    active_generation: ActiveGenerationSlot<T>,\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(validate(root), [])
+
 
 if __name__ == "__main__":
     unittest.main()
