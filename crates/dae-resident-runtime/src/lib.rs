@@ -3,6 +3,7 @@ use dae_resident_core::GenerationCoordinator;
 mod cleanup_inventory;
 mod executor;
 mod generation_drain;
+mod generation_lifecycle;
 mod task;
 mod thread_shutdown;
 mod thread_task;
@@ -14,6 +15,10 @@ pub use executor::{
 pub use generation_drain::{
     ResidentDrainControl, ResidentDrainableGeneration, ResidentGenerationDrain,
     ResidentGenerationDrainHooks, ResidentGenerationDrainPolicy,
+};
+pub use generation_lifecycle::{
+    ResidentGenerationDrainControl, ResidentGenerationLifetime, next_resident_generation_id,
+    resident_generation_lifetime_counts,
 };
 pub use task::{
     ResidentAsyncRuntimeShutdown, ResidentAsyncRuntimeTask, ResidentRuntimeTaskRole,
