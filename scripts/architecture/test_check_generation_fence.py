@@ -10,11 +10,16 @@ from check_generation_fence import validate
 
 
 class GenerationFenceChecksTest(unittest.TestCase):
+    @staticmethod
+    def add_core(root: Path) -> None:
+        core = root / "crates" / "dae-resident-core" / "src"
+        core.mkdir(parents=True)
+
     def test_core_owned_guard_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            self.add_core(root)
             core = root / "crates" / "dae-resident-core" / "src"
-            core.mkdir(parents=True)
             (core / "generation_fence.rs").write_text(
                 "pub struct GenerationGate;\npub struct GenerationFence<T>(T);\n",
                 encoding="utf-8",
@@ -31,6 +36,7 @@ class GenerationFenceChecksTest(unittest.TestCase):
     def test_domain_guard_declaration_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            self.add_core(root)
             source = root / "crates" / "dae-resident-udp" / "src"
             source.mkdir(parents=True)
             (source / "lib.rs").write_text(
@@ -46,6 +52,7 @@ class GenerationFenceChecksTest(unittest.TestCase):
     def test_test_only_fixture_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            self.add_core(root)
             source = root / "crates" / "dae-resident-udp" / "src" / "tests"
             source.mkdir(parents=True)
             (source / "generation.rs").write_text(
@@ -58,6 +65,7 @@ class GenerationFenceChecksTest(unittest.TestCase):
     def test_local_active_generation_storage_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            self.add_core(root)
             source = root / "crates" / "dae-resident-tcp" / "src"
             source.mkdir(parents=True)
             (source / "lib.rs").write_text(
@@ -76,6 +84,7 @@ class GenerationFenceChecksTest(unittest.TestCase):
     def test_core_generation_storage_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            self.add_core(root)
             source = root / "crates" / "dae-resident-udp" / "src"
             source.mkdir(parents=True)
             (source / "lib.rs").write_text(
@@ -87,6 +96,39 @@ class GenerationFenceChecksTest(unittest.TestCase):
             )
 
             self.assertEqual(validate(root), [])
+
+    def test_epoch_fence_declaration_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.add_core(root)
+            source = root / "crates" / "dae-resident-tcp" / "src"
+            source.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                "struct LocalEpochFence;\n", encoding="utf-8"
+            )
+
+            errors = validate(root)
+
+            self.assertEqual(len(errors), 1)
+            self.assertIn("LocalEpochFence", errors[0])
+
+    def test_generation_epoch_storage_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.add_core(root)
+            source = root / "crates" / "dae-resident-udp" / "src"
+            source.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                "struct LocalOwner {\n"
+                "    current_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            errors = validate(root)
+
+            self.assertEqual(len(errors), 1)
+            self.assertIn("current_epoch", errors[0])
 
 
 if __name__ == "__main__":
