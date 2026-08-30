@@ -84,47 +84,58 @@ impl ResidentGenerationDrainControl {
         })
     }
 
+    #[inline]
     pub fn id(&self) -> LogicalGenerationId {
         self.id
     }
 
+    #[inline]
     pub fn activate(&self) -> Result<(), String> {
         self.lifecycle.activate().map_err(str::to_owned)
     }
 
+    #[inline]
     pub fn admission_is_open(&self) -> bool {
         self.lifecycle.admission_is_open()
     }
 
+    #[inline]
     pub fn close_admission(&self) {
         self.lifecycle.close_admission();
     }
 
+    #[inline]
     pub fn reopen_admission(&self) -> Result<(), String> {
         self.lifecycle.reopen_admission().map_err(str::to_owned)
     }
 
+    #[inline]
     pub fn stop_is_requested(&self) -> bool {
         self.lifecycle.stop_is_requested()
     }
 
+    #[inline]
     pub fn udp_stop_is_requested(&self) -> bool {
         self.udp_stop.load(Ordering::Acquire)
     }
 
+    #[inline]
     pub fn flow_stop_is_requested(&self) -> bool {
         self.flow_stop.load(Ordering::Acquire)
     }
 
+    #[inline]
     pub fn flow_stop_handle(&self) -> SharedResidentStopSignal {
         Arc::clone(&self.flow_stop)
     }
 
+    #[inline]
     pub fn retire_workloads(&self) {
         self.lifecycle.request_stop();
         self.workload_stop.store(true, Ordering::Release);
     }
 
+    #[inline]
     pub fn request_force_stop(&self) {
         self.retire_workloads();
         self.flow_stop.store(true, Ordering::Release);
@@ -132,24 +143,29 @@ impl ResidentGenerationDrainControl {
         self.lifecycle.stop();
     }
 
+    #[inline]
     pub fn register_udp_runtime(&self) {
         self.udp_router_retained.store(true, Ordering::Release);
         self.udp_dns_runtime_retained.store(true, Ordering::Release);
     }
 
+    #[inline]
     pub fn release_udp_router(&self) {
         self.udp_router_retained.store(false, Ordering::Release);
     }
 
+    #[inline]
     pub fn release_udp_dns_runtime(&self) {
         self.udp_dns_runtime_retained
             .store(false, Ordering::Release);
     }
 
+    #[inline]
     pub fn udp_router_is_retained(&self) -> bool {
         self.udp_router_retained.load(Ordering::Acquire)
     }
 
+    #[inline]
     pub fn udp_dns_runtime_is_retained(&self) -> bool {
         self.udp_dns_runtime_retained.load(Ordering::Acquire)
     }
