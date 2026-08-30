@@ -1,10 +1,11 @@
-use dae_outbound::{
+use dae_outbound_core::{
     MaterializedChain, MaterializedChainUdp, MaterializedPassthroughUdp, MaterializedPortHopping,
     MaterializedQuicVerification, MaterializedSourceImport, MaterializedSourceShape,
     MaterializedTlsFeatures, MaterializedWrapper, MaterializedXhttpMode, MaterializedXhttpSettings,
-    SourceShapeReconciliationKind, SourceShapeRegistryRow, VMessLink, VMessSourceFormat,
-    parse_link_chain, source_shape_reconciliation,
+    SourceShapeReconciliationKind, SourceShapeRegistryRow, source_shape_reconciliation,
 };
+use dae_outbound_stream::link_parser::parse_link_chain;
+use dae_outbound_stream::vmess::{VMessLink, VMessSourceFormat};
 use url::Url;
 
 use super::*;
@@ -42,19 +43,21 @@ pub(crate) fn materialized_source_shape(
 }
 
 fn materialized_tls_features(
-    security: dae_outbound::MaterializedSecurity,
+    security: dae_outbound_core::MaterializedSecurity,
     proxy: &plan::ResidentProxyPlan,
 ) -> MaterializedTlsFeatures {
     match security {
-        dae_outbound::MaterializedSecurity::StandardTls
-        | dae_outbound::MaterializedSecurity::InsecureTls
-        | dae_outbound::MaterializedSecurity::FragmentedTls
-        | dae_outbound::MaterializedSecurity::FingerprintAwareTls => MaterializedTlsFeatures::new(
-            proxy.allow_insecure,
-            proxy.tls_fragment.is_some(),
-            proxy.utls_fingerprint.is_some(),
-        ),
-        dae_outbound::MaterializedSecurity::RealityFingerprint => {
+        dae_outbound_core::MaterializedSecurity::StandardTls
+        | dae_outbound_core::MaterializedSecurity::InsecureTls
+        | dae_outbound_core::MaterializedSecurity::FragmentedTls
+        | dae_outbound_core::MaterializedSecurity::FingerprintAwareTls => {
+            MaterializedTlsFeatures::new(
+                proxy.allow_insecure,
+                proxy.tls_fragment.is_some(),
+                proxy.utls_fingerprint.is_some(),
+            )
+        }
+        dae_outbound_core::MaterializedSecurity::RealityFingerprint => {
             MaterializedTlsFeatures::FINGERPRINT
         }
         _ => MaterializedTlsFeatures::NONE,
@@ -88,7 +91,7 @@ pub(crate) fn source_shape_classifies_materialization(
 #[cfg(test)]
 pub(crate) fn materialized_source_runtime_ownership_model(
     proxy: &plan::ResidentProxyPlan,
-) -> dae_outbound::RuntimeOwnershipModel {
+) -> dae_outbound_core::RuntimeOwnershipModel {
     effective_materialized_runtime_ownership(proxy).model
 }
 
@@ -179,7 +182,7 @@ fn source_metadata(source_link: &str) -> SourceMetadata {
     let passthrough_udp = if parsed.nodes.iter().any(|node| {
         Url::parse(&node.raw).is_ok_and(|url| {
             url.query_pairs().any(|(key, value)| {
-                key == dae_outbound::shared_transport::contract::UDP_PASSTHROUGH_KEY
+                key == dae_outbound_stream::shared_transport::contract::UDP_PASSTHROUGH_KEY
                     && value.eq_ignore_ascii_case("true")
             })
         })

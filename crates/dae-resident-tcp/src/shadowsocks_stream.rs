@@ -2,11 +2,11 @@ use std::io::ErrorKind;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use dae_outbound::shadowsocks::{
+use dae_outbound_stream::shadowsocks::{
     AeadStreamCodec, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
     read_encrypted_chunk_in_place_from_async_stream,
 };
-use dae_outbound::shared_transport::mux::{
+use dae_outbound_stream::shared_transport::mux::{
     OPTION_DATA, SESSION_STATUS_END, SESSION_STATUS_KEEP, SESSION_STATUS_KEEPALIVE,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};

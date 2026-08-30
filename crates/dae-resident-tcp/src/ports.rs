@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use dae_outbound::NetworkType;
+use dae_outbound_core::NetworkType;
 use dae_resident_plan::ResidentProxyBinding;
 
 mod router;

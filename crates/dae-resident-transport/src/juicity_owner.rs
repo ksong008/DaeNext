@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use dae_outbound::juicity::{JuicityAuthStream, authenticate_juicity_connection};
+use dae_outbound_quic::juicity::{JuicityAuthStream, authenticate_juicity_connection};
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -33,7 +33,7 @@ struct JuicityOwnerKey {
     generation: OwnerGeneration,
     graph_link_hash: String,
     mark: u32,
-    congestion: dae_outbound::juicity::JuicityCongestionController,
+    congestion: dae_outbound_quic::juicity::JuicityCongestionController,
 }
 
 impl PartialEq for JuicityOwnerKey {
@@ -580,8 +580,7 @@ async fn run_juicity_owner_registry(
     metrics: Arc<JuicityOwnerMetrics>,
     stop: SharedResidentStopSignal,
 ) {
-    let session_cache =
-        Some(dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache());
+    let session_cache = Some(dae_outbound_quic::boring_quic::new_boring_quic_session_cache());
     let mut ownership_reconciler = JuicityRegistryOwnershipReconciler::new(Arc::clone(&metrics));
     let mut pools = HashMap::<JuicityOwnerKey, JuicityOwnerPool>::new();
     let mut cooldowns = VecDeque::<(JuicityOwnerKey, Instant)>::new();
@@ -686,7 +685,7 @@ fn handle_juicity_acquire(
     next_instance_id: &mut u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) {
     let now = Instant::now();
     while cooldowns.front().is_some_and(|(_, expiry)| *expiry <= now) {
@@ -777,7 +776,7 @@ fn spawn_juicity_transport_build(
     next_instance_id: &mut u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) {
     pool.building = true;
     *physical_slots += 1;
@@ -820,7 +819,7 @@ fn handle_juicity_build_completion(
     next_instance_id: &mut u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) {
     let Some(pool) = pools.get_mut(&completion.key) else {
         return;
@@ -929,7 +928,7 @@ async fn build_juicity_transport(
     instance_id: u64,
     resources: JuicityOwnerResourceProfile,
     metrics: Arc<JuicityOwnerMetrics>,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<JuicityOwnedTransport, String> {
     let proxy = binding.plan();
     let ResidentProxyProtocolPlan::JuicityQuicTcp {

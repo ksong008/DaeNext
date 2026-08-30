@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::shared_transport::{TlsFragmentPlan, TlsFragmentPlanner};
+use dae_outbound_stream::shared_transport::{TlsFragmentPlan, TlsFragmentPlanner};
 use std::future::Future;
 use std::time::Duration;
 use tokio::io::BufReader;

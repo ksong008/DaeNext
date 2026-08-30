@@ -769,7 +769,7 @@ impl ResidentManualProbeHandle {
                     let Some(health_state) = family_result
                         .get("healthState")
                         .and_then(Value::as_str)
-                        .and_then(dae_outbound::HealthState::parse)
+                        .and_then(dae_outbound_core::HealthState::parse)
                     else {
                         continue;
                     };

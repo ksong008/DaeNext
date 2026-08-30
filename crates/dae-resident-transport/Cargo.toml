@@ -8,19 +8,20 @@ repository.workspace = true
 [features]
 default = []
 test-support = [
-    "dae-outbound/test-support",
     "dae-resident-core/test-support",
     "dae-resident-model/test-support",
 ]
 test-boringssl-tls-profile = []
 test-boringssl-unbuffered-bio = []
-test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
+test-boringssl-quic = []
 test-anytls-legacy-frame-reader = []
 
 [dependencies]
 dae-datapath.workspace = true
 dae-dns.workspace = true
-dae-outbound.workspace = true
+dae-outbound-core.workspace = true
+dae-outbound-quic.workspace = true
+dae-outbound-stream.workspace = true
 dae-resident-core.workspace = true
 dae-resident-model.workspace = true
 dae-runtime-control.workspace = true

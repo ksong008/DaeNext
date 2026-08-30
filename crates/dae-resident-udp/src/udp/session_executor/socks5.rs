@@ -105,8 +105,8 @@ async fn socks5_udp_associate_control_async(
         let method = socks5_authenticate_async(stream, username, password).await?;
         let target =
             Socks5Address::parse(target).map_err(|err| format!("parse SOCKS5 target: {err}"))?;
-        let request = dae_outbound::socks5::handshake::request(
-            dae_outbound::socks5::Socks5Command::UdpAssociate,
+        let request = dae_outbound_stream::socks5::handshake::request(
+            dae_outbound_stream::socks5::Socks5Command::UdpAssociate,
             &target,
         )
         .map_err(|err| format!("build SOCKS5 UDP associate request: {err}"))?;
@@ -122,9 +122,9 @@ async fn socks5_udp_associate_control_async(
             .map_err(|err| format!("read SOCKS5 UDP associate reply head: {err}"))?;
         let mut reply_bytes = reply_head.to_vec();
         reply_bytes.extend(read_socks5_address_bytes_async(stream).await?);
-        let parsed = dae_outbound::socks5::handshake::parse_server_reply(&reply_bytes)
+        let parsed = dae_outbound_stream::socks5::handshake::parse_server_reply(&reply_bytes)
             .map_err(|err| format!("parse SOCKS5 UDP associate reply: {err}"))?;
-        if method == dae_outbound::socks5::handshake::AUTH_NO_ACCEPTABLE_METHODS {
+        if method == dae_outbound_stream::socks5::handshake::AUTH_NO_ACCEPTABLE_METHODS {
             return Err("SOCKS5 UDP associate selected no acceptable auth method".to_owned());
         }
         Ok(parsed.bind.authority())
@@ -138,7 +138,7 @@ async fn socks5_authenticate_async(
     username: &str,
     password: &str,
 ) -> Result<u8, String> {
-    let greeting = dae_outbound::socks5::handshake::greeting(username, password);
+    let greeting = dae_outbound_stream::socks5::handshake::greeting(username, password);
     stream
         .write_all(&greeting)
         .await
@@ -148,12 +148,13 @@ async fn socks5_authenticate_async(
         .read_exact(&mut method_selection)
         .await
         .map_err(|err| format!("read SOCKS5 method selection: {err}"))?;
-    let method = dae_outbound::socks5::handshake::parse_method_selection(&method_selection)
+    let method = dae_outbound_stream::socks5::handshake::parse_method_selection(&method_selection)
         .map_err(|err| format!("parse SOCKS5 method selection: {err}"))?;
 
-    if method == dae_outbound::socks5::handshake::AUTH_PASSWORD {
-        let auth = dae_outbound::socks5::handshake::username_password_auth(username, password)
-            .map_err(|err| format!("build SOCKS5 password auth: {err}"))?;
+    if method == dae_outbound_stream::socks5::handshake::AUTH_PASSWORD {
+        let auth =
+            dae_outbound_stream::socks5::handshake::username_password_auth(username, password)
+                .map_err(|err| format!("build SOCKS5 password auth: {err}"))?;
         stream
             .write_all(&auth)
             .await
@@ -163,7 +164,7 @@ async fn socks5_authenticate_async(
             .read_exact(&mut auth_reply)
             .await
             .map_err(|err| format!("read SOCKS5 password auth reply: {err}"))?;
-        if auth_reply[0] != dae_outbound::socks5::handshake::PASSWORD_AUTH_VERSION
+        if auth_reply[0] != dae_outbound_stream::socks5::handshake::PASSWORD_AUTH_VERSION
             || auth_reply[1] != 0
         {
             return Err(format!(

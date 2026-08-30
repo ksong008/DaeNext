@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use dae_outbound::shared_transport::*;
+use dae_outbound_stream::shared_transport::*;
 use dae_resident_core::*;
 use dae_resident_model::*;
 use serde_json::{Value, json};

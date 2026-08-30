@@ -77,12 +77,11 @@ where
 
 pub fn resident_dns_quic_client_config(
     alpn: &str,
-    session_cache: dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache,
+    session_cache: dae_outbound_quic::boring_quic::BoringQuicSessionCache,
 ) -> Result<quinn::ClientConfig, String> {
-    let policy =
-        dae_outbound::shared_transport::boring_quic::BoringQuicClientPolicy::new([alpn.as_bytes()])
-            .map_err(|err| format!("build DNS BoringSSL QUIC policy: {err}"))?;
-    dae_outbound::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache(
+    let policy = dae_outbound_quic::boring_quic::BoringQuicClientPolicy::new([alpn.as_bytes()])
+        .map_err(|err| format!("build DNS BoringSSL QUIC policy: {err}"))?;
+    dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache(
         &policy,
         Arc::new(quinn::TransportConfig::default()),
         Some(session_cache),

@@ -99,7 +99,7 @@ pub(crate) fn build_http_proxy_plan(
     let (tls, server_name, alpn) = match parsed.protocol {
         HttpScheme::Http => ("none".to_owned(), String::new(), Vec::new()),
         HttpScheme::Https => {
-            let application_protocol = dae_outbound::http_proxy::EffectiveHttpProxyApplicationProtocol::from_configured_alpn(
+            let application_protocol = dae_outbound_core::http_proxy::EffectiveHttpProxyApplicationProtocol::from_configured_alpn(
                 Some(&parsed.alpn),
             )
             .map_err(|err| format!("normalize HTTPS proxy ALPN for node {node_tag}: {err}"))?;

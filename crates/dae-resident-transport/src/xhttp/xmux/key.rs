@@ -321,7 +321,7 @@ fn xhttp_system_ca_identity(
     if endpoint.allow_insecure || endpoint.reality.is_some() {
         return Ok(None);
     }
-    let snapshot = dae_outbound::shared_transport::system_ca_snapshot()
+    let snapshot = dae_outbound_quic::system_ca::system_ca_snapshot()
         .map_err(|err| format!("load xHTTP xmux system CA bundle: {err}"))?;
     let identity = snapshot.identity();
     Ok(Some(XhttpSystemCaIdentity {

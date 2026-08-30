@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::Ordering};
 
-use dae_outbound::{
+use dae_outbound_stream::{
     shadowsocks::{ShadowsocksRStreamDecoder, shadowsocksr_http_simple_origin_request},
     shared_transport::HttpUpgradeOptions,
 };

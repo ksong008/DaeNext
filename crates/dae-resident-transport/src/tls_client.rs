@@ -12,11 +12,11 @@ use boring::ssl::{
     SslVerifyMode, SslVersion,
 };
 use boring::x509::{X509StoreContext, X509VerifyError};
-use dae_outbound::shared_transport::{
-    EchConfigList, Mldsa65VerifyKey, SystemCaIdentity, SystemCaSnapshot, TlsFragmentOptions,
-    UTLS_ALPN_POLICY_RANDOMIZED_ALPN, UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN, UTLS_FAMILY_360,
-    UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME, UTLS_FAMILY_EDGE, UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ,
-    UTLS_FAMILY_RANDOM, system_ca_snapshot,
+use dae_outbound_quic::system_ca::{SystemCaIdentity, SystemCaSnapshot, system_ca_snapshot};
+use dae_outbound_stream::shared_transport::{
+    EchConfigList, Mldsa65VerifyKey, TlsFragmentOptions, UTLS_ALPN_POLICY_RANDOMIZED_ALPN,
+    UTLS_ALPN_POLICY_RANDOMIZED_NO_ALPN, UTLS_FAMILY_360, UTLS_FAMILY_ANDROID, UTLS_FAMILY_CHROME,
+    UTLS_FAMILY_EDGE, UTLS_FAMILY_FIREFOX, UTLS_FAMILY_QQ, UTLS_FAMILY_RANDOM,
 };
 #[cfg(test)]
 use tokio::io::AsyncReadExt;

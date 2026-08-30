@@ -28,7 +28,7 @@ impl ResidentXhttpQuicTlsProvider {
         let Some(fingerprint) = fingerprint else {
             return Ok(Self::Boring);
         };
-        if fingerprint.family == dae_outbound::shared_transport::UTLS_FAMILY_CHROME
+        if fingerprint.family == dae_outbound_stream::shared_transport::UTLS_FAMILY_CHROME
             && fingerprint.canonical == "chrome_auto"
             && matches!(fingerprint.name.as_str(), "chrome" | "chrome_auto")
             && !fingerprint.randomized

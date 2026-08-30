@@ -20,7 +20,7 @@ test-boringssl-unbuffered-bio = [
     "test-boringssl-tcp-tls",
     "dae-resident-transport/test-boringssl-unbuffered-bio",
 ]
-test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
+test-boringssl-quic = ["dae-outbound-quic/test-support"]
 test-anytls-legacy-frame-reader = ["dae-resident-transport/test-anytls-legacy-frame-reader"]
 test-support = [
     "dae-resident-dns/test-support",
@@ -37,7 +37,9 @@ dae-datapath.workspace = true
 dae-dns.workspace = true
 dae-ebpf-support.workspace = true
 dae-geodata.workspace = true
-dae-outbound.workspace = true
+dae-outbound-core.workspace = true
+dae-outbound-quic.workspace = true
+dae-outbound-stream.workspace = true
 dae-resident-core.workspace = true
 dae-resident-dns.workspace = true
 dae-resident-plan.workspace = true

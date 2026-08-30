@@ -83,7 +83,7 @@ mod tests {
             net: "tcp".to_owned(),
             stream_host: String::new(),
             stream_path: String::new(),
-            grpc_mode: dae_outbound::shared_transport::GrpcMode::Gun,
+            grpc_mode: dae_outbound_core::GrpcMode::Gun,
             xhttp_download: None,
             xhttp_mode: ResidentXhttpMode::PacketUp,
             xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
@@ -116,7 +116,7 @@ mod tests {
     fn only_complete_packet_over_stream_child_is_admitted() {
         let vmess = chained(proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
             id: "00000000-0000-0000-0000-000000000001".to_owned(),
-            body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+            body_security: dae_outbound_core::vmess::VMessBodySecurity::Aes128Gcm,
         }));
         assert_eq!(
             resident_udp_chain_admission(&vmess),
@@ -125,7 +125,7 @@ mod tests {
 
         let mut vmess_http = proxy(ResidentProxyProtocolPlan::VmessAeadTcp {
             id: "00000000-0000-0000-0000-000000000001".to_owned(),
-            body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+            body_security: dae_outbound_core::vmess::VMessBodySecurity::Aes128Gcm,
         });
         vmess_http.net = "tcp-http-header".to_owned();
         vmess_http.execution = None;

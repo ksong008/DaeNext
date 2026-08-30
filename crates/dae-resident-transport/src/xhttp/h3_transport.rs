@@ -164,7 +164,7 @@ async fn open_xhttp_h3_connection(
     mark: u32,
     role: QuicEndpointIdentityRole,
     shared_transport_identity: Option<[u8; 32]>,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<XhttpH3Connection, String> {
     let deadline =
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
@@ -257,7 +257,7 @@ fn xhttp_h3_transport_identity(
     endpoint: &ResidentXhttpEndpointPlan,
     role: QuicEndpointIdentityRole,
     tls_provider: ResidentXhttpQuicTlsProvider,
-    system_ca: Option<&dae_outbound::shared_transport::SystemCaIdentity>,
+    system_ca: Option<&dae_outbound_quic::system_ca::SystemCaIdentity>,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     update_xhttp_h3_identity_part(&mut digest, b"dae/xhttp/h3-transport/v2");
@@ -288,7 +288,7 @@ fn xhttp_h3_session_namespace(
     endpoint: &ResidentXhttpEndpointPlan,
     role: QuicEndpointIdentityRole,
     tls_provider: ResidentXhttpQuicTlsProvider,
-    system_ca: Option<&dae_outbound::shared_transport::SystemCaIdentity>,
+    system_ca: Option<&dae_outbound_quic::system_ca::SystemCaIdentity>,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     update_xhttp_h3_identity_part(&mut digest, b"dae/xhttp/h3-session/v1");
@@ -348,11 +348,11 @@ fn xhttp_h3_tls_provider(
 
 fn xhttp_h3_system_ca_snapshot(
     endpoint: &ResidentXhttpEndpointPlan,
-) -> Result<Option<Arc<dae_outbound::shared_transport::SystemCaSnapshot>>, String> {
+) -> Result<Option<Arc<dae_outbound_quic::system_ca::SystemCaSnapshot>>, String> {
     if endpoint.allow_insecure || endpoint.reality.is_some() {
         return Ok(None);
     }
-    dae_outbound::shared_transport::system_ca_snapshot()
+    dae_outbound_quic::system_ca::system_ca_snapshot()
         .map(Some)
         .map_err(|err| format!("load xHTTP H3 system CA bundle: {err}"))
 }
@@ -662,7 +662,7 @@ mod packet_up_tests;
 fn build_xhttp_h3_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
     tls_provider: ResidentXhttpQuicTlsProvider,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, String> {
     let system_ca = xhttp_h3_system_ca_snapshot(endpoint)?;
     build_xhttp_h3_client_config_with_system_ca(endpoint, tls_provider, system_ca, session_cache)
@@ -671,8 +671,8 @@ fn build_xhttp_h3_client_config(
 fn build_xhttp_h3_client_config_with_system_ca(
     endpoint: &ResidentXhttpEndpointPlan,
     tls_provider: ResidentXhttpQuicTlsProvider,
-    system_ca: Option<Arc<dae_outbound::shared_transport::SystemCaSnapshot>>,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    system_ca: Option<Arc<dae_outbound_quic::system_ca::SystemCaSnapshot>>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, String> {
     if endpoint.ech.is_some() {
         return Err(format!(
@@ -693,14 +693,11 @@ fn build_xhttp_h3_client_config_with_system_ca(
             session_cache,
         );
     }
-    let policy =
-        dae_outbound::shared_transport::boring_quic::BoringQuicClientPolicy::new(
-            [b"h3".as_slice()],
-        )
+    let policy = dae_outbound_quic::boring_quic::BoringQuicClientPolicy::new([b"h3".as_slice()])
         .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC policy: {err}"))?
         .allow_insecure(endpoint.allow_insecure)
         .zero_rtt(false);
-    dae_outbound::shared_transport::boring_quic::build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
+    dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
         &policy,
         Arc::new(xhttp_h3_transport_config()?),
         session_cache,
@@ -712,10 +709,10 @@ fn build_xhttp_h3_client_config_with_system_ca(
 pub fn xhttp_h3_transport_config() -> Result<quinn::TransportConfig, String> {
     let mut transport = quinn::TransportConfig::default();
     transport.keep_alive_interval(Some(Duration::from_secs(
-        dae_outbound::shared_transport::XHTTP_H3_KEEPALIVE_SECS,
+        dae_outbound_quic::XHTTP_H3_KEEPALIVE_SECS,
     )));
     transport.max_idle_timeout(Some(
-        Duration::from_secs(dae_outbound::shared_transport::XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS)
+        Duration::from_secs(dae_outbound_quic::XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS)
             .try_into()
             .map_err(|err| format!("xHTTP H3 idle timeout config: {err}"))?,
     ));

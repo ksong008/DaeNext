@@ -1,4 +1,4 @@
-use dae_outbound::{
+use dae_outbound_stream::{
     http_proxy::{HttpConnectOptions, request as http_request},
     socks5::{Socks5Address, handshake},
 };

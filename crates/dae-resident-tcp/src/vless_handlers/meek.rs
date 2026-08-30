@@ -51,10 +51,10 @@ pub async fn meek_round_trip_async(
     body: &[u8],
 ) -> Result<Vec<u8>, String> {
     let resources = MeekTransportResourceProfile::selected();
-    if body.len() > dae_outbound::shared_transport::contract::MEEK_MAX_WRITE {
+    if body.len() > dae_outbound_stream::shared_transport::contract::MEEK_MAX_WRITE {
         return Err(format!(
             "Meek polling request body exceeds the selected limit ({})",
-            dae_outbound::shared_transport::contract::MEEK_MAX_WRITE
+            dae_outbound_stream::shared_transport::contract::MEEK_MAX_WRITE
         ));
     }
     let request = meek_http_request(options, body)

@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::{SourceShapeReconciliationKind, source_shape_reconciliation};
+use dae_outbound_core::{SourceShapeReconciliationKind, source_shape_reconciliation};
 
 pub(super) struct ResidentSourceMaterialization<'a> {
     pub(super) node: &'a plan::ResidentNodeLinkShape,
@@ -8,7 +8,7 @@ pub(super) struct ResidentSourceMaterialization<'a> {
 
 struct MaterializedResidentSourcePlan {
     proxy: plan::ResidentProxyPlan,
-    shape: dae_outbound::MaterializedSourceShape,
+    shape: dae_outbound_core::MaterializedSourceShape,
 }
 
 pub(super) fn resident_source_materializations<'a>(

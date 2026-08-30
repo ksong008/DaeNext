@@ -17,7 +17,7 @@ use dae_dns::{
     restore_packed_response_request_id, validate_dns_packet_response_for_request_fast,
     validate_doh_response,
 };
-use dae_outbound::{L4Proto, NetworkType};
+use dae_outbound_core::{L4Proto, NetworkType};
 use dae_routing::{IpPrefix, Query, RoutingMatcher};
 use http::Request;
 use serde_json::Value;

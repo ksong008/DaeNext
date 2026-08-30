@@ -116,7 +116,7 @@ async fn run_chained_packet_case(original_dst: SocketAddr) {
 
     let mut proxy = proxy_plan(ResidentProxyProtocolPlan::VmessAeadTcp {
         id: "00000000-0000-0000-0000-000000000001".to_owned(),
-        body_security: dae_outbound::vmess::VMessBodySecurity::Aes128Gcm,
+        body_security: dae_outbound_core::vmess::VMessBodySecurity::Aes128Gcm,
     });
     proxy.protocol = "vmess";
     proxy.tls = "none".to_owned();

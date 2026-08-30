@@ -1,7 +1,7 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use dae_outbound::{
+use dae_outbound_quic::{
     hysteria2::{read_hysteria2_tcp_response, write_hysteria2_tcp_request},
     juicity::write_juicity_tcp_request,
     tuic::write_tuic_connect_request,

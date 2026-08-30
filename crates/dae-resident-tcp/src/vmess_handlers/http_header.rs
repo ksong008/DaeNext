@@ -10,7 +10,7 @@ pub async fn handle_vmess_http_header_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let proxy = open_vmess_http_header_stream(
@@ -45,7 +45,7 @@ pub async fn handle_vmess_http_header_tls_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let client =
         open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
@@ -82,7 +82,7 @@ async fn relay_vmess_http_header_connection_async<S>(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
     mut proxy: VmessHttpHeaderStream<S>,
     tls_underlay: Option<&'static str>,
 ) -> Result<Value, String>

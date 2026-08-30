@@ -130,7 +130,7 @@ fn configure_utls_template_boring_ssl_for_fingerprint(
             template.record_size_limit.unwrap_or(0),
             template.empty_extensions.as_ptr(),
             template.empty_extensions.len(),
-            dae_outbound::shared_transport::UTLS_TEMPLATE_GREASE,
+            dae_outbound_stream::shared_transport::UTLS_TEMPLATE_GREASE,
             template.session_id_len,
             template.padding_target_handshake_len.unwrap_or(0),
             if template.capabilities.grease { 1 } else { 0 },
@@ -153,11 +153,11 @@ fn configure_utls_template_boring_ssl_for_fingerprint(
 
 fn utls_template_for_plan(
     fingerprint: &ResidentUtlsFingerprintPlan,
-) -> Option<&'static dae_outbound::shared_transport::UtlsRuntimeTemplate> {
-    dae_outbound::shared_transport::resolve_utls_client_hello_id(&fingerprint.name)
+) -> Option<&'static dae_outbound_stream::shared_transport::UtlsRuntimeTemplate> {
+    dae_outbound_stream::shared_transport::resolve_utls_client_hello_id(&fingerprint.name)
         .ok()
         .and_then(|fingerprint| {
-            dae_outbound::shared_transport::resolve_utls_runtime_template(&fingerprint)
+            dae_outbound_stream::shared_transport::resolve_utls_runtime_template(&fingerprint)
         })
 }
 

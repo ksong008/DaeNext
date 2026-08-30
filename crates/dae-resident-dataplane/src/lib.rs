@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use dae_config::Config;
 use dae_ebpf_support::LiveLoadedTproxyListenSocketMap;
-use dae_outbound::{
+use dae_outbound_core::{
     NetworkType, SourceShapeRegistryRow, source_shape_registry_contract, source_shape_registry_rows,
 };
 use serde_json::{Value, json};

@@ -28,10 +28,11 @@ pub(crate) fn build_tuic_proxy_plan(
     let allow_insecure =
         parsed.allow_insecure || config.global.allow_insecure || parsed.disable_sni;
     let congestion =
-        dae_outbound::tuic::TuicCongestionController::from_config(&parsed.congestion_control)
+        dae_outbound_quic::tuic::TuicCongestionController::from_config(&parsed.congestion_control)
             .map_err(|err| format!("validate TUIC congestion controller for {node_tag}: {err}"))?;
-    let udp_relay_mode = dae_outbound::tuic::TuicUdpRelayMode::from_config(&parsed.udp_relay_mode)
-        .map_err(|err| format!("validate TUIC UDP relay mode for {node_tag}: {err}"))?;
+    let udp_relay_mode =
+        dae_outbound_core::tuic::TuicUdpRelayMode::from_config(&parsed.udp_relay_mode)
+            .map_err(|err| format!("validate TUIC UDP relay mode for {node_tag}: {err}"))?;
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,
@@ -129,7 +130,7 @@ pub(crate) fn build_hysteria2_proxy_plan(
         (server_port, Vec::new())
     };
     let server_name = hysteria2_tls_server_name(&parsed.sni, &server.host);
-    let tls_identity = dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+    let tls_identity = dae_outbound_core::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
         server_name.clone(),
         parsed.insecure,
         config.global.allow_insecure,
@@ -256,11 +257,10 @@ pub(crate) fn build_juicity_proxy_plan(
         ));
     }
     let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
-    let congestion =
-        dae_outbound::juicity::JuicityCongestionController::from_config(&parsed.congestion_control)
-            .map_err(|err| {
-                format!("validate Juicity congestion controller for {node_tag}: {err}")
-            })?;
+    let congestion = dae_outbound_quic::juicity::JuicityCongestionController::from_config(
+        &parsed.congestion_control,
+    )
+    .map_err(|err| format!("validate Juicity congestion controller for {node_tag}: {err}"))?;
     let server_name = if parsed.sni.is_empty() {
         parsed.server.clone()
     } else {

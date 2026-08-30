@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use dae_outbound::{
+use dae_outbound_stream::{
     shared_transport::{HttpUpgradeOptions, MeekRoundTripOptions},
     vless::{VlessEncryptedStream, packet},
 };

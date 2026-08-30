@@ -104,7 +104,7 @@ pub enum ResidentUdpExecutorFactory {
     Vmess(ResidentStreamPacketTransport),
     AnyTlsPacketStream,
     Hysteria2Datagram,
-    TuicPacket(dae_outbound::tuic::TuicUdpRelayMode),
+    TuicPacket(dae_outbound_core::tuic::TuicUdpRelayMode),
     JuicityStreamPacket,
     PolicyClosed(ResidentUdpPolicyClosedReason),
 }
@@ -323,10 +323,10 @@ impl ResidentUdpExecutorFactory {
             Self::Vmess(transport) => vmess_executor_label(transport),
             Self::AnyTlsPacketStream => "resident-anytls-packet-stream",
             Self::Hysteria2Datagram => "resident-hysteria2-quic-datagram",
-            Self::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Native) => {
+            Self::TuicPacket(dae_outbound_core::tuic::TuicUdpRelayMode::Native) => {
                 "resident-tuic-quic-datagram-packet"
             }
-            Self::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Quic) => {
+            Self::TuicPacket(dae_outbound_core::tuic::TuicUdpRelayMode::Quic) => {
                 "resident-tuic-quic-unidirectional-stream-packet"
             }
             Self::JuicityStreamPacket => "resident-juicity-quic-stream-packet",
@@ -345,10 +345,10 @@ impl ResidentUdpExecutorFactory {
             | Self::Vmess(_)
             | Self::AnyTlsPacketStream => UdpPacketSemantics::UdpOverStream,
             Self::Hysteria2Datagram => UdpPacketSemantics::QuicDatagram,
-            Self::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Native) => {
+            Self::TuicPacket(dae_outbound_core::tuic::TuicUdpRelayMode::Native) => {
                 UdpPacketSemantics::QuicPacket
             }
-            Self::TuicPacket(dae_outbound::tuic::TuicUdpRelayMode::Quic) => {
+            Self::TuicPacket(dae_outbound_core::tuic::TuicUdpRelayMode::Quic) => {
                 UdpPacketSemantics::QuicStreamPacket
             }
             Self::JuicityStreamPacket => UdpPacketSemantics::QuicStreamPacket,

@@ -3,14 +3,14 @@ use super::*;
 const RESIDENT_VMESS_RESPONSE_BUFFER_LIMIT: usize = 128 * 1024;
 
 pub struct VmessAeadResponseBuffer {
-    request: dae_outbound::vmess::VMessAeadTcpRequest,
-    reader: Option<dae_outbound::vmess::VMessAeadTcpResponseReader>,
+    request: dae_outbound_stream::vmess::VMessAeadTcpRequest,
+    reader: Option<dae_outbound_stream::vmess::VMessAeadTcpResponseReader>,
     bytes: Vec<u8>,
     offset: usize,
 }
 
 impl VmessAeadResponseBuffer {
-    pub fn new(request: dae_outbound::vmess::VMessAeadTcpRequest) -> Self {
+    pub fn new(request: dae_outbound_stream::vmess::VMessAeadTcpRequest) -> Self {
         Self {
             request,
             reader: None,

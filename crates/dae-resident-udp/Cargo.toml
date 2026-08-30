@@ -12,14 +12,16 @@ test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send"]
 test-boringssl-tcp-tls = []
 test-boringssl-tls-profile = ["dae-resident-transport/test-boringssl-tls-profile"]
 test-boringssl-unbuffered-bio = ["dae-resident-transport/test-boringssl-unbuffered-bio"]
-test-boringssl-quic = ["dae-outbound/test-boringssl-quic"]
+test-boringssl-quic = []
 test-anytls-legacy-frame-reader = ["dae-resident-transport/test-anytls-legacy-frame-reader"]
 
 [dependencies]
 dae-core-types.workspace = true
 dae-datapath.workspace = true
 dae-ebpf-support.workspace = true
-dae-outbound.workspace = true
+dae-outbound-core.workspace = true
+dae-outbound-quic.workspace = true
+dae-outbound-stream.workspace = true
 dae-resident-core.workspace = true
 dae-resident-plan.workspace = true
 dae-resident-transport.workspace = true

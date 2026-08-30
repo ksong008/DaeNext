@@ -138,7 +138,7 @@ fn resident_expanded_source_matrix_row(
 ) -> Value {
     let reconciliation_kind = source_shape_reconciliation_kind(row);
     let candidate_materializations = if reconciliation_kind
-        == Some(dae_outbound::SourceShapeReconciliationKind::ProductionWitness)
+        == Some(dae_outbound_core::SourceShapeReconciliationKind::ProductionWitness)
     {
         materializations
             .iter()
@@ -206,10 +206,10 @@ fn resident_expanded_source_matrix_row(
         _ => "blocked",
     };
     let (planner_status, candidate_evaluation) = match reconciliation_kind {
-        Some(dae_outbound::SourceShapeReconciliationKind::ProductionWitness) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::ProductionWitness) => {
             (production_witness_status, "per-node-materialization")
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::AggregateCapability)
+        Some(dae_outbound_core::SourceShapeReconciliationKind::AggregateCapability)
             if row.resident_status == "blocked" =>
         {
             (
@@ -217,32 +217,32 @@ fn resident_expanded_source_matrix_row(
                 "blocked-aggregate-classification",
             )
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::AggregateCapability) => (
+        Some(dae_outbound_core::SourceShapeReconciliationKind::AggregateCapability) => (
             PLANNER_STATUS_AGGREGATE_REPORT_ONLY,
             "aggregate-report-only",
         ),
-        Some(dae_outbound::SourceShapeReconciliationKind::DeferredCapability) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::DeferredCapability) => {
             (PLANNER_STATUS_BLOCKED_DEFERRED, "deferred-row-blocker")
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::SourceRejected) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::SourceRejected) => {
             ("not-source-supported", "source-policy-rejected")
         }
         None => ("blocked", "missing-reconciliation"),
     };
     let capability_reason_id = match reconciliation_kind {
-        Some(dae_outbound::SourceShapeReconciliationKind::AggregateCapability)
+        Some(dae_outbound_core::SourceShapeReconciliationKind::AggregateCapability)
             if row.resident_status == "blocked" =>
         {
             json!(row.blocker_id.unwrap_or("aggregate-capability-blocked"))
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::AggregateCapability) => Value::Null,
-        Some(dae_outbound::SourceShapeReconciliationKind::DeferredCapability) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::AggregateCapability) => Value::Null,
+        Some(dae_outbound_core::SourceShapeReconciliationKind::DeferredCapability) => {
             json!(row.blocker_id.unwrap_or("deferred-capability"))
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::SourceRejected) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::SourceRejected) => {
             json!("unsupported-source-policy")
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::ProductionWitness) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::ProductionWitness) => {
             match planner_status {
                 "admitted" | "not-present" => Value::Null,
                 "not-source-supported" => json!("unsupported-source-policy"),
@@ -252,21 +252,21 @@ fn resident_expanded_source_matrix_row(
         None => json!(row.blocker_id.unwrap_or("missing-source-reconciliation")),
     };
     let redacted_detail = match reconciliation_kind {
-        Some(dae_outbound::SourceShapeReconciliationKind::AggregateCapability)
+        Some(dae_outbound_core::SourceShapeReconciliationKind::AggregateCapability)
             if row.resident_status == "blocked" =>
         {
             "aggregate classification is visible, but exact component coverage remains blocked"
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::AggregateCapability) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::AggregateCapability) => {
             "aggregate capability is report-only; classified sources do not contribute planner admission"
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::DeferredCapability) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::DeferredCapability) => {
             "shape is blocked and deferred by its registry blocker; no per-node candidate is reported"
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::SourceRejected) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::SourceRejected) => {
             "shape is rejected by Rust native source policy"
         }
-        Some(dae_outbound::SourceShapeReconciliationKind::ProductionWitness) => {
+        Some(dae_outbound_core::SourceShapeReconciliationKind::ProductionWitness) => {
             match planner_status {
                 "admitted" => "current config candidate is admitted by resident planner",
                 "not-present" => "shape is source-supported but absent from current config",

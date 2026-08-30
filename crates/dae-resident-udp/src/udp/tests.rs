@@ -1,7 +1,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 pub(in crate::udp) mod tests {
-    use dae_outbound::shared_transport::GrpcMode;
+    use dae_outbound_core::GrpcMode;
     use dae_resident_plan::{
         ResidentProxyPlan, ResidentProxyProtocolPlan, ResidentXhttpMode, ResidentXhttpSettingsPlan,
     };

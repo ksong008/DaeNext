@@ -3,8 +3,8 @@ use std::str::FromStr;
 
 use dae_dns::DnsCacheKey;
 use dae_netutil::{MagicNetworkEncoding, encode_magic_network_with_encoding, parse_magic_network};
-use dae_outbound::policy::parse_policy;
-use dae_outbound::{Annotation, Dialer, DialerGroup, NetworkType};
+use dae_outbound_core::policy::parse_policy;
+use dae_outbound_core::{Annotation, Dialer, DialerGroup, NetworkType};
 use dae_routing::{Query, RoutingMatcher};
 use dae_sniffing::sniff_tcp;
 use serde_json::json;

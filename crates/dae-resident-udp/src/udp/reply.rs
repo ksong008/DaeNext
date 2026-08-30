@@ -1,6 +1,6 @@
 use super::*;
 #[cfg(any(test, feature = "test-support"))]
-use dae_outbound::vless::contract::is_xtls_rprx_vision_flow;
+use dae_outbound_core::vless::contract::is_xtls_rprx_vision_flow;
 #[cfg(any(test, feature = "test-support"))]
 use dae_resident_transport::VisionUnpadState;
 

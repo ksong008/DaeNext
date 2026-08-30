@@ -212,7 +212,7 @@ impl UdpSessionExecutor {
 
     fn new_vmess(
         id: &str,
-        body_security: dae_outbound::vmess::VMessBodySecurity,
+        body_security: dae_outbound_core::vmess::VMessBodySecurity,
         transport: ResidentStreamPacketTransport,
     ) -> Self {
         let session = match transport {

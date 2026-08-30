@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use dae_outbound::hysteria2::{
+use dae_outbound_quic::hysteria2::{
     Hysteria2AuthReport, Hysteria2AuthenticatedSession, Hysteria2BbrProfile,
     Hysteria2CongestionNegotiation, Hysteria2CongestionRuntime,
     Hysteria2EffectiveCongestionController, Hysteria2ServerBandwidthResponse, Hysteria2UdpMessage,
@@ -1202,7 +1202,7 @@ impl Hysteria2OwnerRegistryHandle {
             cell_states[state_index] += 1;
         }
         let padding = hysteria2_padding_metrics_snapshot();
-        let capabilities = dae_outbound::hysteria2::hysteria2_capability_ledger()
+        let capabilities = dae_outbound_quic::hysteria2::hysteria2_capability_ledger()
             .iter()
             .map(|entry| {
                 json!({
@@ -1270,8 +1270,8 @@ impl Hysteria2OwnerRegistryHandle {
                 "contentRecorded": false,
                 "auth": {
                     "range": {
-                        "minimumInclusive": dae_outbound::hysteria2::HYSTERIA2_AUTH_PADDING_MIN,
-                        "maximumExclusive": dae_outbound::hysteria2::HYSTERIA2_AUTH_PADDING_MAX_EXCLUSIVE,
+                        "minimumInclusive": dae_outbound_quic::hysteria2::HYSTERIA2_AUTH_PADDING_MIN,
+                        "maximumExclusive": dae_outbound_quic::hysteria2::HYSTERIA2_AUTH_PADDING_MAX_EXCLUSIVE,
                     },
                     "samples": padding.auth_samples,
                     "bytes": padding.auth_bytes,
@@ -1280,8 +1280,8 @@ impl Hysteria2OwnerRegistryHandle {
                 },
                 "tcpRequest": {
                     "range": {
-                        "minimumInclusive": dae_outbound::hysteria2::HYSTERIA2_TCP_REQUEST_PADDING_MIN,
-                        "maximumExclusive": dae_outbound::hysteria2::HYSTERIA2_TCP_REQUEST_PADDING_MAX_EXCLUSIVE,
+                        "minimumInclusive": dae_outbound_quic::hysteria2::HYSTERIA2_TCP_REQUEST_PADDING_MIN,
+                        "maximumExclusive": dae_outbound_quic::hysteria2::HYSTERIA2_TCP_REQUEST_PADDING_MAX_EXCLUSIVE,
                     },
                     "samples": padding.tcp_request_samples,
                     "bytes": padding.tcp_request_bytes,
@@ -1504,8 +1504,7 @@ async fn run_hysteria2_owner_registry(
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     stop: SharedResidentStopSignal,
 ) {
-    let session_cache =
-        Some(dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache());
+    let session_cache = Some(dae_outbound_quic::boring_quic::new_boring_quic_session_cache());
     let mut ownership_reconciler =
         Hysteria2RegistryOwnershipReconciler::new(Arc::clone(&metrics), Arc::clone(&index));
     let mut tasks = JoinSet::new();
@@ -1699,7 +1698,7 @@ async fn run_hysteria2_owner_build(
     resources: Hysteria2OwnerResourceProfile,
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     cancellation: OwnerCancellationSignal,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Hysteria2BuildCompletion {
     metrics.cumulative_builds.fetch_add(1, Ordering::Relaxed);
     let result = build_hysteria2_transport(
@@ -1840,7 +1839,7 @@ async fn build_hysteria2_transport(
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     resources: Hysteria2OwnerResourceProfile,
     cancellation: OwnerCancellationSignal,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<(Hysteria2SharedTransport, Hysteria2AuthenticatedSession), Hysteria2OwnerBuildError> {
     let proxy = binding.plan();
     let ResidentProxyProtocolPlan::Hysteria2QuicTcp {

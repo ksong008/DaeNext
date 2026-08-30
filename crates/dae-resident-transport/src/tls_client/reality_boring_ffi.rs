@@ -1,6 +1,6 @@
 use super::*;
 use boring::ssl::SslRef;
-use dae_outbound::shared_transport::reality::reality_client_version;
+use dae_outbound_stream::shared_transport::reality::reality_client_version;
 use foreign_types::ForeignTypeRef;
 
 unsafe extern "C" {

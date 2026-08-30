@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::NetworkType;
+use dae_outbound_core::NetworkType;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct ResidentUdpRetainedResources {

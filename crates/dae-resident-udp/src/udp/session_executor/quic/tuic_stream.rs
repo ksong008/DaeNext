@@ -48,7 +48,7 @@ mod tests {
         let payload = vec![7_u8; u16::MAX as usize];
         let packet = TuicUdpPacket::new(9, 11, "[2001:db8::1]:5353", &payload).unwrap();
         let encoded = encode_tuic_udp_stream_packet(&packet).unwrap();
-        let decoded = dae_outbound::tuic::decode_tuic_udp_stream_packet(&encoded).unwrap();
+        let decoded = dae_outbound_quic::tuic::decode_tuic_udp_stream_packet(&encoded).unwrap();
         assert_eq!(decoded.association_id(), 9);
         assert_eq!(decoded.packet_id(), 11);
         assert_eq!(decoded.fragment_count(), 1);

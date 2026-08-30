@@ -4,11 +4,11 @@ use super::*;
 pub enum ResidentProxyProtocolPlan {
     VlessVisionTcpTls {
         key: [u8; 16],
-        encryption: Option<dae_outbound::vless::VlessEncryptionClient>,
+        encryption: Option<VlessEncryptionClient>,
     },
     VlessMuxTcpTls {
         key: [u8; 16],
-        encryption: Option<dae_outbound::vless::VlessEncryptionClient>,
+        encryption: Option<VlessEncryptionClient>,
     },
     Socks5Tcp {
         username: String,
@@ -78,11 +78,11 @@ pub enum ResidentProxyProtocolPlan {
     },
     VmessAeadTcp {
         id: String,
-        body_security: dae_outbound::vmess::VMessBodySecurity,
+        body_security: dae_outbound_core::vmess::VMessBodySecurity,
     },
     Hysteria2QuicTcp {
         auth: String,
-        tls_identity: dae_outbound::hysteria2::Hysteria2TlsIdentity,
+        tls_identity: Hysteria2TlsIdentity,
         max_tx: u64,
         max_rx: u64,
         congestion: Hysteria2CongestionConfig,
@@ -95,14 +95,14 @@ pub enum ResidentProxyProtocolPlan {
         password: String,
         alpn: Vec<String>,
         allow_insecure: bool,
-        congestion: dae_outbound::tuic::TuicCongestionController,
-        udp_relay_mode: dae_outbound::tuic::TuicUdpRelayMode,
+        congestion: QuicCongestionController,
+        udp_relay_mode: dae_outbound_core::tuic::TuicUdpRelayMode,
     },
     JuicityQuicTcp {
         uuid: String,
         password: String,
         allow_insecure: bool,
-        congestion: dae_outbound::juicity::JuicityCongestionController,
+        congestion: QuicCongestionController,
         pinned_certchain_sha256: String,
     },
 }
@@ -142,7 +142,7 @@ impl ResidentHysteria2ObfsPlan {
 
     pub fn udp_packet_overhead(&self) -> usize {
         if self.is_salamander() {
-            dae_outbound::hysteria2::HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD
+            dae_outbound_quic::hysteria2::HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD
         } else {
             0
         }
@@ -266,18 +266,22 @@ impl ResidentProxyProtocolPlan {
                 udp_policy_closed: false,
             },
             Self::TuicQuicTcp { udp_relay_mode, .. } => match udp_relay_mode {
-                dae_outbound::tuic::TuicUdpRelayMode::Native => ResidentProtocolExecutorContract {
-                    tcp_executor: "resident-tuic-quic-stream",
-                    udp_executor: "resident-tuic-quic-datagram-packet",
-                    packet_semantics: "quic-datagram",
-                    udp_policy_closed: false,
-                },
-                dae_outbound::tuic::TuicUdpRelayMode::Quic => ResidentProtocolExecutorContract {
-                    tcp_executor: "resident-tuic-quic-stream",
-                    udp_executor: "resident-tuic-quic-unidirectional-stream-packet",
-                    packet_semantics: "quic-stream-packet",
-                    udp_policy_closed: false,
-                },
+                dae_outbound_core::tuic::TuicUdpRelayMode::Native => {
+                    ResidentProtocolExecutorContract {
+                        tcp_executor: "resident-tuic-quic-stream",
+                        udp_executor: "resident-tuic-quic-datagram-packet",
+                        packet_semantics: "quic-datagram",
+                        udp_policy_closed: false,
+                    }
+                }
+                dae_outbound_core::tuic::TuicUdpRelayMode::Quic => {
+                    ResidentProtocolExecutorContract {
+                        tcp_executor: "resident-tuic-quic-stream",
+                        udp_executor: "resident-tuic-quic-unidirectional-stream-packet",
+                        packet_semantics: "quic-stream-packet",
+                        udp_policy_closed: false,
+                    }
+                }
             },
             Self::JuicityQuicTcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-juicity-quic-stream",
