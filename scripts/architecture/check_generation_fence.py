@@ -18,9 +18,11 @@ IMPLEMENTATION = re.compile(
 )
 COORDINATION_FIELD = re.compile(
     r"(?m)^\s*(?:pub(?:\s*\([^)]*\))?\s+)?"
-    r"(active_generation|active_slot|generation_gate|generation_fence|generation_guard|"
+    r"(active_generation|active_slot|active_epoch|current_generation|current_epoch|"
+    r"generation|generation_epoch|generation_gate|generation_fence|generation_guard|"
     r"publication|publication_signal|publication_sender|publication_receiver|"
-    r"published_generation|generation_slot)\s*:\s*([^,;\n]+)"
+    r"publication_epoch|published_generation|published_epoch|generation_slot|"
+    r"generation_state)\s*:\s*([^,;\n]+)"
 )
 LOCAL_COORDINATION_STORAGE = re.compile(
     r"\b(?:Mutex|RwLock|Atomic(?:Bool|U8|U16|U32|U64|Usize)|"
@@ -39,6 +41,18 @@ def is_guard_name(name: str) -> bool:
             "generationfence",
             "generationgate",
             "generationguard",
+            "generationlock",
+            "generationbarrier",
+            "epochfence",
+            "epochgate",
+            "epochguard",
+            "epochlock",
+            "epochbarrier",
+            "publicationfence",
+            "publicationgate",
+            "publicationguard",
+            "publicationlock",
+            "publicationbarrier",
             "fencegeneration",
             "gategeneration",
             "guardgeneration",
@@ -59,7 +73,14 @@ def is_test_path(path: pathlib.Path) -> bool:
 def validate(root: pathlib.Path) -> list[str]:
     errors: list[str] = []
     crates_root = root / "crates"
-    for crate_root in sorted(crates_root.glob("dae-resident-*/src")):
+    if not crates_root.is_dir():
+        return ["resident generation gate: crates directory is missing"]
+    resident_source_roots = sorted(crates_root.glob("dae-resident-*/src"))
+    if not resident_source_roots:
+        return ["resident generation gate: resident source directories are missing"]
+    if not (crates_root / "dae-resident-core" / "src").is_dir():
+        errors.append("resident generation gate: dae-resident-core source directory is missing")
+    for crate_root in resident_source_roots:
         if crate_root.parent.name == "dae-resident-core":
             continue
         for path in sorted(crate_root.rglob("*.rs")):
