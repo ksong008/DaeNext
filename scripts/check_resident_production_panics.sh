@@ -33,7 +33,7 @@ for package in "${packages[@]}"; do
   cargo_args+=(-p "$package")
 done
 
-if ! cargo clippy "${cargo_args[@]}" --lib --bins --examples \
+if ! cargo clippy --locked "${cargo_args[@]}" --lib --bins --examples \
   --profile "$panic_gate_profile" --message-format=json -- \
   -W clippy::unwrap_used -W clippy::expect_used >"$audit_file" 2>&1; then
   tail -c 12000 "$audit_file" >&2

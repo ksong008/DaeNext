@@ -16,6 +16,19 @@ IMPLEMENTATION = re.compile(
     r"\bimpl(?:\s*<[^>{}]*>)?\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+for\s+)?"
     r"([A-Za-z_][A-Za-z0-9_]*)\b"
 )
+COORDINATION_FIELD = re.compile(
+    r"(?m)^\s*(?:pub(?:\s*\([^)]*\))?\s+)?"
+    r"(active_generation|active_slot|generation_gate|generation_fence|generation_guard|"
+    r"publication|publication_signal|publication_sender|publication_receiver|"
+    r"published_generation|generation_slot)\s*:\s*([^,;\n]+)"
+)
+LOCAL_COORDINATION_STORAGE = re.compile(
+    r"\b(?:Mutex|RwLock|Atomic(?:Bool|U8|U16|U32|U64|Usize)|"
+    r"(?:watch|broadcast|mpsc)::(?:Sender|Receiver))\b"
+)
+CORE_COORDINATION_TYPES = re.compile(
+    r"\b(?:ActiveGenerationSlot|GenerationGate|GenerationFence|PublicationEpoch)\b"
+)
 
 
 def is_guard_name(name: str) -> bool:
@@ -64,6 +77,18 @@ def validate(root: pathlib.Path) -> list[str]:
                         f"resident generation guard is declared outside dae-resident-core: "
                         f"{relative} ({name})"
                     )
+            for match in COORDINATION_FIELD.finditer(source):
+                field_name, field_type = match.groups()
+                if not LOCAL_COORDINATION_STORAGE.search(field_type):
+                    continue
+                if CORE_COORDINATION_TYPES.search(field_type):
+                    continue
+                relative = path.relative_to(root)
+                errors.append(
+                    "resident generation coordination storage is not core-owned: "
+                    f"{relative} ({field_name}: {field_type.strip()}); "
+                    "use dae-resident-core generation contracts"
+                )
     return errors
 
 
