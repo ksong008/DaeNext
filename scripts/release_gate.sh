@@ -26,6 +26,8 @@ run_step "architecture dependency policy" python3 scripts/architecture/check_dep
 run_step "architecture dependency checker tests" python3 scripts/architecture/test_check_dependencies.py
 run_step "generation fence ownership" python3 scripts/architecture/check_generation_fence.py
 run_step "generation fence ownership tests" python3 scripts/architecture/test_check_generation_fence.py
+run_step "recovery boundary" python3 scripts/architecture/check_recovery_boundaries.py
+run_step "recovery boundary checker tests" python3 scripts/architecture/test_check_recovery_boundaries.py
 run_step "large source boundary gate" python3 scripts/architecture/check_source_boundaries.py
 run_step "large source boundary checker tests" python3 scripts/architecture/test_check_source_boundaries.py
 run_step "product physical boundaries" python3 scripts/architecture/check_product_boundaries.py
