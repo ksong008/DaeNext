@@ -41,6 +41,18 @@
       "production": 54000,
       "tests": 15000
     },
+    "dae-outbound-core": {
+      "production": 70000,
+      "tests": 2000
+    },
+    "dae-outbound-quic": {
+      "production": 6000,
+      "tests": 1000
+    },
+    "dae-outbound-stream": {
+      "production": 26000,
+      "tests": 1000
+    },
     "dae-resident-dataplane": {
       "production": 34000,
       "tests": 29000
