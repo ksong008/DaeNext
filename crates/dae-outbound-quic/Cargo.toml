@@ -1,0 +1,32 @@
+[package]
+name = "dae-outbound-quic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+boring.workspace = true
+boring-sys.workspace = true
+boring-v4-compat.workspace = true
+bytes.workspace = true
+chacha20poly1305.workspace = true
+brotli.workspace = true
+dae-outbound-core.workspace = true
+dae-tls.workspace = true
+foreign-types.workspace = true
+h3.workspace = true
+h3-quinn.workspace = true
+hkdf.workspace = true
+http.workspace = true
+fastrand.workspace = true
+quinn.workspace = true
+quinn-boring.workspace = true
+quinn-proto.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+tokio.workspace = true

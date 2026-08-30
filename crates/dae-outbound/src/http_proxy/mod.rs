@@ -1,14 +1,19 @@
-mod application_protocol;
-pub mod contract;
-mod dataplane;
-pub mod link;
-pub mod request;
+pub use dae_outbound_core::http_proxy::{application_protocol, contract, link};
+pub mod dataplane {
+    pub use dae_outbound_stream::http_proxy::dataplane::*;
+}
+pub mod request {
+    pub use dae_outbound_stream::http_proxy::request::*;
+}
+
 #[cfg(any(test, feature = "test-support"))]
 mod tls_dataplane;
 
-pub use application_protocol::{EffectiveHttpProxyApplicationProtocol, HTTP_1_1_ALPN};
-pub use dataplane::{HttpConnectExchangeReport, connect_exchange, connect_exchange_over_stream};
-pub use link::{HttpProxyLink, HttpScheme};
-pub use request::{HttpConnectOptions, HttpForwardRequest, HttpTransportMode};
+pub use dae_outbound_core::http_proxy::{EffectiveHttpProxyApplicationProtocol, HTTP_1_1_ALPN};
+pub use dae_outbound_core::http_proxy::{HttpProxyLink, HttpScheme};
+pub use dae_outbound_stream::http_proxy::{
+    HttpConnectExchangeReport, HttpConnectOptions, HttpForwardRequest, HttpTransportMode,
+    connect_exchange, connect_exchange_over_stream,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use tls_dataplane::{HttpsProxyTlsExchangeReport, connect_exchange_over_tls_stream};

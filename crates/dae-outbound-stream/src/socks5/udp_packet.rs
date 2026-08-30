@@ -1,0 +1,53 @@
+use dae_outbound_core::error::OutboundError;
+
+use dae_outbound_core::socks5::address::Socks5Address;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Socks5UdpDatagram {
+    pub reserved: [u8; 2],
+    pub fragment: u8,
+    pub target: Socks5Address,
+    pub payload: Vec<u8>,
+}
+
+pub fn wrap(target: &Socks5Address, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    let mut out = Vec::with_capacity(3 + target.encoded_len() + payload.len());
+    out.extend_from_slice(&[0, 0, 0]);
+    target.write_to(&mut out)?;
+    out.extend_from_slice(payload);
+    Ok(out)
+}
+
+pub fn wrap_socket_addr(target: SocketAddr, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    let target = match target {
+        SocketAddr::V4(target) => Socks5Address::Ipv4 {
+            addr: *target.ip(),
+            port: target.port(),
+        },
+        SocketAddr::V6(target) => Socks5Address::Ipv6 {
+            addr: *target.ip(),
+            port: target.port(),
+        },
+    };
+    wrap(&target, payload)
+}
+
+pub fn wrap_target(target: &str, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    wrap(&Socks5Address::parse(target)?, payload)
+}
+
+pub fn unwrap(input: &[u8]) -> Result<Socks5UdpDatagram, OutboundError> {
+    if input.len() < 4 {
+        return Err(OutboundError::BadSocks5Packet(
+            "udp packet too short".to_owned(),
+        ));
+    }
+    let (target, consumed) = Socks5Address::decode(&input[3..])?;
+    Ok(Socks5UdpDatagram {
+        reserved: [input[0], input[1]],
+        fragment: input[2],
+        target,
+        payload: input[3 + consumed..].to_vec(),
+    })
+}
+use std::net::SocketAddr;

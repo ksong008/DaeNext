@@ -11,19 +11,7 @@ use crate::socks5::Socks5Address;
 #[cfg(any(test, feature = "test-support"))]
 use super::{contract, link};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AnyTlsFrame {
-    pub cmd: u8,
-    pub sid: u32,
-    pub data: Vec<u8>,
-}
-
-impl AnyTlsFrame {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn data_len(&self) -> usize {
-        self.data.len()
-    }
-}
+pub use dae_outbound_stream::anytls::AnyTlsFrame;
 
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug, Eq, PartialEq)]

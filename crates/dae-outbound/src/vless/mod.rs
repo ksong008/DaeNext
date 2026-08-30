@@ -1,39 +1,24 @@
-pub mod contract;
-pub mod dataplane;
-pub mod encryption;
-pub mod key;
-pub mod link;
-pub mod packet;
+pub use dae_outbound_core::vless::{contract, key, packet};
+pub mod link {
+    pub use dae_outbound_stream::vless::link::*;
+}
+pub mod dataplane {
+    pub use dae_outbound_stream::vless::dataplane::*;
+}
+#[cfg(test)]
+mod test_tls_transports;
+#[cfg(test)]
+mod test_xhttp_h3;
 
-pub use dataplane::{
-    VLESS_VERSION, VlessGrpcHttp2ExchangeReport, VlessGrpcHttp2Request,
-    VlessGrpcHunkExchangeReport, VlessGrpcHunkRequest, VlessHttpTransportExchangeReport,
-    VlessHttpTransportRequestHead, VlessHttpUpgradeExchangeReport, VlessMeekPollingExchangeReport,
-    VlessMeekPollingRequest, VlessMuxExchangeReport, VlessMuxRequest, VlessTcpExchangeReport,
-    VlessTcpRequest, VlessUdpOverTcpExchangeReport, VlessUdpRequest, VlessWebSocketExchangeReport,
-    VlessWebSocketRequest, VlessXHttpHttp2ExchangeReport, VlessXHttpHttp2Request,
-    VlessXHttpPacketExchangeReport, VlessXHttpPacketRequest, mux_exchange_over_stream,
-    read_http_transport_request_head_from_stream, read_mux_request_from_stream,
-    read_tcp_request_from_grpc_http2_stream, read_tcp_request_from_grpc_hunk_stream,
-    read_tcp_request_from_meek_polling_stream, read_tcp_request_from_stream,
-    read_tcp_request_from_websocket_stream, read_tcp_request_from_xhttp_http2_stream,
-    read_tcp_request_from_xhttp_packet_stream, read_udp_request_from_stream, response_header_bytes,
-    response_payload_bytes, tcp_exchange_over_grpc_http2_stream,
-    tcp_exchange_over_grpc_hunk_stream, tcp_exchange_over_http_transport_stream,
-    tcp_exchange_over_httpupgrade_stream, tcp_exchange_over_meek_polling_stream,
-    tcp_exchange_over_stream, tcp_exchange_over_websocket_stream,
-    tcp_exchange_over_xhttp_http2_stream, tcp_exchange_over_xhttp_packet_stream,
-    udp_over_tcp_exchange_over_stream, udp_response_packet, write_grpc_http2_hunk_response,
-    write_xhttp_http2_payload_response,
+pub use dae_outbound_core::vless::key::password_to_key;
+pub use dae_outbound_stream::vless::dataplane::*;
+pub use dae_outbound_stream::vless::{
+    VLESSLink, VlessEncryptedStream, VlessEncryptionClient, VlessEncryptionMode, VlessEncryptionRtt,
 };
-#[cfg(any(test, feature = "test-support"))]
-pub use dataplane::{
-    VlessHttpsHttpUpgradeTlsExchangeReport, VlessWssTlsExchangeReport, VlessXHttpH3ExchangeReport,
+#[cfg(test)]
+pub use test_tls_transports::{
+    VlessHttpsHttpUpgradeTlsExchangeReport, VlessWssTlsExchangeReport,
     tcp_exchange_over_https_httpupgrade_tls_stream, tcp_exchange_over_wss_tls_stream,
-    tcp_exchange_over_xhttp_h3_loopback,
 };
-pub use encryption::{
-    VlessEncryptedStream, VlessEncryptionClient, VlessEncryptionMode, VlessEncryptionRtt,
-};
-pub use key::password_to_key;
-pub use link::VLESSLink;
+#[cfg(test)]
+pub use test_xhttp_h3::{VlessXHttpH3ExchangeReport, tcp_exchange_over_xhttp_h3_loopback};
