@@ -34,7 +34,7 @@ LINE_COMMENT = re.compile(r"//[^\n]*")
 
 def load_metadata(root: pathlib.Path) -> dict[str, Any]:
     result = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
         cwd=root,
         check=True,
         capture_output=True,

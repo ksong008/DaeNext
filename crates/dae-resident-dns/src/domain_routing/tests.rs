@@ -196,7 +196,7 @@ fn failed_capacity_replacement_restores_the_previous_cache_and_owner() {
 
 #[test]
 fn published_generation_fences_late_writes_from_retired_generation() {
-    let fence = ResidentDomainRoutingGenerationFence::default();
+    let fence = ResidentDomainRoutingMapOwner::default();
     let old_ip = ip_to_key("192.0.2.10".parse().unwrap());
     let new_ip = ip_to_key("192.0.2.20".parse().unwrap());
     let stale_ip = ip_to_key("192.0.2.30".parse().unwrap());
@@ -266,7 +266,7 @@ fn published_generation_fences_late_writes_from_retired_generation() {
 
 #[test]
 fn domain_routing_fence_rejects_a_generation_bound_to_another_map() {
-    let fence = ResidentDomainRoutingGenerationFence::default();
+    let fence = ResidentDomainRoutingMapOwner::default();
     let mut owner = DomainRoutingOwner::default();
 
     fence
@@ -298,7 +298,7 @@ fn domain_routing_fence_rejects_a_generation_bound_to_another_map() {
 
 #[test]
 fn activation_serializes_with_an_in_flight_old_generation_write() {
-    let fence = Arc::new(ResidentDomainRoutingGenerationFence::default());
+    let fence = Arc::new(ResidentDomainRoutingMapOwner::default());
     let old_ip = ip_to_key("192.0.2.40".parse().unwrap());
     let in_flight_ip = ip_to_key("192.0.2.41".parse().unwrap());
     let candidate_ip = ip_to_key("192.0.2.42".parse().unwrap());
@@ -391,7 +391,7 @@ fn activation_serializes_with_an_in_flight_old_generation_write() {
 
 #[test]
 fn same_logical_id_from_another_physical_runtime_cannot_write() {
-    let fence = ResidentDomainRoutingGenerationFence::default();
+    let fence = ResidentDomainRoutingMapOwner::default();
     let mut active_owner = DomainRoutingOwner::default();
     fence
         .activate_with(generation_for(9, 1), 7, &active_owner, |_, _, _| Ok(()))

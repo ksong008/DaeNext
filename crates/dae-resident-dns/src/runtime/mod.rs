@@ -173,9 +173,7 @@ pub(crate) use crate::{
     fit_dns_response_to_udp_request,
 };
 #[cfg(all(test, feature = "dns-runtime-tests"))]
-pub(crate) use crate::{
-    ResidentDnsDomainRoutingMaintenanceHandle, ResidentDomainRoutingGenerationFence,
-};
+pub(crate) use crate::{ResidentDnsDomainRoutingMaintenanceHandle, ResidentDomainRoutingMapOwner};
 use crate::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
     ResidentDnsGeodata, ResidentDnsProxySelector, ResidentDnsProxyTcpTransport,

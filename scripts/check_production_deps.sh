@@ -13,11 +13,11 @@ case "${1:-}" in
     ;;
 esac
 
-mapfile -t PKGS < <(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print("\n".join(sorted(p["name"] for p in json.load(sys.stdin)["packages"])))')
+mapfile -t PKGS < <(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print("\n".join(sorted(p["name"] for p in json.load(sys.stdin)["packages"])))')
 
 fail=0
 for pkg in "${PKGS[@]}"; do
-  if hits=$(cargo tree -p "$pkg" -e normal "${EXTRA_ARGS[@]}" 2>/dev/null | grep -E "$FORBIDDEN" || true); then
+  if hits=$(cargo tree --locked -p "$pkg" -e normal "${EXTRA_ARGS[@]}" 2>/dev/null | grep -E "$FORBIDDEN" || true); then
     if [[ -n "$hits" ]]; then
       echo "FAIL: $pkg production tree contains forbidden dependency:"
       echo "$hits"
@@ -33,7 +33,7 @@ else
   exit 1
 fi
 
-release_tree="$(cargo tree --workspace -e normal,build,features --prefix none 2>/dev/null)"
+release_tree="$(cargo tree --locked --workspace -e normal,build,features --prefix none 2>/dev/null)"
 release_test_support="$({ printf '%s\n' "$release_tree" | grep -F 'feature "test-support"' || true; } | sort -u)"
 if [[ -n "$release_test_support" ]]; then
   echo "FAIL: release feature graph contains test-support:" >&2
@@ -41,7 +41,7 @@ if [[ -n "$release_test_support" ]]; then
   exit 1
 fi
 
-test_tree="$(cargo tree --workspace --all-features -e normal,build,dev,features --prefix none 2>/dev/null)"
+test_tree="$(cargo tree --locked --workspace --all-features -e normal,build,dev,features --prefix none 2>/dev/null)"
 test_support="$({ printf '%s\n' "$test_tree" | grep -F 'feature "test-support"' || true; } | sort -u)"
 if [[ -z "$test_support" ]]; then
   echo "FAIL: all-feature test graph does not exercise test-support" >&2

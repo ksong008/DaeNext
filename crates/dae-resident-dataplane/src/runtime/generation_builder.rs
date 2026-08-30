@@ -7,7 +7,7 @@ pub(super) struct ResidentGenerationBuildContext<'a> {
     pub(super) prepared: ResidentPreparedDataplane,
     pub(super) routing_tuple_map_id: Option<u32>,
     pub(super) domain_routing_map_id: Option<u32>,
-    pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingGenerationFence>,
+    pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingMapOwner>,
     pub(super) latency_seed: &'a [Value],
     pub(super) dns_reload_snapshot: Option<&'a ResidentDnsReloadSnapshot>,
 }
