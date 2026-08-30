@@ -245,9 +245,7 @@ impl ResidentProxyPlan {
         }
     }
 
-    pub fn vless_encryption(
-        &self,
-    ) -> Result<Option<dae_outbound::vless::VlessEncryptionClient>, String> {
+    pub fn vless_encryption(&self) -> Result<Option<VlessEncryptionClient>, String> {
         match &self.handler {
             ResidentProxyProtocolPlan::VlessVisionTcpTls { encryption, .. }
             | ResidentProxyProtocolPlan::VlessMuxTcpTls { encryption, .. } => {

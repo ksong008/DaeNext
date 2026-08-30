@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::{AliveDialerSet, DialerGroup};
+use dae_outbound_core::{AliveDialerSet, DialerGroup};
 
 const RUNTIME_GROUP_SELECTION_SOURCE_FIXED: &str = "fixed";
 const RUNTIME_GROUP_SELECTION_SOURCE_MIN: &str = "min-runtime-selector";
@@ -102,11 +102,12 @@ fn apply_fixed_group_selection(
             snapshot["selectedLatencyMs"] = json!(health.latency_ms);
             snapshot["selectedCheckedAtUnix"] = json!(health.checked_at_unix);
             snapshot["aliveCandidateCount"] = match health.health_state {
-                dae_outbound::HealthState::Alive => json!(1),
-                dae_outbound::HealthState::Dead | dae_outbound::HealthState::Unavailable => {
+                dae_outbound_core::HealthState::Alive => json!(1),
+                dae_outbound_core::HealthState::Dead
+                | dae_outbound_core::HealthState::Unavailable => {
                     json!(0)
                 }
-                dae_outbound::HealthState::Unknown => Value::Null,
+                dae_outbound_core::HealthState::Unknown => Value::Null,
             };
         }
     }
@@ -136,12 +137,12 @@ fn preferred_fixed_candidate_health(
         })
 }
 
-fn runtime_health_state_rank(state: dae_outbound::HealthState) -> u8 {
+fn runtime_health_state_rank(state: dae_outbound_core::HealthState) -> u8 {
     match state {
-        dae_outbound::HealthState::Alive => 0,
-        dae_outbound::HealthState::Dead => 1,
-        dae_outbound::HealthState::Unknown => 2,
-        dae_outbound::HealthState::Unavailable => 3,
+        dae_outbound_core::HealthState::Alive => 0,
+        dae_outbound_core::HealthState::Dead => 1,
+        dae_outbound_core::HealthState::Unknown => 2,
+        dae_outbound_core::HealthState::Unavailable => 3,
     }
 }
 

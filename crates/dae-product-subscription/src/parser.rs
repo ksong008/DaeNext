@@ -50,7 +50,7 @@ pub fn parse_node_link(link: &str, tag: Option<&str>) -> ParsedNodeLink {
 
 fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option<ParsedNodeLink> {
     let tag = tag.map(decode_node_label);
-    if let Ok(parsed) = dae_outbound::VMessLink::parse(link) {
+    if let Ok(parsed) = dae_outbound_stream::VMessLink::parse(link) {
         let address = parsed.address();
         return Some(ParsedNodeLink {
             display_name: tag
@@ -63,7 +63,7 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
             normalized_link: None,
         });
     }
-    if let Ok(parsed) = dae_outbound::VLESSLink::parse(link) {
+    if let Ok(parsed) = dae_outbound_stream::VLESSLink::parse(link) {
         let address = parsed.add.clone();
         return Some(ParsedNodeLink {
             display_name: tag
@@ -76,7 +76,7 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
             normalized_link: None,
         });
     }
-    if let Ok(parsed) = dae_outbound::ShadowsocksLink::parse(link) {
+    if let Ok(parsed) = dae_outbound_core::ShadowsocksLink::parse(link) {
         let address = parsed.address();
         return Some(ParsedNodeLink {
             display_name: tag
@@ -89,7 +89,7 @@ fn parse_node_link_with_outbound_parser(link: &str, tag: Option<&str>) -> Option
             normalized_link: None,
         });
     }
-    if let Ok(parsed) = dae_outbound::Hysteria2Link::parse(link) {
+    if let Ok(parsed) = dae_outbound_core::Hysteria2Link::parse(link) {
         let address = parsed.property_address();
         let normalized_link = hysteria2_mport_query_present(link).then(|| parsed.export_url());
         return Some(ParsedNodeLink {

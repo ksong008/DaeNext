@@ -1,7 +1,7 @@
 use super::*;
 
 pub fn build_juicity_stream_packet_request(target: &str, frame: &[u8]) -> Result<Vec<u8>, String> {
-    let metadata = dae_outbound::trojan::TrojanMetadata::parse("udp", target)
+    let metadata = dae_outbound_core::trojan::TrojanMetadata::parse("udp", target)
         .map_err(|err| format!("build Juicity UDP metadata: {err}"))?;
     let metadata = metadata
         .encode()

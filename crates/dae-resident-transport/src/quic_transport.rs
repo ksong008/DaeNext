@@ -15,9 +15,9 @@ use blake2::{
 };
 #[cfg(test)]
 use bytes::Bytes;
-use dae_outbound::hysteria2::HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD;
+use dae_outbound_quic::hysteria2::HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD;
 #[cfg(test)]
-use dae_outbound::hysteria2::build_hysteria2_runtime_client_config_with_udp_overhead;
+use dae_outbound_quic::hysteria2::build_hysteria2_runtime_client_config_with_udp_overhead;
 #[cfg(test)]
 use dae_resident_core::{Hysteria2OwnerResourceProfile, ResidentRuntimeProfile};
 use dae_resident_core::{QuicCandidateRaceResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE};

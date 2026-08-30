@@ -1,4 +1,4 @@
-use dae_outbound::{
+use dae_outbound_core::{
     FLOW_STREAM_ASSOCIATION_OWNERSHIP, FLOW_STREAM_PACKET_OWNERSHIP,
     FLOW_STREAM_POLICY_CLOSED_OWNERSHIP, GENERATION_OWNED_ANYTLS_OWNERSHIP,
     GENERATION_OWNED_H2_PACKET_OWNERSHIP, GENERATION_OWNED_H2_POLICY_CLOSED_OWNERSHIP,
@@ -54,7 +54,7 @@ const STANDARD_OR_REALITY_SECURITY: &[SecurityDimension] = &[
 
 pub(super) fn materialized_execution_shape(
     execution: plan::ResidentExecutionPlan,
-) -> dae_outbound::MaterializedExecutionShape {
+) -> dae_outbound_core::MaterializedExecutionShape {
     project_materialized_execution_shape(execution)
 }
 

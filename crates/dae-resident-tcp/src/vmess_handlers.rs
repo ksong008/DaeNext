@@ -5,14 +5,14 @@ pub use http_header::*;
 
 fn take_vmess_tcp_session(
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
     target: &str,
     sniff: &mut TcpSniffReport,
     build_context: &str,
 ) -> Result<(VMessAeadTcpClientSessionStart, usize), String> {
     let initial_payload = sniff.take_payload();
     let initial_payload_len = initial_payload.len();
-    let session = dae_outbound::vmess::aead_tcp_client_session_start_with_security(
+    let session = dae_outbound_stream::vmess::aead_tcp_client_session_start_with_security(
         id,
         target,
         &initial_payload,
@@ -37,7 +37,7 @@ pub async fn handle_vmess_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
@@ -102,7 +102,7 @@ pub async fn handle_vmess_tls_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
         open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
@@ -189,7 +189,7 @@ pub async fn handle_vmess_websocket_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let options =
@@ -263,7 +263,7 @@ pub async fn handle_vmess_httpupgrade_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let options =
@@ -335,7 +335,7 @@ pub async fn handle_vmess_websocket_tls_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
         open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
@@ -427,7 +427,7 @@ pub async fn handle_vmess_httpupgrade_tls_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let mut client =
         open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
@@ -516,7 +516,7 @@ pub async fn handle_vmess_grpc_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,
@@ -609,7 +609,7 @@ pub async fn handle_vmess_h2_proxy_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
     id: &str,
-    body_security: dae_outbound::vmess::VMessBodySecurity,
+    body_security: dae_outbound_core::vmess::VMessBodySecurity,
 ) -> Result<Value, String> {
     let (mut session, initial_payload_len) = take_vmess_tcp_session(
         id,

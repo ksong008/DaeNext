@@ -1,7 +1,7 @@
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use dae_outbound::NetworkType;
+use dae_outbound_core::NetworkType;
 
 use super::*;
 

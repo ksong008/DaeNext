@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::vless::VlessEncryptedStream;
+use dae_outbound_stream::vless::VlessEncryptedStream;
 use tokio::io::AsyncWriteExt;
 
 async fn write_vless_encrypted_xhttp_bytes(

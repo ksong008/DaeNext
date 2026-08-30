@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use dae_outbound::shared_transport::websocket_client_mask_key;
+use dae_outbound_stream::websocket::websocket_client_mask_key;
 
 const WEBSOCKET_FIN: u8 = 0x80;
 const WEBSOCKET_MASK: u8 = 0x80;

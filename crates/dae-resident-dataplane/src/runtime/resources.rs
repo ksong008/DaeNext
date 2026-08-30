@@ -244,7 +244,7 @@ impl ResidentRuntimeResourceConfig {
         let meek = MeekTransportResourceProfile::from_runtime_profile(self.runtime_profile.profile);
         let vless_mux =
             VlessMuxOwnerResourceProfile::from_runtime_profile(self.runtime_profile.profile);
-        let ss2022_replay = dae_outbound::shadowsocks::Ss2022UdpReplayPolicy::default();
+        let ss2022_replay = dae_outbound_stream::shadowsocks::Ss2022UdpReplayPolicy::default();
         json!({
             "runtimeProfile": self.runtime_profile.json(),
             "schemaVersion": 2,
@@ -358,7 +358,7 @@ impl ResidentRuntimeResourceConfig {
                 "physicalConnectionsPerOwner": meek.physical_connections_per_owner(),
                 "idleConnectionsPerOwner": meek.idle_connection_limit(),
                 "idleConnectionTimeoutMs": meek.idle_connection_timeout().as_millis(),
-                "requestBodyBytes": dae_outbound::shared_transport::contract::MEEK_MAX_WRITE,
+                "requestBodyBytes": dae_outbound_stream::shared_transport::contract::MEEK_MAX_WRITE,
                 "responseHeaderBytes": meek.response_header_bytes(),
                 "responseBodyBytes": meek.response_body_bytes(),
                 "responseWireBytes": meek.response_wire_bytes(),

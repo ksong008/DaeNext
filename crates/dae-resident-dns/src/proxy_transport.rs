@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use dae_outbound::NetworkType;
+use dae_outbound_core::NetworkType;
 use dae_resident_core::{ResidentDataplaneMetrics, ResidentOwnedTaskShutdownCompletion};
 use dae_resident_plan::ResidentProxyBinding;
 use dae_resident_transport::{

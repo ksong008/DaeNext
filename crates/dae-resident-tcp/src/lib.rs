@@ -22,14 +22,23 @@ use dae_datapath::TcpDirectDialReport;
 #[cfg(test)]
 use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_DIRECT};
 use dae_ebpf_support::BpfRoutingResult;
-use dae_outbound::{
-    http_proxy::{HttpConnectOptions, request as http_request},
+use dae_outbound_core::{
+    shadowsocks::ShadowsocksMetadata,
+    trojan::packet as trojan_packet,
+    vless::{contract::is_xtls_rprx_vision_flow, packet},
+};
+use dae_outbound_quic::{
     hysteria2::{read_hysteria2_tcp_response, write_hysteria2_tcp_request},
     juicity::write_juicity_tcp_request,
+    tuic::write_tuic_connect_request,
+};
+use dae_outbound_stream::{
+    http_proxy::{HttpConnectOptions, request as http_request},
+    mux::{MUX_DATA_FRAME_HEADER_BYTES, mux_data_frame_header},
     shadowsocks::{
         AeadStreamCodec, AeadStreamFrameReader, SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE,
         SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE, SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE,
-        SS2022_TCP_RELAY_PAYLOAD_SIZE, SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE, ShadowsocksMetadata,
+        SS2022_TCP_RELAY_PAYLOAD_SIZE, SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE,
         ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder, Sip003SimpleObfsHttpOptions,
         Sip003SimpleObfsTlsOptions, Ss2022TcpClientStreamEncoder, Ss2022TcpServerStreamDecoder,
         cipher_spec, read_encrypted_chunk_in_place_from_async_stream,
@@ -39,13 +48,10 @@ use dae_outbound::{
     },
     shared_transport::mux::MuxFrameOptions,
     shared_transport::{
-        HttpUpgradeOptions, MUX_DATA_FRAME_HEADER_BYTES, MeekRoundTripOptions, meek_http_request,
-        mux_data_frame, mux_data_frame_header, mux_end_frame, mux_new_frame, validate_http_status,
+        HttpUpgradeOptions, MeekRoundTripOptions, meek_http_request, mux_data_frame, mux_end_frame,
+        mux_new_frame, validate_http_status,
     },
-    trojan::packet as trojan_packet,
-    tuic::write_tuic_connect_request,
-    vless::packet,
-    vless::{VlessEncryptedStream, contract::is_xtls_rprx_vision_flow},
+    vless::VlessEncryptedStream,
     vmess::{
         VMESS_AEAD_TCP_MAX_PAYLOAD_SIZE, VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE,
         VMessAeadTcpClientSessionStart, aead_tcp_response_reader_from_buffer,

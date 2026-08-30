@@ -467,7 +467,7 @@ pub async fn connect_dns_quic_endpoint_async(
     remote: SocketAddr,
     mark: u32,
     contract: DnsQuicEndpointConnectContract,
-    session_cache: dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache,
+    session_cache: dae_outbound_quic::boring_quic::BoringQuicSessionCache,
 ) -> Result<(ObservedQuicEndpoint, quinn::Connection), String> {
     let deadline = dae_runtime_control::AbsoluteDeadline::from_now(
         Instant::now(),

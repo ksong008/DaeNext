@@ -334,7 +334,7 @@ mod tests {
         let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
         let now = ss2022_udp_unix_timestamp_now();
         let codec = Ss2022UdpCodec::new(SS2022_CIPHER, SS2022_PASSWORD, client_session).unwrap();
-        let packet = dae_outbound::shadowsocks::encode_ss2022_udp_server_packet(
+        let packet = dae_outbound_stream::shadowsocks::encode_ss2022_udp_server_packet(
             SS2022_CIPHER,
             SS2022_PASSWORD,
             server_session,
@@ -366,7 +366,7 @@ mod tests {
         let server_session = *b"server92";
         let target: SocketAddr = "192.0.2.1:53".parse().unwrap();
         let now = ss2022_udp_unix_timestamp_now();
-        let packet = dae_outbound::shadowsocks::encode_ss2022_udp_server_packet(
+        let packet = dae_outbound_stream::shadowsocks::encode_ss2022_udp_server_packet(
             SS2022_CIPHER,
             SS2022_PASSWORD,
             server_session,

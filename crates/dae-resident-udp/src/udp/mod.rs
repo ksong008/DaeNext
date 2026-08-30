@@ -10,14 +10,16 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use dae_core_types::Ss2022UdpReplayMetricsSnapshot;
 use dae_ebpf_support::open_transparent_udp_socket_bound_in_netns;
+use dae_outbound_core::{anytls::link as anytls_link, vless::packet};
 #[cfg(test)]
-use dae_outbound::hysteria2::{HYSTERIA2_MAX_UDP_MESSAGE_LENGTH, decode_hysteria2_udp_message};
+use dae_outbound_quic::hysteria2::{
+    HYSTERIA2_MAX_UDP_MESSAGE_LENGTH, decode_hysteria2_udp_message,
+};
 #[cfg(test)]
-use dae_outbound::juicity::{decode_stream_packet_frame, seal_stream_packet_frame};
+use dae_outbound_quic::juicity::{decode_stream_packet_frame, seal_stream_packet_frame};
 #[cfg(test)]
-use dae_outbound::tuic::{decode_tuic_udp_packet, encode_tuic_udp_stream_packet};
-use dae_outbound::{
-    anytls::link as anytls_link,
+use dae_outbound_quic::tuic::{decode_tuic_udp_packet, encode_tuic_udp_stream_packet};
+use dae_outbound_quic::{
     hysteria2::{
         HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage, encode_hysteria2_udp_message,
         encode_hysteria2_udp_payload, fragment_hysteria2_udp_message,
@@ -27,6 +29,12 @@ use dae_outbound::{
         JUICITY_STREAM_PACKET_MAX_FRAME_LEN, JuicityStreamPacketPayload,
         decode_stream_packet_payload_prefix, encode_stream_packet_frame,
     },
+    tuic::{
+        TuicUdpPacket, TuicUdpRelayMode, encode_tuic_udp_packet, encode_tuic_udp_payload,
+        encode_tuic_udp_stream_payload, fragment_tuic_udp_packet,
+    },
+};
+use dae_outbound_stream::{
     shadowsocks::{
         Ss2022UdpCodec, decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
         ss2022_udp_unix_timestamp_now,
@@ -38,11 +46,6 @@ use dae_outbound::{
     },
     socks5::{Socks5Address, udp_packet},
     trojan::packet as trojan_packet,
-    tuic::{
-        TuicUdpPacket, TuicUdpRelayMode, encode_tuic_udp_packet, encode_tuic_udp_payload,
-        encode_tuic_udp_stream_payload, fragment_tuic_udp_packet,
-    },
-    vless::packet,
     vmess,
 };
 use dae_resident_core::*;

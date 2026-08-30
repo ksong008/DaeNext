@@ -162,7 +162,7 @@ pub fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearReport {
         .get()
         .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear_boring()))
         .unwrap_or_default();
-    let _ = dae_outbound::shared_transport::invalidate_system_ca_snapshot();
+    let _ = dae_outbound_quic::system_ca::invalidate_system_ca_snapshot();
     ResidentTlsConfigCacheClearReport {
         boring,
         boring_sessions: boring_sessions.entries,

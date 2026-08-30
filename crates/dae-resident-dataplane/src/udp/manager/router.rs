@@ -12,7 +12,7 @@ use dae_dns::DNS_DEFAULT_PORT;
 use dae_ebpf_support::{
     BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
 };
-use dae_outbound::NetworkType;
+use dae_outbound_core::NetworkType;
 use dae_routing::{Query, RoutingMatcher};
 
 use super::super::super::plan::{

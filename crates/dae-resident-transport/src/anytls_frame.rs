@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use dae_outbound::anytls::{AnyTlsFrame, contract as anytls_contract};
+use dae_outbound_stream::anytls::{AnyTlsFrame, contract as anytls_contract};
 use dae_resident_core::RESIDENT_TCP_IDLE_TIMEOUT;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time;

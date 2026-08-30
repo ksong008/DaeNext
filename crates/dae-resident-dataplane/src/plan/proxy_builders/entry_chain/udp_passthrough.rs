@@ -1,4 +1,5 @@
-use dae_outbound::parse_link_chain;
+use dae_outbound_stream::link_parser::parse_link_chain;
+use dae_outbound_stream::shared_transport::contract::UDP_PASSTHROUGH_KEY;
 use url::Url;
 
 pub(super) fn reject_requested_udp_passthrough(source: &str, node_tag: &str) -> Result<(), String> {
@@ -17,15 +18,13 @@ pub(super) fn reject_requested_udp_passthrough(source: &str, node_tag: &str) -> 
 
     Err(format!(
         "resident dataplane does not admit {}=true for node {node_tag}; requested UDP passthrough has no resident executor and remains fail-closed",
-        dae_outbound::shared_transport::contract::UDP_PASSTHROUGH_KEY,
+        UDP_PASSTHROUGH_KEY,
     ))
 }
 
 fn source_node_requests_udp_passthrough(source: &str) -> bool {
     Url::parse(source).is_ok_and(|url| {
-        url.query_pairs().any(|(key, value)| {
-            key == dae_outbound::shared_transport::contract::UDP_PASSTHROUGH_KEY
-                && value.eq_ignore_ascii_case("true")
-        })
+        url.query_pairs()
+            .any(|(key, value)| key == UDP_PASSTHROUGH_KEY && value.eq_ignore_ascii_case("true"))
     })
 }

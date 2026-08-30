@@ -112,7 +112,7 @@ pub async fn handle_https_proxy_tcp_connection_async(
 ) -> Result<Value, String> {
     let mut proxy =
         open_async_resident_tls_client_with_binding(&selection.proxy, selection.mptcp).await?;
-    dae_outbound::http_proxy::EffectiveHttpProxyApplicationProtocol::Http1
+    dae_outbound_core::http_proxy::application_protocol::EffectiveHttpProxyApplicationProtocol::Http1
         .validate_negotiated_alpn(proxy.negotiated_alpn())
         .map_err(|err| format!("validate HTTPS proxy negotiated ALPN: {err}"))?;
     let tls_underlay = async_resident_tls_underlay_name(&proxy);

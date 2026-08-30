@@ -10,14 +10,15 @@ use std::time::{Duration, Instant};
 use dae_datapath::udp_io::UdpOriginalDstRecvError;
 use dae_datapath::udp_io::{UdpBatchReceiver, UdpOriginalDstPacket, UdpPayload, UdpPayloadPool};
 #[cfg(test)]
-use dae_outbound::shared_transport::GrpcMode;
+use dae_outbound_core::socks5::Socks5Address;
 #[cfg(test)]
-use dae_outbound::{
+use dae_outbound_quic::{
     hysteria2::{Hysteria2UdpMessage, decode_hysteria2_udp_message, encode_hysteria2_udp_message},
     juicity::{decode_stream_packet_frame, seal_stream_packet_frame},
-    socks5::Socks5Address,
     tuic::{TuicUdpPacket, decode_tuic_udp_packet, encode_tuic_udp_packet},
 };
+#[cfg(test)]
+use dae_outbound_stream::shared_transport::GrpcMode;
 use dae_resident_core::events::{
     ResidentEventKind, ResidentEventMetadata, admit_event, append_admitted_event,
     append_event_with_metadata,

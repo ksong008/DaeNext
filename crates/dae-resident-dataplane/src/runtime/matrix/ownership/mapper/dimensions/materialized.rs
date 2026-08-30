@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::{
+use dae_outbound_core::{
     MaterializedExecutionShape, MaterializedPolicyClosedReason, MaterializedProtocol,
     MaterializedSecurity, MaterializedStreamPacketTransport, MaterializedUdp, MaterializedWrapper,
 };

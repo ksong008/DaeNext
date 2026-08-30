@@ -27,7 +27,9 @@ pub fn runtime_link_hash(link: &str) -> String {
 }
 
 pub fn runtime_execution_identity(link: &str) -> String {
-    runtime_link_hash(&dae_outbound::canonical_link_without_display_name(link))
+    runtime_link_hash(&dae_outbound_stream::canonical_link_without_display_name(
+        link,
+    ))
 }
 
 pub fn runtime_redacted_link_source(link: &str) -> String {

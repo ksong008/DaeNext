@@ -115,11 +115,12 @@ impl TrojanUdpStreamSession {
 
     fn try_pop_response_packet(
         &mut self,
-    ) -> Result<Option<dae_outbound::trojan::TrojanUdpPacketPayload>, String> {
-        let Some((packet, consumed)) = dae_outbound::trojan::decode_udp_packet_payload_prefix(
-            &self.response_plaintext[self.response_plaintext_cursor..],
-        )
-        .map_err(|err| format!("decode Trojan UDP session response: {err}"))?
+    ) -> Result<Option<dae_outbound_stream::trojan::TrojanUdpPacketPayload>, String> {
+        let Some((packet, consumed)) =
+            dae_outbound_stream::trojan::decode_udp_packet_payload_prefix(
+                &self.response_plaintext[self.response_plaintext_cursor..],
+            )
+            .map_err(|err| format!("decode Trojan UDP session response: {err}"))?
         else {
             return Ok(None);
         };
@@ -133,7 +134,7 @@ impl TrojanUdpStreamSession {
 
     fn response_result(
         &self,
-        packet: dae_outbound::trojan::TrojanUdpPacketPayload,
+        packet: dae_outbound_stream::trojan::TrojanUdpPacketPayload,
     ) -> UdpExchangeResult {
         let (session_executor, underlay_reuse, tls_underlay) = self.evidence_fields();
         let result = UdpExchangeResult::new(packet.payload, "tls-udp-over-tcp")

@@ -3,7 +3,9 @@ pub struct StableNodeKey(String);
 
 impl StableNodeKey {
     pub fn from_link(link: &str) -> Self {
-        Self(dae_outbound::canonical_link_without_display_name(link))
+        Self(dae_outbound_stream::canonical_link_without_display_name(
+            link,
+        ))
     }
 
     pub fn from_canonical(value: String) -> Self {

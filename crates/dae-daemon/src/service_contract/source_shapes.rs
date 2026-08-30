@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::{SourceShapeReconciliationKind, SourceShapeRegistryRow};
+use dae_outbound_core::{SourceShapeReconciliationKind, SourceShapeRegistryRow};
 
 #[path = "source_shapes/reconciliation.rs"]
 mod reconciliation;
@@ -49,7 +49,7 @@ pub(super) fn source_shape_registry_policy_rejected_row_count(
 }
 
 pub(super) fn required_protocol_variant_shape_ids() -> &'static [&'static str] {
-    dae_outbound::official_common_source_shape_ids()
+    dae_outbound_core::official_common_source_shape_ids()
 }
 
 pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
@@ -119,7 +119,7 @@ pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
         .iter()
         .copied()
         .map(|row| {
-            let reconciliation = dae_outbound::source_shape_reconciliation(row.shape_id);
+            let reconciliation = dae_outbound_core::source_shape_reconciliation(row.shape_id);
             json!({
                 "variantId": row.shape_id,
                 "protocolFamily": row.protocol_family,
@@ -137,7 +137,7 @@ pub(super) fn excluded_stream_wrapper_source_matrix_typed_report(
             })
         })
         .collect::<Vec<_>>();
-    let official_common_source_shape_ids = dae_outbound::official_common_source_shape_ids();
+    let official_common_source_shape_ids = dae_outbound_core::official_common_source_shape_ids();
     let official_common_source_shape_total = official_common_source_shape_ids.len();
     let official_common_rows = rows
         .iter()

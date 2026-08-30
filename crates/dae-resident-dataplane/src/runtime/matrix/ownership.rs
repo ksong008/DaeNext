@@ -6,14 +6,14 @@ use self::mapper::{materialized_execution_shape, materialized_runtime_ownership}
 
 pub(super) fn materialized_source_execution_shape(
     proxy: &plan::ResidentProxyPlan,
-) -> dae_outbound::MaterializedExecutionShape {
+) -> dae_outbound_core::MaterializedExecutionShape {
     materialized_execution_shape(proxy.execution_plan())
 }
 
 pub(super) fn materialized_runtime_ownership_value(proxy: &plan::ResidentProxyPlan) -> Value {
     let profile = effective_materialized_runtime_ownership(proxy);
     let redacted_identity = format!("runtime:{}", proxy.graph_link_hash);
-    if profile.model == dae_outbound::RuntimeOwnershipModel::MaterializedShapeRejected {
+    if profile.model == dae_outbound_core::RuntimeOwnershipModel::MaterializedShapeRejected {
         profile.to_materialization_rejected_value(&redacted_identity)
     } else {
         profile.to_materialized_value(&redacted_identity)
@@ -31,24 +31,25 @@ pub(super) fn source_and_materialized_ownership_agree(
 
 pub(super) fn effective_materialized_runtime_ownership(
     proxy: &plan::ResidentProxyPlan,
-) -> dae_outbound::RuntimeOwnershipProfile {
+) -> dae_outbound_core::RuntimeOwnershipProfile {
     let raw = materialized_runtime_ownership(proxy.execution_plan());
-    if raw.model == dae_outbound::RuntimeOwnershipModel::MaterializedShapeRejected {
+    if raw.model == dae_outbound_core::RuntimeOwnershipModel::MaterializedShapeRejected {
         return raw;
     }
 
     match plan::resident_udp_chain_admission(proxy) {
         plan::ResidentUdpChainAdmission::NotChained => raw,
         plan::ResidentUdpChainAdmission::ParentStream
-            if raw.model == dae_outbound::RuntimeOwnershipModel::FlowStreamAndPacketSession =>
+            if raw.model
+                == dae_outbound_core::RuntimeOwnershipModel::FlowStreamAndPacketSession =>
         {
             raw
         }
         plan::ResidentUdpChainAdmission::ParentStream => {
-            dae_outbound::MATERIALIZED_SHAPE_REJECTED_OWNERSHIP
+            dae_outbound_core::MATERIALIZED_SHAPE_REJECTED_OWNERSHIP
         }
         plan::ResidentUdpChainAdmission::Unsupported(_) => {
-            dae_outbound::FLOW_STREAM_POLICY_CLOSED_OWNERSHIP
+            dae_outbound_core::FLOW_STREAM_POLICY_CLOSED_OWNERSHIP
         }
     }
 }

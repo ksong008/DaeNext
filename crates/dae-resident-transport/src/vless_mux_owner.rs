@@ -8,13 +8,13 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use bytes::Bytes;
-use dae_outbound::shared_transport::mux::{
+use dae_outbound_core::vmess::VMessMetadata;
+use dae_outbound_stream::mux::{
     MuxFrame, MuxFrameDecoder, MuxFrameOptions, OPTION_DATA, SESSION_STATUS_END,
     SESSION_STATUS_KEEP, SESSION_STATUS_KEEPALIVE, SESSION_STATUS_NEW, mux_data_frame,
     mux_end_frame, mux_error_frame, mux_new_frame,
 };
-use dae_outbound::vless::{VlessEncryptedStream, packet};
-use dae_outbound::vmess::VMessMetadata;
+use dae_outbound_stream::vless::{VlessEncryptedStream, packet};
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
 use serde_json::{Value, json};
 use tokio::io::{

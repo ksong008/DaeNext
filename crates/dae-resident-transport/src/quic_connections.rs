@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dae_outbound::hysteria2::{
+use dae_outbound_quic::hysteria2::{
     Hysteria2CongestionRuntime, build_hysteria2_runtime_client_config_with_session_cache,
 };
-use dae_outbound::tuic::{
+use dae_outbound_quic::tuic::{
     TuicCongestionController, build_tuic_runtime_client_config_with_session_cache,
 };
 use dae_resident_core::Hysteria2OwnerResourceProfile;
@@ -66,14 +66,13 @@ pub(crate) struct Hysteria2QuicConnectionRequest<'a> {
     pub(crate) obfs: &'a ResidentHysteria2ObfsPlan,
     pub(crate) port_hop_ports: &'a [u16],
     pub(crate) port_hop_interval: Duration,
-    pub(crate) tls_identity: &'a dae_outbound::hysteria2::Hysteria2TlsIdentity,
+    pub(crate) tls_identity: &'a dae_outbound_quic::hysteria2::Hysteria2TlsIdentity,
     pub(crate) congestion: Arc<Hysteria2CongestionRuntime>,
     pub(crate) resources: Hysteria2OwnerResourceProfile,
     pub(crate) port_hopping_metrics: Arc<Hysteria2PortHoppingMetrics>,
     pub(crate) caller: QuicEndpointCallerClass,
     pub(crate) cancellation: &'a dae_runtime_control::OwnerCancellationSignal,
-    pub(crate) session_cache:
-        Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    pub(crate) session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 }
 
 pub(crate) async fn open_hysteria2_quic_connection_candidates_async(
@@ -244,10 +243,10 @@ pub(crate) async fn open_tuic_quic_connection_candidates_async(
     alpn: &[String],
     allow_insecure: bool,
     congestion: TuicCongestionController,
-    udp_relay_mode: dae_outbound::tuic::TuicUdpRelayMode,
+    udp_relay_mode: dae_outbound_quic::tuic::TuicUdpRelayMode,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
     let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
@@ -298,14 +297,14 @@ pub(crate) async fn open_juicity_quic_connection_candidates_async(
     binding: &ResidentProxyBinding,
     allow_insecure: bool,
     pinned_certchain_sha256: &str,
-    congestion: dae_outbound::juicity::JuicityCongestionController,
+    congestion: dae_outbound_quic::juicity::JuicityCongestionController,
     deadline: dae_runtime_control::AbsoluteDeadline,
     caller: QuicEndpointCallerClass,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
     let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
-    let client_config = dae_outbound::juicity::build_juicity_runtime_client_config_with_congestion_and_session_cache(
+    let client_config = dae_outbound_quic::juicity::build_juicity_runtime_client_config_with_congestion_and_session_cache(
         allow_insecure,
         pinned_certchain_sha256,
         congestion,

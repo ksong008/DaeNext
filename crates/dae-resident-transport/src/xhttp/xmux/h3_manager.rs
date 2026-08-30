@@ -8,16 +8,14 @@ use std::time::{Duration, Instant};
 
 pub struct XhttpH3GenerationManagers {
     managers: Mutex<HashMap<XhttpXmuxKey, XhttpXmuxManagerHandle<XhttpXmuxH3Manager>>>,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 }
 
 impl XhttpH3GenerationManagers {
     pub fn new() -> Self {
         Self {
             managers: Mutex::new(HashMap::new()),
-            session_cache: Some(
-                dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache(),
-            ),
+            session_cache: Some(dae_outbound_quic::boring_quic::new_boring_quic_session_cache()),
         }
     }
 
@@ -439,7 +437,7 @@ pub(in super::super) async fn select_xhttp_h3_xmux_client<F, Fut>(
     new_client: F,
 ) -> Result<XhttpXmuxH3SelectedClient, String>
 where
-    F: FnOnce(Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>) -> Fut,
+    F: FnOnce(Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>) -> Fut,
     Fut: Future<Output = Result<XhttpH3EndpointClient, String>> + Send + 'static,
 {
     let generation = xhttp_xmux_generation_owner(key.runtime_generation())?;

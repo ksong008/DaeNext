@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn reality_pqv_verifies_exact_official_transcript_message() {
         let mut encoded_public_key =
-            vec![0_u8; dae_outbound::shared_transport::MLDSA65_PUBLIC_KEY_BYTES];
+            vec![0_u8; dae_outbound_stream::shared_transport::MLDSA65_PUBLIC_KEY_BYTES];
         let mut seed = [0_u8; 32];
         let mut private_key = MaybeUninit::<boring_sys::MLDSA65_private_key>::uninit();
         let generated = unsafe {
@@ -185,7 +185,8 @@ mod tests {
         authenticated.extend_from_slice(&transcript.client_hello);
         authenticated.extend_from_slice(&transcript.server_hello);
         let message = hmac_sha512(&auth_key, &authenticated).unwrap();
-        let mut signature = vec![0_u8; dae_outbound::shared_transport::MLDSA65_SIGNATURE_BYTES];
+        let mut signature =
+            vec![0_u8; dae_outbound_stream::shared_transport::MLDSA65_SIGNATURE_BYTES];
         let signed = unsafe {
             boring_sys::MLDSA65_sign(
                 signature.as_mut_ptr(),

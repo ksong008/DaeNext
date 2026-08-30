@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::Ordering};
 
-use dae_outbound::{
+use dae_outbound_stream::{
     shared_transport::HttpUpgradeOptions, vmess::aead_tcp_client_session_start_with_security,
 };
 use dae_resident_transport::{

@@ -11,7 +11,7 @@ use super::wire::{
     read_http1_response_message_capped_async, read_to_end_capped_async, restore_dns_response_id,
 };
 use boring::ssl::SslContext;
-use dae_outbound::shared_transport::{SystemCaIdentity, system_ca_snapshot};
+use dae_outbound_quic::system_ca::{SystemCaIdentity, system_ca_snapshot};
 use dae_tls::{build_boring_tls_context_with_system_ca, connect_boring_tls_async};
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};

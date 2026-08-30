@@ -7,7 +7,9 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use bytes::BytesMut;
-use dae_outbound::anytls::{AnyTlsPaddingScheme, contract as anytls_contract, link as anytls_link};
+use dae_outbound_stream::anytls::{
+    AnyTlsPaddingScheme, contract as anytls_contract, link as anytls_link,
+};
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

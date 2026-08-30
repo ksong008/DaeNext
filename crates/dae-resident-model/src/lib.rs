@@ -2,12 +2,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dae_outbound::canonical_link_without_display_name;
-use dae_outbound::hysteria2::Hysteria2CongestionConfig;
-use dae_outbound::shared_transport::{
-    EchConfigList, GrpcMode, Mldsa65VerifyKey, TlsFragmentOptions,
-};
-use dae_outbound::vless::contract::is_xtls_rprx_vision_flow;
+use dae_outbound_core::GrpcMode;
+use dae_outbound_core::vless::contract::is_xtls_rprx_vision_flow;
+use dae_outbound_core::{Hysteria2CongestionConfig, Hysteria2TlsIdentity};
+use dae_outbound_quic::QuicCongestionController;
+use dae_outbound_stream::canonical_link_without_display_name;
+use dae_outbound_stream::shared_transport::{EchConfigList, Mldsa65VerifyKey, TlsFragmentOptions};
+use dae_outbound_stream::vless::VlessEncryptionClient;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

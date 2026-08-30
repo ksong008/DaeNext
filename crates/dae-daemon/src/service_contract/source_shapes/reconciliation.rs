@@ -1,11 +1,11 @@
-use dae_outbound::{
+use dae_outbound_core::{
     SourceShapeReconciliation, SourceShapeReconciliationKind, SourceShapeRegistryRow,
 };
 
 pub(super) fn source_shape_reconciliation_kind(
     row: &SourceShapeRegistryRow,
 ) -> Option<SourceShapeReconciliationKind> {
-    dae_outbound::source_shape_reconciliation(row.shape_id)
+    dae_outbound_core::source_shape_reconciliation(row.shape_id)
         .map(|reconciliation| reconciliation.kind)
 }
 
@@ -52,7 +52,7 @@ pub(super) fn aggregate_row_is_resolved(
     rows: &[SourceShapeRegistryRow],
     excluded_stream_wrappers: &[&str],
 ) -> bool {
-    dae_outbound::source_shape_reconciliation(row.shape_id).is_some_and(|reconciliation| {
+    dae_outbound_core::source_shape_reconciliation(row.shape_id).is_some_and(|reconciliation| {
         reconciliation.kind == SourceShapeReconciliationKind::AggregateCapability
             && row_has_admitted_runtime_evidence(row)
             && aggregate_components_are_admitted(reconciliation, rows, excluded_stream_wrappers)

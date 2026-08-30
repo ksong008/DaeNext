@@ -1,12 +1,12 @@
 use super::*;
 pub(super) fn insert_outbound_production_matrix_service_contract_capabilities(report: &mut Value) {
-    let matrix = dae_outbound::outbound_production_matrix_contract();
-    let source_registry = dae_outbound::source_shape_registry_contract();
-    let stream_wrapper = dae_outbound::stream_wrapper_capability_contract();
-    let packet_semantics = dae_outbound::packet_semantics_capability_contract();
-    let extension_layer = dae_outbound::extension_layer_capability_contract();
-    let transport_option = dae_outbound::transport_option_capability_contract();
-    let live_boundary = dae_outbound::expanded_live_matrix_validation_boundary_contract();
+    let matrix = dae_outbound_core::outbound_production_matrix_contract();
+    let source_registry = dae_outbound_core::source_shape_registry_contract();
+    let stream_wrapper = dae_outbound_core::stream_wrapper_capability_contract();
+    let packet_semantics = dae_outbound_core::packet_semantics_capability_contract();
+    let extension_layer = dae_outbound_core::extension_layer_capability_contract();
+    let transport_option = dae_outbound_core::transport_option_capability_contract();
+    let live_boundary = dae_outbound_core::expanded_live_matrix_validation_boundary_contract();
     let entries = matrix
         .entries
         .iter()

@@ -1,4 +1,4 @@
-use dae_outbound::shared_transport::{
+use dae_outbound_stream::websocket::{
     HttpUpgradeOptions, http_upgrade_request, validate_http_status,
     validate_websocket_handshake_response, websocket_client_binary_frame_with_random_mask,
     websocket_client_handshake, websocket_client_mask_key,

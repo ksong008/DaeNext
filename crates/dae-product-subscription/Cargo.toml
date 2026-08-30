@@ -8,7 +8,8 @@ repository.workspace = true
 [dependencies]
 base64.workspace = true
 brotli.workspace = true
-dae-outbound.workspace = true
+dae-outbound-core.workspace = true
+dae-outbound-stream.workspace = true
 dae-product-core.workspace = true
 dae-product-persistence.workspace = true
 dae-tls.workspace = true

@@ -1,5 +1,5 @@
 use super::plan::{ResidentProxyGroupPlan, build_resident_dataplane_plan};
-use dae_outbound::NetworkType;
+use dae_outbound_core::NetworkType;
 
 pub struct ResidentTcpSelectionBenchmarkFixture {
     group: ResidentProxyGroupPlan,

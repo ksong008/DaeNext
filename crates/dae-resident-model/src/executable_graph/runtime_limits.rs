@@ -3,8 +3,8 @@ use super::*;
 pub(super) fn fingerprint_template_mode_label(
     fingerprint: &ResidentUtlsFingerprintPlan,
 ) -> &'static str {
-    dae_outbound::shared_transport::resolve_utls_template_mode(&fingerprint.name)
-        .map(dae_outbound::shared_transport::utls_template_mode_label)
+    dae_outbound_stream::shared_transport::resolve_utls_template_mode(&fingerprint.name)
+        .map(dae_outbound_stream::shared_transport::utls_template_mode_label)
         .unwrap_or("Unresolved")
 }
 

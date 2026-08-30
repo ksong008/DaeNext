@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::vless::VlessEncryptedStream;
+use dae_outbound_stream::vless::VlessEncryptedStream;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
@@ -826,7 +826,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use dae_outbound::shared_transport::websocket_accept_for_key;
+    use dae_outbound_stream::shared_transport::websocket_accept_for_key;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;

@@ -6,7 +6,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use bytes::Bytes;
-use dae_outbound::tuic::{
+use dae_outbound_quic::tuic::{
     TUIC_MAX_UDP_STREAM_FRAME_LEN, TuicAuthReport, TuicUdpPacket, TuicUdpRelayMode,
     authenticate_tuic_connection, build_tuic_dissociate_frame, build_tuic_heartbeat_frame,
     decode_tuic_udp_packet, decode_tuic_udp_stream_packet,
@@ -724,7 +724,7 @@ pub struct TuicSharedTransport {
     endpoint: ObservedQuicEndpoint,
     connection: quinn::Connection,
     auth_report: TuicAuthReport,
-    congestion: dae_outbound::tuic::TuicCongestionController,
+    congestion: dae_outbound_quic::tuic::TuicCongestionController,
     udp_relay_mode: TuicUdpRelayMode,
     leases: Arc<TuicLogicalLeaseAdmission>,
     udp_associations: Arc<TuicAssociationManager>,
@@ -754,7 +754,7 @@ impl TuicSharedTransport {
         &self.auth_report
     }
 
-    pub fn congestion(&self) -> dae_outbound::tuic::TuicCongestionController {
+    pub fn congestion(&self) -> dae_outbound_quic::tuic::TuicCongestionController {
         self.congestion
     }
 
@@ -809,7 +809,7 @@ impl TuicTransportLease {
         self.transport.auth_report()
     }
 
-    pub fn congestion(&self) -> dae_outbound::tuic::TuicCongestionController {
+    pub fn congestion(&self) -> dae_outbound_quic::tuic::TuicCongestionController {
         self.transport.congestion()
     }
 
@@ -1212,8 +1212,7 @@ async fn run_tuic_owner_registry(
     metrics: Arc<TuicOwnerRegistryMetrics>,
     stop: SharedResidentStopSignal,
 ) {
-    let session_cache =
-        Some(dae_outbound::shared_transport::boring_quic::new_boring_quic_session_cache());
+    let session_cache = Some(dae_outbound_quic::boring_quic::new_boring_quic_session_cache());
     let mut ownership_reconciler =
         TuicRegistryOwnershipReconciler::new(Arc::clone(&metrics), Arc::clone(&index));
     let mut tasks = JoinSet::new();
@@ -1520,7 +1519,7 @@ async fn run_tuic_control_writer(
     metrics: Arc<TuicOwnerRegistryMetrics>,
 ) {
     let heartbeat_interval =
-        std::time::Duration::from_secs(dae_outbound::tuic::DEFAULT_TUIC_KEEPALIVE_SECS);
+        std::time::Duration::from_secs(dae_outbound_quic::tuic::DEFAULT_TUIC_KEEPALIVE_SECS);
     let mut heartbeat = time::interval(heartbeat_interval);
     let mut consecutive_heartbeat_failures = 0_u32;
     heartbeat.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
@@ -1597,7 +1596,7 @@ async fn run_tuic_owner_build(
     command: TuicBuildCommand,
     resources: TuicOwnerResourceProfile,
     metrics: Arc<TuicOwnerRegistryMetrics>,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> TuicBuildCompletion {
     metrics.cumulative_builds.fetch_add(1, Ordering::Relaxed);
     let result = build_tuic_transport(
@@ -1665,7 +1664,7 @@ async fn build_tuic_transport(
     deadline: AbsoluteDeadline,
     metrics: Arc<TuicOwnerRegistryMetrics>,
     resources: TuicOwnerResourceProfile,
-    session_cache: Option<dae_outbound::shared_transport::boring_quic::BoringQuicSessionCache>,
+    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<(TuicSharedTransport, mpsc::Receiver<u16>), TuicOwnerBuildError> {
     let proxy = binding.plan();
     let ResidentProxyProtocolPlan::TuicQuicTcp {

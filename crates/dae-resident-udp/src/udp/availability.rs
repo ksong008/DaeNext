@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use dae_outbound::NetworkType;
+use dae_outbound_core::NetworkType;
 
 type ResidentDataUdpAvailabilityRecorder = dyn Fn(NetworkType, i64) + Send + Sync;
 

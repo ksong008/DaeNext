@@ -1,6 +1,7 @@
 use std::sync::{Arc, atomic::Ordering};
 
-use dae_outbound::{shared_transport::HttpUpgradeOptions, trojan::packet as trojan_packet};
+use dae_outbound_core::trojan::packet as trojan_packet;
+use dae_outbound_stream::shared_transport::HttpUpgradeOptions;
 use dae_resident_transport::{
     httpupgrade_handshake_over_resident_tls_async as native_httpupgrade_handshake_over_resident_tls_async,
     websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async,

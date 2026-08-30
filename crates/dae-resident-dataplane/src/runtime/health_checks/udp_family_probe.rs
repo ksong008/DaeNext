@@ -1,5 +1,5 @@
 use super::*;
-use dae_outbound::HealthState;
+use dae_outbound_core::HealthState;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResidentUdpFamilyProbeResult {
