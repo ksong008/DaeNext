@@ -7,7 +7,7 @@ pub struct ResidentDataplaneRuntime {
     pub(super) workload_shutdown: Option<ResidentRuntimeWorkloadShutdown>,
     pub(super) routing_tuple_map_id: Option<u32>,
     pub(super) domain_routing_map_id: Option<u32>,
-    pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingGenerationFence>,
+    pub(super) domain_routing_fence: Arc<dns::ResidentDomainRoutingMapOwner>,
 }
 
 impl std::fmt::Debug for ResidentDataplaneRuntime {

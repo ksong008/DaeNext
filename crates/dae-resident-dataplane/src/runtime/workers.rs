@@ -136,9 +136,9 @@ pub fn start_resident_dataplane_workers(
         }
     };
     let generation_gate = Arc::new(GenerationGate::default());
-    let domain_routing_fence = Arc::new(dns::ResidentDomainRoutingGenerationFence::with_gate(
-        Arc::clone(&generation_gate),
-    ));
+    let domain_routing_fence = Arc::new(dns::ResidentDomainRoutingMapOwner::with_gate(Arc::clone(
+        &generation_gate,
+    )));
     let built_generation =
         match build_resident_dataplane_generation(ResidentGenerationBuildContext {
             owner: &mut owner,

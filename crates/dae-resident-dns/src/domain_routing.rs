@@ -35,7 +35,7 @@ type ResidentDomainRoutingMapApply =
 pub struct ResidentDnsDomainRouting {
     map_id: u32,
     generation: GenerationToken,
-    fence: Arc<ResidentDomainRoutingGenerationFence>,
+    fence: Arc<ResidentDomainRoutingMapOwner>,
     routing_matcher: RoutingMatcher,
     state: Mutex<ResidentDnsDomainRoutingState>,
     maintenance: maintenance::ResidentDnsDomainRoutingMaintenanceSignal,
@@ -44,26 +44,26 @@ pub struct ResidentDnsDomainRouting {
 }
 
 #[derive(Debug, Default)]
-struct ResidentDomainRoutingGenerationFenceState {
+struct ResidentDomainRoutingMapState {
     map_id: Option<u32>,
     tracker: DomainRoutingTracker,
 }
 
 #[derive(Debug)]
-pub struct ResidentDomainRoutingGenerationFence {
-    inner: GenerationFence<ResidentDomainRoutingGenerationFenceState>,
+pub struct ResidentDomainRoutingMapOwner {
+    inner: GenerationFence<ResidentDomainRoutingMapState>,
 }
 
-impl Default for ResidentDomainRoutingGenerationFence {
+impl Default for ResidentDomainRoutingMapOwner {
     fn default() -> Self {
         Self::with_gate(Arc::new(GenerationGate::default()))
     }
 }
 
-impl ResidentDomainRoutingGenerationFence {
+impl ResidentDomainRoutingMapOwner {
     pub fn with_gate(gate: Arc<GenerationGate>) -> Self {
         Self {
-            inner: gate.resource(ResidentDomainRoutingGenerationFenceState::default()),
+            inner: gate.resource(ResidentDomainRoutingMapState::default()),
         }
     }
 
@@ -91,7 +91,7 @@ impl ResidentDnsDomainRouting {
     pub(crate) fn new(map_id: u32, routing_matcher: RoutingMatcher) -> Self {
         let generation =
             GenerationToken::new(PhysicalRuntimeId::new(0), LogicalGenerationId::new(0));
-        let fence = Arc::new(ResidentDomainRoutingGenerationFence::with_gate_and_map(
+        let fence = Arc::new(ResidentDomainRoutingMapOwner::with_gate_and_map(
             Arc::new(GenerationGate::new(Some(generation))),
             map_id,
         ));
@@ -102,7 +102,7 @@ impl ResidentDnsDomainRouting {
         map_id: u32,
         generation: GenerationToken,
         routing_matcher: RoutingMatcher,
-        fence: Arc<ResidentDomainRoutingGenerationFence>,
+        fence: Arc<ResidentDomainRoutingMapOwner>,
     ) -> Self {
         Self {
             map_id,
@@ -303,11 +303,11 @@ impl ResidentDnsDomainRouting {
     }
 }
 
-impl ResidentDomainRoutingGenerationFence {
+impl ResidentDomainRoutingMapOwner {
     #[cfg(test)]
     fn with_gate_and_map(gate: Arc<GenerationGate>, map_id: u32) -> Self {
         Self {
-            inner: gate.resource(ResidentDomainRoutingGenerationFenceState {
+            inner: gate.resource(ResidentDomainRoutingMapState {
                 map_id: Some(map_id),
                 tracker: DomainRoutingTracker::default(),
             }),

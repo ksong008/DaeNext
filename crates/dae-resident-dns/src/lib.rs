@@ -20,7 +20,7 @@ pub use cache::{
 pub use domain_routing::{
     ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
-    ResidentDomainRoutingGenerationFence,
+    ResidentDomainRoutingMapOwner,
 };
 pub use error_response::{build_dns_server_failure_response, build_reject_response};
 pub use geodata::ResidentDnsGeodata;

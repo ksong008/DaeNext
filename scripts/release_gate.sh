@@ -4,7 +4,7 @@ set -euo pipefail
 release_gate_profile="${DAENEXT_RELEASE_GATE_PROFILE:-production-performance}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 
-cargo_profile_args=(--profile "$release_gate_profile")
+cargo_profile_args=(--locked --profile "$release_gate_profile")
 
 run_step() {
   local name="$1"
@@ -24,6 +24,8 @@ run_step "format" cargo fmt --all -- --check
 run_step "repository text policy" scripts/check_no_emoji.sh
 run_step "architecture dependency policy" python3 scripts/architecture/check_dependencies.py
 run_step "architecture dependency checker tests" python3 scripts/architecture/test_check_dependencies.py
+run_step "generation fence ownership" python3 scripts/architecture/check_generation_fence.py
+run_step "generation fence ownership tests" python3 scripts/architecture/test_check_generation_fence.py
 run_step "large source boundary gate" python3 scripts/architecture/check_source_boundaries.py
 run_step "large source boundary checker tests" python3 scripts/architecture/test_check_source_boundaries.py
 run_step "product physical boundaries" python3 scripts/architecture/check_product_boundaries.py

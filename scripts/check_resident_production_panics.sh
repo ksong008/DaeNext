@@ -10,7 +10,7 @@ audit_file="${TMPDIR:-/tmp}/daenext-resident-production-panics.json"
 metadata_file="${TMPDIR:-/tmp}/daenext-resident-metadata.json"
 trap ': > "$audit_file"; : > "$metadata_file"' EXIT
 
-cargo metadata --no-deps --format-version 1 >"$metadata_file"
+cargo metadata --locked --no-deps --format-version 1 >"$metadata_file"
 mapfile -t packages < <(
   python3 - "$metadata_file" <<'PY'
 import json
