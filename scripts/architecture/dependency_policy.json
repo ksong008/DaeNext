@@ -4,6 +4,9 @@
   "layers": [
     "foundation",
     "platform",
+    "outbound-core",
+    "outbound-stream",
+    "outbound-quic",
     "resident-shared",
     "resident-domain",
     "resident-transport",
@@ -18,22 +21,51 @@
   "layer_dependencies": {
     "foundation": ["foundation"],
     "platform": ["foundation", "platform"],
-    "resident-shared": ["foundation", "platform", "resident-shared"],
+    "outbound-core": ["foundation", "platform", "outbound-core"],
+    "outbound-stream": [
+      "foundation",
+      "platform",
+      "outbound-core",
+      "outbound-stream"
+    ],
+    "outbound-quic": [
+      "foundation",
+      "platform",
+      "outbound-core",
+      "outbound-quic"
+    ],
+    "resident-shared": [
+      "foundation",
+      "platform",
+      "outbound-core",
+      "outbound-stream",
+      "outbound-quic",
+      "resident-shared"
+    ],
     "resident-domain": [
       "foundation",
       "platform",
+      "outbound-core",
+      "outbound-stream",
+      "outbound-quic",
       "resident-shared",
       "resident-transport"
     ],
     "resident-transport": [
       "foundation",
       "platform",
+      "outbound-core",
+      "outbound-stream",
+      "outbound-quic",
       "resident-shared",
       "resident-transport"
     ],
     "resident-coordinator": [
       "foundation",
       "platform",
+      "outbound-core",
+      "outbound-stream",
+      "outbound-quic",
       "resident-shared",
       "resident-transport",
       "resident-domain",
@@ -55,6 +87,9 @@
     "product-domain": [
       "foundation",
       "platform",
+      "outbound-core",
+      "outbound-stream",
+      "outbound-quic",
       "resident-shared",
       "resident-transport",
       "resident-domain",
@@ -79,6 +114,9 @@
     "product": [
       "foundation",
       "platform",
+      "outbound-core",
+      "outbound-stream",
+      "outbound-quic",
       "resident-shared",
       "resident-transport",
       "resident-domain",
@@ -93,6 +131,9 @@
   },
   "forbidden_same_layer": ["resident-domain", "product-domain"],
   "forbidden": {
+    "dae-outbound-core": ["dae-outbound", "dae-outbound-quic", "dae-outbound-stream"],
+    "dae-outbound-stream": ["dae-outbound-quic"],
+    "dae-outbound-quic": ["dae-outbound-stream"],
     "dae-resident-dns": ["dae-resident-tcp", "dae-resident-udp"],
     "dae-resident-tcp": ["dae-resident-dns", "dae-resident-udp"],
     "dae-resident-udp": ["dae-resident-dns", "dae-resident-tcp"]
@@ -137,7 +178,9 @@
         "dae-dns",
         "dae-ebpf-support",
         "dae-netutil",
-        "dae-outbound",
+        "dae-outbound-core",
+        "dae-outbound-quic",
+        "dae-outbound-stream",
         "dae-routing",
         "dae-runtime-control",
         "dae-sniffing"
@@ -174,7 +217,8 @@
         "dae-ebpf-support",
         "dae-geodata",
         "dae-netutil",
-        "dae-outbound",
+        "dae-outbound-core",
+        "dae-outbound-stream",
         "dae-product-control",
         "dae-resident-dataplane",
         "dae-routing",
@@ -247,9 +291,34 @@
     },
     "dae-outbound": {
       "layer": "resident-shared",
-      "normal": ["dae-core-types", "dae-netutil", "dae-tls"],
+      "normal": [
+        "dae-core-types",
+        "dae-netutil",
+        "dae-outbound-core",
+        "dae-outbound-quic",
+        "dae-outbound-stream",
+        "dae-tls"
+      ],
       "build": [],
-      "dev": ["dae-golden"]
+      "dev": ["dae-golden", "dae-outbound-quic"]
+    },
+    "dae-outbound-core": {
+      "layer": "outbound-core",
+      "normal": ["dae-core-types", "dae-netutil"],
+      "build": [],
+      "dev": []
+    },
+    "dae-outbound-quic": {
+      "layer": "outbound-quic",
+      "normal": ["dae-outbound-core", "dae-tls"],
+      "build": [],
+      "dev": []
+    },
+    "dae-outbound-stream": {
+      "layer": "outbound-stream",
+      "normal": ["dae-outbound-core", "dae-core-types", "dae-netutil"],
+      "build": [],
+      "dev": []
     },
     "dae-product-identity": {
       "layer": "foundation",
@@ -304,7 +373,13 @@
     },
     "dae-product-subscription": {
       "layer": "product-domain",
-      "normal": ["dae-outbound", "dae-product-core", "dae-product-persistence", "dae-tls"],
+      "normal": [
+        "dae-outbound-core",
+        "dae-outbound-stream",
+        "dae-product-core",
+        "dae-product-persistence",
+        "dae-tls"
+      ],
       "build": [],
       "dev": []
     },
@@ -323,7 +398,9 @@
         "dae-dns",
         "dae-ebpf-support",
         "dae-geodata",
-        "dae-outbound",
+        "dae-outbound-core",
+        "dae-outbound-quic",
+        "dae-outbound-stream",
         "dae-resident-core",
         "dae-resident-dns",
         "dae-resident-plan",
@@ -354,7 +431,8 @@
         "dae-config",
         "dae-datapath",
         "dae-dns",
-        "dae-outbound",
+        "dae-outbound-core",
+        "dae-outbound-quic",
         "dae-resident-core",
         "dae-resident-plan",
         "dae-resident-transport",
@@ -368,7 +446,9 @@
     "dae-resident-model": {
       "layer": "resident-shared",
       "normal": [
-        "dae-outbound",
+        "dae-outbound-core",
+        "dae-outbound-quic",
+        "dae-outbound-stream",
         "dae-resident-core",
         "dae-runtime-control"
       ],
@@ -393,7 +473,9 @@
         "dae-core-types",
         "dae-datapath",
         "dae-ebpf-support",
-        "dae-outbound",
+        "dae-outbound-core",
+        "dae-outbound-quic",
+        "dae-outbound-stream",
         "dae-resident-core",
         "dae-resident-plan",
         "dae-resident-transport",
@@ -410,7 +492,9 @@
       "normal": [
         "dae-datapath",
         "dae-dns",
-        "dae-outbound",
+        "dae-outbound-core",
+        "dae-outbound-quic",
+        "dae-outbound-stream",
         "dae-resident-core",
         "dae-resident-model",
         "dae-runtime-control"
@@ -424,7 +508,9 @@
         "dae-core-types",
         "dae-datapath",
         "dae-ebpf-support",
-        "dae-outbound",
+        "dae-outbound-core",
+        "dae-outbound-quic",
+        "dae-outbound-stream",
         "dae-resident-core",
         "dae-resident-plan",
         "dae-resident-transport",
