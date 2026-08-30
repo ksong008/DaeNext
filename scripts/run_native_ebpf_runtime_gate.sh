@@ -18,7 +18,8 @@ fi
 run_id="${RUN_ID:-$(date +%Y%m%d%H%M%S)-$$}"
 run_root="${RUN_ROOT:-/tmp/dae-daemon-native-ebpf-runtime-gate-${run_id}}"
 config_file="${CONFIG_FILE:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.dae}"
-rust_native_object="${RUST_NATIVE_OBJECT:-target/bpfel-unknown-none/release/libdae_ebpf_program.so}"
+cargo_target_dir="${CARGO_TARGET_DIR:-target}"
+rust_native_object="${RUST_NATIVE_OBJECT:-$cargo_target_dir/bpfel-unknown-none/release/libdae_ebpf_program.so}"
 cargo_log="${RUNTIME_GATE_LOG:-${CARGO_LOG:-/tmp/dae-native-ebpf-runtime-gate-${run_id}.log}}"
 cgroup_log="${CGROUP_LOG:-/tmp/dae-native-ebpf-cgroup-gate-${run_id}.log}"
 resource_log="${RUNTIME_RESOURCE_LOG:-/tmp/dae-native-ebpf-runtime-resources-${run_id}.env}"
@@ -167,7 +168,7 @@ if ! cargo build --manifest-path Cargo.toml \
   exit 1
 fi
 if ! run_with_resource_sample "$resource_log" timeout "$runtime_timeout" \
-  target/debug/daed-contract-runner run \
+  "$cargo_target_dir/debug/daed-contract-runner" run \
   --config "$config_file" \
   --root "$run_root" \
   --no-listener-smoke \

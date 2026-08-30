@@ -81,8 +81,14 @@ if [[ -n "$capture_pid" ]]; then
   rg -q "ICMP echo request" "$capture_root/untagged.pcap.txt"
 fi
 
-ip -n "$left_ns" link add link "$left_if" name "$left_vlan" type vlan id "$vlan_id"
-ip -n "$right_ns" link add link "$right_if" name "$right_vlan" type vlan id "$vlan_id"
+if ! ip -n "$left_ns" link add link "$left_if" name "$left_vlan" type vlan id "$vlan_id"; then
+  echo "failed to create left VLAN $vlan_id" >&2
+  exit 1
+fi
+if ! ip -n "$right_ns" link add link "$right_if" name "$right_vlan" type vlan id "$vlan_id"; then
+  echo "failed to create right VLAN $vlan_id" >&2
+  exit 1
+fi
 ip -n "$left_ns" address add "$left_vlan_v4" dev "$left_vlan"
 ip -n "$right_ns" address add "$right_vlan_v4" dev "$right_vlan"
 ip -n "$left_ns" link set "$left_vlan" up
