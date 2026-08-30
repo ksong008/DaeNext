@@ -1,20 +1,39 @@
-pub mod aead;
-pub mod cipher;
-pub mod contract;
-pub mod link;
-pub mod metadata;
-mod sip003_dataplane;
-mod sip003_tls_dataplane;
+pub mod aead {
+    pub use dae_outbound_stream::shadowsocks::aead::*;
+}
+pub use dae_outbound_core::shadowsocks::{cipher, contract, link, metadata};
+pub mod sip003_dataplane {
+    pub use dae_outbound_stream::shadowsocks::sip003_dataplane::*;
+}
+pub mod sip003_tls_dataplane {
+    pub use dae_outbound_stream::shadowsocks::sip003_tls_dataplane::*;
+}
 #[cfg(any(test, feature = "test-support"))]
 mod sip003_v2ray_plugin_dataplane;
-pub mod ss2022;
-mod ss2022_tcp_dataplane;
-mod ss2022_udp_dataplane;
-mod ssr_dataplane;
-pub mod ssr_link;
-mod ssr_stream;
+pub mod ss2022 {
+    pub use dae_outbound_stream::shadowsocks::ss2022::*;
+}
+pub mod ss2022_tcp_dataplane {
+    pub use dae_outbound_stream::shadowsocks::ss2022_tcp_dataplane::*;
+}
+pub mod ss2022_udp_dataplane {
+    pub use dae_outbound_stream::shadowsocks::ss2022_udp_dataplane::*;
+}
+pub mod ssr_dataplane {
+    pub use dae_outbound_stream::shadowsocks::ssr_dataplane::*;
+}
+pub mod ssr_link {
+    pub use dae_outbound_stream::shadowsocks::ssr_link::*;
+}
+pub mod ssr_stream {
+    pub use dae_outbound_stream::shadowsocks::ssr_stream::*;
+}
 
-pub use aead::{
+pub use dae_outbound_core::shadowsocks::metadata::{MetadataType, ShadowsocksMetadata};
+pub use dae_outbound_core::shadowsocks::{
+    CipherFamily, CipherInfo, ShadowsocksLink, Sip003, Sip003Opts, classify_cipher,
+};
+pub use dae_outbound_stream::shadowsocks::aead::{
     AeadCipherSpec, AeadStreamCodec, AeadStreamFrameReader, AeadTcpSalts,
     SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE, SHADOWSOCKS_AEAD_TCP_DOWNLOAD_BUFFER_SIZE,
     SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE, SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE,
@@ -24,28 +43,19 @@ pub use aead::{
     read_encrypted_chunk_from_async_stream, read_encrypted_chunk_from_stream,
     read_encrypted_chunk_in_place_from_async_stream, tcp_exchange, tcp_exchange_over_stream,
 };
-pub use cipher::{CipherFamily, CipherInfo, classify_cipher};
-pub use link::{ShadowsocksLink, Sip003, Sip003Opts};
-pub use metadata::{MetadataType, ShadowsocksMetadata};
-pub use sip003_dataplane::{
+pub use dae_outbound_stream::shadowsocks::sip003_dataplane::{
     Sip003SimpleObfsHttpExchangeReport, Sip003SimpleObfsHttpOptions, Sip003SimpleObfsHttpRequest,
     decode_simple_obfs_http_shadowsocks_request, encode_simple_obfs_http_shadowsocks_response,
     read_simple_obfs_http_request, simple_obfs_http_request_with_body,
     simple_obfs_http_shadowsocks_aead_exchange_over_stream,
 };
-pub use sip003_tls_dataplane::{
+pub use dae_outbound_stream::shadowsocks::sip003_tls_dataplane::{
     Sip003SimpleObfsTlsExchangeReport, Sip003SimpleObfsTlsOptions, Sip003SimpleObfsTlsRequest,
     decode_simple_obfs_tls_shadowsocks_request, encode_simple_obfs_tls_shadowsocks_response,
     read_simple_obfs_tls_client_hello, simple_obfs_tls_client_hello_with_body,
     simple_obfs_tls_shadowsocks_aead_exchange_over_stream,
 };
-#[cfg(any(test, feature = "test-support"))]
-pub use sip003_v2ray_plugin_dataplane::{
-    Sip003V2rayPluginExchangeReport, Sip003V2rayPluginOptions, Sip003V2rayPluginRequest,
-    encode_v2ray_plugin_muxed_shadowsocks_response, read_v2ray_plugin_muxed_shadowsocks_request,
-    v2ray_plugin_tls_ws_mux_shadowsocks_aead_exchange_over_stream,
-};
-pub use ss2022_tcp_dataplane::{
+pub use dae_outbound_stream::shadowsocks::ss2022_tcp_dataplane::{
     SS2022_TCP_RELAY_PAYLOAD_SIZE, SS2022_TCP_RELAY_UPLOAD_BUFFER_SIZE, Ss2022TcpClientRequest,
     Ss2022TcpClientStreamEncoder, Ss2022TcpExchangeReport, Ss2022TcpSalts,
     Ss2022TcpServerStreamDecoder, Ss2022TcpServerStreamStart,
@@ -63,7 +73,7 @@ pub use ss2022_tcp_dataplane::{
     tcp_multi_psk_exchange_over_stream as ss2022_tcp_multi_psk_exchange_over_stream,
     unix_timestamp_now as ss2022_tcp_unix_timestamp_now,
 };
-pub use ss2022_udp_dataplane::{
+pub use dae_outbound_stream::shadowsocks::ss2022_udp_dataplane::{
     Ss2022UdpCodec, Ss2022UdpDecodedPacket, Ss2022UdpEncodedPacket, Ss2022UdpReplayMetricsSnapshot,
     Ss2022UdpReplayPolicy, Ss2022UdpReplayTracker,
     decode_client_packet as decode_ss2022_udp_client_packet,
@@ -71,14 +81,20 @@ pub use ss2022_udp_dataplane::{
     encode_server_packet as encode_ss2022_udp_server_packet,
     unix_timestamp_now as ss2022_udp_unix_timestamp_now,
 };
-pub use ssr_dataplane::{
+pub use dae_outbound_stream::shadowsocks::ssr_dataplane::{
     ShadowsocksRThreeLayerExchangeReport, ShadowsocksRThreeLayerOptions,
     ShadowsocksRThreeLayerRequest, encode_shadowsocksr_http_simple_response,
     read_shadowsocksr_http_simple_request, shadowsocksr_three_layer_tcp_exchange_over_stream,
 };
-pub use ssr_link::ShadowsocksRLink;
-pub use ssr_stream::{
+pub use dae_outbound_stream::shadowsocks::ssr_link::ShadowsocksRLink;
+pub use dae_outbound_stream::shadowsocks::ssr_stream::{
     ShadowsocksRStreamCipherSpec, ShadowsocksRStreamDecoder, ShadowsocksRStreamEncoder,
     shadowsocksr_http_simple_origin_request, shadowsocksr_stream_cipher_specs,
     shadowsocksr_stream_cipher_supported,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use sip003_v2ray_plugin_dataplane::{
+    Sip003V2rayPluginExchangeReport, Sip003V2rayPluginOptions, Sip003V2rayPluginRequest,
+    encode_v2ray_plugin_muxed_shadowsocks_response, read_v2ray_plugin_muxed_shadowsocks_request,
+    v2ray_plugin_tls_ws_mux_shadowsocks_aead_exchange_over_stream,
 };

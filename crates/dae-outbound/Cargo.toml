@@ -7,10 +7,13 @@ repository.workspace = true
 
 [features]
 default = ["test-boringssl-quic"]
-test-support = []
+test-support = ["dae-outbound-quic/test-support", "dae-outbound-stream/test-support"]
 test-boringssl-quic = []
 
 [dependencies]
+dae-outbound-core.workspace = true
+dae-outbound-quic.workspace = true
+dae-outbound-stream.workspace = true
 dae-tls.workspace = true
 aes.workspace = true
 aes-gcm.workspace = true
@@ -49,3 +52,4 @@ x25519-dalek.workspace = true
 
 [dev-dependencies]
 dae-golden.workspace = true
+dae-outbound-quic = { workspace = true, features = ["test-support"] }

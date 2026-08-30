@@ -26,6 +26,9 @@ members = [
     "crates/dae-golden",
     "crates/dae-netutil",
     "crates/dae-outbound",
+    "crates/dae-outbound-core",
+    "crates/dae-outbound-quic",
+    "crates/dae-outbound-stream",
     "crates/dae-resident-core",
     "crates/dae-resident-dns",
     "crates/dae-resident-dataplane",
@@ -108,6 +111,9 @@ dae-geodata = { path = "crates/dae-geodata" }
 dae-golden = { path = "crates/dae-golden" }
 dae-netutil = { path = "crates/dae-netutil" }
 dae-outbound = { path = "crates/dae-outbound" }
+dae-outbound-core = { path = "crates/dae-outbound-core" }
+dae-outbound-quic = { path = "crates/dae-outbound-quic" }
+dae-outbound-stream = { path = "crates/dae-outbound-stream" }
 dae-resident-core = { path = "crates/dae-resident-core" }
 dae-resident-dns = { path = "crates/dae-resident-dns" }
 dae-resident-dataplane = { path = "crates/dae-resident-dataplane", default-features = false }
