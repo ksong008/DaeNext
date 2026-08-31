@@ -225,6 +225,24 @@ fn capacity_pressure_evicts_the_oldest_generation_and_keeps_publication_admitted
 }
 
 #[test]
+fn direct_retire_calls_remain_bounded_without_prepare_publication() {
+    let drain = test_drain(Duration::from_secs(60), 1);
+    let now = Instant::now();
+    let (first, first_stop_requests) = TestGeneration::new(1);
+    let (second, second_stop_requests) = TestGeneration::new(2);
+
+    drain.retire_shared_at(first, now);
+    drain.retire_shared_at(second, now + Duration::from_secs(1));
+
+    assert_eq!(first_stop_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(second_stop_requests.load(Ordering::Relaxed), 0);
+    let snapshot = drain.snapshot();
+    assert_eq!(snapshot["retired"], 1);
+    assert_eq!(snapshot["maximumRetired"], 1);
+    assert_eq!(snapshot["pressureEvictedTotal"], 1);
+}
+
+#[test]
 fn committed_publication_keeps_owned_retired_generation_draining() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();

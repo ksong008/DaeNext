@@ -3,6 +3,89 @@ use super::*;
 static CONTROL_FILE_WRITE_SEQUENCE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
 const CONTROL_FILE_CREATE_ATTEMPTS: usize = 32;
+
+enum ResidentWorkerCommand {
+    Reload,
+    Shutdown,
+}
+
+struct ResidentReloadWorker {
+    command: std::sync::mpsc::SyncSender<ResidentWorkerCommand>,
+    stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    failure: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ResidentReloadWorker {
+    fn spawn(options: ResidentRunOptions, mut state: ResidentServiceState) -> Result<Self, String> {
+        let (command, receiver) = std::sync::mpsc::sync_channel(1);
+        let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failure = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let worker_stopping = std::sync::Arc::clone(&stopping);
+        let worker_failure = std::sync::Arc::clone(&failure);
+        let join = std::thread::Builder::new()
+            .name("dae-resident-reload".to_owned())
+            .spawn(move || {
+                while let Ok(command) = receiver.recv() {
+                    if worker_stopping.load(std::sync::atomic::Ordering::Acquire)
+                        || matches!(command, ResidentWorkerCommand::Shutdown)
+                    {
+                        break;
+                    }
+                    if let Err(err) = handle_reload_until(&options, &mut state, || {
+                        worker_stopping.load(std::sync::atomic::Ordering::Acquire)
+                    }) {
+                        *worker_failure
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(err);
+                        worker_stopping.store(true, std::sync::atomic::Ordering::Release);
+                        unsafe {
+                            libc::kill(libc::getpid(), libc::SIGTERM);
+                        }
+                        break;
+                    }
+                }
+            })
+            .map_err(|err| format!("failed to start resident reload worker: {err}"))?;
+        Ok(Self {
+            command,
+            stopping,
+            failure,
+            join: Some(join),
+        })
+    }
+
+    fn request_reload(&self) -> Result<(), String> {
+        match self.command.try_send(ResidentWorkerCommand::Reload) {
+            Ok(()) | Err(std::sync::mpsc::TrySendError::Full(_)) => Ok(()),
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => Err(self
+                .failure_message()
+                .unwrap_or_else(|| "resident reload worker stopped unexpectedly".to_owned())),
+        }
+    }
+
+    fn shutdown(mut self) -> Result<(), String> {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::Release);
+        let _ = self.command.try_send(ResidentWorkerCommand::Shutdown);
+        if let Some(join) = self.join.take() {
+            join.join()
+                .map_err(|_| "resident reload worker panicked".to_owned())?;
+        }
+        match self.failure_message() {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
+
+    fn failure_message(&self) -> Option<String> {
+        self.failure
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
 pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> {
     if options.disable_sudo && unsafe { libc::geteuid() } != 0 {
         return Err("auto-sudo is disabled and current user is not root".to_owned());
@@ -15,13 +98,14 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
             .map_err(|err| format!("waiting for network before subscriptions failed: {err}"))?;
     }
     let geodata_asset_dirs = resident_config_geodata_asset_dirs(&options.config);
-    let mut state = ResidentServiceState {
+    let state = ResidentServiceState {
         runtime: Some(start_resident_production_runtime_with_asset_dirs(
             &runtime_config,
             geodata_asset_dirs.clone(),
         )?),
         config: runtime_config,
     };
+    let worker = ResidentReloadWorker::spawn(options.clone(), state)?;
 
     let started = (|| {
         if !options.disable_pidfile {
@@ -36,7 +120,7 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
         Ok::<(), String>(())
     })();
     if let Err(err) = started {
-        state.runtime.take();
+        let _ = worker.shutdown();
         if !options.disable_pidfile {
             let _ = fs::remove_file(&options.pid_file);
         }
@@ -46,17 +130,17 @@ pub fn run_resident_service(options: &ResidentRunOptions) -> Result<(), String> 
     loop {
         let signal = wait_service_signal()?;
         match signal {
-            libc::SIGUSR1 => handle_reload(options, &mut state)?,
+            libc::SIGUSR1 => worker.request_reload()?,
             libc::SIGUSR2 => handle_suspend_compatibility(options)?,
             libc::SIGHUP => continue,
             libc::SIGTERM | libc::SIGINT | libc::SIGQUIT => {
                 let _ = notify_systemd("STOPPING=1");
                 let _ = log_event(options, "service stopping");
-                state.runtime.take();
+                let shutdown = worker.shutdown();
                 if !options.disable_pidfile {
                     let _ = fs::remove_file(&options.pid_file);
                 }
-                return Ok(());
+                return shutdown;
             }
             _ => continue,
         }
@@ -76,9 +160,12 @@ pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String
         }
         None => read_pid_file(&options.pid_file)?,
     };
-    if options.abort_connections {
-        write_text_file(&options.abort_file, "", 0o644)?;
-    }
+    let Some(_claim) = try_acquire_reload_claim(&options.progress_file)? else {
+        return Ok(format!(
+            "{} shows another reload operation is in progress.\n",
+            options.progress_file.display()
+        ));
+    };
     if let Ok((code, _)) = read_progress(&options.progress_file)
         && code != RELOAD_DONE
         && code != RELOAD_ERROR
@@ -88,6 +175,9 @@ pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String
             options.progress_file.display()
         ));
     }
+    if options.abort_connections {
+        write_text_file(&options.abort_file, "", 0o644)?;
+    }
     write_progress(&options.progress_file, RELOAD_SEND, "")?;
     let status = unsafe { libc::kill(pid, libc::SIGUSR1) };
     if status != 0 {
@@ -95,6 +185,58 @@ pub fn reload_resident_service(options: &ReloadOptions) -> Result<String, String
     }
 
     wait_for_reload_progress(&options.progress_file, options.timeout)
+}
+
+struct ReloadClaim {
+    file: fs::File,
+}
+
+impl Drop for ReloadClaim {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN);
+        }
+    }
+}
+
+fn try_acquire_reload_claim(progress_file: &Path) -> Result<Option<ReloadClaim>, String> {
+    use std::os::fd::AsRawFd;
+
+    let mut lock_name = progress_file.as_os_str().to_os_string();
+    lock_name.push(".lock");
+    let lock_path = PathBuf::from(lock_name);
+    let parent = lock_path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|err| {
+        format!(
+            "failed to create reload lock dir {}: {err}",
+            parent.display()
+        )
+    })?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+    }
+    let file = options
+        .open(&lock_path)
+        .map_err(|err| format!("failed to open reload lock {}: {err}", lock_path.display()))?;
+    let status = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if status == 0 {
+        return Ok(Some(ReloadClaim { file }));
+    }
+    let error = io::Error::last_os_error();
+    if error
+        .raw_os_error()
+        .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+    {
+        return Ok(None);
+    }
+    Err(format!(
+        "failed to lock reload transaction {}: {error}",
+        lock_path.display()
+    ))
 }
 
 fn wait_for_reload_progress(
@@ -129,9 +271,10 @@ fn wait_for_reload_progress(
     }
 }
 
-pub(super) fn handle_reload(
+fn handle_reload_until(
     options: &ResidentRunOptions,
     state: &mut ResidentServiceState,
+    cancelled: impl Fn() -> bool,
 ) -> Result<(), String> {
     notify_systemd("RELOADING=1")?;
     write_progress(&options.progress_file, RELOAD_PROCESSING, "")?;
@@ -139,7 +282,7 @@ pub(super) fn handle_reload(
     match load_config_file(&options.config) {
         Ok(runtime_config) => {
             if !runtime_config.global.disable_waiting_network
-                && let Err(err) = wait_for_network_before_subscriptions()
+                && let Err(err) = wait_for_network_before_subscriptions_until(&cancelled)
             {
                 write_progress(
                     &options.progress_file,
@@ -147,13 +290,25 @@ pub(super) fn handle_reload(
                     &format!("\nwaiting for network before reload failed: {err}"),
                 )?;
                 log_event(options, "reload failed while waiting for network")?;
-                notify_systemd("READY=1")?;
+                if !cancelled() {
+                    notify_systemd("READY=1")?;
+                }
+                return Ok(());
+            }
+            if cancelled() {
+                write_progress(
+                    &options.progress_file,
+                    RELOAD_ERROR,
+                    "\nreload cancelled by service shutdown",
+                )?;
                 return Ok(());
             }
             if let Err(err) = validate_resident_runtime_reload_config(&runtime_config) {
                 write_progress(&options.progress_file, RELOAD_ERROR, &format!("\n{err}"))?;
                 log_event(options, "reload failed")?;
-                notify_systemd("READY=1")?;
+                if !cancelled() {
+                    notify_systemd("READY=1")?;
+                }
                 return Ok(());
             }
             if let Err(err) = swap_runtime_with_restore(
@@ -169,7 +324,9 @@ pub(super) fn handle_reload(
             ) {
                 write_progress(&options.progress_file, RELOAD_ERROR, &format!("\n{err}"))?;
                 log_event(options, "reload failed")?;
-                notify_systemd("READY=1")?;
+                if !cancelled() {
+                    notify_systemd("READY=1")?;
+                }
                 if state.runtime.is_none() {
                     return Err(err);
                 }
@@ -183,7 +340,11 @@ pub(super) fn handle_reload(
             log_event(options, "reload failed")?;
         }
     }
-    notify_systemd("READY=1")
+    if cancelled() {
+        Ok(())
+    } else {
+        notify_systemd("READY=1")
+    }
 }
 
 pub(super) fn resident_config_geodata_asset_dirs(config_path: &Path) -> Vec<PathBuf> {
@@ -463,11 +624,15 @@ pub(super) fn wait_service_signal() -> Result<i32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::wait_for_reload_progress;
+    use super::{
+        ResidentReloadWorker, ResidentWorkerCommand, try_acquire_reload_claim,
+        wait_for_reload_progress,
+    };
     use dae_core_types::reload::{RELOAD_DONE, RELOAD_ERROR, RELOAD_PROCESSING};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -496,6 +661,42 @@ mod tests {
         assert!(err.contains("reload progress timed out"), "err: {err}");
         assert!(err.contains("failed to read"), "err: {err}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reload_claim_serializes_the_full_progress_transaction() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        let progress_file = root.join("progress");
+        let first = try_acquire_reload_claim(&progress_file)
+            .unwrap()
+            .expect("first reload must acquire the claim");
+        assert!(try_acquire_reload_claim(&progress_file).unwrap().is_none());
+        drop(first);
+        assert!(try_acquire_reload_claim(&progress_file).unwrap().is_some());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resident_reload_worker_coalesces_to_one_pending_request() {
+        let (command, receiver) = mpsc::sync_channel(1);
+        let worker = ResidentReloadWorker {
+            command,
+            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            failure: Arc::new(Mutex::new(None)),
+            join: None,
+        };
+
+        worker.request_reload().unwrap();
+        worker.request_reload().unwrap();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ResidentWorkerCommand::Reload)
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]

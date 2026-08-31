@@ -2,23 +2,42 @@ use super::*;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError};
 
 const LOCAL_CONTROL_DIR_MODE: u32 = 0o700;
 const LOCAL_CONTROL_SOCKET_MODE: u32 = 0o600;
 const LOCAL_CONTROL_MAX_REQUEST_BYTES: u64 = 16 * 1024;
 const LOCAL_CONTROL_SERVER_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const LOCAL_CONTROL_SERVER_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCAL_CONTROL_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const LOCAL_CONTROL_RELOAD_QUEUE_CAPACITY: usize = 1;
+
+struct LocalControlReloadBusyReset(Arc<AtomicBool>);
+
+impl Drop for LocalControlReloadBusyReset {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 pub(in crate::daed_product) struct ProductLocalControlRuntime {
     socket_path: PathBuf,
-    join: Option<thread::JoinHandle<()>>,
+    accept_join: Option<thread::JoinHandle<()>>,
+    reload_sender: Option<SyncSender<UnixStream>>,
+    reload_join: Option<thread::JoinHandle<()>>,
 }
 
 impl ProductLocalControlRuntime {
     pub(in crate::daed_product) fn shutdown(mut self) -> io::Result<()> {
-        if let Some(join) = self.join.take() {
+        if let Some(join) = self.accept_join.take() {
             join.join()
                 .map_err(|_| io::Error::other("local control thread panicked"))?;
+        }
+        self.reload_sender.take();
+        if let Some(join) = self.reload_join.take() {
+            join.join()
+                .map_err(|_| io::Error::other("local control reload thread panicked"))?;
         }
         remove_owned_local_control_socket(&self.socket_path)
     }
@@ -26,7 +45,11 @@ impl ProductLocalControlRuntime {
 
 impl Drop for ProductLocalControlRuntime {
     fn drop(&mut self) {
-        if let Some(join) = self.join.take() {
+        if let Some(join) = self.accept_join.take() {
+            let _ = join.join();
+        }
+        self.reload_sender.take();
+        if let Some(join) = self.reload_join.take() {
             let _ = join.join();
         }
         let _ = remove_owned_local_control_socket(&self.socket_path);
@@ -39,13 +62,34 @@ pub(in crate::daed_product) fn spawn_local_control_socket(
     let listener = bind_local_control_socket(&app.control_socket)?;
     listener.set_nonblocking(true)?;
     let socket_path = app.control_socket.clone();
-    let join = thread::Builder::new()
+    let (reload_sender, reload_receiver) =
+        std::sync::mpsc::sync_channel(LOCAL_CONTROL_RELOAD_QUEUE_CAPACITY);
+    let reload_busy = Arc::new(AtomicBool::new(false));
+    let reload_app = Arc::clone(&app);
+    let worker_reload_busy = Arc::clone(&reload_busy);
+    let reload_join = thread::Builder::new()
+        .name("daed-control-reload".to_owned())
+        .stack_size(PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT)
+        .spawn(move || {
+            while let Ok(mut stream) = reload_receiver.recv() {
+                let _busy_reset = LocalControlReloadBusyReset(Arc::clone(&worker_reload_busy));
+                let response = handle_local_control_reload(&reload_app);
+                let _ = write_local_control_response(&mut stream, response);
+            }
+        })?;
+    let accept_reload_sender = reload_sender.clone();
+    let accept_reload_busy = Arc::clone(&reload_busy);
+    let accept_join = thread::Builder::new()
         .name("daed-control".to_owned())
         .stack_size(PRODUCT_HTTP_LOW_MEMORY_WORKER_STACK_BYTES_DEFAULT)
-        .spawn(move || local_control_accept_loop(listener, app))?;
+        .spawn(move || {
+            local_control_accept_loop(listener, app, accept_reload_sender, accept_reload_busy)
+        })?;
     Ok(ProductLocalControlRuntime {
         socket_path,
-        join: Some(join),
+        accept_join: Some(accept_join),
+        reload_sender: Some(reload_sender),
+        reload_join: Some(reload_join),
     })
 }
 
@@ -94,15 +138,19 @@ fn remove_owned_local_control_socket(path: &Path) -> io::Result<()> {
     }
 }
 
-fn local_control_accept_loop(listener: UnixListener, app: Arc<AppState>) {
+fn local_control_accept_loop(
+    listener: UnixListener,
+    app: Arc<AppState>,
+    reload_sender: SyncSender<UnixStream>,
+    reload_busy: Arc<AtomicBool>,
+) {
     while !app.shutdown.is_requested() {
         match listener.accept() {
-            Ok((mut stream, _)) => {
+            Ok((stream, _)) => {
                 if app.shutdown.is_requested() {
                     break;
                 }
-                let response = handle_local_control_stream(&app, &mut stream);
-                let _ = write_local_control_response(&mut stream, response);
+                dispatch_local_control_stream(&app, stream, &reload_sender, &reload_busy);
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                 app.shutdown
@@ -114,14 +162,64 @@ fn local_control_accept_loop(listener: UnixListener, app: Arc<AppState>) {
     }
 }
 
-fn handle_local_control_stream(app: &AppState, stream: &mut UnixStream) -> Value {
-    if let Err(err) = ensure_local_control_peer_is_root(stream) {
-        return json!({"ok": false, "error": err.to_string()});
+fn dispatch_local_control_stream(
+    app: &AppState,
+    mut stream: UnixStream,
+    reload_sender: &SyncSender<UnixStream>,
+    reload_busy: &AtomicBool,
+) {
+    if let Err(err) = ensure_local_control_peer_is_root(&stream) {
+        let _ = write_local_control_response(
+            &mut stream,
+            json!({"ok": false, "error": err.to_string()}),
+        );
+        return;
     }
-    let request = match read_local_control_request(stream) {
+    let request = match read_local_control_request(&mut stream) {
         Ok(request) => request,
-        Err(err) => return json!({"ok": false, "error": err.to_string()}),
+        Err(err) => {
+            let _ = write_local_control_response(
+                &mut stream,
+                json!({"ok": false, "error": err.to_string()}),
+            );
+            return;
+        }
     };
+    if request.get("op").and_then(Value::as_str) == Some(LOCAL_CONTROL_OP_RELOAD) {
+        if reload_busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            let _ = write_local_control_response(
+                &mut stream,
+                json!({"ok": false, "error": "another local-control reload is in progress"}),
+            );
+            return;
+        }
+        match reload_sender.try_send(stream) {
+            Ok(()) => {}
+            Err(TrySendError::Full(mut stream)) => {
+                reload_busy.store(false, Ordering::Release);
+                let _ = write_local_control_response(
+                    &mut stream,
+                    json!({"ok": false, "error": "another local-control reload is queued"}),
+                );
+            }
+            Err(TrySendError::Disconnected(mut stream)) => {
+                reload_busy.store(false, Ordering::Release);
+                let _ = write_local_control_response(
+                    &mut stream,
+                    json!({"ok": false, "error": "local-control reload worker is unavailable"}),
+                );
+            }
+        }
+        return;
+    }
+    let response = handle_local_control_request(app, &request);
+    let _ = write_local_control_response(&mut stream, response);
+}
+
+fn handle_local_control_request(app: &AppState, request: &Value) -> Value {
     match request.get("op").and_then(Value::as_str) {
         Some(LOCAL_CONTROL_OP_STATUS) => handle_local_control_status(app),
         Some(LOCAL_CONTROL_OP_RELOAD) => handle_local_control_reload(app),
@@ -241,6 +339,7 @@ fn read_local_control_request(stream: &mut UnixStream) -> io::Result<Value> {
 }
 
 fn write_local_control_response(stream: &mut UnixStream, response: Value) -> io::Result<()> {
+    stream.set_write_timeout(Some(LOCAL_CONTROL_SERVER_WRITE_TIMEOUT))?;
     let bytes = bounded_local_control_response_bytes(response)?;
     stream.write_all(&bytes)?;
     stream.flush()
@@ -292,6 +391,24 @@ fn local_control_peer_uid(stream: &UnixStream) -> io::Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_control_reload_busy_gate_rejects_concurrent_work() {
+        let busy = AtomicBool::new(false);
+        assert!(
+            busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        );
+        assert!(
+            busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        );
+        busy.store(false, Ordering::Release);
+        assert!(
+            busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        );
+    }
 
     #[test]
     fn local_control_reload_uses_live_runtime_state() {

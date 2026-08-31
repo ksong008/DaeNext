@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::io;
 
 #[cfg(any(feature = "allocator-jemalloc", test))]
@@ -9,6 +10,10 @@ pub(crate) const JEMALLOC_BUILD_CONF_SOURCE: &str = ".cargo/config.toml";
 pub(crate) const JEMALLOC_RUNTIME_DEFAULT_SOURCE: &str = "startup-bootstrap";
 pub(crate) const JEMALLOC_BUILD_FALLBACK: &str = "background_thread:true,max_background_threads:1,dirty_decay_ms:5000,muzzy_decay_ms:5000,percpu_arena:disabled,narenas:2";
 pub(crate) const JEMALLOC_AUTOMATIC_ARENA_MAX: usize = 2;
+
+pub fn allocator_bootstrap_required_for_command(command: Option<&OsStr>) -> bool {
+    command == Some(OsStr::new("run"))
+}
 
 #[cfg(any(feature = "allocator-jemalloc", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,6 +164,22 @@ fn ensure_allocator_startup_configuration_impl() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allocator_bootstrap_is_reserved_for_the_long_running_server() {
+        assert!(allocator_bootstrap_required_for_command(Some(OsStr::new(
+            "run"
+        ))));
+        for command in [
+            None,
+            Some(OsStr::new("version")),
+            Some(OsStr::new("reload")),
+            Some(OsStr::new("latency-probe-helper")),
+            Some(OsStr::new("bpf-loader")),
+        ] {
+            assert!(!allocator_bootstrap_required_for_command(command));
+        }
+    }
 
     #[test]
     fn automatic_arena_count_tracks_effective_parallelism_with_a_small_cap() {

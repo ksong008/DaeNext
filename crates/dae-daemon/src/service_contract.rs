@@ -102,6 +102,12 @@ pub(crate) fn resolve_probe_addresses_bounded(host: &str, port: u16) -> Vec<std:
 }
 
 pub(crate) fn wait_for_network_before_subscriptions() -> Result<(), String> {
+    wait_for_network_before_subscriptions_until(|| false)
+}
+
+pub(crate) fn wait_for_network_before_subscriptions_until(
+    cancelled: impl Fn() -> bool,
+) -> Result<(), String> {
     // A probe that already succeeded for this process is authoritative:
     // re-probing here would only wedge the signal thread again while the
     // daemon already runs on a network that was reachable.
@@ -120,8 +126,14 @@ pub(crate) fn wait_for_network_before_subscriptions() -> Result<(), String> {
         .unwrap_or(60);
     let mut attempts = 0_u32;
     loop {
+        if cancelled() {
+            return Err("network readiness wait cancelled".to_owned());
+        }
         attempts = attempts.saturating_add(1);
         for link in NETWORK_WAIT_LINKS {
+            if cancelled() {
+                return Err("network readiness wait cancelled".to_owned());
+            }
             let Ok(url) = url::Url::parse(link) else {
                 continue;
             };
@@ -131,6 +143,9 @@ pub(crate) fn wait_for_network_before_subscriptions() -> Result<(), String> {
             let port = url.port_or_known_default().unwrap_or(80);
             let addresses = resolve_probe_addresses_bounded(host, port);
             for address in addresses {
+                if cancelled() {
+                    return Err("network readiness wait cancelled".to_owned());
+                }
                 let Ok(mut stream) = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) else {
                     continue;
                 };
@@ -167,7 +182,17 @@ pub(crate) fn wait_for_network_before_subscriptions() -> Result<(), String> {
                 "network did not become ready after {attempts} probe attempts (max_attempts={max_attempts})"
             ));
         }
-        thread::sleep(RETRY_DELAY);
+        let retry_deadline = Instant::now() + RETRY_DELAY;
+        while Instant::now() < retry_deadline {
+            if cancelled() {
+                return Err("network readiness wait cancelled".to_owned());
+            }
+            thread::sleep(
+                retry_deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(100)),
+            );
+        }
     }
 }
 #[cfg(test)]

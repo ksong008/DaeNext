@@ -29,7 +29,9 @@ mod version;
 #[cfg(test)]
 mod tests;
 
-pub use allocator_bootstrap::ensure_allocator_startup_configuration;
+pub use allocator_bootstrap::{
+    allocator_bootstrap_required_for_command, ensure_allocator_startup_configuration,
+};
 pub use control_plane::{
     ControlPlaneOwnerPaths, control_plane_owner_preflight_report,
     default_control_plane_owner_preflight_root, run_control_plane_owner_preflight,

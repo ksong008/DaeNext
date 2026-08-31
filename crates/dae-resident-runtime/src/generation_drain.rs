@@ -390,12 +390,7 @@ impl ResidentGenerationDrain {
             if state.retired.len() < self.policy.maximum_retired {
                 return Ok(());
             }
-            let mut retired = state.retired.remove(0);
-            retired.stop_reason = Some(ResidentGenerationStopReason::ResourcePressure);
-            let target = retired.force_stop_target();
-            state.pressure_forced_total = state.pressure_forced_total.saturating_add(1);
-            state.pressure_evicted_total = state.pressure_evicted_total.saturating_add(1);
-            (target, retired)
+            pressure_evict_oldest(&mut state)
         };
         pressure_eviction.0.request_force_stop();
         drop(pressure_eviction.1);
@@ -413,12 +408,13 @@ impl ResidentGenerationDrain {
         let deadline = retired_at
             .checked_add(self.policy.maximum_age)
             .unwrap_or(retired_at);
-        {
+        let pressure_eviction = {
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            debug_assert!(state.retired.len() < self.policy.maximum_retired);
+            let pressure_eviction = (state.retired.len() >= self.policy.maximum_retired)
+                .then(|| pressure_evict_oldest(&mut state));
             debug_assert!(
                 state
                     .retired
@@ -433,6 +429,12 @@ impl ResidentGenerationDrain {
                 deadline,
                 stop_reason: None,
             });
+            pressure_eviction
+        };
+        if let Some((target, retired)) = pressure_eviction {
+            target.request_force_stop();
+            drop(retired);
+            self.hooks.request_reclaim();
         }
         self.wake.notify_one();
     }
@@ -497,6 +499,17 @@ impl ResidentGenerationDrain {
             self.hooks.request_reclaim();
         }
     }
+}
+
+fn pressure_evict_oldest(
+    state: &mut ResidentGenerationDrainState,
+) -> (ResidentGenerationStopTarget, RetiredResidentGeneration) {
+    let mut retired = state.retired.remove(0);
+    retired.stop_reason = Some(ResidentGenerationStopReason::ResourcePressure);
+    let target = retired.force_stop_target();
+    state.pressure_forced_total = state.pressure_forced_total.saturating_add(1);
+    state.pressure_evicted_total = state.pressure_evicted_total.saturating_add(1);
+    (target, retired)
 }
 
 #[cfg(test)]

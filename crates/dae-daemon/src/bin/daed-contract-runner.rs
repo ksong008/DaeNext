@@ -4,7 +4,10 @@ use std::io::{self, Write};
 mod allocator;
 
 fn main() {
-    if let Err(err) = dae_daemon::ensure_allocator_startup_configuration() {
+    let command = std::env::args_os().nth(1);
+    if dae_daemon::allocator_bootstrap_required_for_command(command.as_deref())
+        && let Err(err) = dae_daemon::ensure_allocator_startup_configuration()
+    {
         let _ = writeln!(
             io::stderr(),
             "daed-contract-runner: failed to apply allocator startup configuration: {err}"
