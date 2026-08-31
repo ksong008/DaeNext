@@ -52,7 +52,11 @@ pub(super) fn send_fd_handoff(socket_fd: i32, payload: &[u8], fds: &[i32]) -> Re
             libc::CMSG_DATA(cmsg).cast::<u8>(),
             rights_bytes,
         );
-        let sent = libc::sendmsg(socket_fd, &msg, 0);
+        #[cfg(target_os = "linux")]
+        let send_flags = libc::MSG_NOSIGNAL;
+        #[cfg(not(target_os = "linux"))]
+        let send_flags = 0;
+        let sent = libc::sendmsg(socket_fd, &msg, send_flags);
         if sent < 0 {
             return Err(format!(
                 "sendmsg failed: {}",
