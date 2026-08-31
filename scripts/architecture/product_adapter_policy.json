@@ -112,7 +112,7 @@
     "http_server.rs": 550,
     "latency": 1750,
     "latency.rs": 60,
-    "local_control.rs": 430,
+    "local_control.rs": 500,
     "logs": 3100,
     "logs.rs": 30,
     "nodes_subscriptions_groups": 1700,
@@ -135,5 +135,5 @@
     "service_metadata.rs": 400,
     "sse_runtime": 1400
   },
-  "total_production_line_limit": 19300
+  "total_production_line_limit": 19400
 }
