@@ -36,7 +36,12 @@ fn outbound_production_matrix_contract_covers_current_native_handlers() {
     for entry in contract.entries {
         assert!(entry.parser_export_metadata, "{}", entry.handler);
         assert!(entry.tcp_dataplane, "{}", entry.handler);
-        assert!(entry.udp_dataplane, "{}", entry.handler);
+        assert_eq!(
+            entry.udp_dataplane,
+            entry.handler != "http-proxy",
+            "{}",
+            entry.handler
+        );
         assert!(entry.transport_underlay, "{}", entry.handler);
         assert!(entry.route_group_connectivity, "{}", entry.handler);
         assert!(entry.reload_behavior, "{}", entry.handler);
@@ -45,6 +50,22 @@ fn outbound_production_matrix_contract_covers_current_native_handlers() {
         assert!(!entry.evidence.is_empty(), "{}", entry.handler);
         assert!(!entry.source_shape_ids.is_empty(), "{}", entry.handler);
     }
+}
+
+#[test]
+fn outbound_production_matrix_dataplane_flags_are_registry_backed() {
+    let entries = production_matrix_entries();
+    let rows = source_shape_registry_rows();
+    assert!(production_matrix_dataplane_declarations_match_registry(
+        entries, rows
+    ));
+
+    let mut falsified = entries[0];
+    falsified.udp_dataplane = !falsified.udp_dataplane;
+    assert!(!production_matrix_dataplane_declarations_match_registry(
+        &[falsified],
+        rows
+    ));
 }
 
 #[test]

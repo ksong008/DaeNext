@@ -323,6 +323,7 @@ pub struct VlessEncryptedStream<S> {
     vision_raw_read_handoff_active: bool,
     vision_raw_write_handoff_requested: bool,
     vision_raw_write_handoff_active: bool,
+    used_cached_ticket_identity: Option<[u8; 32]>,
     client: VlessEncryptionClient,
 }
 
@@ -353,6 +354,7 @@ where
                 .clone()
                 .filter(|ticket| ticket.expires_at > Instant::now());
             if let Some(ticket) = ticket {
+                let ticket_identity = cached_ticket_identity(&ticket);
                 united_key.extend_from_slice(&ticket.pfs_key);
                 united_key.extend_from_slice(&nfs_key);
                 let mut prefix = Vec::with_capacity(iv_and_relays_len + 50);
@@ -387,6 +389,7 @@ where
                     vision_raw_read_handoff_active: false,
                     vision_raw_write_handoff_requested: false,
                     vision_raw_write_handoff_active: false,
+                    used_cached_ticket_identity: Some(ticket_identity),
                     client,
                 });
             }
@@ -552,6 +555,7 @@ where
             vision_raw_read_handoff_active: false,
             vision_raw_write_handoff_requested: false,
             vision_raw_write_handoff_active: false,
+            used_cached_ticket_identity: None,
             client,
         })
     }
@@ -632,15 +636,32 @@ where
         Ok(())
     }
 
-    fn evict_ticket(&self) {
+    fn evict_used_ticket(&self) -> bool {
+        let Some(expected_identity) = self.used_cached_ticket_identity else {
+            return false;
+        };
         if let Ok(mut guard) = self.client.ticket.lock() {
             // Xray treats an invalid 0-RTT response as a stale or replayed
             // ticket and forces the next connection through a full handshake.
             // Keeping a still-in-TTL ticket after an invalid record would
             // make every subsequent request reuse the same bad state.
-            *guard = None;
+            if guard
+                .as_ref()
+                .is_some_and(|ticket| cached_ticket_identity(ticket) == expected_identity)
+            {
+                guard.take();
+                return true;
+            }
         }
+        false
     }
+}
+
+fn cached_ticket_identity(ticket: &VlessEncryptionTicket) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&ticket.pfs_key);
+    hasher.update(&ticket.ticket);
+    *hasher.finalize().as_bytes()
 }
 
 impl<S> AsyncRead for VlessEncryptedStream<S>
@@ -792,10 +813,12 @@ where
                             let length = u16::from_be_bytes([buffer[3], buffer[4]]) as usize;
                             if buffer[..3] != [23, 3, 3] || !(17..=MAX_RECORD_LEN).contains(&length)
                             {
-                                self.evict_ticket();
-                                return Poll::Ready(Err(io_other(
-                                    "VLESS Encryption record header invalid; ticket evicted",
-                                )));
+                                let ticket_evicted = self.evict_used_ticket();
+                                return Poll::Ready(Err(io_other(if ticket_evicted {
+                                    "VLESS Encryption record header invalid; cached ticket evicted"
+                                } else {
+                                    "VLESS Encryption record header invalid"
+                                })));
                             }
                             let mut body = std::mem::take(&mut self.read_plain);
                             body.clear();
@@ -1118,6 +1141,7 @@ mod tests {
             vision_raw_read_handoff_active: false,
             vision_raw_write_handoff_requested: false,
             vision_raw_write_handoff_active: false,
+            used_cached_ticket_identity: None,
             client,
         }
     }
@@ -1202,8 +1226,8 @@ mod tests {
     }
 
     #[test]
-    fn invalid_record_evicts_a_still_live_zero_rtt_ticket() {
-        let stream = test_stream(ChunkedIo::new(Vec::new(), 8), ReadState::Eof);
+    fn invalid_record_evicts_only_a_ticket_consumed_by_this_stream() {
+        let mut stream = test_stream(ChunkedIo::new(Vec::new(), 8), ReadState::Eof);
         *stream
             .client
             .ticket
@@ -1213,7 +1237,26 @@ mod tests {
             pfs_key: [0x44; 64],
             ticket: [0x55; 16],
         });
-        stream.evict_ticket();
+        assert!(!stream.evict_used_ticket());
+        assert!(
+            stream
+                .client
+                .ticket
+                .lock()
+                .expect("ticket mutex must be available")
+                .is_some()
+        );
+        let consumed_identity = cached_ticket_identity(
+            stream
+                .client
+                .ticket
+                .lock()
+                .expect("ticket mutex must be available")
+                .as_ref()
+                .expect("ticket must be present"),
+        );
+        stream.used_cached_ticket_identity = Some(consumed_identity);
+        assert!(stream.evict_used_ticket());
         assert!(
             stream
                 .client
@@ -1221,6 +1264,36 @@ mod tests {
                 .lock()
                 .expect("ticket mutex must be available")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn invalid_record_does_not_evict_a_newer_shared_ticket() {
+        let mut stream = test_stream(ChunkedIo::new(Vec::new(), 8), ReadState::Eof);
+        let consumed = VlessEncryptionTicket {
+            expires_at: Instant::now() + Duration::from_secs(30),
+            pfs_key: [0x44; 64],
+            ticket: [0x55; 16],
+        };
+        stream.used_cached_ticket_identity = Some(cached_ticket_identity(&consumed));
+        *stream
+            .client
+            .ticket
+            .lock()
+            .expect("ticket mutex must be available") = Some(VlessEncryptionTicket {
+            expires_at: Instant::now() + Duration::from_secs(30),
+            pfs_key: [0x66; 64],
+            ticket: [0x77; 16],
+        });
+
+        assert!(!stream.evict_used_ticket());
+        assert!(
+            stream
+                .client
+                .ticket
+                .lock()
+                .expect("ticket mutex must be available")
+                .is_some()
         );
     }
 

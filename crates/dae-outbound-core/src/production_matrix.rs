@@ -1,7 +1,8 @@
 use crate::source_shape_registry::{
-    SourceShapeReconciliationKind, SourceShapeRegistryRow, source_shape_reconciliation,
-    source_shape_registry_rows,
+    RuntimeRouteAdmission, SourceShapeReconciliationKind, SourceShapeRegistryRow,
+    source_shape_reconciliation, source_shape_registry_rows,
 };
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OutboundProductionMatrixEntry {
@@ -38,9 +39,10 @@ pub fn outbound_production_matrix_contract() -> OutboundProductionMatrixContract
     let source_registry_backed_ready =
         production_matrix_entries_are_source_registry_backed(entries, source_shape_registry_rows());
     let parser_export_metadata_ready = entries.iter().all(|entry| entry.parser_export_metadata);
-    let tcp_udp_dataplane_ready = entries
-        .iter()
-        .all(|entry| entry.tcp_dataplane && entry.udp_dataplane);
+    let tcp_udp_dataplane_ready = production_matrix_dataplane_declarations_match_registry(
+        entries,
+        source_shape_registry_rows(),
+    );
     let transport_underlay_ready = entries.iter().all(|entry| entry.transport_underlay);
     let route_group_connectivity_ready = entries.iter().all(|entry| entry.route_group_connectivity);
     let reload_behavior_ready = entries.iter().all(|entry| entry.reload_behavior);
@@ -73,7 +75,24 @@ pub fn outbound_production_matrix_contract() -> OutboundProductionMatrixContract
 }
 
 pub fn production_matrix_entries() -> &'static [OutboundProductionMatrixEntry] {
-    &PRODUCTION_MATRIX_ENTRIES
+    static ENTRIES: OnceLock<Box<[OutboundProductionMatrixEntry]>> = OnceLock::new();
+    ENTRIES.get_or_init(|| {
+        PRODUCTION_MATRIX_TEMPLATES
+            .iter()
+            .map(|template| matrix_entry_from_registry(*template, source_shape_registry_rows()))
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    })
+}
+
+pub fn production_matrix_dataplane_declarations_match_registry(
+    entries: &[OutboundProductionMatrixEntry],
+    rows: &[SourceShapeRegistryRow],
+) -> bool {
+    entries.iter().all(|entry| {
+        let (tcp_dataplane, udp_dataplane) = registry_dataplane_capabilities(entry, rows);
+        entry.tcp_dataplane == tcp_dataplane && entry.udp_dataplane == udp_dataplane
+    })
 }
 
 pub fn production_matrix_entries_are_source_registry_backed(
@@ -99,8 +118,15 @@ pub fn production_matrix_entries_are_source_registry_backed(
     })
 }
 
-const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
-    matrix_entry(
+#[derive(Clone, Copy)]
+struct OutboundProductionMatrixTemplate {
+    handler: &'static str,
+    source_shape_ids: &'static [&'static str],
+    evidence: &'static [&'static str],
+}
+
+const PRODUCTION_MATRIX_TEMPLATES: [OutboundProductionMatrixTemplate; 10] = [
+    matrix_template(
         "shadowsocks",
         &[
             "baseline-aead-cipher-endpoint",
@@ -116,7 +142,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_shadowsocks_ss2022_and_legacy",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "trojan",
         &[
             "baseline-tls-auth-endpoint",
@@ -131,7 +157,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_trojan_tls_and_websocket",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "vmess",
         &[
             "baseline-aead-framed-endpoint",
@@ -150,7 +176,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_vless_vmess_stream_wrappers",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "vless",
         &[
             "vless-native-tcp-endpoint",
@@ -174,7 +200,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_vless_vmess_stream_wrappers",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "hysteria2",
         &["baseline-quic-auth-endpoint", "quic-port-hopping-surface"],
         &[
@@ -184,7 +210,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_hysteria2_quic",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "tuic",
         &[
             "baseline-quic-uuid-endpoint",
@@ -197,7 +223,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_tuic_quic",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "juicity",
         &["baseline-quic-password-endpoint"],
         &[
@@ -207,7 +233,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_juicity_quic",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "anytls",
         &[
             "baseline-frame-stream-endpoint",
@@ -219,7 +245,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_anytls_frame_stream",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "http-proxy",
         &[
             "baseline-connect-endpoint",
@@ -234,7 +260,7 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
             "tests::dataplane_http_connect",
         ],
     ),
-    matrix_entry(
+    matrix_template(
         "socks5",
         &["baseline-socks-endpoint", "nested-chain-shape"],
         &[
@@ -246,22 +272,74 @@ const PRODUCTION_MATRIX_ENTRIES: [OutboundProductionMatrixEntry; 10] = [
     ),
 ];
 
-const fn matrix_entry(
+const fn matrix_template(
     handler: &'static str,
     source_shape_ids: &'static [&'static str],
     evidence: &'static [&'static str],
-) -> OutboundProductionMatrixEntry {
-    OutboundProductionMatrixEntry {
+) -> OutboundProductionMatrixTemplate {
+    OutboundProductionMatrixTemplate {
         handler,
         source_shape_ids,
-        parser_export_metadata: true,
-        tcp_dataplane: true,
-        udp_dataplane: true,
-        transport_underlay: true,
-        route_group_connectivity: true,
-        reload_behavior: true,
-        live_smoke: true,
-        native_executor_ready: true,
         evidence,
     }
+}
+
+fn matrix_entry_from_registry(
+    template: OutboundProductionMatrixTemplate,
+    rows: &[SourceShapeRegistryRow],
+) -> OutboundProductionMatrixEntry {
+    let selected = template
+        .source_shape_ids
+        .iter()
+        .filter_map(|shape_id| rows.iter().find(|row| row.shape_id == *shape_id))
+        .collect::<Vec<_>>();
+    let complete = selected.len() == template.source_shape_ids.len() && !selected.is_empty();
+    let all = |predicate: fn(&SourceShapeRegistryRow) -> bool| {
+        complete && selected.iter().copied().all(predicate)
+    };
+    let (tcp_dataplane, udp_dataplane) = registry_dataplane_capabilities_for_rows(&selected);
+    OutboundProductionMatrixEntry {
+        handler: template.handler,
+        source_shape_ids: template.source_shape_ids,
+        parser_export_metadata: all(|row| row.parser_coverage == "covered"),
+        tcp_dataplane,
+        udp_dataplane,
+        transport_underlay: all(|row| row.executor_proof.underlay_factory == "proved"),
+        route_group_connectivity: all(|row| {
+            row.runtime_selection.selected_runtime_scope == "current-selected-resident-graph"
+                && row.runtime_ownership.data_tcp.admission == RuntimeRouteAdmission::Admitted
+        }),
+        reload_behavior: all(|row| row.executor_proof.reload_lifecycle == "proved"),
+        live_smoke: all(|row| {
+            source_shape_reconciliation(row.shape_id).is_some_and(|reconciliation| {
+                reconciliation.kind == SourceShapeReconciliationKind::ProductionWitness
+            })
+        }),
+        native_executor_ready: all(|row| row.executor_proof.proof_state == "runtime-executable"),
+        evidence: template.evidence,
+    }
+}
+
+fn registry_dataplane_capabilities(
+    entry: &OutboundProductionMatrixEntry,
+    rows: &[SourceShapeRegistryRow],
+) -> (bool, bool) {
+    let selected = entry
+        .source_shape_ids
+        .iter()
+        .filter_map(|shape_id| rows.iter().find(|row| row.shape_id == *shape_id))
+        .collect::<Vec<_>>();
+    registry_dataplane_capabilities_for_rows(&selected)
+}
+
+fn registry_dataplane_capabilities_for_rows(rows: &[&SourceShapeRegistryRow]) -> (bool, bool) {
+    let admitted = |route: crate::source_shape_registry::RuntimeOwnerRoute| {
+        route.admission == RuntimeRouteAdmission::Admitted
+    };
+    (
+        rows.iter()
+            .any(|row| admitted(row.runtime_ownership.data_tcp)),
+        rows.iter()
+            .any(|row| admitted(row.runtime_ownership.data_udp)),
+    )
 }
