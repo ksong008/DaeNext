@@ -22,12 +22,12 @@ impl ValidChars {
 }
 
 #[derive(Clone, Debug)]
-pub struct Trie {
+pub struct PrefixSet {
     keys: Vec<String>,
     valid_chars: ValidChars,
 }
 
-impl Trie {
+impl PrefixSet {
     pub fn new(
         keys: impl IntoIterator<Item = impl Into<String>>,
         valid_chars: ValidChars,
@@ -70,7 +70,7 @@ mod tests {
             .unwrap()
             .iter()
             .map(|value| value.as_str().unwrap().to_owned());
-        let trie = Trie::new(
+        let trie = PrefixSet::new(
             keys,
             ValidChars::new(b"0123456789abcdefghijklmnopqrstuvwxyz-.^_"),
         )
