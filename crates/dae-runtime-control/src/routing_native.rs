@@ -1,10 +1,13 @@
 use std::fmt;
 use std::mem::size_of;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 
 use dae_core_types::OutboundIndex;
 use dae_ebpf_support::{
-    BpfLpmKey, BpfMatchSet, LpmMapBuildSpec, LpmMapEntry, MAX_MATCH_SET_LEN, RoutingMapEntry,
+    BpfLpmKey, BpfMatchSet, LpmMapBuildSpec, LpmMapEntry, MATCH_TYPE_DOMAIN_SET, MATCH_TYPE_DSCP,
+    MATCH_TYPE_FALLBACK, MATCH_TYPE_IP_SET, MATCH_TYPE_IP_VERSION, MATCH_TYPE_L4_PROTO,
+    MATCH_TYPE_MAC, MATCH_TYPE_PORT, MATCH_TYPE_PROCESS_NAME, MATCH_TYPE_SOURCE_IP_SET,
+    MATCH_TYPE_SOURCE_PORT, MAX_MATCH_SET_LEN, RoutingMapEntry,
 };
 use dae_routing::IpPrefix;
 
@@ -12,17 +15,6 @@ pub const MAX_LPM_ARRAY_ENTRIES: usize = MAX_MATCH_SET_LEN + 8;
 pub const DEFAULT_LPM_MAX_ENTRIES: u32 = 2_048_000;
 pub const BPF_F_NO_PREALLOC: u32 = 1;
 
-const MATCH_TYPE_DOMAIN_SET: u8 = 0;
-const MATCH_TYPE_IP_SET: u8 = 1;
-const MATCH_TYPE_SOURCE_IP_SET: u8 = 2;
-const MATCH_TYPE_PORT: u8 = 3;
-const MATCH_TYPE_SOURCE_PORT: u8 = 4;
-const MATCH_TYPE_L4_PROTO: u8 = 5;
-const MATCH_TYPE_IP_VERSION: u8 = 6;
-const MATCH_TYPE_MAC: u8 = 7;
-const MATCH_TYPE_PROCESS_NAME: u8 = 8;
-const MATCH_TYPE_DSCP: u8 = 9;
-const MATCH_TYPE_FALLBACK: u8 = 10;
 const LPM_HIT_VALUE: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +170,50 @@ impl RoutingNativeBuildPlan {
                     max: MAX_LPM_ARRAY_ENTRIES,
                 });
             }
+            if spec.key_size != size_of::<BpfLpmKey>() as u32 {
+                return Err(RoutingNativePlanError::InvalidLpmSpec {
+                    index: spec.index,
+                    field: "key_size",
+                    got: u64::from(spec.key_size),
+                    want: size_of::<BpfLpmKey>() as u64,
+                });
+            }
+            if spec.value_size != size_of::<u32>() as u32 {
+                return Err(RoutingNativePlanError::InvalidLpmSpec {
+                    index: spec.index,
+                    field: "value_size",
+                    got: u64::from(spec.value_size),
+                    want: size_of::<u32>() as u64,
+                });
+            }
+            if spec.max_entries == 0 {
+                return Err(RoutingNativePlanError::InvalidLpmSpec {
+                    index: spec.index,
+                    field: "max_entries",
+                    got: 0,
+                    want: 1,
+                });
+            }
+            if spec.entries.len() > spec.max_entries as usize {
+                return Err(RoutingNativePlanError::InvalidLpmSpec {
+                    index: spec.index,
+                    field: "entries",
+                    got: spec.entries.len() as u64,
+                    want: u64::from(spec.max_entries),
+                });
+            }
+            if let Some(entry) = spec
+                .entries
+                .iter()
+                .find(|entry| entry.key.prefix_len > dae_ebpf_support::BPF_LPM_FULL_PREFIX_BITS)
+            {
+                return Err(RoutingNativePlanError::InvalidLpmSpec {
+                    index: spec.index,
+                    field: "prefix_len",
+                    got: u64::from(entry.key.prefix_len),
+                    want: u64::from(dae_ebpf_support::BPF_LPM_FULL_PREFIX_BITS),
+                });
+            }
         }
         Ok(())
     }
@@ -236,6 +272,12 @@ pub enum RoutingNativePlanError {
         got: u32,
         want: u32,
     },
+    InvalidLpmSpec {
+        index: u32,
+        field: &'static str,
+        got: u64,
+        want: u64,
+    },
     LpmArrayOverflow {
         got: usize,
         max: usize,
@@ -259,6 +301,15 @@ impl fmt::Display for RoutingNativePlanError {
             Self::InvalidLpmTemplate { field, got, want } => {
                 write!(f, "invalid LPM template {field}: got {got}, want {want}")
             }
+            Self::InvalidLpmSpec {
+                index,
+                field,
+                got,
+                want,
+            } => write!(
+                f,
+                "invalid LPM spec {index} {field}: got {got}, want {want}"
+            ),
             Self::LpmArrayOverflow { got, max } => {
                 write!(f, "routing native LPM array overflow: {got} > {max}")
             }
@@ -338,17 +389,8 @@ fn lpm_rule_count(rules: &[RoutingNativeRule]) -> usize {
 
 pub fn ip_prefix_to_bpf_lpm_key(prefix: &IpPrefix) -> BpfLpmKey {
     match prefix.addr() {
-        IpAddr::V4(addr) => {
-            let mapped = addr.to_ipv6_mapped();
-            BpfLpmKey {
-                prefix_len: u32::from(prefix.bits()) + 96,
-                data: ipv6_to_native_words(mapped),
-            }
-        }
-        IpAddr::V6(addr) => BpfLpmKey {
-            prefix_len: u32::from(prefix.bits()),
-            data: ipv6_to_native_words(addr),
-        },
+        IpAddr::V4(addr) => BpfLpmKey::from_ipv4_mapped(prefix.bits(), addr.octets()),
+        IpAddr::V6(addr) => BpfLpmKey::from_ipv6(prefix.bits(), addr.octets()),
     }
 }
 
@@ -522,22 +564,7 @@ fn lpm_spec(index: u32, template: LpmMapTemplate, entries: Vec<LpmMapEntry>) -> 
 }
 
 fn mac_to_bpf_lpm_key(mac: [u8; 6]) -> BpfLpmKey {
-    let mut octets = [0_u8; 16];
-    octets[10..].copy_from_slice(&mac);
-    BpfLpmKey {
-        prefix_len: 128,
-        data: ipv6_to_native_words(Ipv6Addr::from(octets)),
-    }
-}
-
-fn ipv6_to_native_words(addr: Ipv6Addr) -> [u32; 4] {
-    let octets = addr.octets();
-    [
-        u32::from_ne_bytes([octets[0], octets[1], octets[2], octets[3]]),
-        u32::from_ne_bytes([octets[4], octets[5], octets[6], octets[7]]),
-        u32::from_ne_bytes([octets[8], octets[9], octets[10], octets[11]]),
-        u32::from_ne_bytes([octets[12], octets[13], octets[14], octets[15]]),
-    ]
+    BpfLpmKey::from_mac(mac)
 }
 
 #[cfg(test)]
@@ -661,6 +688,40 @@ mod tests {
             lpm_maps: vec![],
         };
         assert_ne!(plan_a.checksum(), plan_b.checksum());
+    }
+
+    #[test]
+    fn plan_validation_rejects_invalid_lpm_entry_contract() {
+        let mut plan = RoutingNativeBuildPlan {
+            routing_entries: vec![routing_entry(0, MATCH_TYPE_FALLBACK, 1, 0, 0, 0, [0; 16])],
+            lpm_maps: vec![LpmMapBuildSpec {
+                index: 0,
+                flags: 1,
+                max_entries: 1,
+                key_size: size_of::<BpfLpmKey>() as u32,
+                value_size: size_of::<u32>() as u32,
+                entries: vec![lpm_entry(129, 1, [0; 4])],
+            }],
+        };
+        let error = plan.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            RoutingNativePlanError::InvalidLpmSpec {
+                field: "prefix_len",
+                ..
+            }
+        ));
+
+        plan.lpm_maps[0].entries[0] = lpm_entry(128, 1, [0; 4]);
+        plan.lpm_maps[0].entries.push(lpm_entry(128, 1, [0; 4]));
+        let error = plan.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            RoutingNativePlanError::InvalidLpmSpec {
+                field: "entries",
+                ..
+            }
+        ));
     }
 
     #[test]

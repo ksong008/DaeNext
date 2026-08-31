@@ -3,7 +3,7 @@ use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use crate::{
-    BpfDomainRouting, BpfLpmKey, BpfMatchSet, RuntimeMapUpdateDiffReport,
+    BPF_LPM_FULL_PREFIX_BITS, BpfDomainRouting, BpfLpmKey, BpfMatchSet, RuntimeMapUpdateDiffReport,
     apply_runtime_map_update_diff, delete_map_elem_bytes, lookup_map_elem_bytes, open_map_fd,
     update_map_elem_bytes,
 };
@@ -275,6 +275,30 @@ fn create_lpm_trie_map(spec: &LpmMapBuildSpec) -> io::Result<OwnedFd> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("bad LPM max entries for index {}: got 0", spec.index),
+        ));
+    }
+    if spec.entries.len() > spec.max_entries as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "too many LPM entries for index {}: got {}, max {}",
+                spec.index,
+                spec.entries.len(),
+                spec.max_entries
+            ),
+        ));
+    }
+    if let Some(entry) = spec
+        .entries
+        .iter()
+        .find(|entry| entry.key.prefix_len > BPF_LPM_FULL_PREFIX_BITS)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "bad LPM prefix length for index {}: got {}, max {}",
+                spec.index, entry.key.prefix_len, BPF_LPM_FULL_PREFIX_BITS
+            ),
         ));
     }
 
