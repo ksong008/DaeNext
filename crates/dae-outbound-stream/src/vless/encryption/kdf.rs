@@ -1,13 +1,15 @@
+use blake3::hazmat::HasherExt;
+
 const OUT_LEN: usize = 32;
 const BLOCK_LEN: usize = 64;
 const CHUNK_LEN: usize = 1024;
+const MAX_CV_STACK_DEPTH: usize = usize::BITS as usize;
 
 const CHUNK_START: u32 = 1 << 0;
 const CHUNK_END: u32 = 1 << 1;
 const PARENT: u32 = 1 << 2;
 const ROOT: u32 = 1 << 3;
 const DERIVE_KEY_CONTEXT: u32 = 1 << 5;
-const DERIVE_KEY_MATERIAL: u32 = 1 << 6;
 
 const IV: [u32; 8] = [
     0x6A09_E667,
@@ -56,14 +58,18 @@ impl Output {
 }
 
 pub(super) fn derive_key_bytes(context: &[u8], key_material: &[u8]) -> [u8; OUT_LEN] {
-    let context_key = hash_with_mode(context, IV, DERIVE_KEY_CONTEXT);
-    let context_words = bytes_to_cv(&context_key);
-    hash_with_mode(key_material, context_words, DERIVE_KEY_MATERIAL)
+    let context_key = hash_raw_derive_key_context(context);
+    let mut hasher = blake3::Hasher::new_from_context_key(&context_key);
+    hasher.update(key_material);
+    *hasher.finalize().as_bytes()
 }
 
-fn hash_with_mode(input: &[u8], key: [u32; 8], flags: u32) -> [u8; OUT_LEN] {
+fn hash_raw_derive_key_context(input: &[u8]) -> [u8; OUT_LEN] {
+    let key = IV;
+    let flags = DERIVE_KEY_CONTEXT;
     let chunk_count = input.len().div_ceil(CHUNK_LEN).max(1);
-    let mut cv_stack = Vec::<[u32; 8]>::new();
+    let mut cv_stack = [[0_u32; 8]; MAX_CV_STACK_DEPTH];
+    let mut cv_stack_len = 0_usize;
     let mut final_output = None;
 
     for chunk_index in 0..chunk_count {
@@ -82,15 +88,21 @@ fn hash_with_mode(input: &[u8], key: [u32; 8], flags: u32) -> [u8; OUT_LEN] {
         let mut cv = output.chaining_value();
         let mut total_chunks = chunk_index + 1;
         while total_chunks & 1 == 0 {
-            let left = cv_stack.pop().expect("balanced BLAKE3 CV stack");
+            cv_stack_len = cv_stack_len
+                .checked_sub(1)
+                .expect("balanced BLAKE3 CV stack");
+            let left = cv_stack[cv_stack_len];
             cv = parent_output(left, cv, key, flags).chaining_value();
             total_chunks >>= 1;
         }
-        cv_stack.push(cv);
+        cv_stack[cv_stack_len] = cv;
+        cv_stack_len += 1;
     }
 
     let mut output = final_output.expect("BLAKE3 always has a final chunk");
-    while let Some(left) = cv_stack.pop() {
+    while cv_stack_len != 0 {
+        cv_stack_len -= 1;
+        let left = cv_stack[cv_stack_len];
         output = parent_output(left, output.chaining_value(), key, flags);
     }
     output.root_hash()
@@ -215,14 +227,6 @@ fn bytes_to_block_words(bytes: &[u8]) -> [u32; 16] {
     words
 }
 
-fn bytes_to_cv(bytes: &[u8; OUT_LEN]) -> [u32; 8] {
-    let mut words = [0_u32; 8];
-    for (word, chunk) in words.iter_mut().zip(bytes.chunks_exact(4)) {
-        *word = u32::from_le_bytes(chunk.try_into().expect("four-byte BLAKE3 CV word"));
-    }
-    words
-}
-
 fn words_to_bytes(words: &[u32]) -> [u8; OUT_LEN] {
     let mut output = [0_u8; OUT_LEN];
     for (chunk, word) in output.chunks_exact_mut(4).zip(words.iter().copied()) {
@@ -247,5 +251,24 @@ mod tests {
                 blake3::derive_key(std::str::from_utf8(context).unwrap(), material)
             );
         }
+    }
+
+    #[test]
+    fn binary_context_is_stable_and_not_lossily_reencoded() {
+        let context = [0xff, 0x00, 0x80, b'V', b'L', b'E', b'S', b'S'];
+        let material = [0x5a; 64];
+        let derived = derive_key_bytes(&context, &material);
+        assert_eq!(
+            derived,
+            [
+                0x4b, 0x2d, 0x28, 0xa8, 0x53, 0xdc, 0x82, 0x7c, 0x74, 0x6c, 0xae, 0xb9, 0x2b, 0x9f,
+                0x67, 0x34, 0x5c, 0xa5, 0xaa, 0x8f, 0xf6, 0xd0, 0x21, 0x83, 0xf3, 0x29, 0xa2, 0x0a,
+                0xdc, 0x3f, 0x9a, 0xb0,
+            ]
+        );
+        assert_ne!(
+            derived,
+            blake3::derive_key(&String::from_utf8_lossy(&context), &material)
+        );
     }
 }

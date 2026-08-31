@@ -29,11 +29,12 @@ const QUIC_INITIAL_IV_LEN: usize = 12;
 
 pub(crate) fn sniff_quic_initial_sni(chunks: &[&[u8]]) -> Result<String, SniffingError> {
     let mut crypto = BTreeMap::<u64, Vec<u8>>::new();
+    let mut initial_states = BTreeMap::<Vec<u8>, QuicInitialState>::new();
     let mut saw_quic = false;
     let mut needs_more = false;
 
     for chunk in chunks {
-        match extract_quic_initial_crypto(chunk, &mut crypto) {
+        match extract_quic_initial_crypto(chunk, &mut crypto, &mut initial_states) {
             Ok(found) => saw_quic |= found,
             Err(SniffingError::NeedMore) => needs_more = true,
             Err(SniffingError::NotApplicable | SniffingError::NotFound) => {}
@@ -62,11 +63,12 @@ pub(crate) fn sniff_quic_initial_sni(chunks: &[&[u8]]) -> Result<String, Sniffin
 fn extract_quic_initial_crypto(
     datagram: &[u8],
     crypto: &mut BTreeMap<u64, Vec<u8>>,
+    initial_states: &mut BTreeMap<Vec<u8>, QuicInitialState>,
 ) -> Result<bool, SniffingError> {
     let mut offset = 0_usize;
     let mut found = false;
     while offset < datagram.len() {
-        match decrypt_quic_initial_packet(&datagram[offset..]) {
+        match decrypt_quic_initial_packet(&datagram[offset..], initial_states) {
             Ok(packet) => {
                 found = true;
                 extract_crypto_frames(&packet.plaintext, crypto)?;
@@ -84,7 +86,10 @@ struct DecryptedInitialPacket {
     plaintext: Vec<u8>,
 }
 
-fn decrypt_quic_initial_packet(packet: &[u8]) -> Result<DecryptedInitialPacket, SniffingError> {
+fn decrypt_quic_initial_packet(
+    packet: &[u8],
+    initial_states: &mut BTreeMap<Vec<u8>, QuicInitialState>,
+) -> Result<DecryptedInitialPacket, SniffingError> {
     if packet.len() < 7 {
         return Err(SniffingError::NeedMore);
     }
@@ -122,7 +127,14 @@ fn decrypt_quic_initial_packet(packet: &[u8]) -> Result<DecryptedInitialPacket, 
         return Err(SniffingError::NeedMore);
     }
 
-    let keys = initial_keys(dcid)?;
+    let state = match initial_states.entry(dcid.to_vec()) {
+        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::btree_map::Entry::Vacant(entry) => entry.insert(QuicInitialState {
+            keys: initial_keys(dcid)?,
+            largest_authenticated_packet_number: None,
+        }),
+    };
+    let keys = &state.keys;
     let sample = &packet[pn_offset + 4..pn_offset + 4 + QUIC_HP_SAMPLE_LEN];
     let mask = header_protection_mask(&keys.hp, sample)?;
     let unprotected_first = first ^ (mask[0] & QUIC_LONG_HEADER_HP_MASK);
@@ -130,13 +142,18 @@ fn decrypt_quic_initial_packet(packet: &[u8]) -> Result<DecryptedInitialPacket, 
     if pn_len > packet_len || pn_offset + pn_len > packet_end {
         return Err(SniffingError::NotApplicable);
     }
-    let mut packet_number = 0_u64;
+    let mut truncated_packet_number = 0_u64;
     let mut pn_bytes = [0_u8; 4];
     for i in 0..pn_len {
         let byte = packet[pn_offset + i] ^ mask[i + 1];
         pn_bytes[i] = byte;
-        packet_number = (packet_number << 8) | u64::from(byte);
+        truncated_packet_number = (truncated_packet_number << 8) | u64::from(byte);
     }
+    let packet_number = reconstruct_packet_number(
+        state.largest_authenticated_packet_number,
+        truncated_packet_number,
+        pn_len,
+    );
 
     let mut header = packet[..pn_offset + pn_len].to_vec();
     header[0] = unprotected_first;
@@ -147,6 +164,11 @@ fn decrypt_quic_initial_packet(packet: &[u8]) -> Result<DecryptedInitialPacket, 
     cipher
         .decrypt_in_place(GenericArray::from_slice(&nonce), &header, &mut ciphertext)
         .map_err(|_| SniffingError::NotApplicable)?;
+    state.largest_authenticated_packet_number = Some(
+        state
+            .largest_authenticated_packet_number
+            .map_or(packet_number, |largest| largest.max(packet_number)),
+    );
     Ok(DecryptedInitialPacket {
         consumed: packet_end,
         plaintext: ciphertext,
@@ -157,6 +179,35 @@ struct InitialKeys {
     key: [u8; QUIC_INITIAL_KEY_LEN],
     iv: [u8; QUIC_INITIAL_IV_LEN],
     hp: [u8; QUIC_INITIAL_KEY_LEN],
+}
+
+struct QuicInitialState {
+    keys: InitialKeys,
+    largest_authenticated_packet_number: Option<u64>,
+}
+
+fn reconstruct_packet_number(
+    largest_authenticated: Option<u64>,
+    truncated: u64,
+    packet_number_len: usize,
+) -> u64 {
+    const MAX_PACKET_NUMBER: u64 = (1_u64 << 62) - 1;
+
+    let expected = largest_authenticated
+        .map(|largest| largest.saturating_add(1).min(MAX_PACKET_NUMBER))
+        .unwrap_or(0);
+    let window = 1_u64 << (packet_number_len * 8);
+    let half_window = window / 2;
+    let mask = window - 1;
+    let mut candidate = (expected & !mask) | truncated;
+    if candidate.saturating_add(half_window) <= expected
+        && candidate <= MAX_PACKET_NUMBER.saturating_sub(window)
+    {
+        candidate += window;
+    } else if candidate > expected.saturating_add(half_window) && candidate >= window {
+        candidate -= window;
+    }
+    candidate
 }
 
 fn initial_keys(dcid: &[u8]) -> Result<InitialKeys, SniffingError> {
@@ -330,6 +381,35 @@ mod tests {
         );
         let got = sniff_quic_initial_sni(&[first.as_slice(), second.as_slice()]).unwrap();
         assert_eq!(got, "www.example.com");
+    }
+
+    #[test]
+    fn quic_initial_sniffer_reconstructs_packet_number_across_window() {
+        let handshake = test_tls_client_hello("www.example.com");
+        let first = test_quic_initial_packet_with_crypto(0, &handshake[..20], 255);
+        let second = test_quic_initial_packet_with_crypto(20, &handshake[20..], 256);
+
+        let got = sniff_quic_initial_sni(&[first.as_slice(), second.as_slice()]).unwrap();
+        assert_eq!(got, "www.example.com");
+    }
+
+    #[test]
+    fn unauthenticated_packet_does_not_advance_packet_number_state() {
+        let handshake = test_tls_client_hello("www.example.com");
+        let mut corrupted = test_quic_initial_packet_with_crypto(0, &handshake, 255);
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 0x80;
+        let valid = test_quic_initial_packet_with_crypto(0, &handshake, 0);
+
+        let got = sniff_quic_initial_sni(&[corrupted.as_slice(), valid.as_slice()]).unwrap();
+        assert_eq!(got, "www.example.com");
+    }
+
+    #[test]
+    fn packet_number_reconstruction_tracks_the_expected_window() {
+        assert_eq!(reconstruct_packet_number(Some(254), 255, 1), 255);
+        assert_eq!(reconstruct_packet_number(Some(255), 0, 1), 256);
+        assert_eq!(reconstruct_packet_number(Some(256), 255, 1), 255);
     }
 
     fn test_quic_initial_packet(host: &str) -> Vec<u8> {

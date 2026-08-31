@@ -47,8 +47,8 @@ pub use dae_outbound_core::matrix_extension_capability::{
 };
 pub use dae_outbound_core::production_matrix::{
     OutboundProductionMatrixContract, OutboundProductionMatrixEntry,
-    outbound_production_matrix_contract, production_matrix_entries,
-    production_matrix_entries_are_source_registry_backed,
+    outbound_production_matrix_contract, production_matrix_dataplane_declarations_match_registry,
+    production_matrix_entries, production_matrix_entries_are_source_registry_backed,
 };
 pub use dae_outbound_core::security_underlay_capability::{
     SecurityUnderlayCapabilityContract, SecurityUnderlayCapabilityRow,

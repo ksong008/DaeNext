@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::OnceLock;
 
 use dae_outbound_core::error::OutboundError;
 
@@ -338,34 +339,29 @@ fn decode_hpack_string(block: &[u8], start: usize) -> Result<(Vec<u8>, usize), O
 
 fn decode_huffman(input: &[u8]) -> Result<Vec<u8>, OutboundError> {
     let mut out = Vec::new();
+    let trie = huffman_decode_trie();
+    let mut node = 0_usize;
     let mut code = 0_u32;
     let mut code_len = 0_u8;
     for &byte in input {
         for shift in (0..8).rev() {
-            code = (code << 1) | u32::from((byte >> shift) & 1);
+            let bit = usize::from((byte >> shift) & 1);
+            code = (code << 1) | bit as u32;
             code_len = code_len
                 .checked_add(1)
                 .ok_or_else(|| hpack_error("HPACK Huffman code length overflow"))?;
-            if let Some((symbol, _)) = HUFFMAN_TABLE
-                .iter()
-                .enumerate()
-                .find(|(_, (candidate, len))| *len == code_len && *candidate == code)
-            {
-                out.push(symbol as u8);
+            node = trie[node].children[bit]
+                .ok_or_else(|| hpack_error("invalid HPACK Huffman code"))?;
+            if let Some(symbol) = trie[node].symbol {
+                out.push(symbol);
                 if out.len() > MAX_HPACK_STRING_BYTES {
                     return Err(hpack_error(format!(
                         "HPACK Huffman output exceeds {MAX_HPACK_STRING_BYTES} bytes"
                     )));
                 }
+                node = 0;
                 code = 0;
                 code_len = 0;
-                continue;
-            }
-            let has_prefix = HUFFMAN_TABLE.iter().any(|(candidate, len)| {
-                *len > code_len && (*candidate >> (*len - code_len)) == code
-            });
-            if !has_prefix {
-                return Err(hpack_error("invalid HPACK Huffman code"));
             }
         }
     }
@@ -373,6 +369,38 @@ fn decode_huffman(input: &[u8]) -> Result<Vec<u8>, OutboundError> {
         return Err(hpack_error("invalid HPACK Huffman padding"));
     }
     Ok(out)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HuffmanDecodeNode {
+    children: [Option<usize>; 2],
+    symbol: Option<u8>,
+}
+
+fn huffman_decode_trie() -> &'static [HuffmanDecodeNode] {
+    static TRIE: OnceLock<Box<[HuffmanDecodeNode]>> = OnceLock::new();
+    TRIE.get_or_init(|| {
+        let mut nodes = vec![HuffmanDecodeNode::default()];
+        for (symbol, (code, code_len)) in HUFFMAN_TABLE.iter().copied().enumerate() {
+            let mut node = 0_usize;
+            for shift in (0..code_len).rev() {
+                let bit = ((code >> shift) & 1) as usize;
+                let child = match nodes[node].children[bit] {
+                    Some(child) => child,
+                    None => {
+                        let child = nodes.len();
+                        nodes.push(HuffmanDecodeNode::default());
+                        nodes[node].children[bit] = Some(child);
+                        child
+                    }
+                };
+                node = child;
+            }
+            debug_assert!(nodes[node].symbol.is_none());
+            nodes[node].symbol = Some(symbol as u8);
+        }
+        nodes.into_boxed_slice()
+    })
 }
 
 fn hpack_error(message: impl Into<String>) -> OutboundError {
@@ -486,6 +514,18 @@ mod huffman_tests {
             let decoded = decode_huffman(&encoded).unwrap();
             assert_eq!(decoded, sample, "round trip for {sample:?}");
         }
+    }
+
+    #[test]
+    fn huffman_trie_decodes_every_symbol() {
+        let input = (0_u8..=u8::MAX).collect::<Vec<_>>();
+        let encoded = huffman_encode(&input);
+        assert_eq!(decode_huffman(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn huffman_trie_rejects_padding_longer_than_seven_bits() {
+        assert!(decode_huffman(&[0xff]).is_err());
     }
 }
 
