@@ -28,6 +28,8 @@ pub(super) fn daemon_identity_is_production_product() {
     assert!(report["rust_run_entrypoint_exists"].as_bool().unwrap());
     assert!(report["identity_admission_allowed"].as_bool().unwrap());
     assert!(!report["production_admission_allowed"].as_bool().unwrap());
+    assert!(!report["host_mutation_allowed"].as_bool().unwrap());
+    assert!(!report["final_state_admission_allowed"].as_bool().unwrap());
 }
 
 #[test]
