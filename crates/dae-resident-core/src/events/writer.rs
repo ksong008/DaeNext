@@ -325,7 +325,7 @@ fn run_event_writer(
         inner.metrics.command_dequeued();
         match command {
             ResidentEventWriterCommand::Event(event) => {
-                match persist_resident_event_direct(&inner.path, &inner.lock, event) {
+                match persist_resident_event_direct(&inner.lock, event) {
                     Ok(outcome) => {
                         if outcome.persisted {
                             inner.metrics.persisted();

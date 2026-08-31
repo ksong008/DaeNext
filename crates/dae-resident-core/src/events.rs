@@ -159,7 +159,7 @@ fn append_resident_event(path: &Path, lock: &Mutex<()>, event: ResidentEvent) {
         Ok(()) => return,
         Err(event) => event,
     };
-    let _ = persist_resident_event_direct(path, lock, event);
+    let _ = persist_resident_event_direct(lock, event);
 }
 
 pub fn path_string(path: &Path) -> String {
@@ -239,11 +239,9 @@ fn prune_resident_event_log_file_direct(path: &Path) -> io::Result<()> {
 /// (writer thread or the no-writer fallback) observes
 /// [`ResidentEventPersistOutcome`] to drive the persisted/filtered metrics.
 fn persist_resident_event_direct(
-    path: &Path,
     lock: &Mutex<()>,
     event: ResidentEvent,
 ) -> io::Result<ResidentEventPersistOutcome> {
-    let _ = (path, lock);
     let persist = event.should_persist();
     if !persist {
         return Ok(ResidentEventPersistOutcome {
@@ -252,6 +250,9 @@ fn persist_resident_event_direct(
         });
     }
     let value = event.into_serializable_value();
+    let _guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     EVENT_LOG_APPEND_COUNT.fetch_add(1, Ordering::Relaxed);
     dispatch_to_event_log_sink(&value);
 
@@ -320,6 +321,44 @@ mod tests {
         set_event_log_sink(None);
         set_event_log_policy(None);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn direct_fallback_serializes_concurrent_sink_dispatch() {
+        let _guard = event_test_guard();
+        let fallback_lock = Arc::new(Mutex::new(()));
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let maximum = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let sink_active = Arc::clone(&active);
+        let sink_maximum = Arc::clone(&maximum);
+        set_event_log_sink(Some(Arc::new(move |_| {
+            let current = sink_active.fetch_add(1, Ordering::SeqCst) + 1;
+            sink_maximum.fetch_max(current, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            sink_active.fetch_sub(1, Ordering::SeqCst);
+        })));
+
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let threads = (0..8)
+            .map(|index| {
+                let fallback_lock = Arc::clone(&fallback_lock);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    persist_resident_event_direct(
+                        &fallback_lock,
+                        ResidentEvent::new(json!({"event": "fallback", "index": index})),
+                    )
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+
+        assert_eq!(maximum.load(Ordering::SeqCst), 1);
+        set_event_log_sink(None);
     }
 
     #[test]

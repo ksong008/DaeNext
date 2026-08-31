@@ -657,19 +657,36 @@ fn run_subscription_scheduler<C: SubscriptionSchedulerCallbacks + 'static>(
     );
     let mut invalid_cron = InvalidCronLogTracker::default();
     loop {
-        if let Err(error) = refresh_due_subscriptions_with_callbacks(
+        let mut wake_during_refresh = false;
+        let refresh = refresh_due_subscriptions_with_control(
             callbacks.as_ref(),
             &state,
             &config_dir,
             unix_now(),
             &mut invalid_cron,
-        ) {
-            callbacks.append_log(
-                &config_dir,
-                &state,
-                "error",
-                &format!("subscription scheduler tick failed: {error}"),
-            );
+            || loop {
+                match stop.try_recv() {
+                    Ok(SchedulerCommand::Wake) => wake_during_refresh = true,
+                    Ok(SchedulerCommand::Stop)
+                    | Err(std::sync::mpsc::TryRecvError::Disconnected) => return true,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+                }
+            },
+        );
+        match refresh {
+            Ok(None) => break,
+            Ok(Some(_)) => {}
+            Err(error) => {
+                callbacks.append_log(
+                    &config_dir,
+                    &state,
+                    "error",
+                    &format!("subscription scheduler tick failed: {error}"),
+                );
+            }
+        }
+        if wake_during_refresh {
+            continue;
         }
         let wait = match subscription_scheduler_wait(&state, unix_now()) {
             Ok(Some(wait)) => Some(wait),
@@ -720,6 +737,29 @@ pub fn refresh_due_subscriptions_with_callbacks<C: SubscriptionSchedulerCallback
     now_unix: u64,
     invalid_cron: &mut InvalidCronLogTracker,
 ) -> io::Result<Value> {
+    refresh_due_subscriptions_with_control(
+        callbacks,
+        state,
+        config_dir,
+        now_unix,
+        invalid_cron,
+        || false,
+    )?
+    .ok_or_else(|| io::Error::new(io::ErrorKind::Interrupted, "subscription refresh cancelled"))
+}
+
+fn refresh_due_subscriptions_with_control<C, F>(
+    callbacks: &C,
+    state: &Path,
+    config_dir: &Path,
+    now_unix: u64,
+    invalid_cron: &mut InvalidCronLogTracker,
+    mut stop_requested: F,
+) -> io::Result<Option<Value>>
+where
+    C: SubscriptionSchedulerCallbacks,
+    F: FnMut() -> bool,
+{
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
     let scan = due_scheduled_subscriptions(&conn, now_unix)?;
@@ -742,6 +782,9 @@ pub fn refresh_due_subscriptions_with_callbacks<C: SubscriptionSchedulerCallback
     let mut fetch_errors = 0_usize;
     let mut runtime_input_changes = 0_usize;
     for subscription in &scan.due {
+        if stop_requested() {
+            return Ok(None);
+        }
         match callbacks.refresh_subscription(state, config_dir, subscription.id) {
             Ok(report) => {
                 let outcome = SubscriptionRefreshOutcome::from_report(&report);
@@ -783,6 +826,9 @@ pub fn refresh_due_subscriptions_with_callbacks<C: SubscriptionSchedulerCallback
         }
     }
 
+    if stop_requested() {
+        return Ok(None);
+    }
     let runtime_apply = callbacks.apply_runtime(state, config_dir, runtime_input_changes > 0);
     let checked_at = product_iso8601_utc(now_unix);
     let _ = set_metadata(state, "subscription_scheduler_last_tick_at", &checked_at);
@@ -796,7 +842,7 @@ pub fn refresh_due_subscriptions_with_callbacks<C: SubscriptionSchedulerCallback
         "subscription_scheduler_last_invalid_count",
         &scan.invalid_cron.len().to_string(),
     );
-    Ok(json!({
+    Ok(Some(json!({
         "checkedAt": checked_at,
         "attempted": attempted,
         "dueCount": scan.due.len(),
@@ -808,7 +854,7 @@ pub fn refresh_due_subscriptions_with_callbacks<C: SubscriptionSchedulerCallback
         "runtimeReloaded": runtime_apply.applied,
         "runtimeReload": runtime_apply.report,
         "runtimeReloadError": runtime_apply.error,
-    }))
+    })))
 }
 
 fn scheduler_sqlite_io_error(error: rusqlite::Error) -> io::Error {
@@ -1023,6 +1069,75 @@ mod tests {
         fn append_log(&self, _config_dir: &Path, _state: &Path, _level: &str, _message: &str) {
             self.log_calls.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    struct CancellationCallbacks {
+        refresh_calls: AtomicUsize,
+        apply_calls: AtomicUsize,
+    }
+
+    impl SubscriptionSchedulerCallbacks for CancellationCallbacks {
+        fn refresh_subscription(
+            &self,
+            _state: &Path,
+            _config_dir: &Path,
+            _subscription_id: i64,
+        ) -> io::Result<Value> {
+            self.refresh_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(json!({"fetched": true}))
+        }
+
+        fn apply_runtime(
+            &self,
+            _state: &Path,
+            _config_dir: &Path,
+            _requested: bool,
+        ) -> SubscriptionSchedulerRuntimeApply {
+            self.apply_calls.fetch_add(1, Ordering::Relaxed);
+            SubscriptionSchedulerRuntimeApply::default()
+        }
+
+        fn append_log(&self, _config_dir: &Path, _state: &Path, _level: &str, _message: &str) {}
+    }
+
+    #[test]
+    fn due_batch_stop_check_bounds_shutdown_to_the_current_refresh() {
+        let directory = std::env::temp_dir().join(format!(
+            "dae-product-subscription-scheduler-cancel-{}",
+            fastrand::u64(..)
+        ));
+        let state = directory.join("daed.db");
+        ensure_state_schema(&state).unwrap();
+        let conn = open_state_connection(&state).unwrap();
+        for id in [1_i64, 2] {
+            conn.execute(
+                "INSERT INTO subscriptions(id, updated_at, link, cron_exp, cron_enable, status, info, tag)
+                 VALUES(?1, '2026-06-17T00:00:00Z', 'file://fixture', '* * * * *', 1, '', '', ?2)",
+                params![id, format!("fixture-{id}")],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let callbacks = CancellationCallbacks {
+            refresh_calls: AtomicUsize::new(0),
+            apply_calls: AtomicUsize::new(0),
+        };
+        let mut invalid_cron = InvalidCronLogTracker::default();
+
+        let outcome = refresh_due_subscriptions_with_control(
+            &callbacks,
+            &state,
+            &directory,
+            unix_utc(2026, 6, 17, 0, 2, 0),
+            &mut invalid_cron,
+            || callbacks.refresh_calls.load(Ordering::Relaxed) >= 1,
+        )
+        .unwrap();
+
+        assert!(outcome.is_none());
+        assert_eq!(callbacks.refresh_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(callbacks.apply_calls.load(Ordering::Relaxed), 0);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

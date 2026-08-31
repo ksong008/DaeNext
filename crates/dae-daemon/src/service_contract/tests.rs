@@ -9,6 +9,12 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
+    #[test]
+    fn network_wait_honors_cancellation_before_probe() {
+        let error = wait_for_network_before_subscriptions_until(|| true).unwrap_err();
+        assert_eq!(error, "network readiness wait cancelled");
+    }
+
     #[derive(Clone)]
     struct FakeRuntime {
         drops: Arc<AtomicUsize>,
