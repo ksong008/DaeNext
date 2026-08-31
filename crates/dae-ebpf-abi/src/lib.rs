@@ -251,13 +251,143 @@ pub struct BpfLpmKey {
     pub data: [u32; 4],
 }
 
+impl BpfLpmKey {
+    pub const fn zeroed() -> Self {
+        Self {
+            prefix_len: 0,
+            data: [0; 4],
+        }
+    }
+
+    pub const fn from_ipv4_mapped(prefix_bits: u8, address: [u8; 4]) -> Self {
+        assert!(prefix_bits <= 32, "IPv4 LPM prefix exceeds 32 bits");
+        let mut octets = [0_u8; 16];
+        octets[10] = 0xff;
+        octets[11] = 0xff;
+        octets[12] = address[0];
+        octets[13] = address[1];
+        octets[14] = address[2];
+        octets[15] = address[3];
+        Self::from_octets(BPF_LPM_IPV4_MAPPED_PREFIX_BITS + prefix_bits as u32, octets)
+    }
+
+    pub const fn from_ipv6(prefix_bits: u8, address: [u8; 16]) -> Self {
+        assert!(prefix_bits <= 128, "IPv6 LPM prefix exceeds 128 bits");
+        Self::from_octets(prefix_bits as u32, address)
+    }
+
+    pub const fn from_mac(address: [u8; 6]) -> Self {
+        let mut octets = [0_u8; 16];
+        let mut index = 0;
+        while index < address.len() {
+            octets[BPF_LPM_MAC_OFFSET + index] = address[index];
+            index += 1;
+        }
+        Self::from_octets(BPF_LPM_FULL_PREFIX_BITS, octets)
+    }
+
+    pub const fn octets(self) -> [u8; 16] {
+        let words = self.data;
+        let first = words[0].to_ne_bytes();
+        let second = words[1].to_ne_bytes();
+        let third = words[2].to_ne_bytes();
+        let fourth = words[3].to_ne_bytes();
+        [
+            first[0], first[1], first[2], first[3], second[0], second[1], second[2], second[3],
+            third[0], third[1], third[2], third[3], fourth[0], fourth[1], fourth[2], fourth[3],
+        ]
+    }
+
+    const fn from_octets(prefix_len: u32, octets: [u8; 16]) -> Self {
+        Self {
+            prefix_len,
+            data: [
+                u32::from_ne_bytes([octets[0], octets[1], octets[2], octets[3]]),
+                u32::from_ne_bytes([octets[4], octets[5], octets[6], octets[7]]),
+                u32::from_ne_bytes([octets[8], octets[9], octets[10], octets[11]]),
+                u32::from_ne_bytes([octets[12], octets[13], octets[14], octets[15]]),
+            ],
+        }
+    }
+}
+
 pub const TASK_COMM_LEN: usize = 16;
 pub const MAX_MATCH_SET_LEN: u32 = 32 * 32;
+pub const MATCH_TYPE_DOMAIN_SET: u8 = 0;
+pub const MATCH_TYPE_IP_SET: u8 = 1;
+pub const MATCH_TYPE_SOURCE_IP_SET: u8 = 2;
+pub const MATCH_TYPE_PORT: u8 = 3;
+pub const MATCH_TYPE_SOURCE_PORT: u8 = 4;
+pub const MATCH_TYPE_L4_PROTO: u8 = 5;
+pub const MATCH_TYPE_IP_VERSION: u8 = 6;
+pub const MATCH_TYPE_MAC: u8 = 7;
+pub const MATCH_TYPE_PROCESS_NAME: u8 = 8;
+pub const MATCH_TYPE_DSCP: u8 = 9;
+pub const MATCH_TYPE_FALLBACK: u8 = 10;
+pub const BPF_LPM_IPV4_MAPPED_PREFIX_BITS: u32 = 96;
+pub const BPF_LPM_FULL_PREFIX_BITS: u32 = 128;
+pub const BPF_LPM_MAC_OFFSET: usize = 10;
 pub const TPROXY_MARK: u32 = 0x0800_0000;
 pub const BPF_DAE_PARAM_ABI_VERSION: u32 = 2;
 pub const UDP_STATE_SATURATION_POLICY_FAIL_CLOSED: u32 = 0;
 pub const UDP_STATE_IDLE_TIMEOUT_NS_DEFAULT: u64 = 300_000_000_000;
 pub const REDIRECT_TRACK_ABI_VERSION: u8 = 3;
+
+#[cfg(test)]
+mod lpm_contract_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn lpm_key_layout_is_stable() {
+        assert_eq!(size_of::<BpfLpmKey>(), 20);
+        assert_eq!(align_of::<BpfLpmKey>(), 4);
+        assert_eq!(offset_of!(BpfLpmKey, prefix_len), 0);
+        assert_eq!(offset_of!(BpfLpmKey, data), 4);
+    }
+
+    #[test]
+    fn lpm_key_constructors_preserve_kernel_lookup_bytes() {
+        let ipv4 = BpfLpmKey::from_ipv4_mapped(24, [192, 0, 2, 1]);
+        assert_eq!(ipv4.prefix_len, 120);
+        assert_eq!(
+            ipv4.octets(),
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1]
+        );
+
+        let ipv6_address = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let ipv6 = BpfLpmKey::from_ipv6(64, ipv6_address);
+        assert_eq!(ipv6.prefix_len, 64);
+        assert_eq!(ipv6.octets(), ipv6_address);
+
+        let mac = BpfLpmKey::from_mac([0x02, 0, 0, 0, 0, 1]);
+        assert_eq!(mac.prefix_len, BPF_LPM_FULL_PREFIX_BITS);
+        assert_eq!(
+            mac.octets(),
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0, 0, 1]
+        );
+    }
+
+    #[test]
+    fn routing_match_kinds_remain_wire_stable() {
+        assert_eq!(
+            [
+                MATCH_TYPE_DOMAIN_SET,
+                MATCH_TYPE_IP_SET,
+                MATCH_TYPE_SOURCE_IP_SET,
+                MATCH_TYPE_PORT,
+                MATCH_TYPE_SOURCE_PORT,
+                MATCH_TYPE_L4_PROTO,
+                MATCH_TYPE_IP_VERSION,
+                MATCH_TYPE_MAC,
+                MATCH_TYPE_PROCESS_NAME,
+                MATCH_TYPE_DSCP,
+                MATCH_TYPE_FALLBACK,
+            ],
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        );
+    }
+}
 pub const LINK_HDR_LEN_NONE: u32 = 0;
 pub const LINK_HDR_LEN_ETHERNET: u32 = 14;
 

@@ -26,9 +26,6 @@ const LISTEN_SOCKET_KEY_TCP4: u32 = 0;
 const LISTEN_SOCKET_KEY_TCP6: u32 = 1;
 const LISTEN_SOCKET_KEY_UDP4: u32 = 2;
 const LISTEN_SOCKET_KEY_UDP6: u32 = 3;
-const SKB_CB_TPROXY_MARK: usize = 0;
-const SKB_CB_TPROXY_L4PROTO: usize = 1;
-const SKB_CB_TPROXY_IS_IPV4: usize = 2;
 const REDIRECT_LINK_LAYER_L2: u8 = 2;
 const REDIRECT_LINK_LAYER_L3: u8 = 3;
 const TPROXY_METRICS_KEY: u32 = 0;
@@ -275,21 +272,6 @@ unsafe fn prep_redirect_to_control_plane(
         {
             return false;
         }
-        (*skb).cb[SKB_CB_TPROXY_MARK] = TPROXY_MARK;
-        let assign_l4proto = if ((*info).l4proto == IPPROTO_TCP
-            && packet::tcp_syn((*info).tcp_flags))
-            || (*info).l4proto == IPPROTO_UDP
-        {
-            (*info).l4proto as u32
-        } else {
-            0
-        };
-        (*skb).cb[SKB_CB_TPROXY_L4PROTO] = assign_l4proto;
-        (*skb).cb[SKB_CB_TPROXY_IS_IPV4] = if assign_l4proto != 0 {
-            (*info).is_ipv4 as u32
-        } else {
-            0
-        };
     }
     true
 }
@@ -322,24 +304,36 @@ unsafe fn redirect_to_control_plane(
 
 #[inline(always)]
 pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {
-    if unsafe { (*skb).cb[SKB_CB_TPROXY_MARK] } != TPROXY_MARK {
+    let mut info = ParsedPacket::zeroed();
+    if unsafe { packet::parse_transport(skb, ETH_HLEN, ptr::addr_of_mut!(info)) } != 0 {
+        return TC_ACT_SHOT;
+    }
+    let mut tuple = BpfTuplesKey::zeroed();
+    let mut redirect_track_key = BpfRedirectKey::zeroed();
+    unsafe {
+        packet::build_tuples(ptr::addr_of!(info), ptr::addr_of_mut!(tuple));
+        redirect_key::from_forward_tuple(
+            ptr::addr_of!(tuple),
+            ptr::addr_of_mut!(redirect_track_key),
+        );
+    }
+    let entry = unsafe {
+        helpers::bpf_map_lookup_elem(
+            maps::redirect_track_map_ptr(),
+            ptr::addr_of!(redirect_track_key).cast::<c_void>(),
+        )
+    }
+    .cast::<BpfRedirectEntry>();
+    if entry.is_null() || unsafe { (*entry).abi_version } != REDIRECT_TRACK_ABI_VERSION {
         return TC_ACT_SHOT;
     }
 
     unsafe {
         (*skb).mark = TPROXY_MARK;
         let _ = helpers::bpf_skb_change_type(skb.cast::<c_void>(), PACKET_HOST);
-        let mut info = ParsedPacket::zeroed();
-        if packet::parse_transport(skb, ETH_HLEN, ptr::addr_of_mut!(info)) == 0 {
-            let info_ptr = ptr::addr_of!(info);
-            if is_new_tcp(info_ptr) || (*info_ptr).l4proto == IPPROTO_UDP {
-                assign_listener(skb, (*info_ptr).l4proto as u32, (*info_ptr).is_ipv4 as u32);
-            }
-        } else {
-            let l4proto = (*skb).cb[SKB_CB_TPROXY_L4PROTO];
-            if l4proto != 0 {
-                assign_listener(skb, l4proto, (*skb).cb[SKB_CB_TPROXY_IS_IPV4]);
-            }
+        let info_ptr = ptr::addr_of!(info);
+        if is_new_tcp(info_ptr) || (*info_ptr).l4proto == IPPROTO_UDP {
+            assign_listener(skb, (*info_ptr).l4proto as u32, (*info_ptr).is_ipv4 as u32);
         }
     }
     TC_ACT_OK

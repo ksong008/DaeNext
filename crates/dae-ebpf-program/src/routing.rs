@@ -3,8 +3,12 @@ use core::{ffi::c_void, ptr};
 use aya_ebpf::bindings::__sk_buff;
 
 use crate::abi::{
-    BpfDomainRouting, BpfIpBytes, BpfLpmKey, BpfMatchSet, BpfOutboundConnectivityQuery,
-    BpfPidPname, BpfRoutingResult, BpfTuplesKey, MAX_MATCH_SET_LEN, TASK_COMM_LEN,
+    BPF_LPM_FULL_PREFIX_BITS, BpfDomainRouting, BpfIpBytes, BpfLpmKey, BpfMatchSet,
+    BpfOutboundConnectivityQuery, BpfPidPname, BpfRoutingResult, BpfTuplesKey,
+    MATCH_TYPE_DOMAIN_SET, MATCH_TYPE_DSCP, MATCH_TYPE_FALLBACK, MATCH_TYPE_IP_SET,
+    MATCH_TYPE_IP_VERSION, MATCH_TYPE_L4_PROTO, MATCH_TYPE_MAC, MATCH_TYPE_PORT,
+    MATCH_TYPE_PROCESS_NAME, MATCH_TYPE_SOURCE_IP_SET, MATCH_TYPE_SOURCE_PORT, MAX_MATCH_SET_LEN,
+    TASK_COMM_LEN,
 };
 use crate::packet::{self, IPPROTO_TCP, ParsedPacket};
 use crate::{helpers, maps};
@@ -20,18 +24,6 @@ const OUTBOUND_MUST_RULES: u8 = 0xfc;
 const OUTBOUND_CONTROL_PLANE_ROUTING: u8 = 0xfd;
 const OUTBOUND_LOGICAL_OR: u8 = 0xfe;
 const OUTBOUND_LOGICAL_MASK: u8 = 0xfe;
-
-const MATCH_TYPE_DOMAIN_SET: u8 = 0;
-const MATCH_TYPE_IP_SET: u8 = 1;
-const MATCH_TYPE_SOURCE_IP_SET: u8 = 2;
-const MATCH_TYPE_PORT: u8 = 3;
-const MATCH_TYPE_SOURCE_PORT: u8 = 4;
-const MATCH_TYPE_L4_PROTO: u8 = 5;
-const MATCH_TYPE_IP_VERSION: u8 = 6;
-const MATCH_TYPE_MAC: u8 = 7;
-const MATCH_TYPE_PROCESS_NAME: u8 = 8;
-const MATCH_TYPE_DSCP: u8 = 9;
-const MATCH_TYPE_FALLBACK: u8 = 10;
 
 const L4_PROTO_TCP_MATCH: u32 = 1;
 const L4_PROTO_UDP_MATCH: u32 = 2;
@@ -120,18 +112,9 @@ impl RouteCtx {
             h_dport: 0,
             h_sport: 0,
             result: -ENOEXEC,
-            lpm_key_saddr: BpfLpmKey {
-                prefix_len: 0,
-                data: [0; 4],
-            },
-            lpm_key_daddr: BpfLpmKey {
-                prefix_len: 0,
-                data: [0; 4],
-            },
-            lpm_key_mac: BpfLpmKey {
-                prefix_len: 0,
-                data: [0; 4],
-            },
+            lpm_key_saddr: BpfLpmKey::zeroed(),
+            lpm_key_daddr: BpfLpmKey::zeroed(),
+            lpm_key_mac: BpfLpmKey::zeroed(),
             state: 0,
         }
     }
@@ -214,7 +197,7 @@ unsafe fn copy16_to_lpm_words(dst: *mut u32, src: *const u8) {
 #[inline(always)]
 unsafe fn set_lpm_key(key: *mut BpfLpmKey, ip: *const BpfIpBytes) {
     unsafe {
-        (*key).prefix_len = 128;
+        (*key).prefix_len = BPF_LPM_FULL_PREFIX_BITS;
         copy16_to_lpm_words(
             ptr::addr_of_mut!((*key).data).cast::<u32>(),
             ptr::addr_of!((*ip).u6_addr8).cast::<u8>(),
