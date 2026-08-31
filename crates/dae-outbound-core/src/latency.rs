@@ -22,13 +22,13 @@ impl LatenciesN {
             let index = (self.head + self.len) % self.values.len();
             self.values[index] = latency_ms;
             self.len += 1;
-            self.sum += latency_ms;
+            self.sum = self.sum.saturating_add(latency_ms);
             return;
         }
-        self.sum -= self.values[self.head];
+        self.sum = self.sum.saturating_sub(self.values[self.head]);
         self.values[self.head] = latency_ms;
         self.head = (self.head + 1) % self.values.len();
-        self.sum += latency_ms;
+        self.sum = self.sum.saturating_add(latency_ms);
     }
 
     pub fn last(&self) -> Option<i64> {
@@ -84,5 +84,16 @@ mod tests {
 
         assert_eq!(latencies.avg(), Some(40));
         assert_eq!(latencies.last(), Some(50));
+    }
+
+    #[test]
+    fn extreme_samples_do_not_overflow_the_sum() {
+        let mut latencies = LatenciesN::new(2);
+        latencies.append(i64::MAX);
+        latencies.append(i64::MAX);
+        assert_eq!(latencies.avg(), Some(i64::MAX / 2));
+
+        latencies.append(i64::MIN);
+        assert_eq!(latencies.avg(), Some(i64::MIN / 2));
     }
 }
