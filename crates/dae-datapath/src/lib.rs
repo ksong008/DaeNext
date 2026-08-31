@@ -28,8 +28,8 @@ pub use active::{
     active_tcp_routing_map_contract, active_tcp_topology_contract, active_udp_endpoint_contract,
 };
 pub use active_handoff::{
-    ActiveHandoffDecision, ActiveHandoffKey, ActiveHandoffState, ActiveL4, ActiveTcpHandoffInput,
-    ActiveUdpHandoffInput,
+    ActiveHandoffDecision, ActiveHandoffError, ActiveHandoffKey, ActiveHandoffState, ActiveL4,
+    ActiveTcpHandoffInput, ActiveUdpHandoffInput,
 };
 pub use dial::{magic_network, magic_network_bytes, magic_network_len, write_magic_network_bytes};
 pub use packet_sniffer::{PACKET_SNIFFER_POOL_MAX_ENTRIES, PACKET_SNIFFER_TTL_MS};

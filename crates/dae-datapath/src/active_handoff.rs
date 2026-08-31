@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::net::SocketAddr;
 
 use crate::route::RouteRule;
@@ -61,14 +62,40 @@ pub enum ActiveHandoffDecision {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActiveHandoffError {
+    pub expected: ActiveL4,
+    pub actual: ActiveL4,
+}
+
+impl fmt::Display for ActiveHandoffError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "active handoff L4 mismatch: expected {:?}, got {:?}",
+            self.expected, self.actual
+        )
+    }
+}
+
+impl std::error::Error for ActiveHandoffError {}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ActiveHandoffState {
     decisions: HashMap<ActiveHandoffKey, ActiveHandoffDecision>,
 }
 
 impl ActiveHandoffState {
-    pub fn apply_tcp(&mut self, input: ActiveTcpHandoffInput) -> ActiveHandoffDecision {
-        assert_eq!(input.key.l4, ActiveL4::Tcp);
+    pub fn apply_tcp(
+        &mut self,
+        input: ActiveTcpHandoffInput,
+    ) -> Result<ActiveHandoffDecision, ActiveHandoffError> {
+        if input.key.l4 != ActiveL4::Tcp {
+            return Err(ActiveHandoffError {
+                expected: ActiveL4::Tcp,
+                actual: input.key.l4,
+            });
+        }
         let domain = input.sniffed_domain.clone().unwrap_or_default();
         let plan = route_dial_tcp_plan(&RouteDialTcpPlanInput {
             dial_mode: input.dial_mode,
@@ -89,11 +116,19 @@ impl ActiveHandoffState {
             requires_outbound_adapter: true,
         };
         self.decisions.insert(input.key, decision.clone());
-        decision
+        Ok(decision)
     }
 
-    pub fn apply_udp(&mut self, input: ActiveUdpHandoffInput) -> ActiveHandoffDecision {
-        assert_eq!(input.key.l4, ActiveL4::Udp);
+    pub fn apply_udp(
+        &mut self,
+        input: ActiveUdpHandoffInput,
+    ) -> Result<ActiveHandoffDecision, ActiveHandoffError> {
+        if input.key.l4 != ActiveL4::Udp {
+            return Err(ActiveHandoffError {
+                expected: ActiveL4::Udp,
+                actual: input.key.l4,
+            });
+        }
         let decision = ActiveHandoffDecision::Udp {
             key: input.key,
             outbound: input.outbound,
@@ -104,7 +139,7 @@ impl ActiveHandoffState {
             requires_outbound_adapter: true,
         };
         self.decisions.insert(input.key, decision.clone());
-        decision
+        Ok(decision)
     }
 
     pub fn remove(&mut self, key: &ActiveHandoffKey) -> Option<ActiveHandoffDecision> {
@@ -142,23 +177,25 @@ mod tests {
             source: addr("192.0.2.10:50123"),
             destination: addr("198.51.100.20:443"),
         };
-        let decision = state.apply_tcp(ActiveTcpHandoffInput {
-            key,
-            dial_mode: TcpDialMode::DomainPlusPlus,
-            initial_outbound: 2,
-            sniffed_domain: Some("example.com".to_owned()),
-            domain_is_real: true,
-            initial_mark: 0,
-            so_mark_from_dae: 1234,
-            mptcp: true,
-            route_rules: vec![RouteRule {
-                kind: "Fallback".to_owned(),
-                outbound: OUTBOUND_DIRECT,
-                mark: 4321,
-                must: false,
-                matched: true,
-            }],
-        });
+        let decision = state
+            .apply_tcp(ActiveTcpHandoffInput {
+                key,
+                dial_mode: TcpDialMode::DomainPlusPlus,
+                initial_outbound: 2,
+                sniffed_domain: Some("example.com".to_owned()),
+                domain_is_real: true,
+                initial_mark: 0,
+                so_mark_from_dae: 1234,
+                mptcp: true,
+                route_rules: vec![RouteRule {
+                    kind: "Fallback".to_owned(),
+                    outbound: OUTBOUND_DIRECT,
+                    mark: 4321,
+                    must: false,
+                    matched: true,
+                }],
+            })
+            .unwrap();
         let ActiveHandoffDecision::Tcp {
             sniff_used,
             plan,
@@ -185,13 +222,15 @@ mod tests {
             source: addr("192.0.2.10:50123"),
             destination: addr("198.51.100.53:443"),
         };
-        let decision = state.apply_udp(ActiveUdpHandoffInput {
-            key,
-            outbound: OUTBOUND_CONTROL_PLANE_ROUTING,
-            sniffed_domain: Some("video.example".to_owned()),
-            mark: 0,
-            must: false,
-        });
+        let decision = state
+            .apply_udp(ActiveUdpHandoffInput {
+                key,
+                outbound: OUTBOUND_CONTROL_PLANE_ROUTING,
+                sniffed_domain: Some("video.example".to_owned()),
+                mark: 0,
+                must: false,
+            })
+            .unwrap();
         assert_eq!(state.len(), 1);
         let ActiveHandoffDecision::Udp {
             outbound,
@@ -217,17 +256,19 @@ mod tests {
             source: addr("192.0.2.10:50123"),
             destination: addr("198.51.100.20:443"),
         };
-        let decision = state.apply_tcp(ActiveTcpHandoffInput {
-            key,
-            dial_mode: TcpDialMode::Domain,
-            initial_outbound: OUTBOUND_BLOCK,
-            sniffed_domain: None,
-            domain_is_real: false,
-            initial_mark: 0,
-            so_mark_from_dae: 1234,
-            mptcp: false,
-            route_rules: Vec::new(),
-        });
+        let decision = state
+            .apply_tcp(ActiveTcpHandoffInput {
+                key,
+                dial_mode: TcpDialMode::Domain,
+                initial_outbound: OUTBOUND_BLOCK,
+                sniffed_domain: None,
+                domain_is_real: false,
+                initial_mark: 0,
+                so_mark_from_dae: 1234,
+                mptcp: false,
+                route_rules: Vec::new(),
+            })
+            .unwrap();
         let ActiveHandoffDecision::Tcp {
             sniff_used, plan, ..
         } = decision
@@ -238,5 +279,31 @@ mod tests {
         assert_eq!(plan.final_dial_target, "198.51.100.20:443");
         assert_eq!(plan.final_mark, 1234);
         assert!(!plan.userspace_route_executed);
+    }
+
+    #[test]
+    fn l4_mismatch_returns_error_without_recording_a_decision() {
+        let mut state = ActiveHandoffState::default();
+        let key = ActiveHandoffKey {
+            l4: ActiveL4::Udp,
+            source: addr("192.0.2.10:50123"),
+            destination: addr("198.51.100.20:443"),
+        };
+        let error = state
+            .apply_tcp(ActiveTcpHandoffInput {
+                key,
+                dial_mode: TcpDialMode::Ip,
+                initial_outbound: OUTBOUND_DIRECT,
+                sniffed_domain: None,
+                domain_is_real: false,
+                initial_mark: 0,
+                so_mark_from_dae: 0,
+                mptcp: false,
+                route_rules: Vec::new(),
+            })
+            .unwrap_err();
+        assert_eq!(error.expected, ActiveL4::Tcp);
+        assert_eq!(error.actual, ActiveL4::Udp);
+        assert!(state.is_empty());
     }
 }
