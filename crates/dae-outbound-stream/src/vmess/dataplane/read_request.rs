@@ -1,5 +1,7 @@
 use super::*;
 
+/// Decodes a VMess AEAD request for an adapter or server-side reader.
+/// Callers that accept untrusted requests must share a replay guard per command key.
 pub fn read_aead_tcp_request_from_stream<S>(
     stream: &mut S,
     uuid: &str,
@@ -217,6 +219,12 @@ where
     if !eauth_crc_validated {
         return Err(OutboundError::BadVmess(
             "VMess EAuthID checksum mismatch".to_owned(),
+        ));
+    }
+    let now = unix_timestamp_now()?;
+    if !eauth_timestamp_is_within_window(eauth_timestamp, now) {
+        return Err(OutboundError::BadVmess(
+            "VMess EAuthID timestamp is outside the allowed window".to_owned(),
         ));
     }
 

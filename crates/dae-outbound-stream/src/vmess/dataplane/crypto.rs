@@ -1,4 +1,37 @@
 use super::*;
+use std::collections::HashMap;
+
+#[derive(Debug)]
+pub struct VMessEauthReplayGuard {
+    entries: HashMap<[u8; 16], u64>,
+    capacity: usize,
+}
+
+impl VMessEauthReplayGuard {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    pub fn check_and_record(&mut self, eauth_id: [u8; 16], now: u64) -> bool {
+        self.entries.retain(|_, expires_at| *expires_at > now);
+        if self.entries.contains_key(&eauth_id) {
+            return false;
+        }
+        if self.entries.len() >= self.capacity
+            && let Some(key) = self.entries.keys().next().copied()
+        {
+            self.entries.remove(&key);
+        }
+        self.entries.insert(
+            eauth_id,
+            now.saturating_add(VMESS_EAUTH_TIMESTAMP_WINDOW_SECS + 1),
+        );
+        true
+    }
+}
 
 pub(super) fn put_eauth_id(
     cmd_key: &[u8; 16],
@@ -229,6 +262,10 @@ pub(super) fn unix_timestamp_now() -> Result<u64, OutboundError> {
         .as_secs())
 }
 
+pub(super) fn eauth_timestamp_is_within_window(timestamp: u64, now: u64) -> bool {
+    timestamp.abs_diff(now) <= VMESS_EAUTH_TIMESTAMP_WINDOW_SECS
+}
+
 pub(super) fn read_exact(
     stream: &mut impl Read,
     buf: &mut [u8],
@@ -276,5 +313,23 @@ mod tests {
         let err = parse_uuid_bytes("gggggggggggggggggggggggggggggggg")
             .expect_err("non-hex ASCII VMess UUID must be rejected");
         assert!(matches!(err, OutboundError::BadVmess(_)));
+    }
+
+    #[test]
+    fn eauth_timestamp_window_is_symmetric_and_bounded() {
+        assert!(eauth_timestamp_is_within_window(1_000, 880));
+        assert!(eauth_timestamp_is_within_window(1_000, 1_120));
+        assert!(!eauth_timestamp_is_within_window(1_000, 879));
+        assert!(!eauth_timestamp_is_within_window(1_000, 1_121));
+    }
+
+    #[test]
+    fn eauth_replay_guard_is_bounded_and_expires_entries() {
+        let mut guard = VMessEauthReplayGuard::new(1);
+        assert!(guard.check_and_record([1; 16], 1_000));
+        assert!(!guard.check_and_record([1; 16], 1_001));
+        assert!(guard.check_and_record([1; 16], 1_121));
+        assert!(guard.check_and_record([2; 16], 2_000));
+        assert!(guard.check_and_record([1; 16], 2_000));
     }
 }
