@@ -6,7 +6,6 @@ use dae_resident_core::{
 };
 
 const DNS_TRANSPORT_WORKER_STACK_BYTES_MIN: usize = 2 * 1024 * 1024;
-const TCP_FLOW_STACK_BYTES_DEFAULT: usize = 512 * 1024;
 const UDP_SOCKET_BUFFER_BYTES_DEFAULT: usize = 512 * 1024;
 const UDP_SOCKET_BUFFER_BYTES_MIN: usize = 64 * 1024;
 const UDP_SOCKET_BUFFER_BYTES_MAX: usize = 8 * 1024 * 1024;
@@ -46,8 +45,7 @@ impl ResidentDnsUdpRuntimeConfig {
             direct_shards,
             proxy_actor_limit: profile.dns_proxy_udp_actors_default(),
             actor_worker_threads: actor_worker_threads.max(1),
-            worker_stack_bytes: TCP_FLOW_STACK_BYTES_DEFAULT
-                .max(DNS_TRANSPORT_WORKER_STACK_BYTES_MIN),
+            worker_stack_bytes: DNS_TRANSPORT_WORKER_STACK_BYTES_MIN,
             socket_buffer_bytes: standalone_socket_buffer_bytes(),
             queue_depth: profile.dns_udp_forwarder_queue_depth_default(),
             pending_limit: profile.dns_udp_forwarder_pending_limit_default(),
