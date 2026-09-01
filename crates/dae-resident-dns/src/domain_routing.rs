@@ -10,7 +10,9 @@ use dae_runtime_control::{
     apply_domain_routing_state_entries_by_id, ip_to_key,
 };
 
-use dae_resident_core::{GenerationFence, GenerationGate, GenerationToken};
+use dae_resident_core::{
+    GenerationFence, GenerationGate, GenerationToken, ResidentDnsResourceProfile,
+};
 #[cfg(test)]
 use dae_resident_core::{LogicalGenerationId, PhysicalRuntimeId};
 
@@ -111,7 +113,9 @@ impl ResidentDnsDomainRouting {
             routing_matcher,
             state: Mutex::new(ResidentDnsDomainRoutingState {
                 owner: DomainRoutingOwner::default(),
-                cache: DnsCacheStore::default(),
+                cache: DnsCacheStore::new(
+                    ResidentDnsResourceProfile::selected().dns_cache_entry_limit(),
+                ),
                 domain_bitmap: Vec::new(),
             }),
             maintenance: maintenance::ResidentDnsDomainRoutingMaintenanceSignal::default(),
@@ -181,6 +185,16 @@ impl ResidentDnsDomainRouting {
         drop(state);
         self.maintenance.notify_deadline_changed();
         Ok(())
+    }
+
+    pub fn cache_entry_count(&self) -> Result<usize, String> {
+        let now_unix = unix_now();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
+        self.sweep_expired_locked(now_unix, &mut state)?;
+        Ok(state.cache.len())
     }
 
     pub fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<(), String> {
@@ -440,8 +454,13 @@ pub(super) fn build_resident_dns_domain_routing_update_plan(
         .copied()
         .map(ip_to_key)
         .collect::<Vec<_>>();
-    let mut entry = cache_plan.entry.clone();
-    entry.domain_bitmap.clear();
+    let mut entry = DnsCacheEntry::new(
+        cache_plan.entry.deadline_unix,
+        cache_plan.entry.original_deadline_unix,
+    );
+    entry.route_owner_key = cache_plan.entry.route_owner_key.clone();
+    entry.ips = cache_plan.entry.ips.clone();
+    entry.has_any_ip = cache_plan.entry.has_any_ip;
     entry.domain_bitmap.extend_from_slice(bitmap);
     Ok(Some(ResidentDnsDomainRoutingUpdatePlan {
         key: cache_plan.key.clone(),

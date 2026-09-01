@@ -11,7 +11,6 @@ use dae_resident_transport::{
 };
 
 use crate::unix_now;
-use dae_dns::cache::DNS_CACHE_MAX_ENTRIES;
 use dae_dns::{DnsCacheEntry, DnsCacheKey, DnsCacheStats, DnsPacketView};
 
 mod reload;
@@ -20,11 +19,13 @@ mod deadline_index;
 use self::deadline_index::{ResidentDnsCacheDeadline, ResidentDnsCacheDeadlineIndex};
 
 const DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS: i64 = 60;
+const DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES: usize = 4 * 1024;
 
 #[derive(Debug)]
 pub struct ResidentDnsRuntimeCache {
     state: Mutex<ResidentDnsRuntimeCacheState>,
     inflight: Mutex<BTreeMap<ResidentDnsResponseCacheKey, Arc<ResidentDnsFlightState>>>,
+    cache_entry_limit: usize,
     flight_entry_limit: usize,
     flight_follower_limit: usize,
     flight_retained_budget: Arc<ResidentDnsFlightRetainedBudget>,
@@ -36,6 +37,7 @@ impl Default for ResidentDnsRuntimeCache {
         Self {
             state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
             inflight: Mutex::new(BTreeMap::new()),
+            cache_entry_limit: resources.dns_cache_entry_limit(),
             flight_entry_limit: resources.flight_entry_limit(),
             flight_follower_limit: resources.flight_followers_per_entry(),
             flight_retained_budget: Arc::new(ResidentDnsFlightRetainedBudget::new(
@@ -55,7 +57,7 @@ struct ResidentDnsRuntimeCacheState {
 
 #[derive(Debug)]
 struct ResidentDnsStoredCacheEntry {
-    entry: DnsCacheEntry,
+    entry: Arc<DnsCacheEntry>,
     deadline: ResidentDnsCacheDeadline,
 }
 
@@ -197,6 +199,21 @@ pub struct ResidentDnsFlightPermit<'a> {
 
 impl ResidentDnsRuntimeCache {
     #[cfg(any(test, feature = "test-support"))]
+    pub fn with_cache_entry_limit(cache_entry_limit: usize) -> Self {
+        let resources = ResidentDnsResourceProfile::selected();
+        Self {
+            state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
+            inflight: Mutex::new(BTreeMap::new()),
+            cache_entry_limit: cache_entry_limit.max(1),
+            flight_entry_limit: resources.flight_entry_limit(),
+            flight_follower_limit: resources.flight_followers_per_entry(),
+            flight_retained_budget: Arc::new(ResidentDnsFlightRetainedBudget::new(
+                resources.flight_retained_bytes(),
+            )),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_flight_entry_limit(flight_entry_limit: usize) -> Self {
         let resources = ResidentDnsResourceProfile::selected();
         Self::with_flight_limits(
@@ -212,9 +229,11 @@ impl ResidentDnsRuntimeCache {
         flight_follower_limit: usize,
         flight_retained_bytes: usize,
     ) -> Self {
+        let resources = ResidentDnsResourceProfile::selected();
         Self {
             state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
             inflight: Mutex::new(BTreeMap::new()),
+            cache_entry_limit: resources.dns_cache_entry_limit(),
             flight_entry_limit: flight_entry_limit.max(1),
             flight_follower_limit: flight_follower_limit.max(1),
             flight_retained_budget: Arc::new(ResidentDnsFlightRetainedBudget::new(
@@ -337,13 +356,16 @@ impl ResidentDnsRuntimeCache {
         key: ResidentDnsResponseCacheKey,
         mut entry: DnsCacheEntry,
     ) -> Result<(), String> {
+        if entry.packed_response.len() > DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES {
+            return Ok(());
+        }
         let mut state = self
             .state
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
         sweep_expired_if_due(&mut state, now_unix);
         if !state.entries.contains_key(&key) {
-            evict_entries(&mut state, now_unix);
+            evict_entries(&mut state, now_unix, self.cache_entry_limit);
         }
         entry.route_owner_key = key.base.to_string();
         insert_cache_entry(&mut state, key, entry);
@@ -392,6 +414,16 @@ impl ResidentDnsRuntimeCache {
             .lock()
             .map(|state| state.entries.len())
             .unwrap_or(0)
+    }
+
+    pub fn entry_count(&self) -> Result<usize, String> {
+        let now_unix = unix_now();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        sweep_expired_if_due(&mut state, now_unix);
+        Ok(state.entries.len())
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -456,9 +488,13 @@ fn lookup_scoped_response_into(
     Ok(false)
 }
 
-fn evict_entries(state: &mut ResidentDnsRuntimeCacheState, now_unix: i64) {
+fn evict_entries(
+    state: &mut ResidentDnsRuntimeCacheState,
+    now_unix: i64,
+    cache_entry_limit: usize,
+) {
     remove_expired_entries(state, now_unix);
-    while state.entries.len() >= DNS_CACHE_MAX_ENTRIES {
+    while state.entries.len() >= cache_entry_limit.max(1) {
         let Some(deadline) = state.deadlines.pop_first() else {
             break;
         };
@@ -500,11 +536,12 @@ fn remove_expired_entries(state: &mut ResidentDnsRuntimeCacheState, now_unix: i6
 fn insert_cache_entry(
     state: &mut ResidentDnsRuntimeCacheState,
     key: ResidentDnsResponseCacheKey,
-    entry: DnsCacheEntry,
+    entry: impl Into<Arc<DnsCacheEntry>>,
 ) {
     if let Some(previous) = state.entries.remove(&key) {
         state.deadlines.remove(&previous.deadline);
     }
+    let entry = entry.into();
     let deadline = state
         .deadlines
         .insert(key.clone(), entry.cache_expires_at());
@@ -519,7 +556,7 @@ fn remove_cache_entry(
 ) -> Option<DnsCacheEntry> {
     let stored = state.entries.remove(key)?;
     state.deadlines.remove(&stored.deadline);
-    Some(stored.entry)
+    Some(Arc::try_unwrap(stored.entry).unwrap_or_else(|entry| entry.as_ref().clone()))
 }
 
 impl ResidentDnsFlightPermit<'_> {

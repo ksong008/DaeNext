@@ -16,12 +16,18 @@ pub(super) fn api_general_cache_stats(app: &AppState) -> HttpResponse {
         Err(err) => return HttpResponse::json(500, json!({"error": err.to_string()})),
     };
     let latency = count_table(&conn, "node_latency_results").unwrap_or(0);
+    let runtime = app.runtime.summary();
+    let metrics = runtime
+        .pointer("/residentDataplane/metrics")
+        .unwrap_or(&Value::Null);
+    let dns_cache = metrics["dnsCacheEntries"].as_u64().unwrap_or(0);
+    let routing_cache = metrics["dnsRoutingCacheEntries"].as_u64().unwrap_or(0);
     HttpResponse::json(
         200,
         json!({
-            "dnsCacheEntries": 0,
+            "dnsCacheEntries": dns_cache,
             "nodeLatencyCacheEntries": latency,
-            "routingCacheEntries": 0,
+            "routingCacheEntries": routing_cache,
         }),
     )
 }

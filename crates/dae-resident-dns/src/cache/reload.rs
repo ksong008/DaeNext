@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResidentDnsRuntimeCacheSnapshot {
-    entries: Vec<(ResidentDnsResponseCacheKey, DnsCacheEntry)>,
+    entries: Vec<(ResidentDnsResponseCacheKey, Arc<DnsCacheEntry>)>,
 }
 
 impl ResidentDnsRuntimeCacheSnapshot {
@@ -48,11 +48,70 @@ impl ResidentDnsRuntimeCache {
                 continue;
             }
             if !state.entries.contains_key(key) {
-                evict_entries(&mut state, now_unix);
+                evict_entries(&mut state, now_unix, self.cache_entry_limit);
             }
-            insert_cache_entry(&mut state, key.clone(), entry.clone());
+            insert_cache_entry(&mut state, key.clone(), Arc::clone(entry));
             restored += 1;
         }
         Ok(restored)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reload_snapshot_shares_entries_with_the_source_cache() {
+        let cache = ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+        let key = ResidentDnsResponseCacheKey::new(
+            DnsCacheKey::new("shared.example.", 1, 1),
+            ResidentDnsResponseCacheScope::Reject,
+        );
+        cache
+            .insert_response(
+                unix_now(),
+                key,
+                DnsCacheEntry::new(unix_now() + 60, unix_now() + 60),
+            )
+            .unwrap();
+
+        let snapshot = cache.snapshot_for_reload().unwrap();
+        assert_eq!(snapshot.entry_count(), 1);
+        assert_eq!(Arc::strong_count(&snapshot.entries[0].1), 2);
+
+        let restored = ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+        assert_eq!(restored.restore_reload_snapshot(&snapshot).unwrap(), 1);
+        assert_eq!(Arc::strong_count(&snapshot.entries[0].1), 3);
+    }
+
+    #[test]
+    fn cache_capacity_is_profileled_and_large_packed_responses_are_not_retained() {
+        let cache = ResidentDnsRuntimeCache::with_cache_entry_limit(1);
+        let now = unix_now();
+        let first = ResidentDnsResponseCacheKey::new(
+            DnsCacheKey::new("first.example.", 1, 1),
+            ResidentDnsResponseCacheScope::Reject,
+        );
+        let second = ResidentDnsResponseCacheKey::new(
+            DnsCacheKey::new("second.example.", 1, 1),
+            ResidentDnsResponseCacheScope::Reject,
+        );
+        cache
+            .insert_response(now, first, DnsCacheEntry::new(now + 60, now + 60))
+            .unwrap();
+        cache
+            .insert_response(now, second, DnsCacheEntry::new(now + 60, now + 60))
+            .unwrap();
+        assert_eq!(cache.entry_len(), 1);
+
+        let large = ResidentDnsResponseCacheKey::new(
+            DnsCacheKey::new("large.example.", 1, 1),
+            ResidentDnsResponseCacheScope::Reject,
+        );
+        let mut large_entry = DnsCacheEntry::new(now + 60, now + 60);
+        large_entry.packed_response = vec![0; DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES + 1];
+        cache.insert_response(now, large, large_entry).unwrap();
+        assert_eq!(cache.entry_len(), 1);
     }
 }

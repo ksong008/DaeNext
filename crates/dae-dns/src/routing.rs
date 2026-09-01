@@ -157,11 +157,35 @@ impl RequestMatcher {
         } else {
             self.domain_matcher.match_domain_bitmap(qname)
         };
+        self.match_request_with_bitmap(qtype, &domain_bitmap)
+    }
 
+    pub fn match_request_into(
+        &self,
+        qname: &str,
+        qtype: u16,
+        domain_bitmap: &mut Vec<u32>,
+    ) -> Result<DnsRequestOutboundIndex, DnsError> {
+        domain_bitmap.resize(self.domain_matcher.bitmap_words(), 0);
+        if qname.is_empty() {
+            domain_bitmap.fill(0);
+        } else {
+            self.domain_matcher
+                .fill_domain_bitmap(qname, domain_bitmap)
+                .map_err(|err| DnsError::Resolve(err.to_string()))?;
+        }
+        self.match_request_with_bitmap(qtype, domain_bitmap)
+    }
+
+    fn match_request_with_bitmap(
+        &self,
+        qtype: u16,
+        domain_bitmap: &[u32],
+    ) -> Result<DnsRequestOutboundIndex, DnsError> {
         let mut good_subrule = false;
         let mut bad_rule = false;
         for (index, match_set) in self.matches.iter().enumerate() {
-            if !bad_rule && !good_subrule && match_set.matches(index, qtype, &domain_bitmap) {
+            if !bad_rule && !good_subrule && match_set.matches(index, qtype, domain_bitmap) {
                 good_subrule = true;
             }
 
@@ -294,16 +318,41 @@ impl ResponseMatcher {
         ips: &[IpAddr],
         upstream: DnsRequestOutboundIndex,
     ) -> Result<DnsResponseOutboundIndex, DnsError> {
+        let mut domain_bitmap = Vec::new();
+        self.match_response_into(qname, qtype, ips, upstream, &mut domain_bitmap)
+    }
+
+    pub fn match_response_into(
+        &self,
+        qname: &str,
+        qtype: u16,
+        ips: &[IpAddr],
+        upstream: DnsRequestOutboundIndex,
+        domain_bitmap: &mut Vec<u32>,
+    ) -> Result<DnsResponseOutboundIndex, DnsError> {
         if qname.is_empty() {
             return Err(DnsError::Resolve("qName cannot be empty".to_owned()));
         }
-        let domain_bitmap = self.domain_matcher.match_domain_bitmap(qname);
+        domain_bitmap.resize(self.domain_matcher.bitmap_words(), 0);
+        self.domain_matcher
+            .fill_domain_bitmap(qname, domain_bitmap)
+            .map_err(|err| DnsError::Resolve(err.to_string()))?;
+        self.match_response_with_bitmap(qtype, ips, upstream, domain_bitmap)
+    }
+
+    fn match_response_with_bitmap(
+        &self,
+        qtype: u16,
+        ips: &[IpAddr],
+        upstream: DnsRequestOutboundIndex,
+        domain_bitmap: &[u32],
+    ) -> Result<DnsResponseOutboundIndex, DnsError> {
         let mut good_subrule = false;
         let mut bad_rule = false;
         for (index, match_set) in self.matches.iter().enumerate() {
             if !bad_rule
                 && !good_subrule
-                && match_set.matches(index, qtype, ips, upstream, &domain_bitmap, &self.lpm_sets)
+                && match_set.matches(index, qtype, ips, upstream, domain_bitmap, &self.lpm_sets)
             {
                 good_subrule = true;
             }

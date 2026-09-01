@@ -18,6 +18,9 @@ const HIGH_PERFORMANCE_TCP_CONNECTION_LIMIT: usize = 4_096;
 const LOW_MEMORY_WEBSOCKET_CONTROL_QUEUE_DEPTH: usize = 2;
 const BALANCED_WEBSOCKET_CONTROL_QUEUE_DEPTH: usize = 4;
 const HIGH_PERFORMANCE_WEBSOCKET_CONTROL_QUEUE_DEPTH: usize = 8;
+const LOW_MEMORY_TCP_RELAY_BUFFER_BYTES: usize = 16 * 1024;
+const BALANCED_TCP_RELAY_BUFFER_BYTES: usize = 64 * 1024;
+const HIGH_PERFORMANCE_TCP_RELAY_BUFFER_BYTES: usize = 64 * 1024;
 const LOW_MEMORY_UDP_SESSION_SOFT_WATERMARK: usize = 128;
 const BALANCED_UDP_SESSION_SOFT_WATERMARK: usize = 512;
 const HIGH_PERFORMANCE_UDP_SESSION_SOFT_WATERMARK: usize = 1_024;
@@ -251,6 +254,9 @@ const HIGH_PERFORMANCE_DNS_PROXY_UDP_ACTORS: usize = 16;
 const LOW_MEMORY_DNS_FLIGHT_ENTRY_LIMIT: usize = 1_024;
 const BALANCED_DNS_FLIGHT_ENTRY_LIMIT: usize = 4_096;
 const HIGH_PERFORMANCE_DNS_FLIGHT_ENTRY_LIMIT: usize = 16_384;
+const LOW_MEMORY_DNS_CACHE_ENTRY_LIMIT: usize = 1_024;
+const BALANCED_DNS_CACHE_ENTRY_LIMIT: usize = 4_096;
+const HIGH_PERFORMANCE_DNS_CACHE_ENTRY_LIMIT: usize = 4_096;
 const LOW_MEMORY_DNS_FLIGHT_FOLLOWERS_PER_ENTRY: usize = 512;
 const BALANCED_DNS_FLIGHT_FOLLOWERS_PER_ENTRY: usize = 4_096;
 const HIGH_PERFORMANCE_DNS_FLIGHT_FOLLOWERS_PER_ENTRY: usize = 16_384;
@@ -324,6 +330,7 @@ pub struct QuicCandidateRaceResourceProfile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TcpRelayResourceProfile {
     websocket_control_queue_depth: usize,
+    tcp_relay_buffer_bytes: usize,
 }
 
 impl TcpRelayResourceProfile {
@@ -340,11 +347,20 @@ impl TcpRelayResourceProfile {
                     HIGH_PERFORMANCE_WEBSOCKET_CONTROL_QUEUE_DEPTH
                 }
             },
+            tcp_relay_buffer_bytes: match profile {
+                ResidentRuntimeProfile::LowMemory => LOW_MEMORY_TCP_RELAY_BUFFER_BYTES,
+                ResidentRuntimeProfile::Balanced => BALANCED_TCP_RELAY_BUFFER_BYTES,
+                ResidentRuntimeProfile::HighPerformance => HIGH_PERFORMANCE_TCP_RELAY_BUFFER_BYTES,
+            },
         }
     }
 
     pub const fn websocket_control_queue_depth(self) -> usize {
         self.websocket_control_queue_depth
+    }
+
+    pub const fn tcp_relay_buffer_bytes(self) -> usize {
+        self.tcp_relay_buffer_bytes
     }
 }
 
@@ -386,6 +402,7 @@ impl QuicCandidateRaceResourceProfile {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResidentDnsResourceProfile {
+    dns_cache_entry_limit: usize,
     flight_entry_limit: usize,
     flight_followers_per_entry: usize,
     flight_retained_bytes: usize,
@@ -470,6 +487,7 @@ impl ResidentDnsResourceProfile {
     pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
         match profile {
             ResidentRuntimeProfile::LowMemory => Self {
+                dns_cache_entry_limit: LOW_MEMORY_DNS_CACHE_ENTRY_LIMIT,
                 flight_entry_limit: LOW_MEMORY_DNS_FLIGHT_ENTRY_LIMIT,
                 flight_followers_per_entry: LOW_MEMORY_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: LOW_MEMORY_DNS_FLIGHT_RETAINED_BYTES,
@@ -485,6 +503,7 @@ impl ResidentDnsResourceProfile {
                 bind_tcp_queries_per_connection: LOW_MEMORY_DNS_BIND_TCP_QUERIES_PER_CONNECTION,
             },
             ResidentRuntimeProfile::Balanced => Self {
+                dns_cache_entry_limit: BALANCED_DNS_CACHE_ENTRY_LIMIT,
                 flight_entry_limit: BALANCED_DNS_FLIGHT_ENTRY_LIMIT,
                 flight_followers_per_entry: BALANCED_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: BALANCED_DNS_FLIGHT_RETAINED_BYTES,
@@ -500,6 +519,7 @@ impl ResidentDnsResourceProfile {
                 bind_tcp_queries_per_connection: BALANCED_DNS_BIND_TCP_QUERIES_PER_CONNECTION,
             },
             ResidentRuntimeProfile::HighPerformance => Self {
+                dns_cache_entry_limit: HIGH_PERFORMANCE_DNS_CACHE_ENTRY_LIMIT,
                 flight_entry_limit: HIGH_PERFORMANCE_DNS_FLIGHT_ENTRY_LIMIT,
                 flight_followers_per_entry: HIGH_PERFORMANCE_DNS_FLIGHT_FOLLOWERS_PER_ENTRY,
                 flight_retained_bytes: HIGH_PERFORMANCE_DNS_FLIGHT_RETAINED_BYTES,
@@ -520,6 +540,10 @@ impl ResidentDnsResourceProfile {
 
     pub const fn flight_entry_limit(self) -> usize {
         self.flight_entry_limit
+    }
+
+    pub const fn dns_cache_entry_limit(self) -> usize {
+        self.dns_cache_entry_limit
     }
 
     pub const fn flight_followers_per_entry(self) -> usize {
@@ -580,6 +604,7 @@ impl ResidentDnsResourceProfile {
 
     pub fn json(self) -> Value {
         json!({
+            "dnsCacheEntryLimit": self.dns_cache_entry_limit,
             "flightEntryLimit": self.flight_entry_limit,
             "flightFollowersPerEntry": self.flight_followers_per_entry,
             "flightRetainedBytes": self.flight_retained_bytes,
@@ -1996,6 +2021,11 @@ mod tests {
 
         assert!(low.flight_entry_limit() < balanced.flight_entry_limit());
         assert!(balanced.flight_entry_limit() < high.flight_entry_limit());
+        assert!(low.dns_cache_entry_limit() < balanced.dns_cache_entry_limit());
+        assert_eq!(
+            balanced.dns_cache_entry_limit(),
+            high.dns_cache_entry_limit()
+        );
         assert!(low.flight_followers_per_entry() < balanced.flight_followers_per_entry());
         assert!(balanced.flight_followers_per_entry() < high.flight_followers_per_entry());
         assert!(low.flight_retained_bytes() < balanced.flight_retained_bytes());
@@ -2038,6 +2068,10 @@ mod tests {
             assert_eq!(
                 contract["flightEntryLimit"],
                 json!(resources.flight_entry_limit())
+            );
+            assert_eq!(
+                contract["dnsCacheEntryLimit"],
+                json!(resources.dns_cache_entry_limit())
             );
             assert_eq!(
                 contract["upstreamCandidateRaceWidth"],
@@ -2087,6 +2121,16 @@ mod tests {
         assert!(
             ResidentRuntimeProfile::Balanced.tcp_connection_limit_default()
                 < ResidentRuntimeProfile::HighPerformance.tcp_connection_limit_default()
+        );
+        assert_eq!(
+            TcpRelayResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory)
+                .tcp_relay_buffer_bytes(),
+            16 * 1024
+        );
+        assert_eq!(
+            TcpRelayResourceProfile::from_runtime_profile(ResidentRuntimeProfile::Balanced)
+                .tcp_relay_buffer_bytes(),
+            64 * 1024
         );
         assert!(
             ResidentRuntimeProfile::LowMemory.quic_endpoint_limit_default()

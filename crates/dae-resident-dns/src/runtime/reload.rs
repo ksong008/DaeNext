@@ -57,6 +57,17 @@ impl ResidentDnsReloadHandle {
             domain_routing,
         })
     }
+
+    pub fn cache_entry_counts(&self) -> Result<(usize, usize), String> {
+        let response_cache_entries = self.response_cache.entry_count()?;
+        let domain_routing_entries = self
+            .domain_routing
+            .as_ref()
+            .map(|domain_routing| domain_routing.cache_entry_count())
+            .transpose()?
+            .unwrap_or(0);
+        Ok((response_cache_entries, domain_routing_entries))
+    }
 }
 
 impl ResidentDnsReloadRestoreReport {
