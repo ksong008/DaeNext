@@ -1,11 +1,8 @@
+use dae_ebpf_support::{
+    ConnectivityEvent, ConnectivityKey, runtime_maps::ValidatedRuntimeMapHandle,
+};
 use std::collections::HashMap;
 use std::io;
-use std::os::fd::{AsRawFd, OwnedFd};
-
-use dae_ebpf_support::{
-    ConnectivityEvent, ConnectivityKey,
-    runtime_maps::{open_map_fd, update_map_elem_bytes},
-};
 
 const KNOWN_L4_COUNT: usize = 3;
 const KNOWN_IP_COUNT: usize = 2;
@@ -48,7 +45,7 @@ pub struct OutboundConnectivityOwner {
 #[derive(Debug, Default)]
 pub struct OutboundConnectivityMapOwner {
     owner: OutboundConnectivityOwner,
-    map_fd: Option<(u32, OwnedFd)>,
+    map_fd: Option<(u32, ValidatedRuntimeMapHandle)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -371,11 +368,17 @@ impl OutboundConnectivityMapOwner {
     }
 
     fn write_entries(&mut self, map_id: u32, entries: &[ConnectivityStateEntry]) -> io::Result<()> {
-        let fd = self.ensure_fd(map_id)?;
+        self.ensure_fd(map_id)?;
         for entry in entries {
             let key = [entry.key.outbound, entry.key.l4proto, entry.key.ipversion];
             let value = entry.value.to_ne_bytes();
-            if let Err(err) = update_map_elem_bytes(fd, &key, &value) {
+            let result = self
+                .map_fd
+                .as_ref()
+                .expect("connectivity owner map handle is present")
+                .1
+                .update_elem_bytes(&key, &value);
+            if let Err(err) = result {
                 self.map_fd = None;
                 return Err(err);
             }
@@ -383,20 +386,15 @@ impl OutboundConnectivityMapOwner {
         Ok(())
     }
 
-    fn ensure_fd(&mut self, map_id: u32) -> io::Result<i32> {
+    fn ensure_fd(&mut self, map_id: u32) -> io::Result<()> {
         let needs_open = self
             .map_fd
             .as_ref()
             .is_none_or(|(cached_map_id, _)| *cached_map_id != map_id);
         if needs_open {
-            self.map_fd = Some((map_id, open_map_fd(map_id)?));
+            self.map_fd = Some((map_id, ValidatedRuntimeMapHandle::open_by_id(map_id)?));
         }
-        Ok(self
-            .map_fd
-            .as_ref()
-            .expect("connectivity owner map fd is present")
-            .1
-            .as_raw_fd())
+        Ok(())
     }
 }
 

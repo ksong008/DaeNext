@@ -3,15 +3,14 @@ use std::{
     io,
     mem::size_of,
     net::IpAddr,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    os::fd::{FromRawFd, OwnedFd},
 };
 
 use dae_config::Config;
 use dae_core_types::OutboundIndex;
 use dae_ebpf_support::{
-    RuntimeMapInfo, RuntimeMapSnapshot, delete_map_elem_bytes, lookup_map_elem_bytes,
-    map_keys_by_fd, open_map_fd, runtime_map_name_matches as support_runtime_map_name_matches,
-    update_map_elem_bytes,
+    RuntimeMapInfo, RuntimeMapSnapshot, ValidatedRuntimeMapHandle,
+    runtime_map_name_matches as support_runtime_map_name_matches,
 };
 use dae_routing::IpPrefix;
 use serde_json::{Value, json};
@@ -26,20 +25,22 @@ use super::{
 use dae_resident_dataplane::facade::SharedResidentIpPrefixSet;
 
 pub(super) fn update_lpm_array_map(
-    lpm_array_fd: i32,
+    lpm_array_map: &ValidatedRuntimeMapHandle,
     lpm_sets: &[SharedResidentIpPrefixSet],
 ) -> Result<(), String> {
     for (index, prefixes) in lpm_sets.iter().enumerate() {
         let inner = create_lpm_map(prefixes)?;
         let key = (index as u32).to_ne_bytes();
         let value = (inner.as_raw_fd() as u32).to_ne_bytes();
-        update_map_elem_bytes(lpm_array_fd, &key, &value).map_err(|err| err.to_string())?;
+        lpm_array_map
+            .update_elem_bytes(&key, &value)
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }
 
 pub(super) fn update_outbound_connectivity_map(
-    connectivity_fd: i32,
+    connectivity_map: &ValidatedRuntimeMapHandle,
     config: &Config,
 ) -> Result<Value, String> {
     let outbound_ids = resident_user_outbound_ids(config);
@@ -61,15 +62,18 @@ pub(super) fn update_outbound_connectivity_map(
             "alive": true,
         });
         desired.push(item.clone());
-        if connectivity_value_is_alive(connectivity_fd, &key)? {
+        if connectivity_value_is_alive(connectivity_map, &key)? {
             skipped.push(item);
             continue;
         }
-        update_map_elem_bytes(connectivity_fd, &key, &alive).map_err(|err| err.to_string())?;
+        connectivity_map
+            .update_elem_bytes(&key, &alive)
+            .map_err(|err| err.to_string())?;
         written.push(item);
     }
     let mut deleted = Vec::new();
-    for key in map_keys_by_fd(connectivity_fd, super::OUTBOUND_CONNECTIVITY_KEY_SIZE)
+    for key in connectivity_map
+        .keys(super::OUTBOUND_CONNECTIVITY_KEY_SIZE)
         .map_err(|err| err.to_string())?
     {
         let [outbound, l4proto, ipversion] = key.as_slice() else {
@@ -79,7 +83,7 @@ pub(super) fn update_outbound_connectivity_map(
         if desired_keys.contains(&key) {
             continue;
         }
-        if let Err(err) = delete_map_elem_bytes(connectivity_fd, &key)
+        if let Err(err) = connectivity_map.delete_elem_bytes(&key)
             && err.raw_os_error() != Some(libc::ENOENT)
         {
             return Err(err.to_string());
@@ -105,9 +109,12 @@ pub(super) fn update_outbound_connectivity_map(
     }))
 }
 
-fn connectivity_value_is_alive(connectivity_fd: i32, key: &[u8; 3]) -> Result<bool, String> {
+fn connectivity_value_is_alive(
+    connectivity_map: &ValidatedRuntimeMapHandle,
+    key: &[u8; 3],
+) -> Result<bool, String> {
     let mut value = [0_u8; 4];
-    match lookup_map_elem_bytes(connectivity_fd, key, &mut value) {
+    match connectivity_map.lookup_elem_bytes(key, &mut value) {
         Ok(()) => Ok(u32::from_ne_bytes(value) == 1),
         Err(err) if err.raw_os_error() == Some(libc::ENOENT) => Ok(false),
         Err(err) => Err(err.to_string()),
@@ -148,23 +155,26 @@ pub(super) fn resident_outbound_connectivity_entries(
     entries
 }
 
-fn create_lpm_map(prefixes: &[IpPrefix]) -> Result<OwnedFd, String> {
-    let fd = create_bpf_map(CreateBpfMapSpec {
-        name: UNUSED_LPM_TYPE_NAME,
-        map_type: BPF_MAP_TYPE_LPM_TRIE,
-        key_size: LPM_KEY_SIZE,
-        value_size: LPM_VALUE_SIZE,
-        max_entries: LPM_MAX_ENTRIES,
-        map_flags: BPF_F_NO_PREALLOC,
-    })
+fn create_lpm_map(prefixes: &[IpPrefix]) -> Result<ValidatedRuntimeMapHandle, String> {
+    let map = ValidatedRuntimeMapHandle::from_owned_fd(
+        create_bpf_map(CreateBpfMapSpec {
+            name: UNUSED_LPM_TYPE_NAME,
+            map_type: BPF_MAP_TYPE_LPM_TRIE,
+            key_size: LPM_KEY_SIZE,
+            value_size: LPM_VALUE_SIZE,
+            max_entries: LPM_MAX_ENTRIES,
+            map_flags: BPF_F_NO_PREALLOC,
+        })
+        .map_err(|err| format!("create resident LPM trie map failed: {err}"))?,
+    )
     .map_err(|err| format!("create resident LPM trie map failed: {err}"))?;
     let one = 1_u32.to_ne_bytes();
     for prefix in prefixes {
         let key = prefix_to_lpm_key(prefix);
-        update_map_elem_bytes(fd.as_raw_fd(), &key, &one)
+        map.update_elem_bytes(&key, &one)
             .map_err(|err| format!("update resident LPM trie map failed: {err}"))?;
     }
-    Ok(fd)
+    Ok(map)
 }
 
 fn prefix_to_lpm_key(prefix: &IpPrefix) -> [u8; 20] {
@@ -203,7 +213,7 @@ pub(super) fn open_unique_map(
     snapshot: &RuntimeMapSnapshot,
     ids: &[u32],
     name: &str,
-) -> Result<(OwnedFd, RuntimeMapInfo), String> {
+) -> Result<ValidatedRuntimeMapHandle, String> {
     let candidates = snapshot.all_by_name_in_ids(ids, name);
     if candidates.len() != 1 {
         return Err(format!(
@@ -218,7 +228,7 @@ pub(super) fn open_optional_unique_map(
     snapshot: &RuntimeMapSnapshot,
     ids: &[u32],
     name: &str,
-) -> Result<Option<(OwnedFd, RuntimeMapInfo)>, String> {
+) -> Result<Option<ValidatedRuntimeMapHandle>, String> {
     let candidates = snapshot.all_by_name_in_ids(ids, name);
     if candidates.len() > 1 {
         return Err(format!(
@@ -236,7 +246,7 @@ pub(super) fn open_latest_map_in_ids(
     snapshot: &RuntimeMapSnapshot,
     ids: &[u32],
     name: &str,
-) -> Result<Option<(OwnedFd, RuntimeMapInfo)>, String> {
+) -> Result<Option<ValidatedRuntimeMapHandle>, String> {
     snapshot
         .latest_by_name_in_ids(ids, name)
         .map(open_map_info)
@@ -247,7 +257,7 @@ pub(super) fn open_all_maps(
     snapshot: &RuntimeMapSnapshot,
     ids: &[u32],
     name: &str,
-) -> Result<Vec<(OwnedFd, RuntimeMapInfo)>, String> {
+) -> Result<Vec<ValidatedRuntimeMapHandle>, String> {
     snapshot
         .all_by_name_in_ids(ids, name)
         .into_iter()
@@ -259,10 +269,16 @@ pub(super) fn runtime_map_name_matches(actual: &str, expected: &str) -> bool {
     support_runtime_map_name_matches(actual, expected)
 }
 
-fn open_map_info(info: &RuntimeMapInfo) -> Result<(OwnedFd, RuntimeMapInfo), String> {
-    open_map_fd(info.id)
-        .map(|fd| (fd, info.clone()))
-        .map_err(|err| err.to_string())
+fn open_map_info(info: &RuntimeMapInfo) -> Result<ValidatedRuntimeMapHandle, String> {
+    let map = ValidatedRuntimeMapHandle::open_by_id(info.id).map_err(|err| err.to_string())?;
+    if map.info() != info {
+        return Err(format!(
+            "map identity changed while opening id {}: snapshot={info:?} opened={:?}",
+            info.id,
+            map.info()
+        ));
+    }
+    Ok(map)
 }
 
 pub(super) fn map_json(info: &RuntimeMapInfo) -> Value {

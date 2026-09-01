@@ -1,8 +1,6 @@
+use crate::ValidatedRuntimeMapHandle;
 use std::collections::{HashMap, hash_map::Entry};
 use std::io;
-use std::os::fd::{AsRawFd, OwnedFd};
-
-use crate::{open_map_fd, update_map_elem_bytes};
 
 const KNOWN_L4_COUNT: usize = 3;
 const KNOWN_IP_COUNT: usize = 2;
@@ -141,16 +139,16 @@ pub fn update_connectivity_map_by_id(
         return Ok(plan);
     }
 
-    let fd = open_map_fd(map_id)?;
+    let map = ValidatedRuntimeMapHandle::open_by_id(map_id)?;
     let key = [plan.key.outbound, plan.key.l4proto, plan.key.ipversion];
     let value = plan.value.to_ne_bytes();
-    update_map_elem_bytes(fd.as_raw_fd(), &key, &value)?;
+    map.update_elem_bytes(&key, &value)?;
     Ok(plan)
 }
 
 #[derive(Debug, Default)]
 pub struct ConnectivityMapFdCache {
-    maps: HashMap<u32, OwnedFd>,
+    maps: HashMap<u32, ValidatedRuntimeMapHandle>,
     states: HashMap<u32, ConnectivityMap>,
 }
 
@@ -168,13 +166,13 @@ impl ConnectivityMapFdCache {
             return Ok(plan);
         }
 
-        let fd = match self.maps.entry(map_id) {
+        let map = match self.maps.entry(map_id) {
             Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => entry.insert(open_map_fd(map_id)?),
+            Entry::Vacant(entry) => entry.insert(ValidatedRuntimeMapHandle::open_by_id(map_id)?),
         };
         let key = [plan.key.outbound, plan.key.l4proto, plan.key.ipversion];
         let value = plan.value.to_ne_bytes();
-        if let Err(err) = update_map_elem_bytes(fd.as_raw_fd(), &key, &value) {
+        if let Err(err) = map.update_elem_bytes(&key, &value) {
             self.maps.remove(&map_id);
             self.states.remove(&map_id);
             return Err(err);

@@ -31,6 +31,88 @@ pub struct RuntimeMapInfo {
     pub flags: u32,
 }
 
+#[derive(Debug)]
+pub struct ValidatedRuntimeMapHandle {
+    fd: OwnedFd,
+    info: RuntimeMapInfo,
+}
+
+impl ValidatedRuntimeMapHandle {
+    pub fn open_by_id(id: u32) -> io::Result<Self> {
+        let handle = Self::from_owned_fd(open_map_fd(id)?)?;
+        if handle.info.id != id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "BPF map identity changed while opening id {id}: got {}",
+                    handle.info.id
+                ),
+            ));
+        }
+        Ok(handle)
+    }
+
+    pub fn from_owned_fd(fd: OwnedFd) -> io::Result<Self> {
+        let info = map_info(fd.as_raw_fd())?;
+        Ok(Self { fd, info })
+    }
+
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.fd.as_raw_fd()
+    }
+
+    pub fn info(&self) -> &RuntimeMapInfo {
+        &self.info
+    }
+
+    pub fn update_elem_bytes(&self, key: &[u8], value: &[u8]) -> io::Result<()> {
+        update_map_elem_bytes_with_sizes(
+            self.as_raw_fd(),
+            key,
+            value,
+            self.info.key_size,
+            self.info.value_size,
+        )
+    }
+
+    pub fn delete_elem_bytes(&self, key: &[u8]) -> io::Result<()> {
+        delete_map_elem_bytes_with_size(self.as_raw_fd(), key, self.info.key_size)
+    }
+
+    pub fn lookup_elem_bytes(&self, key: &[u8], value: &mut [u8]) -> io::Result<()> {
+        lookup_map_elem_bytes_with_sizes(
+            self.as_raw_fd(),
+            key,
+            value,
+            self.info.key_size,
+            self.info.value_size,
+        )
+    }
+
+    pub fn keys(&self, key_size: u32) -> io::Result<Vec<Vec<u8>>> {
+        if key_size != self.info.key_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "map key size {key_size} does not match map key size {}",
+                    self.info.key_size
+                ),
+            ));
+        }
+        let mut keys = Vec::new();
+        visit_map_keys_by_fd_with_limits(
+            self.as_raw_fd(),
+            key_size,
+            u64::from(self.info.max_entries),
+            |key| {
+                keys.push(key.to_vec());
+                Ok(())
+            },
+        )?;
+        Ok(keys)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeMapCapacity {
     pub info: RuntimeMapInfo,
@@ -303,14 +385,17 @@ fn validate_elem_len(
 }
 
 pub fn update_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &[u8]) -> io::Result<()> {
-    // Buffer-size contract: `key`/`value` must each be at least as long as the
-    // map's key_size/value_size, because the kernel copies exactly that many
-    // bytes from these pointers.  Sizes come from a fresh BPF_OBJ_GET_INFO_BY_FD
-    // query per call — deliberately no cross-call cache, since RawFd numbers can
-    // be reused after close and a stale entry would either wrongly reject valid
-    // calls or silently accept undersized buffers.  An unqueryable map rejects
-    // the call: this is a safe API and must not pass unchecked pointers through.
     let (key_size, value_size) = map_elem_sizes(map_fd)?;
+    update_map_elem_bytes_with_sizes(map_fd, key, value, key_size, value_size)
+}
+
+fn update_map_elem_bytes_with_sizes(
+    map_fd: RawFd,
+    key: &[u8],
+    value: &[u8],
+    key_size: u32,
+    value_size: u32,
+) -> io::Result<()> {
     validate_elem_len("update", "key", map_fd, key.len(), key_size)?;
     validate_elem_len("update", "value", map_fd, value.len(), value_size)?;
     let attr = BpfMapUpdateElemAttr {
@@ -337,11 +422,11 @@ pub fn update_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &[u8]) -> io::Res
 }
 
 pub fn delete_map_elem_bytes(map_fd: RawFd, key: &[u8]) -> io::Result<()> {
-    // Same buffer-size contract as `update_map_elem_bytes`: the kernel reads
-    // exactly key_size bytes from `key`, so a shorter slice is an out-of-bounds
-    // read.  An unqueryable map rejects the call (safe API, no implicit
-    // precondition).
     let (key_size, _) = map_elem_sizes(map_fd)?;
+    delete_map_elem_bytes_with_size(map_fd, key, key_size)
+}
+
+fn delete_map_elem_bytes_with_size(map_fd: RawFd, key: &[u8], key_size: u32) -> io::Result<()> {
     validate_elem_len("delete", "key", map_fd, key.len(), key_size)?;
     let attr = BpfMapDeleteElemAttr {
         map_fd: map_fd as u32,
@@ -365,12 +450,17 @@ pub fn delete_map_elem_bytes(map_fd: RawFd, key: &[u8]) -> io::Result<()> {
 }
 
 pub fn lookup_map_elem_bytes(map_fd: RawFd, key: &[u8], value: &mut [u8]) -> io::Result<()> {
-    // Buffer-size contract: `key` must be at least key_size bytes and `value`
-    // at least value_size bytes — the kernel reads from `key` and WRITES
-    // exactly value_size bytes into `value`, so a short `value` slice is a
-    // heap/stack buffer overflow on the caller's side.  An unqueryable map
-    // rejects the call (safe API, no implicit precondition).
     let (key_size, value_size) = map_elem_sizes(map_fd)?;
+    lookup_map_elem_bytes_with_sizes(map_fd, key, value, key_size, value_size)
+}
+
+fn lookup_map_elem_bytes_with_sizes(
+    map_fd: RawFd,
+    key: &[u8],
+    value: &mut [u8],
+    key_size: u32,
+    value_size: u32,
+) -> io::Result<()> {
     validate_elem_len("lookup", "key", map_fd, key.len(), key_size)?;
     validate_elem_len("lookup", "value", map_fd, value.len(), value_size)?;
     let attr = BpfMapLookupElemAttr {
@@ -442,7 +532,7 @@ pub fn visit_map_keys_by_fd(
     map_fd: RawFd,
     key_size: u32,
     max_keys: u64,
-    mut visit: impl FnMut(&[u8]) -> io::Result<()>,
+    visit: impl FnMut(&[u8]) -> io::Result<()>,
 ) -> io::Result<u64> {
     if key_size == 0 || max_keys == 0 {
         return Ok(0);
@@ -457,6 +547,19 @@ pub fn visit_map_keys_by_fd(
                 info.key_size
             ),
         ));
+    }
+
+    visit_map_keys_by_fd_with_limits(map_fd, key_size, max_keys, visit)
+}
+
+fn visit_map_keys_by_fd_with_limits(
+    map_fd: RawFd,
+    key_size: u32,
+    max_keys: u64,
+    mut visit: impl FnMut(&[u8]) -> io::Result<()>,
+) -> io::Result<u64> {
+    if key_size == 0 || max_keys == 0 {
+        return Ok(0);
     }
 
     let mut current_key = vec![0_u8; key_size as usize];
