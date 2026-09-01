@@ -64,10 +64,11 @@ impl ResidentUdpPinnedRoute {
         forced_dns_session_lanes: usize,
     ) {
         let Some(original_dst) = packet.original_dst else {
-            append_event(
+            append_event_with_metadata(
                 event_file,
                 event_lock,
-                json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer)}),
+                ResidentEventMetadata::new(ResidentEventKind::UdpPacketSkipped),
+                || json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer)}),
             );
             return;
         };

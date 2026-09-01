@@ -56,7 +56,7 @@ use tokio::time;
 
 use dae_datapath::udp_io::{UdpOriginalDstPacket, UdpSendMessage, try_sendmmsg};
 use dae_resident_core::events::{
-    ResidentEventKind, ResidentEventMetadata, append_event, append_event_with_metadata,
+    ResidentEventKind, ResidentEventMetadata, append_event_with_metadata,
 };
 use dae_resident_core::{append_runtime_execution_descriptor, udp_execution_descriptor};
 mod task_shutdown;

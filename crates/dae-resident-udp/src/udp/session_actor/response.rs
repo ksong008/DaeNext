@@ -4,7 +4,7 @@ use serde_json::Value;
 pub(super) async fn wait_and_record_udp_session_response(
     key: &UdpSessionKey,
     context: &UdpSessionActorContext,
-    executor: &mut Option<UdpSessionExecutor>,
+    executor: &mut Option<Box<UdpSessionExecutor>>,
     proxy: Option<&ResidentProxyBinding>,
     packet_session: &Value,
 ) -> Result<(), String> {
