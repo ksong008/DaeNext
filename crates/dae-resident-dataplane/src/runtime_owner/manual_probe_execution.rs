@@ -99,10 +99,7 @@ impl ManualProbeRuntime {
             .min(concurrency.max(1))
             .max(1);
         let blocking_threads = available_parallelism.min(worker_threads).max(1);
-        let worker_stack_bytes = resources
-            .tcp_flow_stack_bytes
-            .value()
-            .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN);
+        let worker_stack_bytes = RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(worker_threads)
             .max_blocking_threads(blocking_threads)
