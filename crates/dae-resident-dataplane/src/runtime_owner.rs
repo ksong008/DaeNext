@@ -12,6 +12,12 @@ use self::shutdown::shutdown_resident_runtime_owner;
 use self::shutdown::shutdown_resident_runtime_workloads;
 use dae_resident_runtime::{ResidentRuntimeTask, registered_resident_runtime_task};
 
+const RESIDENT_DATA_RUNTIME_WORKER_STACK_BYTES_MIN: usize = 2 * 1024 * 1024;
+
+fn resident_data_runtime_worker_stack_bytes(configured: usize) -> usize {
+    configured.max(RESIDENT_DATA_RUNTIME_WORKER_STACK_BYTES_MIN)
+}
+
 #[cfg(test)]
 fn spawn_resident_runtime_task<F>(
     name: &'static str,
@@ -126,7 +132,8 @@ impl ResidentRuntimeOwner {
             ResidentAllocatorWorkerKind::ResidentData,
             resource_config.tcp_runtime_workers.value(),
         );
-        let worker_stack_bytes = resource_config.tcp_flow_stack_bytes.value();
+        let worker_stack_bytes =
+            resident_data_runtime_worker_stack_bytes(resource_config.tcp_flow_stack_bytes.value());
         let data_plane_executor = ResidentRuntimeExecutor::new(
             ResidentRuntimeExecutorConfig::new(
                 resource_config.tcp_runtime_workers.value(),
@@ -378,6 +385,11 @@ impl ResidentRuntimeOwner {
     }
 
     pub(super) fn read_handle(&self) -> ResidentRuntimeOwnerReadHandle {
+        let mut resources = self.resource_config.json();
+        resources["residentDataWorkerStackBytes"] =
+            json!(resident_data_runtime_worker_stack_bytes(
+                self.resource_config.tcp_flow_stack_bytes.value(),
+            ));
         ResidentRuntimeOwnerReadHandle {
             metrics: Arc::clone(&self.metrics),
             reload_generation: self.reload_generation,
@@ -387,7 +399,7 @@ impl ResidentRuntimeOwner {
                 "manager": "resident-udp-session-manager",
                 "reloadGeneration": self.reload_generation,
             })),
-            resources: Arc::new(self.resource_config.json()),
+            resources: Arc::new(resources),
             udp_payload_admission: self.udp_payload_admission.clone(),
             event_writer: self.event_writer.read_handle(),
             hysteria2_owner_registry: self.hysteria2_owner_registry.clone(),
@@ -1076,6 +1088,18 @@ fn fill_manual_probe_join_set(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resident_data_runtime_keeps_the_production_stack_safety_floor() {
+        assert_eq!(
+            resident_data_runtime_worker_stack_bytes(512 * 1024),
+            RESIDENT_DATA_RUNTIME_WORKER_STACK_BYTES_MIN
+        );
+        assert_eq!(
+            resident_data_runtime_worker_stack_bytes(4 * 1024 * 1024),
+            4 * 1024 * 1024
+        );
+    }
 
     #[test]
     fn manual_probe_index_builds_requested_links_lazily_by_execution_identity() {
