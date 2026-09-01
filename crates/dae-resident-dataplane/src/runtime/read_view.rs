@@ -7,6 +7,7 @@ pub(super) struct ResidentRuntimeOwnerReadHandle {
     pub(super) runtime_owner: Arc<Value>,
     pub(super) packet_session_manager: Arc<Value>,
     pub(super) resources: Arc<Value>,
+    pub(super) udp_payload_admission: ResidentUdpPayloadAdmission,
     pub(super) event_writer: ResidentEventWriterHandle,
     pub(super) hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
     pub(super) tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
@@ -25,7 +26,9 @@ impl ResidentRuntimeOwnerReadHandle {
         snapshot["runtimeOwner"] = self.runtime_owner.as_ref().clone();
         snapshot["packetSessionManager"] = self.packet_session_manager.as_ref().clone();
         snapshot["resources"] = self.resources.as_ref().clone();
+        snapshot["udpPayloadAdmission"] = self.udp_payload_admission.snapshot();
         snapshot["eventWriter"] = self.event_writer.metrics_snapshot();
+        snapshot["tlsConfigCache"] = crate::client::resident_tls_config_cache_metrics();
         snapshot["connectUdpPools"] =
             udp::connect_udp_pool_metrics_snapshot(self.reload_generation);
         snapshot["quicEndpoints"] = tcp::quic_endpoint_metrics_snapshot(self.reload_generation);
@@ -77,6 +80,7 @@ impl ResidentRuntimeOwnerReadHandle {
 pub struct ResidentDataplaneReadHandle {
     owner: ResidentRuntimeOwnerReadHandle,
     generation_drain: ResidentGenerationDrain,
+    coordinator: ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
 }
 
 impl std::fmt::Debug for ResidentDataplaneReadHandle {
@@ -92,16 +96,32 @@ impl ResidentDataplaneReadHandle {
     pub(super) fn new(
         owner: ResidentRuntimeOwnerReadHandle,
         generation_drain: ResidentGenerationDrain,
+        coordinator: ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
     ) -> Self {
         Self {
             owner,
             generation_drain,
+            coordinator,
         }
     }
 
     pub fn metrics_snapshot(&self) -> Value {
         let mut metrics = self.owner.metrics_snapshot();
         metrics["generationDrain"] = self.generation_drain.snapshot();
+        let generation = self.coordinator.load();
+        let (dns_cache_entries, dns_routing_cache_entries) = generation
+            .dns_reload_handle
+            .cache_entry_counts()
+            .unwrap_or((0, 0));
+        let resident_node_count = generation
+            .groups
+            .iter()
+            .map(|group| group.candidate_count())
+            .sum::<usize>();
+        metrics["dnsCacheEntries"] = json!(dns_cache_entries);
+        metrics["dnsRoutingCacheEntries"] = json!(dns_routing_cache_entries);
+        metrics["residentNodeCount"] = json!(resident_node_count);
+        metrics["activeGeneration"] = json!(generation.reload_generation.get());
         metrics
     }
 }

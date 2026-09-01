@@ -335,7 +335,7 @@ pub(crate) fn resident_proxy_plans(
         };
         let mut candidates = Vec::with_capacity(build_nodes.len());
         for node in build_nodes {
-            let link = node.link.clone();
+            let link = Arc::<str>::from(node.link.as_str());
             let mut proxy =
                 build_proxy_plan(config, group.name.clone(), node.tag.clone(), node.link)?;
             proxy.group_policy = group_policy.as_str().to_owned();
@@ -343,9 +343,9 @@ pub(crate) fn resident_proxy_plans(
             candidates.push(ResidentProxyCandidatePlan {
                 match_index: node.match_index,
                 annotation_add_latency_ms: node.annotation_add_latency_ms,
-                link_hash: link_hash(&link),
-                execution_identity: execution_link_hash(&link),
-                redacted_link_source: redacted_link_source(&link),
+                link_hash: link_hash(link.as_ref()),
+                execution_identity: execution_link_hash(link.as_ref()),
+                redacted_link_source: redacted_link_source(link.as_ref()),
                 link,
                 binding: ResidentProxyBinding::configuration(Arc::new(proxy))?,
                 data_udp_observation: Arc::new(ResidentDataUdpObservation::default()),

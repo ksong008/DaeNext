@@ -13,7 +13,7 @@ const RESIDENT_HEALTH_DATABASE_SEED_TTL_INTERVALS: u32 = 2;
 pub(crate) struct ResidentProxyCandidatePlan {
     pub(crate) match_index: usize,
     pub(crate) annotation_add_latency_ms: i64,
-    pub(crate) link: String,
+    pub(crate) link: Arc<str>,
     pub(crate) link_hash: String,
     pub(crate) execution_identity: String,
     pub(crate) redacted_link_source: String,
@@ -1030,7 +1030,7 @@ impl ResidentProxyGroupPlan {
             .candidates
             .iter()
             .enumerate()
-            .filter_map(|(index, candidate)| (candidate.link == link).then_some(index))
+            .filter_map(|(index, candidate)| (candidate.link.as_ref() == link).then_some(index))
             .collect::<Vec<_>>();
         if indexes.is_empty() {
             return Ok(0);
@@ -1204,7 +1204,7 @@ impl ResidentProxyGroupPlan {
         let candidates = vec![ResidentProxyCandidatePlan {
             match_index: 0,
             annotation_add_latency_ms: 0,
-            link: proxy.node_tag.clone(),
+            link: Arc::from(proxy.node_tag.as_str()),
             link_hash: link_hash(&proxy.node_tag),
             execution_identity: execution_link_hash(&proxy.node_tag),
             redacted_link_source: redacted_link_source(&proxy.node_tag),

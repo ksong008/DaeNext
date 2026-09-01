@@ -198,8 +198,8 @@ pub fn run_outbound_dataplane_smoke(
             .all(|protocol| protocol == "juicity")
         && selected_node.adapter_mode == "rust-native"
         && selected_node.parent_dialer_non_nil;
-    let group_selection_admitted =
-        selected.index < parsed.len() && selected_dialer.link == selected_parsed.link.export_url();
+    let group_selection_admitted = selected.index < parsed.len()
+        && selected_dialer.link.as_ref() == selected_parsed.link.export_url();
     let health_policy_admitted =
         options.selection_policy.needs_alive_state() && alive_count > 0 && selected.latency_ms > 0;
     let juicity_true_quic_h3_dataplane_admitted = registry_admitted
