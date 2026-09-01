@@ -31,6 +31,7 @@ pub(super) struct VmessAeadUdpOverTcpSession {
     response: Option<vmess::VMessAeadTcpResponseReader>,
     response_plaintext: Vec<u8>,
     response_plaintext_cursor: usize,
+    response_read_buffer: Vec<u8>,
     fixed_target: UdpSessionFixedTarget,
 }
 
@@ -95,6 +96,7 @@ impl VmessAeadUdpOverTcpSession {
             response: None,
             response_plaintext: Vec::new(),
             response_plaintext_cursor: 0,
+            response_read_buffer: Vec::new(),
             fixed_target: UdpSessionFixedTarget::default(),
         }
     }
@@ -198,15 +200,17 @@ impl VmessAeadUdpOverTcpSession {
                 .await
                 .map(|payload| payload.map(|payload| self.response_result(payload)));
         }
-        let mut buf = [0_u8; 8192];
-        let Some(read) = read_vmess_underlay_plaintext(underlay, &mut buf, mode).await? else {
+        self.response_read_buffer.resize(8192, 0);
+        let read_buffer = &mut self.response_read_buffer;
+        let Some(read) = read_vmess_underlay_plaintext(underlay, read_buffer, mode).await? else {
             return Ok(None);
         };
         compact_vmess_response_buffer(
             &mut self.response_plaintext,
             &mut self.response_plaintext_cursor,
         );
-        self.response_plaintext.extend_from_slice(&buf[..read]);
+        self.response_plaintext
+            .extend_from_slice(&read_buffer[..read]);
         self.try_pop_response_payload()
             .map(|payload| payload.map(|payload| self.response_result(payload)))
     }

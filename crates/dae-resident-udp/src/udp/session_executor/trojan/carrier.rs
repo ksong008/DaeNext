@@ -34,15 +34,18 @@ impl TrojanUdpCarrierKind {
 pub(super) enum TrojanUdpCarrier {
     Tls {
         client: AsyncResidentTlsClient,
+        read_buffer: Vec<u8>,
         tls_underlay: &'static str,
     },
     WebSocket {
         client: AsyncResidentTlsClient,
         state: AsyncWebSocketPayloadState,
+        read_buffer: Vec<u8>,
         tls_underlay: &'static str,
     },
     HttpUpgrade {
         client: AsyncResidentTlsClient,
+        read_buffer: Vec<u8>,
         tls_underlay: &'static str,
     },
     Grpc {
@@ -74,6 +77,7 @@ impl TrojanUdpCarrier {
                 .await?;
                 Ok(Self::Tls {
                     client,
+                    read_buffer: Vec::new(),
                     tls_underlay,
                 })
             }
@@ -97,6 +101,7 @@ impl TrojanUdpCarrier {
                 Ok(Self::WebSocket {
                     client,
                     state,
+                    read_buffer: Vec::new(),
                     tls_underlay,
                 })
             }
@@ -121,6 +126,7 @@ impl TrojanUdpCarrier {
                 .await?;
                 Ok(Self::HttpUpgrade {
                     client,
+                    read_buffer: Vec::new(),
                     tls_underlay,
                 })
             }
@@ -169,27 +175,46 @@ impl TrojanUdpCarrier {
         &mut self,
         mode: UdpStreamReadMode,
     ) -> Result<Option<Vec<u8>>, String> {
-        let mut out = [0_u8; 8192];
-        let read = match self {
-            Self::Tls { client, .. } | Self::HttpUpgrade { client, .. } => {
-                read_udp_stream_once(client, &mut out, mode, "read Trojan UDP session plaintext")
-                    .await?
+        match self {
+            Self::Tls {
+                client,
+                read_buffer,
+                ..
             }
-            Self::WebSocket { client, state, .. } => {
+            | Self::HttpUpgrade {
+                client,
+                read_buffer,
+                ..
+            } => {
+                read_buffer.resize(8192, 0);
+                let read = read_udp_stream_once(
+                    client,
+                    read_buffer,
+                    mode,
+                    "read Trojan UDP session plaintext",
+                )
+                .await?;
+                Ok(read.map(|read| read_buffer[..read].to_vec()))
+            }
+            Self::WebSocket {
+                client,
+                state,
+                read_buffer,
+                ..
+            } => {
+                read_buffer.resize(8192, 0);
                 let mut reader = AsyncWebSocketPayloadReader::new(client, state);
-                read_udp_stream_once(
+                let read = read_udp_stream_once(
                     &mut reader,
-                    &mut out,
+                    read_buffer,
                     mode,
                     "read Trojan WebSocket UDP session payload",
                 )
-                .await?
+                .await?;
+                Ok(read.map(|read| read_buffer[..read].to_vec()))
             }
-            Self::Grpc { .. } => {
-                return Err("Trojan gRPC UDP uses the hunk response reader".to_owned());
-            }
-        };
-        Ok(read.map(|read| out[..read].to_vec()))
+            Self::Grpc { .. } => Err("Trojan gRPC UDP uses the hunk response reader".to_owned()),
+        }
     }
 
     async fn read_grpc_chunk(

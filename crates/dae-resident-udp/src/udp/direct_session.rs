@@ -556,26 +556,33 @@ fn append_udp_direct_exchange_failed(
     dscp: Option<u8>,
     err: String,
 ) {
-    let mut event = json!({
-        "event": "udp_exchange_failed",
-        "peer": resident_socket_addr_display(key.peer()),
-        "original_dst": resident_socket_addr_display(original_dst),
-        "outbound_kind": UDP_DIRECT_OUTBOUND,
-        "network": resident_udp_network_name(original_dst),
-        "outbound": UDP_DIRECT_OUTBOUND,
-        "policy": UDP_DIRECT_POLICY,
-        "dialer": UDP_DIRECT_OUTBOUND,
-        "ip": resident_socket_addr_display(original_dst),
-        "protocol": UDP_DIRECT_PROTOCOL,
-        "handler": UDP_DIRECT_HANDLER,
-        "request_len": request_len,
-        "error": err,
-        "packetSession": key.to_value(),
-    });
-    if let Some(dscp) = dscp {
-        event["dscp"] = json!(dscp);
-    }
-    append_event(&context.event_file, &context.event_lock, event);
+    append_event_with_metadata(
+        &context.event_file,
+        &context.event_lock,
+        ResidentEventMetadata::new(ResidentEventKind::UdpExchangeFailed),
+        || {
+            let mut event = json!({
+                "event": ResidentEventKind::UdpExchangeFailed.name(),
+                "peer": resident_socket_addr_display(key.peer()),
+                "original_dst": resident_socket_addr_display(original_dst),
+                "outbound_kind": UDP_DIRECT_OUTBOUND,
+                "network": resident_udp_network_name(original_dst),
+                "outbound": UDP_DIRECT_OUTBOUND,
+                "policy": UDP_DIRECT_POLICY,
+                "dialer": UDP_DIRECT_OUTBOUND,
+                "ip": resident_socket_addr_display(original_dst),
+                "protocol": UDP_DIRECT_PROTOCOL,
+                "handler": UDP_DIRECT_HANDLER,
+                "request_len": request_len,
+                "error": err,
+                "packetSession": key.to_value(),
+            });
+            if let Some(dscp) = dscp {
+                event["dscp"] = json!(dscp);
+            }
+            event
+        },
+    );
 }
 
 fn udp_unspecified_bind_addr_for_remote(remote: SocketAddr) -> SocketAddr {

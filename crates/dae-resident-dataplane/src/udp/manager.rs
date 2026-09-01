@@ -369,10 +369,11 @@ pub(super) async fn run_resident_udp_session_manager_async(
     ));
     if let Err(err) = socket.set_nonblocking(true) {
         let report = udp_session_manager_start_failure("socket-nonblocking", err.to_string());
-        append_event(
+        append_event_with_metadata(
             &event_file,
             &event_lock,
-            udp_session_manager_event("udp_socket_nonblocking_failed", &report),
+            ResidentEventMetadata::new(ResidentEventKind::UdpSocketNonblockingFailed),
+            || udp_session_manager_event("udp_socket_nonblocking_failed", &report),
         );
         return report;
     }
@@ -380,63 +381,67 @@ pub(super) async fn run_resident_udp_session_manager_async(
         Ok(socket) => socket,
         Err(err) => {
             let report = udp_session_manager_start_failure("async-fd", err.to_string());
-            append_event(
+            append_event_with_metadata(
                 &event_file,
                 &event_lock,
-                udp_session_manager_event("udp_session_manager_async_fd_failed", &report),
+                ResidentEventMetadata::new(ResidentEventKind::UdpSessionManagerAsyncFdFailed),
+                || udp_session_manager_event("udp_session_manager_async_fd_failed", &report),
             );
             return report;
         }
     };
     let default_proxy_group = initial_plan.router.default_proxy_group();
-    append_event(
+    append_event_with_metadata(
         &event_file,
         &event_lock,
-        json!({
-            "event": "udp_session_manager_started",
-            "proxy_group": default_proxy_group.group_name,
-            "group_policy": default_proxy_group.group_policy_name(),
-            "candidate_count": default_proxy_group.candidate_count(),
-            "admitted_candidate_count": default_proxy_group.admitted_candidate_count(),
-            "default_outbound": initial_plan.router.default_outbound(),
-            "routing_tuple_map_id": initial_plan.router.routing_tuple_map_id(),
-            "session_admission": {
-                "mode": if initial_config.session_admission_limit.is_some() { "fixed" } else { "automatic" },
-                "fixed_limit": initial_config.session_admission_limit,
-                "soft_watermark": initial_config.session_soft_watermark,
-                "scope": "resident-udp-manager",
-            },
-            "dns_fast_path_concurrency": initial_config.dns_fast_path_concurrency,
-            "dns_fast_path_queue_depth": initial_config.dns_fast_path_queue_depth,
-            "forced_dns_session_lanes": initial_config.runtime_shards,
-            "generation": initial_config.generation,
-            "runtimeProfile": initial_config.profile,
-            "queuedPayloadAdmission": initial_config.payload_admission.snapshot(),
-            "generationAdmission": "fixed-at-transparent-session-boundary",
-            "packetSessionManager": {
-                "schemaVersion": 2,
-                "manager": "resident-udp-session-manager",
-                "runtime": "process-owned-shared-multi-thread",
-                "sessionShardCount": initial_config.runtime_shards,
-                "sharedDataPlaneWorkerThreads": initial_config.runtime_worker_threads,
-                "sessionAdmission": {
+        ResidentEventMetadata::new(ResidentEventKind::UdpSessionManagerStarted),
+        || {
+            json!({
+                "event": "udp_session_manager_started",
+                "proxy_group": default_proxy_group.group_name,
+                "group_policy": default_proxy_group.group_policy_name(),
+                "candidate_count": default_proxy_group.candidate_count(),
+                "admitted_candidate_count": default_proxy_group.admitted_candidate_count(),
+                "default_outbound": initial_plan.router.default_outbound(),
+                "routing_tuple_map_id": initial_plan.router.routing_tuple_map_id(),
+                "session_admission": {
                     "mode": if initial_config.session_admission_limit.is_some() { "fixed" } else { "automatic" },
-                    "fixedLimit": initial_config.session_admission_limit,
-                    "softWatermark": initial_config.session_soft_watermark,
+                    "fixed_limit": initial_config.session_admission_limit,
+                    "soft_watermark": initial_config.session_soft_watermark,
                     "scope": "resident-udp-manager",
                 },
-                "perSessionQueueDepth": initial_config.session_queue_depth,
-                "replyQueueDepth": initial_config.reply_queue_depth,
-                "replySocketCacheCapacity": initial_config.reply_socket_cache_capacity,
-                "keyFields": [
-                    "graphIdentityHash",
-                    "outbound",
-                    "peerSocketAddr",
-                    "originalDestinationSocketAddr",
-                    "packetSemantics",
-                ],
-            },
-        }),
+                "dns_fast_path_concurrency": initial_config.dns_fast_path_concurrency,
+                "dns_fast_path_queue_depth": initial_config.dns_fast_path_queue_depth,
+                "forced_dns_session_lanes": initial_config.runtime_shards,
+                "generation": initial_config.generation,
+                "runtimeProfile": initial_config.profile,
+                "queuedPayloadAdmission": initial_config.payload_admission.snapshot(),
+                "generationAdmission": "fixed-at-transparent-session-boundary",
+                "packetSessionManager": {
+                    "schemaVersion": 2,
+                    "manager": "resident-udp-session-manager",
+                    "runtime": "process-owned-shared-multi-thread",
+                    "sessionShardCount": initial_config.runtime_shards,
+                    "sharedDataPlaneWorkerThreads": initial_config.runtime_worker_threads,
+                    "sessionAdmission": {
+                        "mode": if initial_config.session_admission_limit.is_some() { "fixed" } else { "automatic" },
+                        "fixedLimit": initial_config.session_admission_limit,
+                        "softWatermark": initial_config.session_soft_watermark,
+                        "scope": "resident-udp-manager",
+                    },
+                    "perSessionQueueDepth": initial_config.session_queue_depth,
+                    "replyQueueDepth": initial_config.reply_queue_depth,
+                    "replySocketCacheCapacity": initial_config.reply_socket_cache_capacity,
+                    "keyFields": [
+                        "graphIdentityHash",
+                        "outbound",
+                        "peerSocketAddr",
+                        "originalDestinationSocketAddr",
+                        "packetSemantics",
+                    ],
+                },
+            })
+        },
     );
 
     let payload_pool = UdpPayloadPool::new(
@@ -499,10 +504,11 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             would_block: batch.would_block,
                         });
                         if let Some(reason) = &batch.fallback_activated {
-                            append_event(
+                            append_event_with_metadata(
                                 &event_file,
                                 &event_lock,
-                                json!({"event": "udp_recvmmsg_fallback", "reason": reason}),
+                                ResidentEventMetadata::new(ResidentEventKind::UdpRecvmmsgFallback),
+                                || json!({"event": "udp_recvmmsg_fallback", "reason": reason}),
                             );
                         }
                         let batch_now = Instant::now();
@@ -638,10 +644,11 @@ pub(super) async fn run_resident_udp_session_manager_async(
                     }
                     Err(err) => {
                         if !stop.load(Ordering::Relaxed) {
-                            append_event(
+                            append_event_with_metadata(
                                 &event_file,
                                 &event_lock,
-                                json!({"event": "udp_receive_failed", "error": err}),
+                                ResidentEventMetadata::new(ResidentEventKind::UdpReceiveFailed),
+                                || json!({"event": "udp_receive_failed", "error": err}),
                             );
                         }
                     }
@@ -779,10 +786,11 @@ pub(super) async fn run_resident_udp_session_manager_async(
         "retiredComponentShutdownDegraded": retired_component_shutdown_degraded,
         "generations": generation_shutdown,
     });
-    append_event(
+    append_event_with_metadata(
         &event_file,
         &event_lock,
-        udp_session_manager_event("udp_session_manager_stopped", &report),
+        ResidentEventMetadata::new(ResidentEventKind::UdpSessionManagerStopped),
+        || udp_session_manager_event("udp_session_manager_stopped", &report),
     );
     report
 }
@@ -950,10 +958,11 @@ fn bind_manager_packet(
     forced_dns_session_lanes: usize,
 ) -> Option<ResidentUdpPinnedRoute> {
     let Some(original_dst) = packet.original_dst else {
-        append_event(
+        append_event_with_metadata(
             event_file,
             event_lock,
-            json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer)}),
+            ResidentEventMetadata::new(ResidentEventKind::UdpPacketSkipped),
+            || json!({"event": "udp_packet_skipped", "reason": "missing original destination", "peer": resident_socket_addr_display(packet.peer)}),
         );
         return None;
     };
@@ -1052,17 +1061,24 @@ fn append_udp_route_selection_failed(
     dscp: Option<u8>,
     err: String,
 ) {
-    let mut event = json!({
-        "event": "udp_exchange_failed",
-        "peer": resident_socket_addr_display(peer),
-        "original_dst": resident_socket_addr_display(original_dst),
-        "error": err,
-        "network": resident_udp_network_name(original_dst),
-    });
-    if let Some(dscp) = dscp {
-        event["dscp"] = json!(dscp);
-    }
-    append_event(event_file, event_lock, event);
+    append_event_with_metadata(
+        event_file,
+        event_lock,
+        ResidentEventMetadata::new(ResidentEventKind::UdpExchangeFailed),
+        || {
+            let mut event = json!({
+                "event": "udp_exchange_failed",
+                "peer": resident_socket_addr_display(peer),
+                "original_dst": resident_socket_addr_display(original_dst),
+                "error": err,
+                "network": resident_udp_network_name(original_dst),
+            });
+            if let Some(dscp) = dscp {
+                event["dscp"] = json!(dscp);
+            }
+            event
+        },
+    );
 }
 
 fn udp_route_chosen_event(

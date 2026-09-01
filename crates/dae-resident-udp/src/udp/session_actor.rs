@@ -85,7 +85,7 @@ async fn run_udp_session_actor(
 
     let mut packets = 0_u64;
     let mut stop_reason = "queue-closed".to_owned();
-    let mut executor: Option<UdpSessionExecutor> = None;
+    let mut executor: Option<Box<UdpSessionExecutor>> = None;
     let mut session_proxy: Option<ResidentProxyBinding> = None;
     let idle_timeout = key.idle_timeout(context.proxy_session_idle_timeout);
     let idle_timer = time::sleep(idle_timeout);
@@ -129,7 +129,7 @@ async fn run_udp_session_actor(
                         )
                     };
                     selected_executor.set_runtime_metrics(Arc::clone(&context.metrics));
-                    executor = Some(selected_executor);
+                    executor = Some(Box::new(selected_executor));
                     session_proxy = Some(managed.proxy.clone());
                 }
                 let (exchange, execute_timed_out) = match executor.as_mut() {
@@ -216,7 +216,7 @@ async fn run_udp_session_actor(
                 if !response_buffer_timer_armed
                     && executor
                         .as_ref()
-                        .is_some_and(UdpSessionExecutor::has_response_buffer)
+                        .is_some_and(|executor| executor.has_response_buffer())
                 {
                     response_buffer_timer
                         .as_mut()
@@ -238,7 +238,7 @@ async fn run_udp_session_actor(
                 if !response_buffer_timer_armed
                     && executor
                         .as_ref()
-                        .is_some_and(UdpSessionExecutor::has_response_buffer)
+                        .is_some_and(|executor| executor.has_response_buffer())
                 {
                     response_buffer_timer.as_mut().reset(
                         time::Instant::now() + context.response_buffer_idle_timeout,
@@ -300,5 +300,22 @@ impl Drop for UdpManagedSessionGuard {
     fn drop(&mut self) {
         self.metrics.udp_closed();
         self.active_sessions.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn boxed_udp_executor_keeps_the_actor_state_pointer_sized() {
+        assert_eq!(
+            std::mem::size_of::<Option<Box<UdpSessionExecutor>>>(),
+            std::mem::size_of::<usize>()
+        );
+        assert!(
+            std::mem::size_of::<Option<Box<UdpSessionExecutor>>>()
+                < std::mem::size_of::<Option<UdpSessionExecutor>>()
+        );
     }
 }

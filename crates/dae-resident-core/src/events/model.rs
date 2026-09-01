@@ -10,10 +10,18 @@ pub enum ResidentEventKind {
     UdpDnsPacketFinished,
     UdpPacketFinished,
     UdpPacketDropped,
+    UdpPacketSkipped,
     UdpReplyFailed,
+    UdpExchangeFailed,
+    UdpReceiveFailed,
+    UdpRecvmmsgFallback,
     UdpRouteChosen,
+    UdpSessionManagerStarted,
     UdpSessionStarted,
+    UdpSessionManagerStopped,
     UdpSessionStopped,
+    UdpSocketNonblockingFailed,
+    UdpSessionManagerAsyncFdFailed,
 }
 
 impl ResidentEventKind {
@@ -25,10 +33,18 @@ impl ResidentEventKind {
             Self::UdpDnsPacketFinished => "udp_dns_packet_finished",
             Self::UdpPacketFinished => "udp_packet_finished",
             Self::UdpPacketDropped => "udp_packet_dropped",
+            Self::UdpPacketSkipped => "udp_packet_skipped",
             Self::UdpReplyFailed => "udp_reply_failed",
+            Self::UdpExchangeFailed => "udp_exchange_failed",
+            Self::UdpReceiveFailed => "udp_receive_failed",
+            Self::UdpRecvmmsgFallback => "udp_recvmmsg_fallback",
             Self::UdpRouteChosen => "udp_route_chosen",
+            Self::UdpSessionManagerStarted => "udp_session_manager_started",
             Self::UdpSessionStarted => "udp_session_started",
+            Self::UdpSessionManagerStopped => "udp_session_manager_stopped",
             Self::UdpSessionStopped => "udp_session_stopped",
+            Self::UdpSocketNonblockingFailed => "udp_socket_nonblocking_failed",
+            Self::UdpSessionManagerAsyncFdFailed => "udp_session_manager_async_fd_failed",
         }
     }
 
@@ -38,9 +54,17 @@ impl ResidentEventKind {
             Self::UdpDnsPacketFinished | Self::UdpPacketFinished => {
                 ResidentEventLifecycleClass::Packet
             }
-            Self::UdpPacketDropped => ResidentEventLifecycleClass::Packet,
-            Self::UdpReplyFailed => ResidentEventLifecycleClass::Error,
-            Self::UdpSessionStarted => ResidentEventLifecycleClass::Startup,
+            Self::UdpPacketDropped | Self::UdpPacketSkipped => ResidentEventLifecycleClass::Packet,
+            Self::UdpReplyFailed
+            | Self::UdpExchangeFailed
+            | Self::UdpReceiveFailed
+            | Self::UdpSocketNonblockingFailed
+            | Self::UdpSessionManagerAsyncFdFailed => ResidentEventLifecycleClass::Error,
+            Self::UdpRecvmmsgFallback => ResidentEventLifecycleClass::Debug,
+            Self::UdpSessionManagerStarted | Self::UdpSessionStarted => {
+                ResidentEventLifecycleClass::Startup
+            }
+            Self::UdpSessionManagerStopped => ResidentEventLifecycleClass::Debug,
             Self::DnsBindQueryFinished
             | Self::DnsPathChosen
             | Self::UdpRouteChosen
@@ -50,7 +74,12 @@ impl ResidentEventKind {
 
     const fn severity(self) -> ResidentEventSeverity {
         match self {
-            Self::UdpReplyFailed => ResidentEventSeverity::Error,
+            Self::UdpReplyFailed
+            | Self::UdpExchangeFailed
+            | Self::UdpReceiveFailed
+            | Self::UdpSocketNonblockingFailed
+            | Self::UdpSessionManagerAsyncFdFailed => ResidentEventSeverity::Error,
+            Self::UdpPacketSkipped => ResidentEventSeverity::Warning,
             _ => ResidentEventSeverity::Debug,
         }
     }

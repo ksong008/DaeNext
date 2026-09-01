@@ -200,28 +200,33 @@ async fn record_udp_session_exchange_result(
                 },
             )
         }
-        Err(err) => {
-            let handler = resident_udp_proxy_handler_name(proxy);
-            let network = udp_network_name(original_dst);
-            let mut event_json = udp_exchange_base_event(
-                "udp_exchange_failed",
-                proxy,
-                peer,
-                original_dst,
-                handler,
-                network,
-                false,
-                session_scope,
-                packet_session,
-            );
-            if let Some(map) = event_json.as_object_mut() {
-                map.insert("error".to_owned(), Value::String(err));
-                if let Some(dscp) = dscp {
-                    map.insert("dscp".to_owned(), Value::from(dscp));
+        Err(err) => append_event_with_metadata(
+            &event_file,
+            &event_lock,
+            ResidentEventMetadata::new(ResidentEventKind::UdpExchangeFailed),
+            || {
+                let handler = resident_udp_proxy_handler_name(proxy);
+                let network = udp_network_name(original_dst);
+                let mut event_json = udp_exchange_base_event(
+                    "udp_exchange_failed",
+                    proxy,
+                    peer,
+                    original_dst,
+                    handler,
+                    network,
+                    false,
+                    session_scope,
+                    packet_session,
+                );
+                if let Some(map) = event_json.as_object_mut() {
+                    map.insert("error".to_owned(), Value::String(err));
+                    if let Some(dscp) = dscp {
+                        map.insert("dscp".to_owned(), Value::from(dscp));
+                    }
                 }
-            }
-            append_event(&event_file, &event_lock, event_json)
-        }
+                event_json
+            },
+        ),
     }
 }
 

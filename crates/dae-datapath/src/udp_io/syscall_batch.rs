@@ -40,7 +40,7 @@ impl UdpBatchReceiver {
         };
         let slots = (0..slot_count)
             .map(|_| UdpBatchRecvSlot {
-                payload: vec![0_u8; UDP_RECV_MAX_DATAGRAM_CAPACITY],
+                payload: Vec::with_capacity(UDP_RECV_MAX_DATAGRAM_CAPACITY),
                 control: [0_u8; 256],
                 peer: unsafe { std::mem::zeroed() },
             })

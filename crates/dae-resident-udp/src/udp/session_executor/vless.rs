@@ -32,6 +32,7 @@ pub(in crate::udp) struct VlessXudpStreamSession {
     response_unpadder: Option<VisionUnpadder>,
     response_plaintext: Vec<u8>,
     response_xudp_payload: Vec<u8>,
+    response_read_buffer: Vec<u8>,
     fixed_target: UdpSessionFixedTarget,
 }
 
@@ -152,25 +153,32 @@ impl VlessXudpStreamSession {
         if self.client.is_none() && self.encrypted.is_none() && mode.waits_for_readiness() {
             return std::future::pending().await;
         }
-        let mut buf = [0_u8; 2048];
+        self.response_read_buffer.resize(2048, 0);
+        let read_buffer = &mut self.response_read_buffer;
         let read = if let Some(encrypted) = self.encrypted.as_mut() {
             read_udp_stream_once(
                 encrypted,
-                &mut buf,
+                read_buffer,
                 mode,
                 "read VLESS encrypted XUDP session plaintext",
             )
             .await?
         } else if let Some(client) = self.client.as_mut() {
-            read_udp_stream_once(client, &mut buf, mode, "read VLESS XUDP session plaintext")
-                .await?
+            read_udp_stream_once(
+                client,
+                read_buffer,
+                mode,
+                "read VLESS XUDP session plaintext",
+            )
+            .await?
         } else {
             return Ok(None);
         };
         match read {
             None => Ok(None),
             Some(read) => {
-                self.response_plaintext.extend_from_slice(&buf[..read]);
+                self.response_plaintext
+                    .extend_from_slice(&read_buffer[..read]);
                 self.try_pop_response_payload()
                     .map(|payload| payload.map(|payload| self.response_result(payload)))
             }
@@ -278,6 +286,7 @@ pub(in crate::udp) struct VlessXhttpH2UdpSession {
     seq: u64,
     response_header_seen: bool,
     response_plaintext: Vec<u8>,
+    response_read_buffer: Vec<u8>,
     upload_underlay: Option<&'static str>,
     upload_http_version: Option<ResidentXhttpHttpVersion>,
     xhttp_mode: Option<ResidentXhttpMode>,
@@ -478,20 +487,22 @@ impl VlessXhttpH2UdpSession {
             return Ok(Some(self.response_result(payload)));
         }
         if self.encrypted.is_some() {
-            let mut buf = [0_u8; 8192];
+            self.response_read_buffer.resize(8192, 0);
+            let read_buffer = &mut self.response_read_buffer;
             let stream = self
                 .encrypted
                 .as_mut()
                 .ok_or_else(|| "VLESS encrypted xHTTP UDP stream disappeared".to_owned())?;
             let read = read_udp_stream_once(
                 stream,
-                &mut buf,
+                read_buffer,
                 mode,
                 "read VLESS encrypted xHTTP UDP response",
             )
             .await?;
             if let Some(read) = read {
-                self.response_plaintext.extend_from_slice(&buf[..read]);
+                self.response_plaintext
+                    .extend_from_slice(&read_buffer[..read]);
                 return self
                     .try_pop_response_payload()
                     .map(|payload| payload.map(|payload| self.response_result(payload)));
