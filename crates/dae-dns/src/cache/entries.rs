@@ -1,4 +1,5 @@
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use crate::cache::DnsCacheEntry;
 use crate::cache_key::{DnsCacheKey, DnsCacheKeyView, hash_dns_cache_key_wire_parts};
@@ -10,8 +11,8 @@ const DNS_CACHE_SMALL_BACKEND_MAX_ENTRIES: usize = 16;
 
 #[derive(Clone, Debug)]
 pub(super) enum DnsCacheEntries {
-    Small(Vec<(DnsCacheKey, DnsCacheEntry)>),
-    Map(HashMap<DnsCacheKey, DnsCacheEntry>),
+    Small(Vec<(DnsCacheKey, Arc<DnsCacheEntry>)>),
+    Map(HashMap<DnsCacheKey, Arc<DnsCacheEntry>>),
 }
 
 impl DnsCacheEntries {
@@ -41,17 +42,17 @@ impl DnsCacheEntries {
         match self {
             Self::Small(entries) => entries
                 .iter()
-                .find_map(|(candidate, entry)| (candidate == key).then_some(entry)),
-            Self::Map(entries) => entries.get(key),
+                .find_map(|(candidate, entry)| (candidate == key).then_some(entry.as_ref())),
+            Self::Map(entries) => entries.get(key).map(Arc::as_ref),
         }
     }
 
     pub(super) fn get_view(&self, key: DnsCacheKeyView<'_>) -> Option<&DnsCacheEntry> {
         match self {
-            Self::Small(entries) => entries
-                .iter()
-                .find_map(|(candidate, entry)| candidate.matches_view(key).then_some(entry)),
-            Self::Map(entries) => entries.get(&key),
+            Self::Small(entries) => entries.iter().find_map(|(candidate, entry)| {
+                candidate.matches_view(key).then_some(entry.as_ref())
+            }),
+            Self::Map(entries) => entries.get(&key).map(Arc::as_ref),
         }
     }
 
@@ -63,12 +64,14 @@ impl DnsCacheEntries {
             Self::Small(entries) => {
                 for (candidate, entry) in entries {
                     if packet_question_matches_key(question, candidate)? {
-                        return Ok(Some(entry));
+                        return Ok(Some(entry.as_ref()));
                     }
                 }
                 Ok(None)
             }
-            Self::Map(entries) => Ok(entries.get(&DnsPacketQuestionCacheKey(question))),
+            Self::Map(entries) => Ok(entries
+                .get(&DnsPacketQuestionCacheKey(question))
+                .map(Arc::as_ref)),
         }
     }
 
@@ -80,6 +83,21 @@ impl DnsCacheEntries {
     }
 
     pub(super) fn for_each(&self, mut f: impl FnMut(&DnsCacheKey, &DnsCacheEntry)) {
+        match self {
+            Self::Small(entries) => {
+                for (key, entry) in entries {
+                    f(key, entry.as_ref());
+                }
+            }
+            Self::Map(entries) => {
+                for (key, entry) in entries {
+                    f(key, entry.as_ref());
+                }
+            }
+        }
+    }
+
+    pub(super) fn for_each_shared(&self, mut f: impl FnMut(&DnsCacheKey, &Arc<DnsCacheEntry>)) {
         match self {
             Self::Small(entries) => {
                 for (key, entry) in entries {
@@ -100,18 +118,18 @@ impl DnsCacheEntries {
                 if let Some((_, existing)) =
                     entries.iter_mut().find(|(candidate, _)| candidate == &key)
                 {
-                    *existing = entry;
+                    *existing = Arc::new(entry);
                     return;
                 }
-                entries.push((key, entry));
+                entries.push((key, Arc::new(entry)));
             }
             Self::Map(entries) => {
-                entries.insert(key, entry);
+                entries.insert(key, Arc::new(entry));
             }
         }
     }
 
-    pub(super) fn remove(&mut self, key: &DnsCacheKey) -> Option<DnsCacheEntry> {
+    pub(super) fn remove(&mut self, key: &DnsCacheKey) -> Option<Arc<DnsCacheEntry>> {
         match self {
             Self::Small(entries) => {
                 let index = entries.iter().position(|(candidate, _)| candidate == key)?;
@@ -121,7 +139,7 @@ impl DnsCacheEntries {
         }
     }
 
-    pub(super) fn remove_view(&mut self, key: DnsCacheKeyView<'_>) -> Option<DnsCacheEntry> {
+    pub(super) fn remove_view(&mut self, key: DnsCacheKeyView<'_>) -> Option<Arc<DnsCacheEntry>> {
         match self {
             Self::Small(entries) => {
                 let index = entries
@@ -136,7 +154,7 @@ impl DnsCacheEntries {
     pub(super) fn remove_packet_question(
         &mut self,
         question: &DnsPacketQuestionView<'_>,
-    ) -> Result<Option<DnsCacheEntry>, DnsError> {
+    ) -> Result<Option<Arc<DnsCacheEntry>>, DnsError> {
         Ok(self
             .remove_packet_question_entry(question)?
             .map(|(_, entry)| entry))
@@ -145,7 +163,7 @@ impl DnsCacheEntries {
     pub(super) fn remove_packet_question_entry(
         &mut self,
         question: &DnsPacketQuestionView<'_>,
-    ) -> Result<Option<(DnsCacheKey, DnsCacheEntry)>, DnsError> {
+    ) -> Result<Option<(DnsCacheKey, Arc<DnsCacheEntry>)>, DnsError> {
         match self {
             Self::Small(entries) => {
                 let mut index = 0;
@@ -186,7 +204,7 @@ impl DnsCacheEntries {
     pub(super) fn remove_expired_entries(
         &mut self,
         now_unix: i64,
-    ) -> Vec<(DnsCacheKey, DnsCacheEntry)> {
+    ) -> Vec<(DnsCacheKey, Arc<DnsCacheEntry>)> {
         match self {
             Self::Small(entries) => {
                 let mut removed = Vec::new();
@@ -212,7 +230,7 @@ impl DnsCacheEntries {
                 .iter()
                 .map(|(_, entry)| entry.cache_expires_at())
                 .min(),
-            Self::Map(entries) => entries.values().map(DnsCacheEntry::cache_expires_at).min(),
+            Self::Map(entries) => entries.values().map(|entry| entry.cache_expires_at()).min(),
         }
     }
 

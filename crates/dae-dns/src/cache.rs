@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use crate::cache_key::{DnsCacheKey, DnsCacheKeyView};
 use crate::error::DnsError;
@@ -209,6 +210,14 @@ impl DnsCacheStore {
         self.stats.expired_removal_total += removed.len() as u64;
         self.stats.remove_callback_total += removed.len() as u64;
         removed
+            .into_iter()
+            .map(|(key, entry)| {
+                (
+                    key,
+                    Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()),
+                )
+            })
+            .collect()
     }
 
     pub fn next_expiry_unix(&self) -> Option<i64> {
@@ -242,6 +251,21 @@ impl DnsCacheStore {
         entries
     }
 
+    pub fn snapshot_live_entries_shared(
+        &mut self,
+        now_unix: i64,
+    ) -> Vec<(DnsCacheKey, Arc<DnsCacheEntry>)> {
+        let _ = self.sweep(now_unix);
+        let mut entries = Vec::with_capacity(self.entries.len());
+        self.entries.for_each_shared(|key, entry| {
+            if entry.cache_expires_at() > now_unix {
+                entries.push((key.clone(), Arc::clone(entry)));
+            }
+        });
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        entries
+    }
+
     pub fn cache_stats_entries(&self, now_unix: i64) -> usize {
         self.entries.live_count(now_unix)
     }
@@ -259,7 +283,9 @@ impl DnsCacheStore {
     }
 
     pub fn remove(&mut self, key: &DnsCacheKey) -> Option<DnsCacheEntry> {
-        self.entries.remove(key)
+        self.entries
+            .remove(key)
+            .map(|entry| Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()))
     }
 
     pub fn capacity_eviction_key_for_insert(&self, key: &DnsCacheKey) -> Option<DnsCacheKey> {
@@ -272,7 +298,7 @@ impl DnsCacheStore {
     pub fn remove_capacity_eviction(&mut self, key: &DnsCacheKey) -> Option<DnsCacheEntry> {
         let entry = self.entries.remove(key)?;
         self.stats.remove_callback_total = self.stats.remove_callback_total.saturating_add(1);
-        Some(entry)
+        Some(Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()))
     }
 
     pub fn restore_capacity_eviction(&mut self, key: DnsCacheKey, entry: DnsCacheEntry) {
@@ -284,14 +310,25 @@ impl DnsCacheStore {
         &mut self,
         question: &DnsPacketQuestionView<'_>,
     ) -> Result<Option<DnsCacheEntry>, DnsError> {
-        self.entries.remove_packet_question(question)
+        self.entries.remove_packet_question(question).map(|entry| {
+            entry.map(|entry| Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()))
+        })
     }
 
     pub fn remove_packet_question_entry(
         &mut self,
         question: &DnsPacketQuestionView<'_>,
     ) -> Result<Option<(DnsCacheKey, DnsCacheEntry)>, DnsError> {
-        self.entries.remove_packet_question_entry(question)
+        self.entries
+            .remove_packet_question_entry(question)
+            .map(|entry| {
+                entry.map(|(key, entry)| {
+                    (
+                        key,
+                        Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()),
+                    )
+                })
+            })
     }
 
     pub fn restore_removed_entry(&mut self, key: DnsCacheKey, entry: DnsCacheEntry) {

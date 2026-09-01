@@ -5,13 +5,14 @@ use tokio::net::TcpStream as TokioTcpStream;
 #[cfg(test)]
 use tokio::time;
 
+use dae_resident_core::TcpRelayResourceProfile;
 pub use dae_resident_transport::{DirectTcpConnection, open_direct_tcp_connection_async};
 
 #[cfg(test)]
 use dae_resident_core::ResidentStopSignal;
 use dae_resident_core::{ResidentDataplaneMetrics, SharedResidentStopSignal};
 
-use super::relay_raw_tcp_streams;
+use super::relay_raw_tcp_streams_with_buffer_size;
 
 #[derive(Default, Debug, Eq, PartialEq)]
 pub struct DirectTcpRelayStats {
@@ -37,7 +38,15 @@ pub async fn relay_tcp_direct_async(
     }
     drop(initial_payload);
 
-    relay_raw_tcp_streams(inbound, direct, stop, stats, metrics).await
+    relay_raw_tcp_streams_with_buffer_size(
+        inbound,
+        direct,
+        stop,
+        stats,
+        metrics,
+        TcpRelayResourceProfile::selected().tcp_relay_buffer_bytes(),
+    )
+    .await
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResidentDnsDomainRoutingReloadSnapshot {
-    accepted_responses: Vec<(DnsCacheKey, DnsCacheEntry)>,
+    accepted_responses: Vec<(DnsCacheKey, Arc<DnsCacheEntry>)>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -27,7 +27,7 @@ impl ResidentDnsDomainRouting {
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
         self.sweep_expired_locked(now_unix, &mut state)?;
-        let accepted_responses = state.cache.snapshot_live_entries(now_unix);
+        let accepted_responses = state.cache.snapshot_live_entries_shared(now_unix);
         Ok(ResidentDnsDomainRoutingReloadSnapshot { accepted_responses })
     }
 
@@ -121,7 +121,7 @@ mod tests {
         entry.route_owner_key = key.to_string();
         entry.ips.push("192.0.2.40".parse().unwrap());
         let snapshot = ResidentDnsDomainRoutingReloadSnapshot {
-            accepted_responses: vec![(key, entry)],
+            accepted_responses: vec![(key, Arc::new(entry))],
         };
 
         let report = domain_routing.restore_reload_snapshot(&snapshot).unwrap();

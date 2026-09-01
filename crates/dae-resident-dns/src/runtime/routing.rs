@@ -1,5 +1,10 @@
 use super::*;
+use std::cell::RefCell;
 use std::time::Duration;
+
+thread_local! {
+    static DNS_ROUTING_BITMAP_SCRATCH: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+}
 
 mod actions;
 mod qtype;
@@ -472,9 +477,11 @@ pub fn select_request_action(
     let qname = question
         .qname_to_canonical_string()
         .map_err(|err| format!("read DNS request qname: {err}"))?;
-    let outbound = matcher
-        .match_request(&qname, question.qtype())
-        .map_err(|err| format!("match dns.routing.request: {err}"))?;
+    let outbound = DNS_ROUTING_BITMAP_SCRATCH.with(|scratch| {
+        matcher
+            .match_request_into(&qname, question.qtype(), &mut scratch.borrow_mut())
+            .map_err(|err| format!("match dns.routing.request: {err}"))
+    })?;
     request_action_from_index(plan, outbound)
 }
 
@@ -520,8 +527,16 @@ pub fn select_response_action_for_upstream(
             ips.push(ip);
         }
     }
-    let outbound = matcher
-        .match_response(&qname, question.qtype(), &ips, upstream)
-        .map_err(|err| format!("match dns.routing.response: {err}"))?;
+    let outbound = DNS_ROUTING_BITMAP_SCRATCH.with(|scratch| {
+        matcher
+            .match_response_into(
+                &qname,
+                question.qtype(),
+                &ips,
+                upstream,
+                &mut scratch.borrow_mut(),
+            )
+            .map_err(|err| format!("match dns.routing.response: {err}"))
+    })?;
     response_action_from_index(plan, outbound)
 }

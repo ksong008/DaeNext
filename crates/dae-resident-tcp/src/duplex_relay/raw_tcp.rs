@@ -29,6 +29,7 @@ impl RawTcpRelayDirection {
         cx: &mut Context<'_>,
         source: &mut TokioTcpStream,
         sink: &mut TokioTcpStream,
+        buffer_size: usize,
         read_error: &'static str,
         write_error: &'static str,
     ) -> Poll<Result<RawTcpDirectionPoll, String>> {
@@ -60,7 +61,7 @@ impl RawTcpRelayDirection {
 
         if self.filled == 0 && !self.source_closed {
             if self.buffer.is_empty() {
-                self.buffer.resize(RAW_TCP_RELAY_BUFFER_SIZE, 0);
+                self.buffer.resize(buffer_size, 0);
             }
             let mut read_buffer = ReadBuf::new(&mut self.buffer);
             match Pin::new(&mut *source).poll_read(cx, &mut read_buffer) {
@@ -138,14 +139,16 @@ struct RawTcpRelayDriver {
     upload: RawTcpRelayDirection,
     download: RawTcpRelayDirection,
     stats: DirectTcpRelayStats,
+    buffer_size: usize,
 }
 
 impl RawTcpRelayDriver {
-    fn new(stats: DirectTcpRelayStats) -> Self {
+    fn with_buffer_size(stats: DirectTcpRelayStats, buffer_size: usize) -> Self {
         Self {
             upload: RawTcpRelayDirection::default(),
             download: RawTcpRelayDirection::default(),
             stats,
+            buffer_size: buffer_size.max(1),
         }
     }
 
@@ -160,6 +163,7 @@ impl RawTcpRelayDriver {
             cx,
             inbound,
             direct,
+            self.buffer_size,
             "read inbound TCP for direct relay",
             "write client payload to direct TCP",
         ) {
@@ -171,6 +175,7 @@ impl RawTcpRelayDriver {
             cx,
             direct,
             inbound,
+            self.buffer_size,
             "read direct TCP",
             "write direct TCP payload to client",
         ) {
@@ -217,7 +222,26 @@ pub async fn relay_raw_tcp_streams(
     stats: DirectTcpRelayStats,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
-    let mut driver = RawTcpRelayDriver::new(stats);
+    relay_raw_tcp_streams_with_buffer_size(
+        inbound,
+        direct,
+        stop,
+        stats,
+        metrics,
+        RAW_TCP_RELAY_BUFFER_SIZE,
+    )
+    .await
+}
+
+pub async fn relay_raw_tcp_streams_with_buffer_size(
+    inbound: &mut TokioTcpStream,
+    direct: &mut TokioTcpStream,
+    stop: SharedResidentStopSignal,
+    stats: DirectTcpRelayStats,
+    metrics: &ResidentDataplaneMetrics,
+    buffer_size: usize,
+) -> Result<DirectTcpRelayStats, String> {
+    let mut driver = RawTcpRelayDriver::with_buffer_size(stats, buffer_size);
     let mut stop_listener = stop.listener();
     let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
     tokio::pin!(idle_deadline);
