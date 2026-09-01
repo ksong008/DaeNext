@@ -166,10 +166,11 @@ pub use runtime_decision::{
 };
 pub use runtime_maps::{
     MAP_USAGE_PRESSURE_RATIO, MAP_USAGE_WARNING_RATIO, RuntimeMapCapacity, RuntimeMapInfo,
-    RuntimeMapSnapshot, count_map_entries_by_fd, count_map_entries_by_id, delete_map_elem_bytes,
-    lookup_map_elem_bytes, map_capacity_by_fd, map_capacity_by_id, map_capacity_fast_by_fd,
-    map_capacity_fast_by_id, map_ids, map_info, map_keys_by_fd, open_map_fd,
-    runtime_map_name_matches, truncated_bpf_name, update_map_elem_bytes,
+    RuntimeMapSnapshot, ValidatedRuntimeMapHandle, count_map_entries_by_fd,
+    count_map_entries_by_id, delete_map_elem_bytes, lookup_map_elem_bytes, map_capacity_by_fd,
+    map_capacity_by_id, map_capacity_fast_by_fd, map_capacity_fast_by_id, map_ids, map_info,
+    map_keys_by_fd, open_map_fd, runtime_map_name_matches, truncated_bpf_name,
+    update_map_elem_bytes,
 };
 pub use sockmap::{
     LISTEN_SOCKET_KEY_TCP4, LISTEN_SOCKET_KEY_TCP6, LISTEN_SOCKET_KEY_UDP4, LISTEN_SOCKET_KEY_UDP6,

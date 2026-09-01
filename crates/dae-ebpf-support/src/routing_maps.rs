@@ -1,11 +1,10 @@
 use std::io;
 use std::mem::size_of;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{FromRawFd, OwnedFd};
 
 use crate::{
     BPF_LPM_FULL_PREFIX_BITS, BpfDomainRouting, BpfLpmKey, BpfMatchSet, RuntimeMapUpdateDiffReport,
-    apply_runtime_map_update_diff, delete_map_elem_bytes, lookup_map_elem_bytes, open_map_fd,
-    update_map_elem_bytes,
+    ValidatedRuntimeMapHandle, apply_runtime_map_update_diff,
 };
 
 const BPF_MAP_CREATE: libc::c_uint = 0;
@@ -64,19 +63,19 @@ pub fn apply_routing_maps_by_id(
     routing_entries: &[RoutingMapEntry],
     lpm_entries: &[LpmArrayMapEntry],
 ) -> io::Result<RoutingMapApplyReport> {
-    let routing_map = open_map_fd(routing_map_id)?;
-    let lpm_array_map = open_map_fd(lpm_array_map_id)?;
+    let routing_map = ValidatedRuntimeMapHandle::open_by_id(routing_map_id)?;
+    let lpm_array_map = ValidatedRuntimeMapHandle::open_by_id(lpm_array_map_id)?;
 
     for entry in lpm_entries {
-        let inner = open_map_fd(entry.map_id)?;
+        let inner = ValidatedRuntimeMapHandle::open_by_id(entry.map_id)?;
         let key = entry.index.to_ne_bytes();
         let value = (inner.as_raw_fd() as u32).to_ne_bytes();
-        update_map_elem_bytes(lpm_array_map.as_raw_fd(), &key, &value)?;
+        lpm_array_map.update_elem_bytes(&key, &value)?;
     }
 
     for entry in routing_entries {
         let key = entry.index.to_ne_bytes();
-        update_map_elem_bytes(routing_map.as_raw_fd(), &key, plain_bytes(&entry.value))?;
+        routing_map.update_elem_bytes(&key, plain_bytes(&entry.value))?;
     }
 
     Ok(RoutingMapApplyReport {
@@ -93,35 +92,31 @@ pub fn apply_routing_maps_with_lpm_build_by_id(
     lpm_entries: &[LpmArrayMapEntry],
     lpm_maps: &[LpmMapBuildSpec],
 ) -> io::Result<RoutingMapApplyReport> {
-    let routing_map = open_map_fd(routing_map_id)?;
-    let lpm_array_map = open_map_fd(lpm_array_map_id)?;
+    let routing_map = ValidatedRuntimeMapHandle::open_by_id(routing_map_id)?;
+    let lpm_array_map = ValidatedRuntimeMapHandle::open_by_id(lpm_array_map_id)?;
     let mut created_lpm_maps = Vec::with_capacity(lpm_maps.len());
 
     for spec in lpm_maps {
         let inner = create_lpm_trie_map(spec)?;
         for entry in &spec.entries {
-            update_map_elem_bytes(
-                inner.as_raw_fd(),
-                plain_bytes(&entry.key),
-                plain_bytes(&entry.value),
-            )?;
+            inner.update_elem_bytes(plain_bytes(&entry.key), plain_bytes(&entry.value))?;
         }
         let key = spec.index.to_ne_bytes();
         let value = (inner.as_raw_fd() as u32).to_ne_bytes();
-        update_map_elem_bytes(lpm_array_map.as_raw_fd(), &key, &value)?;
+        lpm_array_map.update_elem_bytes(&key, &value)?;
         created_lpm_maps.push(inner);
     }
 
     for entry in lpm_entries {
-        let inner = open_map_fd(entry.map_id)?;
+        let inner = ValidatedRuntimeMapHandle::open_by_id(entry.map_id)?;
         let key = entry.index.to_ne_bytes();
         let value = (inner.as_raw_fd() as u32).to_ne_bytes();
-        update_map_elem_bytes(lpm_array_map.as_raw_fd(), &key, &value)?;
+        lpm_array_map.update_elem_bytes(&key, &value)?;
     }
 
     for entry in routing_entries {
         let key = entry.index.to_ne_bytes();
-        update_map_elem_bytes(routing_map.as_raw_fd(), &key, plain_bytes(&entry.value))?;
+        routing_map.update_elem_bytes(&key, plain_bytes(&entry.value))?;
     }
 
     Ok(RoutingMapApplyReport {
@@ -136,7 +131,7 @@ pub fn apply_domain_routing_map_by_id(
     updates: &[DomainRoutingMapEntry],
     deletes: &[[u32; 4]],
 ) -> io::Result<DomainRoutingMapApplyReport> {
-    let map = open_map_fd(map_id)?;
+    let map = ValidatedRuntimeMapHandle::open_by_id(map_id)?;
     let mut snapshots = Vec::with_capacity(updates.len().saturating_add(deletes.len()));
     for key in updates
         .iter()
@@ -150,34 +145,30 @@ pub fn apply_domain_routing_map_by_id(
             continue;
         }
         let mut old_value = [0_u8; size_of::<BpfDomainRouting>()];
-        let old_value =
-            match lookup_map_elem_bytes(map.as_raw_fd(), plain_bytes(&key), &mut old_value) {
-                Ok(()) => Some(old_value),
-                Err(error) if error.raw_os_error() == Some(libc::ENOENT) => None,
-                Err(error) => return Err(error),
-            };
+        let old_value = match map.lookup_elem_bytes(plain_bytes(&key), &mut old_value) {
+            Ok(()) => Some(old_value),
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => None,
+            Err(error) => return Err(error),
+        };
         snapshots.push((key, old_value));
     }
 
     for entry in updates {
-        if let Err(err) = update_map_elem_bytes(
-            map.as_raw_fd(),
-            plain_bytes(&entry.key),
-            plain_bytes(&entry.value),
-        ) {
+        if let Err(err) = map.update_elem_bytes(plain_bytes(&entry.key), plain_bytes(&entry.value))
+        {
             return Err(domain_routing_apply_error(
                 err,
-                rollback_domain_routing_snapshot(map.as_raw_fd(), &snapshots),
+                rollback_domain_routing_snapshot(&map, &snapshots),
             ));
         }
     }
     for key in deletes {
-        if let Err(err) = delete_map_elem_bytes(map.as_raw_fd(), plain_bytes(key))
+        if let Err(err) = map.delete_elem_bytes(plain_bytes(key))
             && err.raw_os_error() != Some(libc::ENOENT)
         {
             return Err(domain_routing_apply_error(
                 err,
-                rollback_domain_routing_snapshot(map.as_raw_fd(), &snapshots),
+                rollback_domain_routing_snapshot(&map, &snapshots),
             ));
         }
     }
@@ -188,14 +179,14 @@ pub fn apply_domain_routing_map_by_id(
 }
 
 fn rollback_domain_routing_snapshot(
-    map_fd: i32,
+    map: &ValidatedRuntimeMapHandle,
     snapshots: &[([u32; 4], Option<[u8; size_of::<BpfDomainRouting>()]>)],
 ) -> io::Result<()> {
     let mut first_error = None;
     for (key, old_value) in snapshots.iter().rev() {
         let result = match old_value {
-            Some(old_value) => update_map_elem_bytes(map_fd, plain_bytes(key), old_value),
-            None => delete_map_elem_bytes(map_fd, plain_bytes(key)),
+            Some(old_value) => map.update_elem_bytes(plain_bytes(key), old_value),
+            None => map.delete_elem_bytes(plain_bytes(key)),
         };
         if let Err(error) = result
             && error.raw_os_error() != Some(libc::ENOENT)
@@ -224,13 +215,13 @@ pub fn apply_domain_routing_map_diff_by_id(
     current: &[DomainRoutingMapEntry],
     desired: &[DomainRoutingMapEntry],
 ) -> io::Result<RuntimeMapUpdateDiffReport> {
-    let map = open_map_fd(map_id)?;
+    let map = ValidatedRuntimeMapHandle::open_by_id(map_id)?;
     apply_runtime_map_update_diff(
         current.iter().map(|entry| (entry.key, entry.value)),
         desired.iter().map(|entry| (entry.key, entry.value)),
-        |key, value| update_map_elem_bytes(map.as_raw_fd(), plain_bytes(key), plain_bytes(value)),
+        |key, value| map.update_elem_bytes(plain_bytes(key), plain_bytes(value)),
         |key| {
-            if let Err(err) = delete_map_elem_bytes(map.as_raw_fd(), plain_bytes(key))
+            if let Err(err) = map.delete_elem_bytes(plain_bytes(key))
                 && err.raw_os_error() != Some(libc::ENOENT)
             {
                 return Err(err);
@@ -248,7 +239,7 @@ fn plain_bytes<T>(value: &T) -> &[u8] {
     }
 }
 
-fn create_lpm_trie_map(spec: &LpmMapBuildSpec) -> io::Result<OwnedFd> {
+fn create_lpm_trie_map(spec: &LpmMapBuildSpec) -> io::Result<ValidatedRuntimeMapHandle> {
     if spec.key_size != size_of::<BpfLpmKey>() as u32 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -325,7 +316,7 @@ fn create_lpm_trie_map(spec: &LpmMapBuildSpec) -> io::Result<OwnedFd> {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: A successful BPF_MAP_CREATE returns a new owned file descriptor.
-    Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+    ValidatedRuntimeMapHandle::from_owned_fd(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 }
 
 #[repr(C)]
