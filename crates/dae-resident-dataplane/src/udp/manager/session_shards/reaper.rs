@@ -84,9 +84,18 @@ impl UdpSessionReaper {
     }
 }
 
+impl Drop for UdpSessionReaper {
+    fn drop(&mut self) {
+        for abort in self.aborts.values() {
+            abort.abort();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+    use tokio::sync::oneshot;
 
     use super::*;
 
@@ -120,5 +129,32 @@ mod tests {
         assert_eq!(failed, 0);
         assert_eq!(timed_out, 1);
         assert!(reaper.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dropping_reaper_aborts_tracked_tasks() {
+        struct DropSignal(Option<oneshot::Sender<()>>);
+
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                let _ = self.0.take().expect("drop signal sender").send(());
+            }
+        }
+
+        let (signal_tx, signal_rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _signal = DropSignal(Some(signal_tx));
+            std::future::pending::<()>().await;
+        });
+        let mut reaper = UdpSessionReaper::new(1);
+        reaper.retire(handle).unwrap();
+
+        drop(reaper);
+
+        assert!(
+            time::timeout(Duration::from_secs(1), signal_rx)
+                .await
+                .is_ok()
+        );
     }
 }

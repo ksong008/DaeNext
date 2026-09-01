@@ -165,3 +165,59 @@ impl ResidentUdpSessionShardPool {
         })
     }
 }
+
+impl Drop for ResidentUdpSessionShardPool {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::sync::oneshot;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn dropping_session_shard_pool_aborts_shards() {
+        struct DropSignal(Option<oneshot::Sender<()>>);
+
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                let _ = self.0.take().expect("drop signal sender").send(());
+            }
+        }
+
+        let (signal_tx, signal_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _signal = DropSignal(Some(signal_tx));
+            std::future::pending::<()>().await;
+            Value::Null
+        });
+        tokio::task::yield_now().await;
+
+        let pool = ResidentUdpSessionShardPool {
+            handle: ResidentUdpSessionShardHandle {
+                senders: Arc::new(Vec::new()),
+                closing: Arc::new(AtomicBool::new(false)),
+                metrics: Arc::new(ResidentDataplaneMetrics::default()),
+                event_file: PathBuf::new(),
+                event_lock: Arc::new(Mutex::new(())),
+            },
+            actor_stop: ResidentStopSignal::shared(),
+            stops: Vec::new(),
+            tasks: vec![task],
+        };
+        drop(pool);
+
+        assert!(
+            time::timeout(Duration::from_secs(1), signal_rx)
+                .await
+                .is_ok()
+        );
+    }
+}
