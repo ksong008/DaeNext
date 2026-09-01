@@ -126,10 +126,7 @@ impl ResidentRuntimeOwner {
             ResidentAllocatorWorkerKind::ResidentData,
             resource_config.tcp_runtime_workers.value(),
         );
-        let worker_stack_bytes = resource_config
-            .tcp_flow_stack_bytes
-            .value()
-            .max(RESIDENT_DNS_TRANSPORT_WORKER_STACK_BYTES_MIN);
+        let worker_stack_bytes = resource_config.tcp_flow_stack_bytes.value();
         let data_plane_executor = ResidentRuntimeExecutor::new(
             ResidentRuntimeExecutorConfig::new(
                 resource_config.tcp_runtime_workers.value(),
@@ -391,6 +388,7 @@ impl ResidentRuntimeOwner {
                 "reloadGeneration": self.reload_generation,
             })),
             resources: Arc::new(self.resource_config.json()),
+            udp_payload_admission: self.udp_payload_admission.clone(),
             event_writer: self.event_writer.read_handle(),
             hysteria2_owner_registry: self.hysteria2_owner_registry.clone(),
             tuic_owner_registry: self.tuic_owner_registry.clone(),

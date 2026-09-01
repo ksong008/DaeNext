@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -39,7 +39,8 @@ mod types;
 use self::types::*;
 pub use self::types::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, ResidentTlsConfigCacheClearReport,
-    clear_resident_tls_config_caches,
+    ResidentTlsConfigCacheRetainReport, clear_resident_tls_config_caches,
+    resident_tls_config_cache_metrics, retain_resident_tls_config_cache_for_plans,
 };
 pub(super) use dae_resident_model::{
     ResidentPeerVerificationPolicy, ResidentTlsFactorySelection, ResidentTlsPolicy,

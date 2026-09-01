@@ -68,6 +68,16 @@ pub(super) fn build_resident_dataplane_generation(
     proxy_groups
         .values_mut()
         .try_for_each(|group| group.apply_runtime_generation(reload_generation))?;
+    let active_tls_plans = proxy_groups
+        .values()
+        .flat_map(|group| {
+            group
+                .candidates
+                .iter()
+                .map(|candidate| candidate.binding.plan())
+        })
+        .collect::<Vec<_>>();
+    client::retain_resident_tls_config_cache_for_plans(active_tls_plans);
     let default_proxy = proxy_groups
         .get(&default_outbound)
         .and_then(|group| group.default_proxy_snapshot())

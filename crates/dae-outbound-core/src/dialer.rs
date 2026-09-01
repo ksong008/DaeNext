@@ -1,6 +1,7 @@
 use crate::alive::AliveDialerSet;
 use crate::latency::LatenciesN;
 use crate::types::{NETWORK_TYPE_COLLECTION_COUNT, NetworkType};
+use std::sync::Arc;
 
 pub const TIMEOUT_MS: i64 = 10_000;
 
@@ -86,7 +87,7 @@ impl Default for Collection {
 pub struct Dialer {
     pub name: String,
     pub subscription_tag: String,
-    pub link: String,
+    pub link: Arc<str>,
     collections: Vec<Option<Collection>>,
     probe_http_client_created: bool,
     probe_http_transport_created: bool,
@@ -96,7 +97,7 @@ impl Dialer {
     pub fn new(name: impl Into<String>, subscription_tag: impl Into<String>) -> Self {
         let name = name.into();
         Self {
-            link: String::new(),
+            link: Arc::from(""),
             name,
             subscription_tag: subscription_tag.into(),
             collections: vec![None; NETWORK_TYPE_COLLECTION_COUNT],
@@ -105,7 +106,7 @@ impl Dialer {
         }
     }
 
-    pub fn with_link(mut self, link: impl Into<String>) -> Self {
+    pub fn with_link(mut self, link: impl Into<Arc<str>>) -> Self {
         self.link = link.into();
         self
     }

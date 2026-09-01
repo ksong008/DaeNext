@@ -133,10 +133,11 @@ pub use stream_io::{
 };
 pub use tls_client::{
     AsyncResidentTlsClient, AsyncVlessTlsClient, ResidentTlsConfigCacheClearReport,
-    async_resident_tls_underlay_name, async_tls_underlay_name, clear_resident_tls_config_caches,
-    open_async_resident_tls_client_with_binding,
+    ResidentTlsConfigCacheRetainReport, async_resident_tls_underlay_name, async_tls_underlay_name,
+    clear_resident_tls_config_caches, open_async_resident_tls_client_with_binding,
     open_async_vless_tls_client_with_flow_at_candidates, open_async_xhttp_endpoint_tls_client,
     open_async_xhttp_endpoint_tls_client_at_candidates, open_proxy_tcp_stream_with_binding,
+    resident_tls_config_cache_metrics, retain_resident_tls_config_cache_for_plans,
     take_boring_tls_io_profile_snapshot,
 };
 pub use transport_identity::resident_transport_binding_identity_digest;
