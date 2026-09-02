@@ -138,7 +138,7 @@ dae-tls = { path = "crates/dae-tls" }
 dae-trace = { path = "crates/dae-trace" }
 h3 = { version = "0.0.8", features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
 h3-quinn = "0.0.10"
-h2 = "0.4"
+h2 = "0.4.16"
 hashbrown = "0.15"
 http = "1"
 fastrand = "2"
@@ -154,7 +154,7 @@ object = { version = "0.36.7", default-features = false, features = ["elf", "rea
 percent-encoding = "2.3"
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio"] }
 quinn-boring = { path = "vendor/quinn-boring", default-features = false, features = ["runtime-tokio"] }
-quinn-proto = { version = "0.11.14", default-features = false }
+quinn-proto = { version = "0.11.16", default-features = false }
 udp = { package = "quinn-udp", version = "0.5", default-features = false, features = ["tracing"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
