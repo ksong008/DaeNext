@@ -401,9 +401,8 @@ fn configure_client_hello_profile(
 /// cap exists to bound memory in the Rust-side decompression buffer even if
 /// the peer lies about the declared length (brotli zip-bomb defence).
 ///
-/// Note: the bound is a *read* budget, not an exact allocation cap: `Vec`
-/// growth may transiently hold up to ~2x the bound while `read_to_end`
-/// appends, so peak allocation stays below ~32 MiB per certificate exchange.
+/// The decompression buffer grows only as data is produced, rather than being
+/// allocated from the peer-controlled declared length.
 pub const BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Maximum bytes of brotli-compressed certificate input we are willing to
@@ -424,8 +423,7 @@ unsafe extern "C" fn decompress_brotli_certificate(
         return 0;
     }
     let compressed = unsafe { std::slice::from_raw_parts(input, input_len) };
-    let mut decompressed =
-        Vec::with_capacity(uncompressed_len.min(BORING_QUIC_MAX_DECOMPRESSED_CERTIFICATE_BYTES));
+    let mut decompressed = Vec::new();
     let mut decoder = brotli::Decompressor::new(compressed, 4096);
     let decoded = decoder
         .by_ref()
