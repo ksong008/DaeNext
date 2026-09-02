@@ -193,14 +193,6 @@ impl TuicOwnerRegistryMetrics {
         subtract_count(&self.active_association_quarantine, count);
     }
 
-    fn queued_bytes_added(&self, bytes: usize) {
-        let active = self
-            .current_udp_queued_bytes
-            .fetch_add(bytes, Ordering::Relaxed)
-            .saturating_add(bytes);
-        update_high_water(&self.high_water_udp_queued_bytes, active);
-    }
-
     fn queued_bytes_released(&self, bytes: usize) {
         subtract_count(&self.current_udp_queued_bytes, bytes);
     }
@@ -548,21 +540,23 @@ impl TuicAssociationManager {
                 .fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let owner_bytes = self
-            .metrics
-            .current_udp_queued_bytes
-            .load(Ordering::Acquire);
-        if owner_bytes
-            .checked_add(bytes)
-            .is_none_or(|next| next > self.resources.udp_owner_queue_bytes())
-        {
+        if !reserve_queued_bytes(
+            &self.metrics.current_udp_queued_bytes,
+            bytes,
+            self.resources.udp_owner_queue_bytes(),
+        ) {
             subtract_count(&queue.queued_bytes, bytes);
             self.metrics
                 .association_queue_byte_drops
                 .fetch_add(1, Ordering::Relaxed);
             return;
         }
-        self.metrics.queued_bytes_added(bytes);
+        update_high_water(
+            &self.metrics.high_water_udp_queued_bytes,
+            self.metrics
+                .current_udp_queued_bytes
+                .load(Ordering::Relaxed),
+        );
         let queued = TuicQueuedUdpPacket {
             packet: Some(packet),
             bytes,

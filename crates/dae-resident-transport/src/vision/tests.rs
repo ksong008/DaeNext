@@ -166,6 +166,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resident_vless_vision_rejects_observation_overflow() {
+        let mut state = VisionInnerTlsState::new();
+        let payload = vec![0_u8; VISION_TLS_OBSERVE_LIMIT + 1];
+
+        let error = state.observe_client_payload(&payload).unwrap_err();
+
+        assert!(error.contains("observation exceeds"));
+        assert!(state.client_pending.is_empty());
+    }
+
     fn tls13_server_hello_record(cipher_suite: u16, selected_tls13: bool) -> Vec<u8> {
         let mut body = Vec::new();
         body.extend_from_slice(&[0x03, 0x03]);
