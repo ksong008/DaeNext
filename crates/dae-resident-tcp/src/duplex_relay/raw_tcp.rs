@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 use super::*;
 
 const RAW_TCP_RELAY_BUFFER_SIZE: usize = 64 * 1024;
+const RAW_TCP_RELAY_INITIAL_BUFFER_SIZE: usize = 16 * 1024;
 const RAW_TCP_RELAY_COOPERATIVE_BUDGET: usize = 32;
 
 #[derive(Default)]
@@ -12,6 +13,7 @@ struct RawTcpRelayDirection {
     buffer: Vec<u8>,
     filled: usize,
     written: usize,
+    grow_on_next_read: bool,
     source_closed: bool,
     sink_shutdown: bool,
 }
@@ -61,7 +63,12 @@ impl RawTcpRelayDirection {
 
         if self.filled == 0 && !self.source_closed {
             if self.buffer.is_empty() {
-                self.buffer.resize(buffer_size, 0);
+                self.buffer
+                    .resize(buffer_size.min(RAW_TCP_RELAY_INITIAL_BUFFER_SIZE), 0);
+            } else if self.grow_on_next_read && self.buffer.len() < buffer_size {
+                let next_size = self.buffer.len().saturating_mul(2).min(buffer_size);
+                self.buffer.resize(next_size.max(self.buffer.len()), 0);
+                self.grow_on_next_read = false;
             }
             let mut read_buffer = ReadBuf::new(&mut self.buffer);
             match Pin::new(&mut *source).poll_read(cx, &mut read_buffer) {
@@ -72,6 +79,7 @@ impl RawTcpRelayDirection {
                         self.source_closed = true;
                     } else {
                         self.filled = read;
+                        self.grow_on_next_read = read == self.buffer.len();
                     }
                 }
                 Poll::Ready(Err(error)) if is_graceful_stream_close_error(&error) => {

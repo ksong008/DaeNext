@@ -10,7 +10,9 @@ where
     pending.extend_from_slice(payload);
     if pending.len() > VISION_TLS_OBSERVE_LIMIT {
         pending.clear();
-        return Ok(());
+        return Err(format!(
+            "Vision TLS observation exceeds {VISION_TLS_OBSERVE_LIMIT} bytes"
+        ));
     }
     let mut consumed_total = 0_usize;
     loop {
