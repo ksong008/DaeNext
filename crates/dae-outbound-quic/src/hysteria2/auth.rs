@@ -1,6 +1,6 @@
 use std::future::poll_fn;
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use h3::client;
 use http::{Request, StatusCode};
 
@@ -14,6 +14,7 @@ const RESPONSE_HEADER_UDP_ENABLED: &str = "Hysteria-UDP";
 const COMMON_HEADER_CC_RX: &str = "Hysteria-CC-RX";
 const COMMON_HEADER_PADDING: &str = "Hysteria-Padding";
 const STATUS_AUTH_OK: u16 = 233;
+const MAX_AUTH_RESPONSE_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hysteria2AuthReport {
@@ -83,12 +84,21 @@ pub async fn authenticate_hysteria2_connection(
         .recv_response()
         .await
         .map_err(|err| bad_auth(format!("recv Hysteria2 auth response: {err:?}")))?;
-    while request_stream
+    let mut response_body_bytes = 0_usize;
+    while let Some(data) = request_stream
         .recv_data()
         .await
         .map_err(|err| bad_auth(format!("drain Hysteria2 auth response body: {err:?}")))?
-        .is_some()
-    {}
+    {
+        response_body_bytes = response_body_bytes
+            .checked_add(data.remaining())
+            .ok_or_else(|| bad_auth("Hysteria2 auth response body length overflow"))?;
+        if response_body_bytes > MAX_AUTH_RESPONSE_BODY_BYTES {
+            return Err(bad_auth(format!(
+                "Hysteria2 auth response body exceeds {MAX_AUTH_RESPONSE_BODY_BYTES} bytes"
+            )));
+        }
+    }
     let status = response.status();
     let udp_enabled = response
         .headers()
