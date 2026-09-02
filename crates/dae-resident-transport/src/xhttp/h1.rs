@@ -28,6 +28,8 @@ pub struct XhttpH1DownloadBody {
     state: XhttpH1BodyState,
 }
 
+const MAX_CHUNK_LINE_BYTES: usize = 8 * 1024;
+
 enum XhttpH1BodyReader {
     Client(AsyncResidentTlsClient),
     ReadHalf(tokio::io::ReadHalf<AsyncResidentTlsClient>),
@@ -410,8 +412,33 @@ impl XhttpH1DownloadBody {
     }
 
     fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<Result<usize, String>> {
+        let line_state = matches!(
+            self.state,
+            XhttpH1BodyState::ChunkSize | XhttpH1BodyState::Trailer
+        );
+        let line_capacity = if line_state {
+            if self.find_crlf().is_none() && self.buffer.len() > MAX_CHUNK_LINE_BYTES {
+                return Poll::Ready(Err(format!(
+                    "xHTTP HTTP/1.1 chunk line exceeds {MAX_CHUNK_LINE_BYTES} bytes"
+                )));
+            }
+            Some(
+                MAX_CHUNK_LINE_BYTES
+                    .saturating_add(2)
+                    .saturating_sub(self.buffer.len()),
+            )
+        } else {
+            None
+        };
         let mut scratch = [0_u8; 8192];
-        let mut read_buf = ReadBuf::new(&mut scratch);
+        let read_capacity =
+            line_capacity.map_or(scratch.len(), |capacity| capacity.min(scratch.len()));
+        if read_capacity == 0 {
+            return Poll::Ready(Err(format!(
+                "xHTTP HTTP/1.1 chunk line exceeds {MAX_CHUNK_LINE_BYTES} bytes"
+            )));
+        }
+        let mut read_buf = ReadBuf::new(&mut scratch[..read_capacity]);
         let poll = match &mut self.reader {
             XhttpH1BodyReader::Client(client) => Pin::new(client).poll_read(cx, &mut read_buf),
             XhttpH1BodyReader::ReadHalf(reader) => Pin::new(reader).poll_read(cx, &mut read_buf),
