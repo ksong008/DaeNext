@@ -132,9 +132,15 @@ impl Shadowsocks2022DatagramSession {
             .codec
             .as_mut()
             .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
-        let mut packet_nonce = vec![0_u8; self.packet_nonce_len];
+        if self.packet_nonce_len > 32 {
+            return Err(format!(
+                "Shadowsocks 2022 UDP packet nonce length {} exceeds the stack nonce capacity",
+                self.packet_nonce_len
+            ));
+        }
+        let mut packet_nonce = [0_u8; 32];
         if self.packet_nonce_len > 0 {
-            fastrand::fill(&mut packet_nonce);
+            fastrand::fill(&mut packet_nonce[..self.packet_nonce_len]);
         }
         let request = codec
             .encode_client_packet(
@@ -142,7 +148,7 @@ impl Shadowsocks2022DatagramSession {
                 payload,
                 ss2022_udp_unix_timestamp_now(),
                 if self.packet_nonce_len > 0 {
-                    Some(packet_nonce.as_slice())
+                    Some(&packet_nonce[..self.packet_nonce_len])
                 } else {
                     None
                 },

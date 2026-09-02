@@ -1018,9 +1018,15 @@ fn bind_manager_packet(
         ResidentUdpSelection::ResidentDns => ResidentUdpPinnedRoute::ResidentDns,
         ResidentUdpSelection::Proxy(selection) => {
             let graph_identity_hash = graph_identity_hash(selection.proxy.plan());
+            let session_key = UdpSessionKey::new_with_graph_identity_hash(
+                selection.proxy.plan(),
+                &graph_identity_hash,
+                first.peer,
+                first_original_dst,
+            );
             ResidentUdpPinnedRoute::Proxy {
                 proxy: selection.proxy,
-                graph_identity_hash,
+                session_key,
                 selected_network_type: selection.selected_network_type,
                 force_proxy_packet: selection.force_proxy_packet,
                 route: selection.route,

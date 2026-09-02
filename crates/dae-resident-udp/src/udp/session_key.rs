@@ -1,6 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
 use std::hash::RandomState;
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -22,16 +23,17 @@ where
 
 #[derive(Clone, Debug)]
 pub struct UdpSessionKey {
-    graph_id: String,
-    graph_identity_hash: String,
-    graph_link_hash: String,
-    redacted_link_source: String,
-    outbound: String,
+    graph_id: Arc<str>,
+    graph_identity_hash: Arc<str>,
+    graph_link_hash: Arc<str>,
+    redacted_link_source: Arc<str>,
+    outbound: Arc<str>,
     peer: SocketAddr,
     original_destination: SocketAddr,
     packet_semantics: UdpPacketSemantics,
     wire_identity: ResidentUdpWireIdentityContract,
     dispatch_lane: Option<u16>,
+    hash: u64,
 }
 
 impl UdpSessionKey {
@@ -73,6 +75,20 @@ impl UdpSessionKey {
         )
     }
 
+    pub fn with_dispatch_lane_for_session(&self, dispatch_lane: u16) -> Self {
+        let mut key = self.clone();
+        key.dispatch_lane = Some(dispatch_lane);
+        key.hash = session_key_hash(
+            &key.graph_identity_hash,
+            &key.outbound,
+            key.peer,
+            key.original_destination,
+            key.packet_semantics,
+            key.dispatch_lane,
+        );
+        key
+    }
+
     fn build(
         proxy: &ResidentProxyPlan,
         peer: SocketAddr,
@@ -98,28 +114,42 @@ impl UdpSessionKey {
     ) -> Self {
         let packet_semantics = udp_packet_semantics_for_destination(proxy, original_dst);
         let source_contract = udp_source_contract(proxy, packet_semantics);
+        let graph_id = Arc::<str>::from(proxy.graph_id.as_str());
+        let graph_identity_hash = Arc::<str>::from(graph_identity_hash);
+        let graph_link_hash = Arc::<str>::from(proxy.graph_link_hash.as_str());
+        let redacted_link_source = Arc::<str>::from(proxy.redacted_link_source.as_str());
+        let outbound = Arc::<str>::from(proxy.group_name.as_str());
+        let hash = session_key_hash(
+            &graph_identity_hash,
+            &outbound,
+            peer,
+            original_dst,
+            packet_semantics,
+            dispatch_lane,
+        );
         Self {
-            graph_id: proxy.graph_id.clone(),
-            graph_identity_hash: graph_identity_hash.to_owned(),
-            graph_link_hash: proxy.graph_link_hash.clone(),
-            redacted_link_source: proxy.redacted_link_source.clone(),
-            outbound: proxy.group_name.clone(),
+            graph_id,
+            graph_identity_hash,
+            graph_link_hash,
+            redacted_link_source,
+            outbound,
             peer,
             original_destination: original_dst,
             packet_semantics,
             wire_identity: source_contract.wire_identity(),
             dispatch_lane,
+            hash,
         }
     }
 
     pub fn to_value(&self) -> Value {
         let mut value = packet_session_value(
             UdpPacketSessionIdentity {
-                graph_id: self.graph_id.clone(),
-                graph_identity_hash: self.graph_identity_hash.clone(),
-                graph_link_hash: self.graph_link_hash.clone(),
-                redacted_link_source: self.redacted_link_source.clone(),
-                outbound: self.outbound.clone(),
+                graph_id: self.graph_id.to_string(),
+                graph_identity_hash: self.graph_identity_hash.to_string(),
+                graph_link_hash: self.graph_link_hash.to_string(),
+                redacted_link_source: self.redacted_link_source.to_string(),
+                outbound: self.outbound.to_string(),
                 source_display: resident_socket_addr_display(self.peer),
                 destination_display: resident_socket_addr_display(self.original_destination),
                 peer: Some(self.peer),
@@ -186,13 +216,26 @@ impl Eq for UdpSessionKey {}
 
 impl Hash for UdpSessionKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.graph_identity_hash.hash(state);
-        self.outbound.hash(state);
-        self.peer.hash(state);
-        self.original_destination.hash(state);
-        self.packet_semantics.hash(state);
-        self.dispatch_lane.hash(state);
+        state.write_u64(self.hash);
     }
+}
+
+fn session_key_hash(
+    graph_identity_hash: &str,
+    outbound: &str,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    packet_semantics: UdpPacketSemantics,
+    dispatch_lane: Option<u16>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    graph_identity_hash.hash(&mut hasher);
+    outbound.hash(&mut hasher);
+    peer.hash(&mut hasher);
+    original_dst.hash(&mut hasher);
+    packet_semantics.hash(&mut hasher);
+    dispatch_lane.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub fn dns_request_dispatch_lane(payload: &[u8], lane_count: usize) -> u16 {
