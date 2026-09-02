@@ -498,7 +498,15 @@ fn product_geodata_update_worker_loop<C, J>(
 {
     let mut worker = hooks.worker_started();
     loop {
-        worker.poll();
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| worker.poll())).is_err() {
+            metrics.worker_panicked();
+            if stopping.load(Ordering::Acquire) {
+                return;
+            }
+            worker = hooks.worker_started();
+            thread::yield_now();
+            continue;
+        }
         let received = {
             let Ok(receiver) = receiver.lock() else {
                 return;
