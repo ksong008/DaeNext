@@ -115,10 +115,17 @@ impl XhttpXmuxH3Manager {
             return XhttpXmuxH3SelectAction::Closed;
         }
         self.prune();
+        let waiter = self.state_waiter();
+        self.select_or_reserve_new_with_waiter(waiter)
+    }
 
+    fn select_or_reserve_new_with_waiter(
+        &mut self,
+        waiter: XhttpXmuxStateWait,
+    ) -> XhttpXmuxH3SelectAction {
         let reusable_len = self.reusable_len();
         if reusable_len == 0 {
-            return self.reserve_new_or_wait(reusable_len);
+            return self.reserve_new_or_wait(reusable_len, waiter);
         }
 
         if self
@@ -145,7 +152,7 @@ impl XhttpXmuxH3Manager {
             .collect::<Vec<_>>();
 
         if candidates.is_empty() {
-            return self.reserve_new_or_wait(reusable_len);
+            return self.reserve_new_or_wait(reusable_len, waiter);
         }
 
         let index = candidates[fastrand::usize(..candidates.len())];
@@ -164,13 +171,17 @@ impl XhttpXmuxH3Manager {
         XhttpXmuxH3SelectAction::Selected(selected)
     }
 
-    fn reserve_new_or_wait(&mut self, live_len: usize) -> XhttpXmuxH3SelectAction {
+    fn reserve_new_or_wait(
+        &mut self,
+        live_len: usize,
+        waiter: XhttpXmuxStateWait,
+    ) -> XhttpXmuxH3SelectAction {
         let opening = self.lifecycle.opening();
         if !self
             .connection_capacity
             .can_start_opening(live_len, opening)
         {
-            return XhttpXmuxH3SelectAction::WaitForState(self.state_waiter());
+            return XhttpXmuxH3SelectAction::WaitForState(waiter);
         }
         self.reserve_opening()
     }

@@ -61,10 +61,7 @@ async fn drive_xhttp_packet_up_payload_stream(
             }
         }
     };
-    let result = tokio::select! {
-        result = upload_direction => result,
-        result = download_direction => result,
-    };
+    let result = tokio::try_join!(upload_direction, download_direction).map(|_| ());
     close_xhttp_download_client(download).await;
     close_xhttp_upload_client(upload).await;
     result
@@ -111,10 +108,7 @@ async fn drive_xhttp_stream_payload_stream(
             }
         }
     };
-    let result = tokio::select! {
-        result = upload_direction => result,
-        result = download_direction => result,
-    };
+    let result = tokio::try_join!(upload_direction, download_direction).map(|_| ());
     close_xhttp_download_client(download).await;
     close_xhttp_stream_upload_client(upload).await;
     result
