@@ -20,8 +20,8 @@ use dae_outbound_quic::{
 #[cfg(test)]
 use dae_outbound_stream::shared_transport::GrpcMode;
 use dae_resident_core::events::{
-    ResidentEventKind, ResidentEventMetadata, admit_event, append_admitted_event,
-    append_event_with_metadata,
+    ResidentEventAdmission, ResidentEventKind, ResidentEventMetadata, admit_event,
+    append_admitted_event, append_event_with_metadata,
 };
 #[cfg(test)]
 use dae_resident_plan::{

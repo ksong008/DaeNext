@@ -121,14 +121,6 @@ pub(super) async fn run_resident_udp_session_shard(
     })
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UdpSessionDispatchOutcome {
-    Queued,
-    QueueFull,
-    AdmissionRejected,
-    ActorUnavailable,
-}
-
 enum UdpSessionSend<Packet> {
     Queued,
     Full(Packet),
@@ -145,21 +137,6 @@ fn classify_session_send<Packet>(
     }
 }
 
-impl UdpSessionDispatchOutcome {
-    fn queued(self) -> bool {
-        self == Self::Queued
-    }
-
-    fn reason(self) -> &'static str {
-        match self {
-            Self::Queued => UDP_ROUTE_REASON_QUEUED,
-            Self::QueueFull => UDP_ROUTE_REASON_QUEUE_FULL,
-            Self::AdmissionRejected => UDP_ROUTE_REASON_LIMIT,
-            Self::ActorUnavailable => UDP_ROUTE_REASON_SESSION_UNAVAILABLE,
-        }
-    }
-}
-
 async fn handle_proxy_shard_packet(
     packet: ResidentUdpProxyShardPacket,
     context: &ResidentUdpSessionShardContext,
@@ -168,26 +145,11 @@ async fn handle_proxy_shard_packet(
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
 ) {
-    let route_event = admit_event(ResidentEventMetadata::new(
-        ResidentEventKind::UdpRouteChosen,
-    ))
-    .map(|admission| {
-        let event = udp_route_chosen_event(
-            packet.managed.packet.peer,
-            packet.managed.original_dst,
-            &packet.route,
-            Some(&packet.managed.proxy),
-            Some(&packet.key),
-            packet.sniffed_domain.as_deref().unwrap_or_default(),
-            packet.managed.dscp,
-            true,
-            UDP_ROUTE_REASON_QUEUED,
-        );
-        (admission, event)
-    });
-    let outcome = dispatch_proxy_packet(
+    dispatch_proxy_packet(
         packet.key,
         packet.managed,
+        packet.route,
+        packet.sniffed_domain,
         context,
         cleanup_tx,
         sessions,
@@ -195,16 +157,6 @@ async fn handle_proxy_shard_packet(
         next_actor_id,
     )
     .await;
-    if let Some((admission, mut route_event)) = route_event {
-        route_event["task_queued"] = json!(outcome.queued());
-        route_event["reason"] = json!(outcome.reason());
-        append_admitted_event(
-            &context.event_file,
-            &context.event_lock,
-            admission,
-            route_event,
-        );
-    }
 }
 
 async fn handle_direct_shard_packet(
@@ -215,25 +167,11 @@ async fn handle_direct_shard_packet(
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
 ) {
-    let route_event = admit_event(ResidentEventMetadata::new(
-        ResidentEventKind::UdpRouteChosen,
-    ))
-    .map(|admission| {
-        let event = udp_direct_route_chosen_event(
-            packet.managed.packet.peer,
-            packet.managed.original_dst,
-            &packet.route,
-            &packet.key,
-            packet.sniffed_domain.as_deref().unwrap_or_default(),
-            packet.managed.dscp,
-            true,
-            UDP_ROUTE_REASON_QUEUED,
-        );
-        (admission, event)
-    });
-    let outcome = dispatch_direct_packet(
+    let _outcome = dispatch_direct_packet(
         packet.key,
         packet.managed,
+        packet.route,
+        packet.sniffed_domain,
         context,
         cleanup_tx,
         sessions,
@@ -241,48 +179,98 @@ async fn handle_direct_shard_packet(
         next_actor_id,
     )
     .await;
-    if let Some((admission, mut route_event)) = route_event {
-        route_event["task_queued"] = json!(outcome.queued());
-        route_event["reason"] = json!(outcome.reason());
-        append_admitted_event(
-            &context.event_file,
-            &context.event_lock,
-            admission,
-            route_event,
-        );
-    }
 }
 
 async fn dispatch_proxy_packet(
     key: UdpSessionKey,
     mut managed: ManagedUdpPacket,
+    route: ResidentUdpRouteSelection,
+    sniffed_domain: SharedUdpSniffedDomain,
     context: &ResidentUdpSessionShardContext,
     cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
-) -> UdpSessionDispatchOutcome {
+) {
+    let peer = managed.packet.peer;
+    let original_dst = managed.original_dst;
+    let dscp = managed.dscp;
+    let mut route_event = None;
     for attempt in 0..2 {
-        let existed = sessions.contains_key(&key);
-        if !existed && !create_proxy_session(&key, context, cleanup_tx, sessions, next_actor_id) {
-            return UdpSessionDispatchOutcome::AdmissionRejected;
-        }
-        let result = sessions
-            .get(&key)
-            .expect("proxy UDP session exists after creation")
-            .session
-            .sender
-            .try_send(managed);
+        let lookup_key = key.clone();
+        let (existed, result) = match sessions.entry(lookup_key) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                let result = entry.get().session.sender.try_send(managed);
+                (true, result)
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let Some(session) = create_proxy_session(&key, context, cleanup_tx, next_actor_id)
+                else {
+                    append_proxy_route_event(
+                        context,
+                        route_event.take().or_else(|| {
+                            build_proxy_route_event(
+                                peer,
+                                original_dst,
+                                &route,
+                                &managed.proxy,
+                                &key,
+                                sniffed_domain.as_deref().unwrap_or_default(),
+                                dscp,
+                            )
+                        }),
+                        false,
+                        UDP_ROUTE_REASON_LIMIT,
+                    );
+                    return;
+                };
+                if route_event.is_none() {
+                    route_event = build_proxy_route_event(
+                        peer,
+                        original_dst,
+                        &route,
+                        &managed.proxy,
+                        &key,
+                        sniffed_domain.as_deref().unwrap_or_default(),
+                        dscp,
+                    );
+                }
+                let result = entry.insert(session).session.sender.try_send(managed);
+                (false, result)
+            }
+        };
         match classify_session_send(result) {
             UdpSessionSend::Queued => {
                 if existed {
                     context.metrics.udp_session_reused();
                 }
-                return UdpSessionDispatchOutcome::Queued;
+                append_proxy_route_event(
+                    context,
+                    route_event.take(),
+                    true,
+                    UDP_ROUTE_REASON_QUEUED,
+                );
+                return;
             }
-            UdpSessionSend::Full(_returned) => {
+            UdpSessionSend::Full(returned) => {
                 context.metrics.udp_session_queue_full();
-                return UdpSessionDispatchOutcome::QueueFull;
+                append_proxy_route_event(
+                    context,
+                    route_event.take().or_else(|| {
+                        build_proxy_route_event(
+                            peer,
+                            original_dst,
+                            &route,
+                            &returned.proxy,
+                            &key,
+                            sniffed_domain.as_deref().unwrap_or_default(),
+                            dscp,
+                        )
+                    }),
+                    false,
+                    UDP_ROUTE_REASON_QUEUE_FULL,
+                );
+                return;
             }
             UdpSessionSend::Closed(returned) => {
                 managed = returned;
@@ -293,39 +281,111 @@ async fn dispatch_proxy_packet(
             }
         }
     }
-    UdpSessionDispatchOutcome::ActorUnavailable
+    append_proxy_route_event(
+        context,
+        route_event.or_else(|| {
+            build_proxy_route_event(
+                peer,
+                original_dst,
+                &route,
+                &managed.proxy,
+                &key,
+                sniffed_domain.as_deref().unwrap_or_default(),
+                dscp,
+            )
+        }),
+        false,
+        UDP_ROUTE_REASON_SESSION_UNAVAILABLE,
+    );
 }
 
 async fn dispatch_direct_packet(
     key: UdpDirectSessionKey,
     mut managed: ManagedDirectUdpPacket,
+    route: ResidentUdpRouteSelection,
+    sniffed_domain: SharedUdpSniffedDomain,
     context: &ResidentUdpSessionShardContext,
     cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
-) -> UdpSessionDispatchOutcome {
+) {
+    let peer = managed.packet.peer;
+    let original_dst = managed.original_dst;
+    let dscp = managed.dscp;
+    let mut route_event = None;
     for attempt in 0..2 {
-        let existed = sessions.contains_key(&key);
-        if !existed && !create_direct_session(&key, context, cleanup_tx, sessions, next_actor_id) {
-            return UdpSessionDispatchOutcome::AdmissionRejected;
-        }
-        let result = sessions
-            .get(&key)
-            .expect("direct UDP session exists after creation")
-            .session
-            .sender
-            .try_send(managed);
+        let lookup_key = key.clone();
+        let (existed, result) = match sessions.entry(lookup_key) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                let result = entry.get().session.sender.try_send(managed);
+                (true, result)
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let Some(session) = create_direct_session(&key, context, cleanup_tx, next_actor_id)
+                else {
+                    append_direct_route_event(
+                        context,
+                        route_event.take().or_else(|| {
+                            build_direct_route_event(
+                                peer,
+                                original_dst,
+                                &route,
+                                &key,
+                                sniffed_domain.as_deref().unwrap_or_default(),
+                                dscp,
+                            )
+                        }),
+                        false,
+                        UDP_ROUTE_REASON_LIMIT,
+                    );
+                    return;
+                };
+                if route_event.is_none() {
+                    route_event = build_direct_route_event(
+                        peer,
+                        original_dst,
+                        &route,
+                        &key,
+                        sniffed_domain.as_deref().unwrap_or_default(),
+                        dscp,
+                    );
+                }
+                let result = entry.insert(session).session.sender.try_send(managed);
+                (false, result)
+            }
+        };
         match classify_session_send(result) {
             UdpSessionSend::Queued => {
                 if existed {
                     context.metrics.udp_session_reused();
                 }
-                return UdpSessionDispatchOutcome::Queued;
+                append_direct_route_event(
+                    context,
+                    route_event.take(),
+                    true,
+                    UDP_ROUTE_REASON_QUEUED,
+                );
+                return;
             }
             UdpSessionSend::Full(_returned) => {
                 context.metrics.udp_session_queue_full();
-                return UdpSessionDispatchOutcome::QueueFull;
+                append_direct_route_event(
+                    context,
+                    route_event.take().or_else(|| {
+                        build_direct_route_event(
+                            peer,
+                            original_dst,
+                            &route,
+                            &key,
+                            sniffed_domain.as_deref().unwrap_or_default(),
+                            dscp,
+                        )
+                    }),
+                    false,
+                    UDP_ROUTE_REASON_QUEUE_FULL,
+                );
+                return;
             }
             UdpSessionSend::Closed(returned) => {
                 managed = returned;
@@ -336,19 +396,118 @@ async fn dispatch_direct_packet(
             }
         }
     }
-    UdpSessionDispatchOutcome::ActorUnavailable
+    append_direct_route_event(
+        context,
+        route_event.or_else(|| {
+            build_direct_route_event(
+                peer,
+                original_dst,
+                &route,
+                &key,
+                sniffed_domain.as_deref().unwrap_or_default(),
+                dscp,
+            )
+        }),
+        false,
+        UDP_ROUTE_REASON_SESSION_UNAVAILABLE,
+    );
+}
+
+fn build_proxy_route_event(
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    route: &ResidentUdpRouteSelection,
+    proxy: &ResidentProxyPlan,
+    key: &UdpSessionKey,
+    sniffed_domain: &str,
+    dscp: u8,
+) -> Option<(ResidentEventAdmission, Value)> {
+    admit_event(ResidentEventMetadata::new(
+        ResidentEventKind::UdpRouteChosen,
+    ))
+    .map(|admission| {
+        (
+            admission,
+            udp_route_chosen_event(
+                peer,
+                original_dst,
+                route,
+                Some(proxy),
+                Some(key),
+                sniffed_domain,
+                dscp,
+                true,
+                UDP_ROUTE_REASON_QUEUED,
+            ),
+        )
+    })
+}
+
+fn append_proxy_route_event(
+    context: &ResidentUdpSessionShardContext,
+    route_event: Option<(ResidentEventAdmission, Value)>,
+    task_queued: bool,
+    reason: &str,
+) {
+    let Some((admission, mut event)) = route_event else {
+        return;
+    };
+    event["task_queued"] = json!(task_queued);
+    event["reason"] = json!(reason);
+    append_admitted_event(&context.event_file, &context.event_lock, admission, event);
+}
+
+fn build_direct_route_event(
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    route: &ResidentUdpRouteSelection,
+    key: &UdpDirectSessionKey,
+    sniffed_domain: &str,
+    dscp: u8,
+) -> Option<(ResidentEventAdmission, Value)> {
+    admit_event(ResidentEventMetadata::new(
+        ResidentEventKind::UdpRouteChosen,
+    ))
+    .map(|admission| {
+        (
+            admission,
+            udp_direct_route_chosen_event(
+                peer,
+                original_dst,
+                route,
+                key,
+                sniffed_domain,
+                dscp,
+                true,
+                UDP_ROUTE_REASON_QUEUED,
+            ),
+        )
+    })
+}
+
+fn append_direct_route_event(
+    context: &ResidentUdpSessionShardContext,
+    route_event: Option<(ResidentEventAdmission, Value)>,
+    task_queued: bool,
+    reason: &str,
+) {
+    let Some((admission, mut event)) = route_event else {
+        return;
+    };
+    event["task_queued"] = json!(task_queued);
+    event["reason"] = json!(reason);
+    append_admitted_event(&context.event_file, &context.event_lock, admission, event);
 }
 
 fn create_proxy_session(
     key: &UdpSessionKey,
     context: &ResidentUdpSessionShardContext,
     cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
-    sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
     next_actor_id: &mut u64,
-) -> bool {
+) -> Option<ResidentUdpProxyShardEntry> {
     let Ok(admission) = try_reserve_session(&context.admission) else {
         context.metrics.udp_session_admission_rejected();
-        return false;
+        return None;
     };
     let (sender, receiver) = mpsc::channel(context.session_queue_depth);
     let actor_id = allocate_actor_id(next_actor_id);
@@ -360,28 +519,23 @@ fn create_proxy_session(
         receiver,
         cleanup_tx.clone(),
     );
-    sessions.insert(
-        key.clone(),
-        ResidentUdpProxyShardEntry {
-            actor_id,
-            session: UdpSessionEntry { sender, handle },
-            _admission: admission,
-        },
-    );
     context.metrics.udp_session_created();
-    true
+    Some(ResidentUdpProxyShardEntry {
+        actor_id,
+        session: UdpSessionEntry { sender, handle },
+        _admission: admission,
+    })
 }
 
 fn create_direct_session(
     key: &UdpDirectSessionKey,
     context: &ResidentUdpSessionShardContext,
     cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
-    sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
     next_actor_id: &mut u64,
-) -> bool {
+) -> Option<ResidentUdpDirectShardEntry> {
     let Ok(admission) = try_reserve_session(&context.admission) else {
         context.metrics.udp_session_admission_rejected();
-        return false;
+        return None;
     };
     let (sender, receiver) = mpsc::channel(context.session_queue_depth);
     let actor_id = allocate_actor_id(next_actor_id);
@@ -393,16 +547,12 @@ fn create_direct_session(
         receiver,
         cleanup_tx.clone(),
     );
-    sessions.insert(
-        key.clone(),
-        ResidentUdpDirectShardEntry {
-            actor_id,
-            session: UdpDirectSessionEntry { sender, handle },
-            _admission: admission,
-        },
-    );
     context.metrics.udp_session_created();
-    true
+    Some(ResidentUdpDirectShardEntry {
+        actor_id,
+        session: UdpDirectSessionEntry { sender, handle },
+        _admission: admission,
+    })
 }
 
 fn try_reserve_session(
