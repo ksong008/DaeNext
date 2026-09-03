@@ -121,6 +121,54 @@ fn udp_generation_pin_is_fixed_by_peer_and_original_destination_until_expiry() {
 }
 
 #[test]
+fn active_udp_generation_pin_keeps_sliding_with_traffic() {
+    let now = Instant::now();
+    let mut pin = UdpGenerationPin {
+        generation: 7,
+        expires_at: now + Duration::from_secs(30),
+        route: None,
+    };
+
+    refresh_udp_generation_pin_expiry(
+        &mut pin,
+        now + Duration::from_secs(20),
+        Duration::from_secs(60),
+        7,
+    );
+
+    assert_eq!(pin.expires_at, now + Duration::from_secs(80));
+}
+
+#[test]
+fn retired_udp_generation_pin_does_not_slide_with_continuous_traffic() {
+    let peer = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 53000);
+    let key = UdpGenerationPinKey {
+        peer,
+        original_dst: SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 443),
+    };
+    let now = Instant::now();
+    let original_deadline = now + Duration::from_secs(30);
+    let mut pin = UdpGenerationPin {
+        generation: 7,
+        expires_at: original_deadline,
+        route: None,
+    };
+
+    for elapsed in [10, 20, 29] {
+        refresh_udp_generation_pin_expiry(
+            &mut pin,
+            now + Duration::from_secs(elapsed),
+            Duration::from_secs(60),
+            8,
+        );
+    }
+    assert_eq!(pin.expires_at, original_deadline);
+
+    let pins = HashMap::from([(key, pin)]);
+    assert!(udp_generation_pin_for_packet(&pins, key, original_deadline, 8).is_none());
+}
+
+#[test]
 fn udp_generation_pins_are_capped_and_evict_the_earliest_expiry() {
     let now = Instant::now();
     let mut pins = HashMap::new();
