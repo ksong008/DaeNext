@@ -566,11 +566,15 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                         &event_file,
                                         &event_lock,
                                     );
-                                    pin.expires_at = now
-                                        + route.idle_timeout(
+                                    refresh_udp_generation_pin_expiry(
+                                        pin,
+                                        now,
+                                        route.idle_timeout(
                                             session_idle_timeout,
                                             proxy_session_idle_timeout,
-                                        );
+                                        ),
+                                        active.id.get(),
+                                    );
                                     continue;
                                 }
                                 let route =
@@ -585,7 +589,12 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                     })
                                     .unwrap_or(session_idle_timeout);
                                 pin.route = route;
-                                pin.expires_at = now + idle_timeout;
+                                refresh_udp_generation_pin_expiry(
+                                    pin,
+                                    now,
+                                    idle_timeout,
+                                    active.id.get(),
+                                );
                                 continue;
                             }
 
@@ -815,12 +824,23 @@ fn udp_generation_pin_is_eligible(pin: &UdpGenerationPin, active_generation: u64
             .is_some_and(ResidentUdpPinnedRoute::follows_active_generation)
 }
 
+fn refresh_udp_generation_pin_expiry(
+    pin: &mut UdpGenerationPin,
+    now: Instant,
+    idle_timeout: Duration,
+    active_generation: u64,
+) {
+    if pin.generation == active_generation {
+        pin.expires_at = now + idle_timeout;
+    }
+}
+
 /// Evict the pin with the earliest expiry once the map is at its cap.
 ///
 /// Pins with the earliest `expires_at` are the ones closest to being reclaimed
 /// by the idle sweep, so evicting them loses the least active routing state.
-/// Active sessions keep refreshing their pin's `expires_at`, so an eviction
-/// only forces the next packet of that tuple to be re-routed.
+/// Active-generation sessions keep refreshing their pin's `expires_at`, so an
+/// eviction only forces the next packet of that tuple to be re-routed.
 fn evict_oldest_udp_generation_pin(pins: &mut HashMap<UdpGenerationPinKey, UdpGenerationPin>) {
     let Some(oldest) = pins
         .iter()
