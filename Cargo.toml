@@ -51,11 +51,16 @@ exclude = [
 ]
 resolver = "3"
 
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
 [profile.production-performance]
 inherits = "release"
 opt-level = 3
-lto = false
-codegen-units = 16
+lto = "fat"
+codegen-units = 1
 panic = "unwind"
 strip = false
 
