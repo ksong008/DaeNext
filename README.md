@@ -147,12 +147,13 @@ production dependency graph.
 | Parameter | Meaning |
 | --- | --- |
 | `--locked` | Requires the dependency versions recorded in `Cargo.lock`; use it for reproducible builds. |
-| `--release` | Uses Cargo's optimized release profile. DaeNext release builds use neither fat nor thin LTO. |
+| `--release` | Uses Cargo's optimized release profile: optimization level 3, fat LTO, one codegen unit, and an unstripped output. |
 | `--target <triple>` | Selects the Rust compilation target, for example `aarch64-unknown-linux-gnu`. The matching Rust target and cross linker must be installed. |
-| `--profile production-performance` | Uses the workspace performance profile: optimization level 3, 16 codegen units, no LTO, unstripped output. |
+| `--profile production-performance` | Uses the workspace production profile: optimization level 3, fat LTO, one codegen unit, and an unstripped output. |
 | `--profile production-size` | Uses the size profile: `opt-level=z`, one codegen unit, no LTO, stripped output. |
 | `CARGO_TARGET_DIR` | Moves Cargo artifacts to a separate cache/output directory. Use separate directories when building different CPU levels concurrently. |
-| `CARGO_PROFILE_RELEASE_LTO=false` | Explicitly disables LTO for callers that may otherwise inject a release-profile override. |
+| `CARGO_PROFILE_RELEASE_LTO=fat` | Selects the default release LTO mode. Override only for a controlled comparison build. |
+| `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` | Selects the default release codegen-unit count. Override only for a controlled comparison build. |
 | `RUSTFLAGS="-C target-cpu=..."` | Selects the minimum CPU instruction baseline. It affects compatibility and must match the artifact label. |
 | `DAE_DAEMON_VERSION` | Overrides the complete version text embedded in `daed --version`; product builds normally set this automatically. |
 | `DAE_RUST_NATIVE_BPF_TOOLCHAIN` | Selects the Rust toolchain used to build the embedded eBPF objects; the default is `nightly`. |
@@ -168,10 +169,11 @@ Recommended distributable CPU baselines:
 | x86_64 v3 | `-C target-cpu=x86-64-v3` | AVX2-class systems; do not install on v1/v2-only CPUs. |
 | ARM64 generic | `-C target-cpu=generic` | Baseline AArch64/ARMv8-A, including Cortex-A53 at the ISA level. |
 
-For example, build a reproducible x86_64-v2 daemon without LTO:
+For example, build a reproducible x86_64-v2 daemon with the default Fat LTO profile:
 
 ```bash
-CARGO_PROFILE_RELEASE_LTO=false \
+CARGO_PROFILE_RELEASE_LTO=fat \
+CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
 RUSTFLAGS="-C target-cpu=x86-64-v2" \
 cargo build --locked --release -p dae-daemon --bin daed
 ```
