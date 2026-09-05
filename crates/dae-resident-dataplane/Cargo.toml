@@ -20,7 +20,8 @@ test-boringssl-unbuffered-bio = [
     "test-boringssl-tcp-tls",
     "dae-resident-transport/test-boringssl-unbuffered-bio",
 ]
-test-boringssl-quic = ["dae-outbound-quic/test-support"]
+# Compatibility selector; QUIC fixtures are enabled only by development dependencies.
+test-boringssl-quic = []
 test-anytls-legacy-frame-reader = ["dae-resident-transport/test-anytls-legacy-frame-reader"]
 test-support = [
     "dae-resident-dns/test-support",
