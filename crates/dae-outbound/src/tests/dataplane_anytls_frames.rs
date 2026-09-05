@@ -20,7 +20,8 @@ fn case_anytls_tcp_first_flight_matches_native_session_order() {
 
     let auth_handshake = anytls::link::handshake_auth_bytes(auth);
     assert_eq!(auth_handshake.len(), 64);
-    assert_eq!(&auth_handshake[32..], &[0; 32]);
+    assert_eq!(&auth_handshake[32..34], &[0, 30]);
+    assert_eq!(&auth_handshake[34..], &[0; 30]);
 
     let settings_frame = anytls::link::frame(
         anytls::contract::CMD_SETTINGS,
@@ -28,6 +29,15 @@ fn case_anytls_tcp_first_flight_matches_native_session_order() {
         &anytls::link::settings_bytes(),
     )
     .unwrap();
+    // Consume the first flight as the official server does: hash, u16 length,
+    // padding, then session frames. Comparing two uses of the encoder alone
+    // would miss a zero length prefix followed by 30 unannounced bytes.
+    let mut flight = auth_handshake.clone();
+    flight.extend_from_slice(&settings_frame);
+    let padding_len = u16::from_be_bytes([flight[32], flight[33]]) as usize;
+    let first_frame = anytls::decode_frame(&flight[34 + padding_len..]).unwrap();
+    assert_eq!(first_frame.cmd, anytls::contract::CMD_SETTINGS);
+    assert_eq!(first_frame.data, anytls::link::settings_bytes());
     let syn_frame = anytls::link::frame(anytls::contract::CMD_SYN, 1, &[]).unwrap();
     let target_addr = anytls::link::socks_addr(target).unwrap();
     let psh_addr_frame = anytls::link::frame(anytls::contract::CMD_PSH, 1, &target_addr).unwrap();

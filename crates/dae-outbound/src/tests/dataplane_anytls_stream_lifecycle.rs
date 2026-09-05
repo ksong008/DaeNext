@@ -49,8 +49,9 @@ fn case_anytls_session_reuse_sequence_has_one_auth_and_two_streams() {
         second.fin_frame.as_slice(),
     ];
 
-    assert_eq!(auth_handshake.len(), 34);
-    assert_eq!(&auth_handshake[32..], &[0, 0]);
+    assert_eq!(auth_handshake.len(), 64);
+    assert_eq!(&auth_handshake[32..34], &[0, 30]);
+    assert_eq!(&auth_handshake[34..], &[0; 30]);
     assert_eq!(frames.len(), 10);
     assert_eq!(anytls::decode_frame(frames[0]).unwrap().sid, 1);
     assert_eq!(
