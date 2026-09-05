@@ -84,17 +84,22 @@ impl ProductControlRuntimeConfig {
 
     #[cfg(test)]
     pub(super) fn for_test() -> Self {
-        Self::for_benchmark()
+        Self::helper_defaults()
     }
 
     pub fn for_helper(thread_name: &'static str) -> Self {
         Self {
             thread_name,
-            ..Self::for_benchmark()
+            ..Self::helper_defaults()
         }
     }
 
+    #[cfg(feature = "benchmark-support")]
     pub fn for_benchmark() -> Self {
+        Self::helper_defaults()
+    }
+
+    fn helper_defaults() -> Self {
         Self {
             thread_name: PRODUCT_CONTROL_RUNTIME_THREAD_NAME,
             profile: ProductHttpProfile::LowMemory,

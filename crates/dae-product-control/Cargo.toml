@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+test-support = ["dae-product-persistence/test-support"]
+benchmark-support = ["dae-product-runtime/benchmark-support"]
+
 [dependencies]
 dae-config.workspace = true
 dae-product-identity.workspace = true
