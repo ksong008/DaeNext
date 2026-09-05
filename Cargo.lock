@@ -1236,6 +1236,7 @@ dependencies = [
  "dae-resident-transport",
  "dae-runtime-control",
  "fastrand",
+ "getrandom 0.3.4",
  "h2",
  "h3",
  "http",
