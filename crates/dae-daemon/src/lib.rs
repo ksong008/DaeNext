@@ -41,7 +41,7 @@ pub use control_plane_entrypoint::{
 };
 #[cfg(feature = "product-api")]
 pub use daed_product::{DaedProductOutput, run_daed_product_with_args_and_version};
-#[cfg(feature = "product-api")]
+#[cfg(all(feature = "product-api", feature = "benchmark-support"))]
 pub use daed_product::{
     ProductControlBenchmarkFixture, ProductGlobalNormalizeBenchmarkFixture,
     product_control_benchmark_fixture, product_global_normalize_benchmark_fixture,

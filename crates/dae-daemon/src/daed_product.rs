@@ -56,6 +56,7 @@ use crate::production_runtime_owner::{
     start_resident_production_runtime_with_latency_seed_and_dns_reload_snapshot,
 };
 
+#[cfg(feature = "benchmark-support")]
 pub use dae_product_control::runtime::{
     ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
 };
@@ -396,8 +397,11 @@ mod runtime_overview;
 use self::runtime_overview::*;
 mod runtime_api;
 use self::runtime_api::*;
-mod resources;
-use self::resources::*;
+#[cfg(test)]
+pub(crate) use dae_product_control::{
+    get_section_value, list_section_summaries_value, section_request_value,
+    select_profile_transactionally, select_section_transactionally,
+};
 mod nodes_subscriptions_groups;
 use self::nodes_subscriptions_groups::*;
 mod product_net;
@@ -440,6 +444,7 @@ use self::auth_storage::*;
 pub use dae_product_control::ensure_default_resources;
 pub use dae_product_control::ensure_default_resources_for_user;
 use dae_product_control::*;
+#[cfg(feature = "benchmark-support")]
 pub use dae_product_control::{ProductControlBenchmarkFixture, product_control_benchmark_fixture};
 #[cfg(test)]
 fn product_test_auth_runtime() -> Arc<ProductAuthRuntime> {
@@ -447,7 +452,10 @@ fn product_test_auth_runtime() -> Arc<ProductAuthRuntime> {
 }
 #[cfg(test)]
 fn product_test_control_runtime() -> Arc<ProductControlRuntime> {
-    ProductControlRuntime::start(ProductControlRuntimeConfig::for_benchmark()).unwrap()
+    ProductControlRuntime::start(ProductControlRuntimeConfig::for_helper(
+        "product-control-runtime",
+    ))
+    .unwrap()
 }
 #[cfg(test)]
 mod tests;

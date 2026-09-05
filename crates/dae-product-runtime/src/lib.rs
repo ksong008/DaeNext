@@ -1,6 +1,7 @@
 mod active_resources;
 mod apply_generation;
 mod apply_state;
+#[cfg(feature = "benchmark-support")]
 mod benchmark;
 mod cgroup_memory;
 mod commit_state;
@@ -25,6 +26,7 @@ mod reconcile_tests;
 pub use active_resources::*;
 pub use apply_generation::*;
 pub use apply_state::*;
+#[cfg(feature = "benchmark-support")]
 pub use benchmark::{
     ProductGlobalNormalizeBenchmarkFixture, product_global_normalize_benchmark_fixture,
 };

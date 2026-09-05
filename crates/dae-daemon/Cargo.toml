@@ -31,7 +31,7 @@ allocator-jemalloc = [
     "dep:tikv-jemalloc-ctl",
     "dep:tikv-jemalloc-sys",
 ]
-benchmark-support = ["dae-resident-dataplane/benchmark-support"]
+benchmark-support = ["dae-resident-dataplane/benchmark-support", "dae-product-control/benchmark-support"]
 # Diagnostic-only compile switches used by the transparent-UDP four-quadrant
 # A/B. Production builds leave both unset and use bounded syscall batching.
 test-scalar-udp-recv = [
@@ -112,5 +112,5 @@ url.workspace = true
 dae-datapath = { workspace = true, features = ["test-support"] }
 dae-outbound = { workspace = true, features = ["test-support"] }
 dae-product-geodata = { workspace = true, features = ["test-support"] }
-dae-product-persistence = { workspace = true, features = ["test-support"] }
+dae-product-control = { workspace = true, features = ["test-support"] }
 dae-resident-dataplane = { workspace = true, features = ["test-support"] }

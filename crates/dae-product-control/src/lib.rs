@@ -12,13 +12,8 @@ use std::time::{Duration, Instant};
 use dae_product_core::*;
 use serde_json::{Value, json};
 
-pub use dae_product_core as core;
-pub use dae_product_geodata as geodata;
-pub use dae_product_http as http;
-pub use dae_product_identity as identity;
-pub use dae_product_persistence as persistence;
-pub use dae_product_runtime as runtime;
-pub use dae_product_subscription as subscription;
+mod domain_api;
+pub use domain_api::{core, geodata, http, identity, persistence, runtime, subscription};
 
 pub mod auth;
 pub use auth::*;
@@ -59,7 +54,9 @@ mod sections;
 pub use sections::*;
 mod selection;
 pub use selection::*;
+#[cfg(feature = "benchmark-support")]
 mod benchmark;
+#[cfg(feature = "benchmark-support")]
 pub use benchmark::{ProductControlBenchmarkFixture, product_control_benchmark_fixture};
 mod cancellation;
 pub use cancellation::*;

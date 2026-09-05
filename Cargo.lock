@@ -682,7 +682,6 @@ dependencies = [
  "dae-outbound-stream",
  "dae-product-control",
  "dae-product-geodata",
- "dae-product-persistence",
  "dae-resident-dataplane",
  "dae-routing",
  "dae-runtime-control",
@@ -1121,11 +1120,11 @@ dependencies = [
 name = "dae-resident-model"
 version = "3.1.0"
 dependencies = [
+ "dae-core-types",
  "dae-outbound-core",
  "dae-outbound-quic",
  "dae-outbound-stream",
  "dae-resident-core",
- "dae-runtime-control",
  "fastrand",
  "serde_json",
  "sha2",
