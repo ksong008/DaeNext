@@ -580,9 +580,67 @@ fn xhttp_generate_padding(method: ResidentXhttpPaddingMethod, len: usize) -> Str
         ResidentXhttpPaddingMethod::Tokenish => {
             const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
             let token_len = ((len as f64) / 0.8).ceil().max(1.0) as usize;
-            (0..token_len)
-                .map(|_| BASE62[fastrand::usize(..BASE62.len())] as char)
-                .collect()
+            let mut token: String = (0..token_len)
+                .map(|_| BASE62[random_index(BASE62.len())] as char)
+                .collect();
+            // Xray sizes tokenish padding against the HTTP/2 HPACK or HTTP/3
+            // QPACK Huffman representation, not the raw character count.
+            // Correct the estimate so the encoded value stays within two
+            // bytes of the requested target.
+            for adjustment in 0..150 {
+                let encoded_len = hpack_huffman_len(token.as_bytes());
+                if encoded_len.abs_diff(len) <= 2 {
+                    break;
+                }
+                if encoded_len < len {
+                    token.push(if adjustment % 2 == 0 { 'X' } else { 'Z' });
+                } else if token.len() > 1 {
+                    token.pop();
+                } else {
+                    break;
+                }
+            }
+            token
+        }
+    }
+}
+
+fn hpack_huffman_len(input: &[u8]) -> usize {
+    // RFC 7541 Appendix B code lengths for the base62 alphabet, in the same
+    // order as BASE62 above. The wire length is the byte-rounded bit count.
+    const LENGTHS: [u8; 62] = [
+        5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+        7, 7, 7, 8, 7, 8, 5, 6, 5, 6, 5, 6, 6, 6, 5, 7, 7, 6, 6, 6, 5, 6, 7, 6, 5, 5, 6, 7, 7, 7,
+        7, 7,
+    ];
+    let bits: usize = input
+        .iter()
+        .map(|byte| match byte {
+            b'0'..=b'9' => LENGTHS[(byte - b'0') as usize],
+            b'A'..=b'Z' => LENGTHS[10 + (byte - b'A') as usize],
+            b'a'..=b'z' => LENGTHS[36 + (byte - b'a') as usize],
+            _ => 8,
+        } as usize)
+        .sum();
+    bits.div_ceil(8)
+}
+
+fn random_index(bound: usize) -> usize {
+    debug_assert!(bound > 0);
+    let limit = u64::MAX - (u64::MAX % bound as u64);
+    loop {
+        let mut bytes = [0_u8; 8];
+        if getrandom::fill(&mut bytes).is_err() {
+            // Entropy source failure: degrade to the process PRNG for
+            // availability. Padding/session-id randomness is then
+            // predictable (weaker anti-tracking) but functional; the
+            // official implementations fail closed instead. Kept as a
+            // deliberate availability trade-off.
+            return fastrand::usize(..bound);
+        }
+        let value = u64::from_ne_bytes(bytes);
+        if value < limit {
+            return (value % bound as u64) as usize;
         }
     }
 }
@@ -705,8 +763,11 @@ pub fn new_xhttp_session_id_for(settings: &ResidentXhttpSettingsPlan) -> String 
         let len = ResidentXhttpSettingsPlan::sample_range((from, to)) as usize;
         let table = settings.session_id_table.as_bytes();
         if !table.is_empty() {
+            // Table-backed session ids ride in the request path alongside
+            // Tokenish padding; sample from the CSPRNG to stay
+            // indistinguishable from random traffic (see `random_index`).
             return (0..len)
-                .map(|_| table[fastrand::usize(..table.len())] as char)
+                .map(|_| table[random_index(table.len())] as char)
                 .collect();
         }
     }
@@ -714,9 +775,18 @@ pub fn new_xhttp_session_id_for(settings: &ResidentXhttpSettingsPlan) -> String 
 }
 
 fn new_xhttp_uuid_session_id() -> String {
-    let high = fastrand::u64(..);
-    let low = fastrand::u64(..);
-    let value = ((high as u128) << 64) | low as u128;
+    // Session ids are exposed in the request path and must not be
+    // predictable from the process PRNG state (anti-tracking). Read 16
+    // bytes from the OS CSPRNG; a failed entropy source falls back to the
+    // process PRNG for availability, mirroring `random_index`.
+    let mut bytes = [0_u8; 16];
+    if getrandom::fill(&mut bytes).is_err() {
+        for chunk in bytes.chunks_exact_mut(8) {
+            let value = fastrand::u64(..).to_ne_bytes();
+            chunk.copy_from_slice(&value);
+        }
+    }
+    let value = u128::from_ne_bytes(bytes);
     format!(
         "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
         (value >> 96) as u32,
@@ -741,6 +811,15 @@ pub fn xhttp_h3_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tokenish_padding_tracks_hpack_target_within_two_bytes() {
+        for target in [1, 2, 7, 32, 127, 900] {
+            let padding = xhttp_generate_padding(ResidentXhttpPaddingMethod::Tokenish, target);
+            assert!(!padding.is_empty());
+            assert!(hpack_huffman_len(padding.as_bytes()).abs_diff(target) <= 2);
+        }
+    }
 
     fn test_xhttp_endpoint(settings: ResidentXhttpSettingsPlan) -> ResidentXhttpEndpointPlan {
         ResidentXhttpEndpointPlan {
