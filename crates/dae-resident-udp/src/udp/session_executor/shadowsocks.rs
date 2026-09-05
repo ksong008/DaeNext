@@ -2,11 +2,40 @@ use super::*;
 
 const SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN: &[u8] = b"shadowsocks-2022-client-session";
 
+const WIRE_RANDOM_POOL_REFILL_BYTES: usize = 512;
+
+/// Draws wire-visible randomness (UDP salts, session ids, nonces) from a
+/// bulk-refilled OS CSPRNG pool. Shadowsocks assumes these values are
+/// unpredictable (the official implementation draws them from a CSPRNG); a
+/// predictable process PRNG would weaken the AEAD salt and nonce
+/// guarantees. Refilling 512 bytes per OS call keeps the per-packet UDP
+/// path syscall-free (same pattern as the Salamander obfs salt pool).
+fn take_wire_random(pool: &mut Vec<u8>, pool_offset: &mut usize, out: &mut [u8]) {
+    if *pool_offset + out.len() > pool.len() {
+        pool.resize(WIRE_RANDOM_POOL_REFILL_BYTES, 0);
+        if getrandom::fill(pool).is_err() {
+            // Entropy source failure: degrade to the process PRNG for
+            // availability; see the same trade-off in xhttp
+            // `random_index`. Wire-visible randomness is then predictable
+            // until the entropy source recovers.
+            fastrand::fill(pool);
+        }
+        *pool_offset = 0;
+    }
+    let end = *pool_offset + out.len();
+    out.copy_from_slice(&pool[*pool_offset..end]);
+    *pool_offset = end;
+}
+
 pub(in crate::udp) struct ShadowsocksAeadDatagramSession {
     cipher: String,
     password: String,
     salt_len: usize,
     relay: DatagramRelay,
+    // See `Shadowsocks2022DatagramSession`: UDP salts are wire-visible and
+    // feed the AEAD subkey derivation, so they must come from a CSPRNG.
+    random_pool: Vec<u8>,
+    random_pool_offset: usize,
 }
 
 impl ShadowsocksAeadDatagramSession {
@@ -16,6 +45,8 @@ impl ShadowsocksAeadDatagramSession {
             password,
             salt_len,
             relay: DatagramRelay::default(),
+            random_pool: Vec::new(),
+            random_pool_offset: 0,
         }
     }
 
@@ -26,7 +57,11 @@ impl ShadowsocksAeadDatagramSession {
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
         let mut salt = vec![0_u8; self.salt_len];
-        fastrand::fill(&mut salt);
+        take_wire_random(
+            &mut self.random_pool,
+            &mut self.random_pool_offset,
+            &mut salt,
+        );
         let request = encode_udp_packet(
             &self.cipher,
             &self.password,
@@ -88,6 +123,10 @@ pub(in crate::udp) struct Shadowsocks2022DatagramSession {
     relay: DatagramRelay,
     runtime_metrics: Option<Arc<ResidentDataplaneMetrics>>,
     replay_metrics: Ss2022UdpReplayMetricsSnapshot,
+    // CSPRNG pool for wire-visible salt/session-id/nonce material; see
+    // `take_wire_random`.
+    random_pool: Vec<u8>,
+    random_pool_offset: usize,
 }
 
 impl Shadowsocks2022DatagramSession {
@@ -100,6 +139,8 @@ impl Shadowsocks2022DatagramSession {
             relay: DatagramRelay::default(),
             runtime_metrics: None,
             replay_metrics: Ss2022UdpReplayMetricsSnapshot::default(),
+            random_pool: Vec::new(),
+            random_pool_offset: 0,
         }
     }
 
@@ -122,7 +163,11 @@ impl Shadowsocks2022DatagramSession {
     ) -> Result<UdpExchangeResult, String> {
         if self.codec.is_none() {
             let mut session_id = [0_u8; 8];
-            fastrand::fill(&mut session_id);
+            take_wire_random(
+                &mut self.random_pool,
+                &mut self.random_pool_offset,
+                &mut session_id,
+            );
             self.codec = Some(
                 Ss2022UdpCodec::new(&self.cipher, &self.password, session_id)
                     .map_err(|err| format!("create Shadowsocks 2022 UDP codec: {err}"))?,
@@ -140,7 +185,11 @@ impl Shadowsocks2022DatagramSession {
         }
         let mut packet_nonce = [0_u8; 32];
         if self.packet_nonce_len > 0 {
-            fastrand::fill(&mut packet_nonce[..self.packet_nonce_len]);
+            take_wire_random(
+                &mut self.random_pool,
+                &mut self.random_pool_offset,
+                &mut packet_nonce[..self.packet_nonce_len],
+            );
         }
         let request = codec
             .encode_client_packet(

@@ -28,6 +28,7 @@ dae-resident-transport.workspace = true
 dae-runtime-control.workspace = true
 bytes.workspace = true
 fastrand.workspace = true
+getrandom.workspace = true
 h2.workspace = true
 h3.workspace = true
 http.workspace = true
