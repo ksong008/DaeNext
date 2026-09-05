@@ -1,6 +1,6 @@
 use std::fmt;
 
-use dae_runtime_control::OwnerGeneration;
+use dae_core_types::OwnerGeneration;
 
 use super::*;
 

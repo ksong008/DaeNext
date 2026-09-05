@@ -1,18 +1,8 @@
 use std::fmt::{self, Write};
 use std::hash::Hash;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct OwnerGeneration(u64);
-
-impl OwnerGeneration {
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
+// Compatibility export: the shared value type has a single owner.
+pub use dae_core_types::OwnerGeneration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RedactedIdentityError {

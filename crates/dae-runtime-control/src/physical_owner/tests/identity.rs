@@ -30,3 +30,20 @@ fn redacted_identity_rejects_namespace_delimiters() {
         Err(RedactedIdentityError::InvalidNamespace)
     );
 }
+
+#[test]
+fn owner_generation_compatibility_export_has_the_shared_type_identity() {
+    let shared = dae_core_types::OwnerGeneration::new(u64::MAX);
+    let legacy: OwnerGeneration = shared;
+    let projection = PhysicalOwnerKeyProjection::new(
+        legacy,
+        TestOwnerKey {
+            graph: 1,
+            transport: 2,
+            private_material: String::new(),
+            fingerprint_seed: 3,
+        },
+    );
+    assert_eq!(projection.generation(), shared);
+    assert_eq!(shared.get(), u64::MAX);
+}

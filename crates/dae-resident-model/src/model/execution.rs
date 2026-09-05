@@ -1,5 +1,5 @@
 use super::*;
-use dae_runtime_control::OwnerGeneration;
+use dae_core_types::OwnerGeneration;
 
 const UNMATERIALIZED_RESIDENT_PLAN_GENERATION: OwnerGeneration = OwnerGeneration::new(0);
 

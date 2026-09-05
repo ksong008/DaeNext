@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Prevent the large architecture boundaries from growing silently."""
+"""Bound non-test-named Rust LOC (including inline tests, comments and blanks).
+
+The legacy 'production' field retains its v1 meaning. Subtree budgets overlap
+package budgets and are checked independently, never added to a grand total.
+"""
 
 from __future__ import annotations
 
@@ -55,6 +59,27 @@ def validate(root: pathlib.Path, policy: dict[str, Any]) -> list[str]:
                     f"{package}: {kind} source boundary grew to {actual} lines; "
                     f"limit is {maximum}"
                 )
+    subtrees = policy.get("subtrees", {})
+    if not isinstance(subtrees, dict):
+        return errors + ["source boundary policy subtrees must be an object"]
+    for relative, limits in sorted(subtrees.items()):
+        path = pathlib.Path(relative)
+        if path.is_absolute() or ".." in path.parts or not relative.startswith("crates/"):
+            errors.append(f"{relative}: subtree must be a repository-relative crates path")
+            continue
+        source_root = root / path
+        if not source_root.is_dir():
+            errors.append(f"{relative}: subtree source directory is missing")
+            continue
+        if not isinstance(limits, dict):
+            errors.append(f"{relative}: subtree limits must be an object")
+            continue
+        for kind, actual in zip(("production", "tests"), line_counts(source_root)):
+            maximum = limits.get(kind)
+            if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum < 0:
+                errors.append(f"{relative}: {kind} limit must be a non-negative integer")
+            elif actual > maximum:
+                errors.append(f"{relative}: {kind} source boundary grew to {actual} lines; limit is {maximum}")
     return errors
 
 
@@ -76,7 +101,7 @@ def main() -> int:
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
-    print(f"source boundary gate: PASS ({len(policy['packages'])} large boundaries checked)")
+    print(f"source boundary gate: PASS ({len(policy['packages'])} packages, {len(policy.get('subtrees', {}))} overlapping subtrees; non-test-named LOC, not release feature evidence)")
     return 0
 
 

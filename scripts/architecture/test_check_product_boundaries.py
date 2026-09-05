@@ -95,6 +95,25 @@ class ProductBoundaryGateTests(unittest.TestCase):
         errors = MODULE.validate(root)
         self.assertTrue(any("bypasses product coordinator" in error for error in errors))
 
+    def test_rejects_unbounded_domain_exports(self) -> None:
+        for declaration in (
+            "pub use dae_product_runtime as runtime;",
+            "pub use dae_product_runtime::*;",
+            "pub use dae_product_runtime::{State, *};",
+            "pub mod nested { pub use dae_product_core as core; }",
+        ):
+            with self.subTest(declaration=declaration):
+                root = self.fixture()
+                source = root / "crates/dae-product-control/src/lib.rs"
+                source.write_text(declaration, encoding="utf-8")
+                self.assertTrue(any("unbounded" in error for error in MODULE.validate(root)))
+
+    def test_accepts_curated_domain_exports(self) -> None:
+        root = self.fixture()
+        source = root / "crates/dae-product-control/src/lib.rs"
+        source.write_text("pub mod runtime { pub use dae_product_runtime::{State, apply}; }", encoding="utf-8")
+        self.assertEqual(MODULE.validate(root), [])
+
     def test_rejects_old_runtime_materialization_path(self) -> None:
         root = self.fixture()
         returned = (
