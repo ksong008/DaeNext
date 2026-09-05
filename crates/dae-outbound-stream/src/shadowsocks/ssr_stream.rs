@@ -181,11 +181,15 @@ struct StreamCipherSpec {
 }
 
 fn http_simple_obfs_request(obfs_host: &str, obfs_port: u16, stream_payload: &[u8]) -> Vec<u8> {
-    let encoded = percent_encode(stream_payload);
-    format!(
+    let head_len = stream_payload.len().min(64).max(1);
+    let encoded = percent_encode(&stream_payload[..head_len]);
+    let body = &stream_payload[head_len..];
+    let mut request = format!(
         "GET /{encoded} HTTP/1.1\r\nHost: {obfs_host}:{obfs_port}\r\nUser-Agent: Mozilla/5.0\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: gzip, deflate\r\nDNT: 1\r\nConnection: keep-alive\r\n\r\n"
     )
-    .into_bytes()
+    .into_bytes();
+    request.extend_from_slice(body);
+    request
 }
 
 #[derive(Clone)]
@@ -347,6 +351,27 @@ fn percent_encode(input: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_simple_places_only_short_prefix_in_path() {
+        let payload = (0_u8..=127).collect::<Vec<_>>();
+        let request = http_simple_obfs_request("front.invalid", 443, &payload);
+        let header_end = request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("HTTP header terminator")
+            + 4;
+        let header = std::str::from_utf8(&request[..header_end]).expect("HTTP header UTF-8");
+        let path = header
+            .lines()
+            .next()
+            .expect("request line")
+            .split_whitespace()
+            .nth(1)
+            .expect("request path");
+        assert_eq!(path.len(), 1 + 64 * 3);
+        assert_eq!(&request[header_end..], &payload[64..]);
+    }
 
     #[test]
     fn in_place_stream_cipher_matches_allocating_wire_for_every_cipher() {

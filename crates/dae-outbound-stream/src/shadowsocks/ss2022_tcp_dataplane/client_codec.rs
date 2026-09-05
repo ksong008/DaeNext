@@ -1,5 +1,6 @@
 use super::*;
-pub(crate) const SS2022_TIMESTAMP_TOLERANCE_SECS: i64 = 90;
+/// SIP003 SS2022 TCP replay window mandated by the reference implementation.
+pub(crate) const SS2022_TIMESTAMP_TOLERANCE_SECS: i64 = 30;
 
 pub(super) fn encode_client_initial_with_timestamp(
     conf: &CipherConf2022,

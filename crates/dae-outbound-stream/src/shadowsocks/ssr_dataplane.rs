@@ -153,18 +153,17 @@ pub fn read_shadowsocksr_http_simple_request(
         16384,
         OutboundError::BadShadowsocks,
     )?;
-    if !remainder.is_empty() {
-        return Err(OutboundError::BadShadowsocks(
-            "SSR http_simple request carried unexpected body bytes".to_owned(),
-        ));
-    }
     let head_text =
         std::str::from_utf8(&head).map_err(|err| OutboundError::BadShadowsocks(err.to_string()))?;
     let request_line = head_text
         .split("\r\n")
         .next()
         .ok_or_else(|| OutboundError::BadShadowsocks("SSR request head empty".to_owned()))?;
-    let stream_payload = decode_http_simple_request_line(request_line)?;
+    // The reference http_simple obfuscator puts only the first 1..=64 bytes
+    // in the escaped URL path and leaves the rest as an unframed HTTP body.
+    // Both portions are the contiguous encrypted SSR stream.
+    let mut stream_payload = decode_http_simple_request_line(request_line)?;
+    stream_payload.extend_from_slice(&remainder);
     let key = evp_bytes_to_key(password.as_bytes(), AES_128_CFB_KEY_LEN);
     let protocol_payload = stream_decrypt_with_iv(cipher, &key, &stream_payload)?;
     let (target, consumed) = Socks5Address::decode(&protocol_payload)?;
@@ -217,12 +216,21 @@ fn http_simple_obfs_request(
     options: &ShadowsocksRThreeLayerOptions,
     stream_payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
-    let encoded = percent_encode(stream_payload);
+    // SSR's reference implementation uses a short escaped path prefix and
+    // appends the remaining encrypted bytes verbatim after the HTTP header.
+    // Keeping the prefix bounded avoids producing an enormous URL and is
+    // accepted by servers whose configured head length is in the 1..=64 range.
+    let head_len = stream_payload.len().min(64).max(1);
+    let encoded = percent_encode(&stream_payload[..head_len]);
+    let body = &stream_payload[head_len..];
     Ok(format!(
         "GET /{encoded} HTTP/1.1\r\nHost: {}:{}\r\nUser-Agent: Mozilla/5.0 (dae ssr-fixture)\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.8\r\nAccept-Encoding: gzip, deflate\r\nDNT: 1\r\nConnection: keep-alive\r\n\r\n",
         options.obfs_host, options.obfs_port
     )
-    .into_bytes())
+    .into_bytes()
+    .into_iter()
+    .chain(body.iter().copied())
+    .collect())
 }
 
 fn decode_http_simple_request_line(line: &str) -> Result<Vec<u8>, OutboundError> {

@@ -24,8 +24,26 @@ pub fn vision_padding_block(
 
 pub fn vision_padding_len(content_len: usize, long_padding: bool) -> usize {
     if content_len < 900 && long_padding {
-        900 - content_len + fastrand::usize(..500)
+        900 - content_len + secure_random_range(500)
     } else {
-        fastrand::usize(..256)
+        secure_random_range(256)
+    }
+}
+
+fn secure_random_range(bound: usize) -> usize {
+    debug_assert!(bound > 0);
+    let limit = u64::MAX - (u64::MAX % bound as u64);
+    loop {
+        let mut bytes = [0_u8; 8];
+        if getrandom::fill(&mut bytes).is_err() {
+            // Entropy source failure: degrade to the process PRNG for
+            // availability (weaker padding indistinguishability); see the
+            // same trade-off in xhttp `random_index`.
+            return fastrand::usize(..bound);
+        }
+        let value = u64::from_ne_bytes(bytes);
+        if value < limit {
+            return (value % bound as u64) as usize;
+        }
     }
 }
