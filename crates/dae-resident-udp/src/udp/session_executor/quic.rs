@@ -600,6 +600,16 @@ impl JuicityQuicStreamPacketSession {
         if binding.plan().graph_link_hash != self.binding.plan().graph_link_hash {
             return Err("Juicity UDP session proxy identity changed".to_owned());
         }
+        // The official Juicity v0.5.0 server accepts DialAuth for a :0
+        // target but forwards it with UDP sendto(:0), which is rejected by
+        // the kernel (EINVAL). Refuse this unsupported mode before opening a
+        // shared owner so callers do not observe a permanently pending packet.
+        if original_dst.port() == 0 {
+            return Err(
+                "Juicity UDP target port 0 is unsupported by the official server; use stream-packet UDP with a concrete target port"
+                    .to_owned(),
+            );
+        }
         self.fixed_target
             .bind(original_dst, "Juicity UDP stream session")?;
         if self.wire_target.is_empty() {
