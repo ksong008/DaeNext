@@ -19,8 +19,8 @@ fn case_anytls_tcp_first_flight_matches_native_session_order() {
     let payload = b"fixture-anytls-payload";
 
     let auth_handshake = anytls::link::handshake_auth_bytes(auth);
-    assert_eq!(auth_handshake.len(), 34);
-    assert_eq!(&auth_handshake[32..], &[0, 0]);
+    assert_eq!(auth_handshake.len(), 64);
+    assert_eq!(&auth_handshake[32..], &[0; 32]);
 
     let settings_frame = anytls::link::frame(
         anytls::contract::CMD_SETTINGS,

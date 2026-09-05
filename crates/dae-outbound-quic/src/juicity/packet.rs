@@ -8,7 +8,7 @@ pub use super::stream_packet::*;
 pub const JUICITY_UNDERLAY_AUTH_IV_LEN: usize = 32;
 pub const JUICITY_UNDERLAY_AUTH_PSK_LEN: usize = 32;
 pub const JUICITY_TRANSPORT_PACKET_CONN_CIPHER: &str = "chacha20-poly1305";
-pub const JUICITY_TRANSPORT_PACKET_CONN_REUSED_INFO: &str = "juicity reused info";
+pub const JUICITY_TRANSPORT_PACKET_CONN_REUSED_INFO: &str = "juicity-reused-info";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JuicityUdpPacketConnKind {

@@ -95,6 +95,10 @@ pub fn auth_key(auth: &str) -> [u8; 32] {
 pub fn handshake_auth_bytes(auth: &str) -> Vec<u8> {
     let mut out = auth_key(auth).to_vec();
     out.extend_from_slice(&[0, 0]);
+    // anytls-go's default packet-0 padding is the fixed 30-byte range. The
+    // server consumes this padding before creating the session; omitting it
+    // changes the observable first record from 64 to 34 bytes.
+    out.resize(out.len() + 30, 0);
     out
 }
 

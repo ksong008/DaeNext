@@ -38,7 +38,7 @@ fn case_juicity_dialauth_record_matches_native_pack_order_contract() {
     assert_eq!(record.transport_packet_conn_cipher, "chacha20-poly1305");
     assert_eq!(
         record.transport_packet_conn_reused_info,
-        "juicity reused info"
+        "juicity-reused-info"
     );
     assert_eq!(
         record.packed.len(),

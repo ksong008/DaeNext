@@ -33,6 +33,10 @@ pub const UDP_UNDERLAY_USES_ORIGINAL: bool = true;
 pub const UDP_PORT_ZERO_PACKET_CONN: &str = "transport_packet_conn";
 pub const UDP_NONZERO_PORT_PACKET_CONN: &str = "stream_packet_conn";
 pub const TRANSPORT_PACKET_CONN_USES_AUTH: bool = true;
-pub const TRANSPORT_PACKET_CONN_CIPHER_INFO: &str = "juicity reused info";
+/// HKDF/AEAD `info` label used by Juicity's transport packet connection.
+///
+/// This exact byte string is defined by the reference implementation
+/// (`ciphers.JuicityReusedInfo`) and is part of the wire key derivation.
+pub const TRANSPORT_PACKET_CONN_CIPHER_INFO: &str = "juicity-reused-info";
 pub const PRODUCTION_DATA_PLANE_OWNER: &str = "dae-resident-dataplane";
 pub const STANDALONE_SMOKE_SURFACE: &str = "test-support-only";

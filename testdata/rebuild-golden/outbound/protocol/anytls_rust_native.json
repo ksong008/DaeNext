@@ -97,7 +97,7 @@
   "rust_adapter_mode": "rust-native",
   "session_contract": {
     "first_handshake": {
-      "auth_key_then_zero_u16_hex": "bdf49c3c3882102fc017ffb661108c63a836d065888a4093994398cc55c2ea2f0000"
+      "auth_key_then_zero_u16_and_default_padding_hex": "bdf49c3c3882102fc017ffb661108c63a836d065888a4093994398cc55c2ea2f0000000000000000000000000000000000000000000000000000000000000000"
     },
     "frame": {
       "cmd_alert": 5,
