@@ -11,7 +11,8 @@ test-support = []
 test-boringssl-tcp-tls = []
 test-boringssl-tls-profile = ["dae-resident-transport/test-boringssl-tls-profile"]
 test-boringssl-unbuffered-bio = ["dae-resident-transport/test-boringssl-unbuffered-bio"]
-test-boringssl-quic = ["dae-outbound-quic/test-support"]
+# Compatibility selector; QUIC fixtures are enabled only by development dependencies.
+test-boringssl-quic = []
 
 [dependencies]
 dae-core-types.workspace = true
