@@ -57,7 +57,7 @@ pub(super) fn runtime_runner_outbound_anytls_commands_match_fixture() {
     );
     assert_eq!(
         auth_json["handshake_hex"].as_str().unwrap(),
-        fixture["session_contract"]["first_handshake"]["auth_key_then_zero_u16_hex"]
+        fixture["session_contract"]["first_handshake"]["auth_key_then_u16_30_and_default_padding_hex"]
             .as_str()
             .unwrap()
     );
