@@ -167,13 +167,26 @@ mod tests {
     }
 
     #[test]
-    fn resident_vless_vision_rejects_observation_overflow() {
+    fn resident_vless_vision_consumes_aggregate_tls_records_over_observe_limit() {
         let mut state = VisionInnerTlsState::new();
-        let payload = vec![0_u8; VISION_TLS_OBSERVE_LIMIT + 1];
+        let mut payload = Vec::new();
+        for _ in 0..5 {
+            payload.extend_from_slice(&[23, 3, 3, 0x3e, 0x80]);
+            payload.extend(std::iter::repeat_n(0xaa, 16_000));
+        }
 
-        let error = state.observe_client_payload(&payload).unwrap_err();
+        state.observe_client_payload(&payload).unwrap();
 
-        assert!(error.contains("observation exceeds"));
+        assert!(state.client_pending.is_empty());
+    }
+
+    #[test]
+    fn resident_vless_vision_large_non_tls_payload_falls_back_without_error() {
+        let mut state = VisionInnerTlsState::new();
+        let payload = vec![0_u8; VISION_TLS_OBSERVE_LIMIT + 8 * 1024];
+
+        state.observe_client_payload(&payload).unwrap();
+
         assert!(state.client_pending.is_empty());
     }
 
