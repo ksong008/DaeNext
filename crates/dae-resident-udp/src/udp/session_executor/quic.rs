@@ -597,7 +597,10 @@ impl JuicityQuicStreamPacketSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if binding.plan().graph_link_hash != self.binding.plan().graph_link_hash {
+        if binding.plan().graph_link_hash != self.binding.plan().graph_link_hash
+            || binding.runtime_generation() != self.binding.runtime_generation()
+            || binding.effective_socket_mark() != self.binding.effective_socket_mark()
+        {
             return Err("Juicity UDP session proxy identity changed".to_owned());
         }
         // The official Juicity v0.5.0 server accepts DialAuth for a :0
@@ -609,6 +612,11 @@ impl JuicityQuicStreamPacketSession {
                 "Juicity UDP target port 0 is unsupported by the official server; use stream-packet UDP with a concrete target port"
                     .to_owned(),
             );
+        }
+        // Reject an unencodable datagram before binding the target or allocating
+        // an owner/stream. The wire length is u16; truncating it corrupts framing.
+        if payload.len() > u16::MAX as usize {
+            return Err("Juicity UDP stream payload exceeds the u16 wire length".to_owned());
         }
         self.fixed_target
             .bind(original_dst, "Juicity UDP stream session")?;
@@ -724,8 +732,15 @@ impl JuicityQuicStreamPacketSession {
     }
 
     fn reset_stream(&mut self) {
-        self.send.take();
-        self.recv.take();
+        // A write may have accepted only a frame prefix. Dropping SendStream
+        // finishes it; reset it explicitly so the peer cannot consume a partial
+        // frame as a graceful end of the packet stream.
+        if let Some(mut send) = self.send.take() {
+            let _ = send.reset(0_u32.into());
+        }
+        if let Some(mut recv) = self.recv.take() {
+            let _ = recv.stop(0_u32.into());
+        }
         self.transport.take();
         self.response_buffer.clear();
         self.response_buffer_cursor = 0;
@@ -801,6 +816,69 @@ pub async fn exercise_juicity_udp_stream_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn juicity_binding(mark: u32, generation: u64) -> ResidentProxyBinding {
+        let mut proxy =
+            crate::udp::tests::tests::test_udp_proxy(ResidentProxyProtocolPlan::JuicityQuicTcp {
+                uuid: "8c1d2c79-59b1-4c9d-94fb-38b4e66f7d91".to_owned(),
+                password: "test-password".to_owned(),
+                allow_insecure: true,
+                congestion: dae_outbound_quic::juicity::JuicityCongestionController::Bbr,
+                pinned_certchain_sha256: String::new(),
+            });
+        proxy.mark = mark;
+        proxy.materialize_execution();
+        let mut binding = ResidentProxyBinding::configuration(Arc::new(proxy)).unwrap();
+        binding
+            .bind_resident_generation(dae_runtime_control::OwnerGeneration::new(generation))
+            .unwrap();
+        binding
+    }
+
+    #[tokio::test]
+    async fn juicity_invalid_datagrams_do_not_bind_target_or_acquire_owner() {
+        let binding = juicity_binding(0, 1);
+        let mut session = JuicityQuicStreamPacketSession::new(binding.clone(), None);
+        for target in ["127.0.0.1:0", "[::1]:0"] {
+            let err = session
+                .exchange(&binding, target.parse().unwrap(), b"first")
+                .await
+                .unwrap_err();
+            assert!(err.contains("target port 0"), "{err}");
+            assert!(session.fixed_target.source().is_none());
+            assert!(session.transport.is_none());
+            assert!(session.wire_target.is_empty());
+        }
+        let target = "127.0.0.1:5300".parse().unwrap();
+        let err = session
+            .exchange(&binding, target, &vec![0; 65536])
+            .await
+            .unwrap_err();
+        assert!(err.contains("u16 wire length"), "{err}");
+        assert!(session.fixed_target.source().is_none());
+        // A valid packet reaches the normal stream owner, proving invalid input
+        // neither poisoned the binding nor selected an alternate raw socket.
+        let err = session
+            .exchange(&binding, target, b"valid")
+            .await
+            .unwrap_err();
+        assert!(err.contains("owner registry is unavailable"), "{err}");
+        assert_eq!(session.fixed_target.source(), Some(target));
+    }
+
+    #[tokio::test]
+    async fn juicity_session_cannot_cross_owner_generation_or_mark() {
+        let binding = juicity_binding(0, 1);
+        let mut session = JuicityQuicStreamPacketSession::new(binding, None);
+        for changed in [juicity_binding(0, 2), juicity_binding(256, 1)] {
+            let err = session
+                .exchange(&changed, "127.0.0.1:5300".parse().unwrap(), b"x")
+                .await
+                .unwrap_err();
+            assert!(err.contains("proxy identity changed"), "{err}");
+            assert!(session.fixed_target.source().is_none());
+        }
+    }
 
     #[test]
     fn quic_datagram_pending_results_do_not_forward_empty_reply() {
