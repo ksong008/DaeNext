@@ -183,7 +183,7 @@
     "tcp_underlay_drops_mptcp": true,
     "tcp_underlay_preserves_mark": true,
     "tcp_underlay_uses_udp": true,
-    "transport_packet_conn_cipher_info": "juicity reused info",
+    "transport_packet_conn_cipher_info": "juicity-reused-info",
     "transport_packet_conn_uses_auth": true,
     "production_data_plane_owner": "dae-resident-dataplane",
     "standalone_smoke_surface": "test-support-only",

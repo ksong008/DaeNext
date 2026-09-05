@@ -92,7 +92,7 @@ pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
         hex_encode(&crate::anytls::link::handshake_auth_bytes(
             auth["auth"].as_str().unwrap()
         )),
-        session["first_handshake"]["auth_key_then_zero_u16_hex"]
+        session["first_handshake"]["auth_key_then_zero_u16_and_default_padding_hex"]
             .as_str()
             .unwrap()
     );
