@@ -20,7 +20,6 @@
     "nodes_subscriptions_groups",
     "nodes_subscriptions_groups.rs",
     "product_net.rs",
-    "resources.rs",
     "runtime_api",
     "runtime_api.rs",
     "runtime_apply",
@@ -51,8 +50,7 @@
       "latency",
       "latency.rs",
       "nodes_subscriptions_groups",
-      "nodes_subscriptions_groups.rs",
-      "resources.rs"
+      "nodes_subscriptions_groups.rs"
     ],
     "runtime-adapter": [
       "runtime_api",
@@ -118,7 +116,6 @@
     "nodes_subscriptions_groups": 1700,
     "nodes_subscriptions_groups.rs": 55,
     "product_net.rs": 60,
-    "resources.rs": 20,
     "runtime_api": 650,
     "runtime_api.rs": 25,
     "runtime_apply": 500,

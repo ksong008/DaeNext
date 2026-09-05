@@ -72,6 +72,7 @@ FORBIDDEN_DAEMON_PATHS = (
     "state_schema.rs",
     "runtime_transition.rs",
     "benchmark.rs",
+    "resources.rs",
     "resources/global_merge.rs",
     "resources/global_parse_helpers.rs",
     "resources/global_render.rs",
@@ -140,6 +141,11 @@ PRODUCT_CRATE_REFERENCE = re.compile(r"\bdae_product_[A-Za-z0-9_]+\b")
 DAEMON_PRODUCT_REFERENCE = re.compile(r"\b(dae_product_[A-Za-z0-9_]+)\b")
 
 
+# The coordinator may publish curated symbols, but cannot grant whole domains.
+UNBOUNDED_DOMAIN_EXPORT = re.compile(
+    r"\bpub\s+use\s+dae_product_\w+\s*(?:as\s+\w+\s*;|;|::\s*\*\s*;|::\s*\{[^;]*\*)"
+)
+
 def rust_sources(root: pathlib.Path) -> list[pathlib.Path]:
     return sorted(root.rglob("*.rs"))
 
@@ -176,6 +182,8 @@ def validate(root: pathlib.Path) -> list[str]:
     for source_root in product_roots:
         for path in rust_sources(source_root):
             text = path.read_text(encoding="utf-8")
+            if source_root.parent.name == "dae-product-control" and UNBOUNDED_DOMAIN_EXPORT.search(text):
+                errors.append(f"unbounded product domain export: {path.relative_to(root)}")
             if DAEMON_CRATE_REFERENCE.search(text):
                 errors.append(
                     f"product crate references daemon implementation: {path.relative_to(root)}"

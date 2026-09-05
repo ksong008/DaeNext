@@ -3,14 +3,14 @@
   "packages": {
     "dae-product-control": {
       "production": 7000,
-      "tests": 700
+      "tests": 530
     },
     "dae-product-core": {
-      "production": 1300,
+      "production": 1228,
       "tests": 0
     },
     "dae-product-identity": {
-      "production": 400,
+      "production": 301,
       "tests": 0
     },
     "dae-product-geodata": {
@@ -18,48 +18,73 @@
       "tests": 0
     },
     "dae-product-http": {
-      "production": 3400,
+      "production": 3387,
       "tests": 0
     },
     "dae-product-persistence": {
-      "production": 2600,
+      "production": 2364,
       "tests": 0
     },
     "dae-product-runtime": {
       "production": 6800,
-      "tests": 300
+      "tests": 278
     },
     "dae-product-subscription": {
       "production": 7800,
       "tests": 0
     },
     "dae-daemon": {
-      "production": 60000,
-      "tests": 21000
+      "production": 50814,
+      "tests": 20105
     },
     "dae-outbound": {
-      "production": 54000,
-      "tests": 15000
+      "production": 9255,
+      "tests": 13709
     },
     "dae-outbound-core": {
-      "production": 70000,
-      "tests": 2000
+      "production": 14473,
+      "tests": 149
     },
     "dae-outbound-quic": {
-      "production": 6000,
-      "tests": 1000
+      "production": 5898,
+      "tests": 473
     },
     "dae-outbound-stream": {
       "production": 26000,
-      "tests": 1000
+      "tests": 207
     },
     "dae-resident-dataplane": {
-      "production": 34000,
-      "tests": 29000
+      "production": 33363,
+      "tests": 28013
     },
     "dae-resident-transport": {
-      "production": 36000,
-      "tests": 6500
+      "production": 35875,
+      "tests": 5265
+    },
+    "dae-resident-tcp": {
+      "production": 14295,
+      "tests": 808
+    },
+    "dae-resident-udp": {
+      "production": 12946,
+      "tests": 1457
+    },
+    "dae-resident-dns": {
+      "production": 20904,
+      "tests": 6570
+    }
+  },
+  "counting": "production means non-test-named Rust LOC, including inline tests, comments and blanks; overlapping subtrees are not summed",
+  "baseline_date": "2026-09-05",
+  "rationale": "Freeze reviewed baseline with at most 5% growth; preserve stricter existing limits; never rebase automatically in CI.",
+  "subtrees": {
+    "crates/dae-daemon/src/daed_product": {
+      "production": 19400,
+      "tests": 14996
+    },
+    "crates/dae-daemon/src/production_runtime_owner": {
+      "production": 17646,
+      "tests": 3356
     }
   }
 }

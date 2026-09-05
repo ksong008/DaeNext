@@ -9,6 +9,13 @@ use crate::plan::{RESIDENT_CONTROL_PLANE_SO_MARK, ResidentXhttpSettingsPlan};
 use super::*;
 
 #[test]
+fn pinned_udp_route_stays_within_its_inline_storage_budget() {
+    // The existing 64-bit layout is 248 bytes. Keep the deliberate inline
+    // session key bounded rather than silencing unbounded enum growth.
+    assert!(std::mem::size_of::<ResidentUdpPinnedRoute>() <= 256);
+}
+
+#[test]
 fn udp_session_manager_uses_the_generation_data_plane_executor() {
     let source = include_str!("../manager.rs");
     assert!(source.contains("process-owned-shared-multi-thread"));

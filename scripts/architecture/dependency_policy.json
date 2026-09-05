@@ -231,7 +231,7 @@
         "dae-datapath",
         "dae-outbound",
         "dae-product-geodata",
-        "dae-product-persistence",
+        "dae-product-control",
         "dae-resident-dataplane"
       ]
     },
@@ -450,7 +450,7 @@
         "dae-outbound-quic",
         "dae-outbound-stream",
         "dae-resident-core",
-        "dae-runtime-control"
+        "dae-core-types"
       ],
       "build": [],
       "dev": []

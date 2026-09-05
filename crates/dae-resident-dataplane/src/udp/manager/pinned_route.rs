@@ -8,6 +8,14 @@ pub(super) struct ResidentUdpRetainedResources {
     pub(super) dns_runtime: bool,
 }
 
+// The proxy route keeps its reusable session key inline. Boxing it would add a
+// heap allocation and pointer indirection to every pinned proxy route without
+// changing ownership or the packet dispatch contract. Keep the existing
+// bounded layout explicit while retaining the strict Clippy gate elsewhere.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "pinned proxy route intentionally keeps the reusable session key inline"
+)]
 #[derive(Clone)]
 pub(super) enum ResidentUdpPinnedRoute {
     ResidentDns,
