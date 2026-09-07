@@ -187,6 +187,10 @@ impl ProductControlRuntimeHooks for ProductControlAllocatorHooks {
         self.inner.thread_start();
     }
 
+    fn on_thread_poll(&self) {
+        self.inner.thread_poll();
+    }
+
     fn on_thread_stop(&self) {
         self.inner.thread_stop();
     }

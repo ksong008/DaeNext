@@ -24,6 +24,7 @@ pub enum ResidentAllocatorWorkerKind {
 pub trait ResidentAllocatorRuntimeHooks: fmt::Debug + Send + Sync {
     fn thread_start(&self);
     fn thread_stop(&self);
+    fn thread_poll(&self) {}
     fn activate(&self, handle: tokio::runtime::Handle);
     fn deactivate(&self);
 }

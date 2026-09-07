@@ -10,6 +10,7 @@ const RESIDENT_DATA_PLANE_RUNTIME_THREAD_NAME: &str = "resident-data-runtime";
 pub trait ResidentRuntimeAllocatorHooks: std::fmt::Debug + Send + Sync {
     fn thread_start(&self);
     fn thread_stop(&self);
+    fn thread_poll(&self) {}
     fn activate(&self, handle: tokio::runtime::Handle);
     fn deactivate(&self);
 }
@@ -55,12 +56,16 @@ impl ResidentRuntimeExecutor {
         let worker_stack_bytes = config.worker_stack_bytes.max(1);
         let start_reclaim = Arc::clone(&allocator_reclaim);
         let stop_reclaim = Arc::clone(&allocator_reclaim);
+        let park_reclaim = Arc::clone(&allocator_reclaim);
+        let unpark_reclaim = Arc::clone(&allocator_reclaim);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(worker_threads)
             .thread_name(RESIDENT_DATA_PLANE_RUNTIME_THREAD_NAME)
             .thread_stack_size(worker_stack_bytes)
             .on_thread_start(move || start_reclaim.thread_start())
             .on_thread_stop(move || stop_reclaim.thread_stop())
+            .on_thread_park(move || park_reclaim.thread_poll())
+            .on_thread_unpark(move || unpark_reclaim.thread_poll())
             .enable_all()
             .build()
             .map_err(|error| format!("build resident data-plane Tokio runtime: {error}"))?;

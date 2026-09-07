@@ -34,6 +34,10 @@ impl ResidentAllocatorRuntimeHooks for DaemonResidentAllocatorRuntimeHooks {
         self.inner.thread_start();
     }
 
+    fn thread_poll(&self) {
+        self.inner.thread_poll();
+    }
+
     fn thread_stop(&self) {
         self.inner.thread_stop();
     }

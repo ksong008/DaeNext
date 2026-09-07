@@ -169,6 +169,21 @@ fn worker_reclaim() -> &'static AllocatorWorkerReclaim {
 }
 
 pub(super) fn allocator_flush_registered_worker_caches() -> (bool, Value) {
+    if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+        matches!(
+            handle.runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::MultiThread
+        )
+    }) {
+        // The coordinator may wait on several runtimes/direct workers. Release
+        // its scheduler worker before any of those waits, not only when visiting
+        // its own runtime in the participant list.
+        return tokio::task::block_in_place(allocator_flush_registered_worker_caches_blocking);
+    }
+    allocator_flush_registered_worker_caches_blocking()
+}
+
+fn allocator_flush_registered_worker_caches_blocking() -> (bool, Value) {
     let reclaim = worker_reclaim();
     let epoch = reclaim.desired_epoch.fetch_add(1, Ordering::AcqRel) + 1;
     reclaim.requested_total.fetch_add(1, Ordering::Relaxed);
@@ -325,7 +340,7 @@ pub(super) fn allocator_worker_reclaim_snapshot_json() -> Value {
         for runtime in runtimes.iter().filter_map(Weak::upgrade) {
             if runtime.active.load(Ordering::Acquire) {
                 *registered_by_kind.entry(runtime.kind.as_str()).or_default() +=
-                    runtime.worker_threads as u64;
+                    runtime.registered_worker_count() as u64;
             }
         }
     }
