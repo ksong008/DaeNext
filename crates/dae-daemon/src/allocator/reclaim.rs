@@ -226,7 +226,7 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
             json!({
                 "operation": "system_allocator_noop",
                 "reason": format!(
-                    "system allocator trim is disabled; set {ALLOCATOR_SYSTEM_TRIM_ENV}=1 for an explicit diagnostic trim"
+                    "system allocator trim is disabled by environment; set {ALLOCATOR_SYSTEM_TRIM_ENV}=1 to enable it"
                 ),
             }),
         );
@@ -236,15 +236,48 @@ fn allocator_reclaim_backend() -> (&'static str, Value) {
 
 #[cfg(not(feature = "allocator-jemalloc"))]
 fn system_allocator_trim_enabled() -> bool {
-    std::env::var(ALLOCATOR_SYSTEM_TRIM_ENV)
-        .or_else(|_| std::env::var(ALLOCATOR_SYSTEM_TRIM_LEGACY_ENV))
+    let value = std::env::var(ALLOCATOR_SYSTEM_TRIM_ENV)
+        .or_else(|_| std::env::var(ALLOCATOR_SYSTEM_TRIM_LEGACY_ENV));
+    system_allocator_trim_enabled_from(value.ok().as_deref())
+}
+
+#[cfg(not(feature = "allocator-jemalloc"))]
+fn system_allocator_trim_enabled_from(value: Option<&str>) -> bool {
+    value
         .map(|value| {
             matches!(
-                value.as_str(),
+                value.trim(),
                 "1" | "true" | "TRUE" | "on" | "ON" | "yes" | "YES"
             )
         })
-        .unwrap_or(false)
+        // Explicit reclaim requests should have the same physical effect under
+        // the system allocator as they do under jemalloc. The variable remains
+        // an opt-out compatibility switch for constrained deployments.
+        .unwrap_or(true)
+}
+
+#[cfg(all(test, not(feature = "allocator-jemalloc")))]
+mod system_tests {
+    use super::*;
+
+    #[test]
+    fn system_allocator_reclaim_defaults_to_enabled_and_respects_opt_out() {
+        assert!(system_allocator_trim_enabled_from(None));
+        for value in ["1", "true", "on", "YES"] {
+            assert!(system_allocator_trim_enabled_from(Some(value)));
+        }
+        for value in ["0", "false", "off", "NO"] {
+            assert!(!system_allocator_trim_enabled_from(Some(value)));
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn system_allocator_reclaim_executes_glibc_trim() {
+        let (status, detail) = system_allocator_trim();
+        assert_eq!(status, "pass");
+        assert_eq!(detail["operation"], "malloc_trim");
+    }
 }
 
 #[cfg(all(
