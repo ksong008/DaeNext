@@ -121,7 +121,7 @@ pub fn resident_runtime_defaults_contract() -> Value {
             "admission": {
                 "configKey": "resident_udp_session_limit",
                 "env": RESIDENT_UDP_SESSION_LIMIT_ENV,
-                "defaultPolicy": "automatic count admission; the runtime profile soft watermark sizes bounded queues and caches",
+                "defaultPolicy": "automatic admission uses a profile resource budget; the soft watermark sizes queues and caches",
                 "min": RESIDENT_UDP_SESSION_LIMIT_MIN,
                 "max": RESIDENT_UDP_SESSION_LIMIT_MAX,
             },

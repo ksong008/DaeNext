@@ -70,8 +70,32 @@ impl CgroupReclaimPressure {
     }
 }
 
+pub(crate) fn publish_resident_memory_pressure(snapshot: &Value) {
+    dae_resident_dataplane::facade::set_resident_memory_pressure(resident_pressure_from_snapshot(
+        snapshot,
+    ));
+}
+
+fn resident_pressure_from_snapshot(snapshot: &Value) -> bool {
+    if snapshot.get("available").and_then(Value::as_bool) != Some(true) {
+        return false;
+    }
+    let current = json_u64(snapshot.get("currentBytes"));
+    let limit = [
+        json_u64(snapshot.get("highBytes")),
+        json_u64(snapshot.get("maxBytes")),
+    ]
+    .into_iter()
+    .flatten()
+    .min();
+    current.zip(limit).is_some_and(|(current, limit)| {
+        limit > 0 && current.saturating_mul(1000) / limit >= CGROUP_RECLAIM_URGENT_USAGE_PERMILLE
+    })
+}
+
 pub(super) fn observe_cgroup_reclaim_pressure() -> CgroupReclaimPressure {
     let snapshot = cgroup_memory_snapshot_json();
+    publish_resident_memory_pressure(&snapshot);
     cgroup_reclaim_pressure_from_snapshot(&snapshot, true)
 }
 
@@ -173,6 +197,23 @@ mod tests {
     use super::*;
 
     static PRESSURE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn resident_pressure_uses_finite_cgroup_limit_and_recovers_without_a_purge() {
+        let mut snapshot = json!({
+            "available": true, "currentBytes": "850", "highBytes": "2000", "maxBytes": "1000",
+        });
+        assert!(resident_pressure_from_snapshot(&snapshot));
+        snapshot["currentBytes"] = json!(849);
+        assert!(!resident_pressure_from_snapshot(&snapshot));
+        snapshot["highBytes"] = json!(800);
+        assert!(resident_pressure_from_snapshot(&snapshot));
+        snapshot["available"] = json!(false);
+        assert!(!resident_pressure_from_snapshot(&snapshot));
+        assert!(!resident_pressure_from_snapshot(
+            &json!({"available": true, "currentBytes": 9999})
+        ));
+    }
 
     #[test]
     fn cgroup_pressure_uses_finite_high_before_max() {

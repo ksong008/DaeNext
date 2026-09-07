@@ -1,9 +1,13 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
 const UNLIMITED_SESSION_LIMIT: usize = 0;
+/// Admission reservation estimate, not measured RSS: datagram scratch space plus
+/// session/task overhead. Shared transport and queued payloads have separate budgets.
+pub const UDP_SESSION_RESERVATION_BYTES: usize = 128 * 1024;
+const DEFAULT_AUTOMATIC_RESOURCE_BUDGET: usize = 128 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ResidentUdpSessionAdmission {
@@ -13,6 +17,8 @@ pub struct ResidentUdpSessionAdmission {
 #[derive(Debug)]
 struct ResidentUdpSessionAdmissionState {
     limit: AtomicUsize,
+    resource_budget: AtomicUsize,
+    memory_pressure: AtomicBool,
     current: AtomicUsize,
     peak: AtomicUsize,
     rejected: AtomicU64,
@@ -34,6 +40,8 @@ impl ResidentUdpSessionAdmission {
         Self {
             state: Arc::new(ResidentUdpSessionAdmissionState {
                 limit: AtomicUsize::new(normalize_limit(limit)),
+                resource_budget: AtomicUsize::new(DEFAULT_AUTOMATIC_RESOURCE_BUDGET),
+                memory_pressure: AtomicBool::new(false),
                 current: AtomicUsize::new(0),
                 peak: AtomicUsize::new(0),
                 rejected: AtomicU64::new(0),
@@ -45,6 +53,24 @@ impl ResidentUdpSessionAdmission {
         self.state
             .limit
             .store(normalize_limit(limit), Ordering::Release);
+    }
+
+    pub fn set_resource_budget(&self, bytes: usize) {
+        self.state
+            .resource_budget
+            .store(bytes.max(UDP_SESSION_RESERVATION_BYTES), Ordering::Release);
+    }
+
+    pub fn set_memory_pressure(&self, pressured: bool) {
+        self.state
+            .memory_pressure
+            .store(pressured, Ordering::Release);
+    }
+
+    fn effective_limit(&self) -> usize {
+        self.configured_limit().unwrap_or_else(|| {
+            self.state.resource_budget.load(Ordering::Acquire) / UDP_SESSION_RESERVATION_BYTES
+        })
     }
 
     pub fn configured_limit(&self) -> Option<usize> {
@@ -61,11 +87,10 @@ impl ResidentUdpSessionAdmission {
         let mut current = self.state.current.load(Ordering::Acquire);
         loop {
             let normalized_limit = self.state.limit.load(Ordering::Acquire);
-            let limit = if normalized_limit == UNLIMITED_SESSION_LIMIT {
-                usize::MAX
-            } else {
-                normalized_limit
-            };
+            let limit = self.effective_limit();
+            if self.state.memory_pressure.load(Ordering::Acquire) {
+                return Err(self.reject(current, normalized_limit));
+            }
             let Some(next) = current.checked_add(1) else {
                 return Err(self.reject(current, normalized_limit));
             };
@@ -102,6 +127,10 @@ impl ResidentUdpSessionAdmission {
         json!({
             "mode": if limit.is_some() { "fixed" } else { "automatic" },
             "fixedLimit": limit,
+            "effectiveLimit": self.effective_limit(),
+            "resourceBudgetBytes": self.state.resource_budget.load(Ordering::Acquire),
+            "reservationBytesPerSession": UDP_SESSION_RESERVATION_BYTES,
+            "memoryPressure": self.state.memory_pressure.load(Ordering::Acquire),
             "current": self.current(),
             "peak": self.state.peak.load(Ordering::Relaxed),
             "rejected": self.state.rejected.load(Ordering::Relaxed),
@@ -138,6 +167,26 @@ fn denormalize_limit(limit: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_budget_and_pressure_preserve_existing_sessions_and_recover() {
+        let admission = ResidentUdpSessionAdmission::new(None);
+        admission.set_resource_budget(2 * UDP_SESSION_RESERVATION_BYTES);
+        let first = admission.try_acquire().unwrap();
+        let second = admission.try_acquire().unwrap();
+        assert!(admission.try_acquire().is_err());
+        admission.set_memory_pressure(true);
+        drop(second);
+        assert_eq!(first.current(), 1);
+        assert!(admission.try_acquire().is_err());
+        admission.set_memory_pressure(false);
+        let replacement = admission.try_acquire().unwrap();
+        admission.set_resource_budget(UDP_SESSION_RESERVATION_BYTES);
+        assert_eq!(admission.current(), 2);
+        assert!(admission.try_acquire().is_err());
+        drop((first, replacement));
+        assert!(admission.try_acquire().is_ok());
+    }
 
     #[test]
     fn automatic_admission_does_not_reject_normal_session_counts() {

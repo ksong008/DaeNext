@@ -685,13 +685,18 @@ mod tests {
     }
 
     #[test]
-    fn automatic_session_admission_has_no_fixed_count_rejection() {
+    fn automatic_session_admission_obeys_resource_budget_without_a_fixed_override() {
         let admission = Arc::new(ResidentUdpSessionAdmission::new(None));
+        admission.set_resource_budget(4 * 128 * 1024);
         let mut permits = Vec::new();
-        for _ in 0..65_536 {
+        for _ in 0..4 {
             permits.push(try_reserve_session(&admission).unwrap());
         }
-        assert_eq!(admission.current(), 65_536);
+        assert_eq!(admission.current(), 4);
+        assert_eq!(admission.configured_limit(), None);
+        assert!(try_reserve_session(&admission).is_err());
+        drop(permits);
+        assert!(try_reserve_session(&admission).is_ok());
     }
 
     #[test]

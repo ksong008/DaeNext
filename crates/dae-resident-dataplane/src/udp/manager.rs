@@ -172,6 +172,8 @@ impl ResidentUdpGenerationRuntime {
         let plan = &generation.udp;
         let config = plan.runtime_config.clone();
         session_admission.set_limit(config.session_admission_limit);
+        session_admission.set_resource_budget(config.session_resource_budget_bytes());
+        session_admission.set_memory_pressure(resident_memory_pressure());
         let reply_dispatcher = UdpReplyDispatcher::start(
             config.reply_shards(),
             config.reply_queue_depth,
@@ -477,6 +479,8 @@ pub(super) async fn run_resident_udp_session_manager_async(
     drop(initial_generation);
 
     let mut stop_listener = stop.listener();
+    let mut memory_maintenance = time::interval(Duration::from_secs(1));
+    memory_maintenance.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let retirement = time::sleep(RESIDENT_IDLE_SLEEP);
     tokio::pin!(retirement);
     while !stop.load(Ordering::Relaxed) {
@@ -662,6 +666,11 @@ pub(super) async fn run_resident_udp_session_manager_async(
                         }
                     }
                 }
+            }
+            _ = memory_maintenance.tick() => {
+                let pressure = resident_memory_pressure();
+                session_admission.set_memory_pressure(pressure);
+                payload_pool.trim_idle(Instant::now(), Duration::from_secs(30), pressure);
             }
             _ = &mut retirement => {
                 retire_idle_udp_generations(
