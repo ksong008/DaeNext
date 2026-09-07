@@ -7,10 +7,12 @@ use super::*;
 const RAW_TCP_RELAY_BUFFER_SIZE: usize = 64 * 1024;
 const RAW_TCP_RELAY_INITIAL_BUFFER_SIZE: usize = 16 * 1024;
 const RAW_TCP_RELAY_COOPERATIVE_BUDGET: usize = 32;
+const RAW_TCP_BUFFER_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Default)]
 struct RawTcpRelayDirection {
     buffer: Vec<u8>,
+    buffer_last_used: Option<time::Instant>,
     filled: usize,
     written: usize,
     grow_on_next_read: bool,
@@ -26,6 +28,25 @@ struct RawTcpDirectionPoll {
 }
 
 impl RawTcpRelayDirection {
+    fn reclaim_deadline(&self) -> Option<time::Instant> {
+        if self.filled != 0 || self.buffer.capacity() == 0 {
+            return None;
+        }
+        self.buffer_last_used
+            .map(|used| used + RAW_TCP_BUFFER_IDLE_TIMEOUT)
+    }
+
+    fn reclaim_if_idle(&mut self, now: time::Instant) {
+        if self
+            .reclaim_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.buffer = Vec::new();
+            self.buffer_last_used = None;
+            self.grow_on_next_read = false;
+        }
+    }
+
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -63,6 +84,20 @@ impl RawTcpRelayDirection {
 
         if self.filled == 0 && !self.source_closed {
             if self.buffer.is_empty() {
+                match source.poll_read_ready(cx) {
+                    Poll::Pending => {
+                        return if state.progressed {
+                            Poll::Ready(Ok(state))
+                        } else {
+                            Poll::Pending
+                        };
+                    }
+                    Poll::Ready(Err(error)) => {
+                        return Poll::Ready(Err(format!("{read_error}: {error}")));
+                    }
+                    Poll::Ready(Ok(_)) => {}
+                }
+                self.buffer_last_used = Some(time::Instant::now());
                 self.buffer
                     .resize(buffer_size.min(RAW_TCP_RELAY_INITIAL_BUFFER_SIZE), 0);
             } else if self.grow_on_next_read && self.buffer.len() < buffer_size {
@@ -134,6 +169,9 @@ impl RawTcpRelayDirection {
             }
         }
 
+        if state.progressed {
+            self.buffer_last_used = Some(time::Instant::now());
+        }
         state.complete = self.source_closed && self.filled == 0 && self.sink_shutdown;
         if state.progressed || state.complete {
             Poll::Ready(Ok(state))
@@ -256,11 +294,31 @@ pub async fn relay_raw_tcp_streams_with_buffer_size(
     let mut progress_without_yield = 0_usize;
 
     loop {
+        // Reclaim each drained direction before polling I/O so a busy opposite
+        // direction cannot starve the idle side's timer branch.
+        let now = time::Instant::now();
+        driver.upload.reclaim_if_idle(now);
+        driver.download.reclaim_if_idle(now);
+        let buffer_deadline = [
+            driver.upload.reclaim_deadline(),
+            driver.download.reclaim_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        let buffer_timer = time::sleep_until(buffer_deadline.unwrap_or_else(time::Instant::now));
+        tokio::pin!(buffer_timer);
         let complete = tokio::select! {
             biased;
             _ = stop_listener.cancelled() => return Ok(driver.stats),
             result = std::future::poll_fn(|cx| driver.poll_cycle(cx, inbound, direct, metrics)) => {
                 result?
+            }
+            _ = &mut buffer_timer, if buffer_deadline.is_some() => {
+                let now = time::Instant::now();
+                driver.upload.reclaim_if_idle(now);
+                driver.download.reclaim_if_idle(now);
+                continue;
             }
             _ = &mut idle_deadline => {
                 return Err("resident direct TCP relay idle timeout".to_owned());
@@ -275,5 +333,82 @@ pub async fn relay_raw_tcp_streams_with_buffer_size(
             progress_without_yield = 0;
             tokio::task::yield_now().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod reclaim_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reclaimed_direction_stays_empty_until_readable_and_preserves_pending_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TokioTcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut source, _) = listener.accept().await.unwrap();
+        let mut output = TokioTcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut sink, _) = listener.accept().await.unwrap();
+        let mut direction = RawTcpRelayDirection {
+            buffer: vec![7; RAW_TCP_RELAY_BUFFER_SIZE],
+            buffer_last_used: Some(time::Instant::now() - RAW_TCP_BUFFER_IDLE_TIMEOUT),
+            filled: 3,
+            ..RawTcpRelayDirection::default()
+        };
+        direction.reclaim_if_idle(time::Instant::now());
+        assert_eq!(direction.buffer.capacity(), RAW_TCP_RELAY_BUFFER_SIZE);
+        std::future::poll_fn(|cx| {
+            direction.poll(
+                cx,
+                &mut source,
+                &mut sink,
+                RAW_TCP_RELAY_BUFFER_SIZE,
+                "read",
+                "write",
+            )
+        })
+        .await
+        .unwrap();
+        let mut pending = [0; 3];
+        output.read_exact(&mut pending).await.unwrap();
+        assert_eq!(pending, [7; 3]);
+        direction.buffer_last_used = Some(time::Instant::now() - RAW_TCP_BUFFER_IDLE_TIMEOUT);
+        direction.reclaim_if_idle(time::Instant::now());
+        assert_eq!(direction.buffer.capacity(), 0);
+        assert!(
+            time::timeout(
+                Duration::from_millis(20),
+                std::future::poll_fn(|cx| direction.poll(
+                    cx,
+                    &mut source,
+                    &mut sink,
+                    RAW_TCP_RELAY_BUFFER_SIZE,
+                    "read",
+                    "write"
+                ))
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(direction.buffer.capacity(), 0);
+        client.write_all(b"resumed").await.unwrap();
+        std::future::poll_fn(|cx| {
+            direction.poll(
+                cx,
+                &mut source,
+                &mut sink,
+                RAW_TCP_RELAY_BUFFER_SIZE,
+                "read",
+                "write",
+            )
+        })
+        .await
+        .unwrap();
+        let mut resumed = [0; 7];
+        output.read_exact(&mut resumed).await.unwrap();
+        assert_eq!(&resumed, b"resumed");
     }
 }
