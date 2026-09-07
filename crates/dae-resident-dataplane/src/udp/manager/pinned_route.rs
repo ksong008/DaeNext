@@ -114,6 +114,7 @@ impl ResidentUdpPinnedRoute {
                     session_key.clone()
                 };
                 let managed = ManagedUdpPacket {
+                    work: None,
                     packet,
                     original_dst,
                     proxy: proxy.clone(),
@@ -137,6 +138,7 @@ impl ResidentUdpPinnedRoute {
             } => {
                 let key = UdpDirectSessionKey::new(packet.peer, original_dst, route.final_mark);
                 let managed = ManagedDirectUdpPacket {
+                    work: None,
                     packet,
                     original_dst,
                     dscp: *dscp,

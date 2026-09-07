@@ -44,7 +44,8 @@ mod memory_pressure;
 pub use memory_pressure::{resident_memory_pressure, set_resident_memory_pressure};
 pub use metrics::{
     ProxiedDoh3CleanupMetricObservation, ResidentDataplaneMetrics, ResidentTcpConnectionGuard,
-    ResidentTrafficCounters, ResidentUdpActivityGuard, UdpIngressMetricObservation,
+    ResidentTrafficCounters, ResidentUdpActivityGuard, ResidentUdpWorkGuard, ResidentUdpWorkStage,
+    UdpIngressMetricObservation,
 };
 pub use network_defaults::{
     ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, RESIDENT_ANYTLS_RELAY_BUFFER_SIZE, RESIDENT_CONNECT_TIMEOUT,
