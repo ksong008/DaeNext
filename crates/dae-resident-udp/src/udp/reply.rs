@@ -5,6 +5,8 @@ use dae_outbound_core::vless::contract::is_xtls_rprx_vision_flow;
 use dae_resident_transport::VisionUnpadState;
 
 mod actor;
+#[cfg(test)]
+pub(in crate::udp) use actor::test_reply_handle;
 pub use actor::{UdpReplyDispatcher, UdpReplyHandle};
 
 #[cfg(any(test, feature = "test-support"))]

@@ -306,6 +306,10 @@ mod tests {
         let requests = [b"first".to_vec(), b"second".to_vec()]
             .into_iter()
             .map(|payload| UdpReplyRequest {
+                work: ResidentUdpWorkGuard::new(
+                    Arc::new(ResidentDataplaneMetrics::default()),
+                    ResidentUdpWorkStage::Reply,
+                ),
                 original_dst,
                 peer,
                 _payload_admission: admission.try_acquire(payload.len()).unwrap(),
@@ -347,6 +351,10 @@ mod tests {
         let now = time::Instant::now();
         let requests = vec![
             UdpReplyRequest {
+                work: ResidentUdpWorkGuard::new(
+                    Arc::new(ResidentDataplaneMetrics::default()),
+                    ResidentUdpWorkStage::Reply,
+                ),
                 original_dst,
                 peer,
                 _payload_admission: admission.try_acquire(7).unwrap(),
@@ -356,6 +364,10 @@ mod tests {
                 download_bytes_on_success: 0,
             },
             UdpReplyRequest {
+                work: ResidentUdpWorkGuard::new(
+                    Arc::new(ResidentDataplaneMetrics::default()),
+                    ResidentUdpWorkStage::Reply,
+                ),
                 original_dst,
                 peer,
                 _payload_admission: admission.try_acquire(5).unwrap(),

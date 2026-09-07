@@ -102,6 +102,7 @@ impl Hash for UdpDirectSessionKey {
 }
 
 pub struct ManagedDirectUdpPacket {
+    pub work: Option<ResidentUdpWorkGuard>,
     pub packet: UdpOriginalDstPacket,
     pub original_dst: SocketAddr,
     pub dscp: u8,
@@ -159,10 +160,16 @@ async fn run_udp_direct_session_actor(
     let mut stop_reason = "queue-closed".to_owned();
     let mut session: Option<DirectUdpSession> = None;
     let idle_timeout = key.idle_timeout(context.session_idle_timeout);
+    let mut last_activity = time::Instant::now();
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
     let mut stop_listener = context.actor_stop.listener();
     'session: loop {
+        if time::Instant::now() >= last_activity + idle_timeout {
+            stop_reason = "idle-timeout".to_owned();
+            break;
+        }
+        idle_timer.as_mut().reset(last_activity + idle_timeout);
         tokio::select! {
             biased;
             _ = stop_listener.cancelled() => {
@@ -170,13 +177,15 @@ async fn run_udp_direct_session_actor(
                 break;
             }
             maybe_managed = receiver.recv() => {
-                let managed = match maybe_managed {
+                let mut managed = match maybe_managed {
                     Some(managed) => managed,
                     None => break,
                 };
-                idle_timer
-                    .as_mut()
-                    .reset(time::Instant::now() + idle_timeout);
+                let mut work = managed.work.take();
+                if let Some(work) = work.as_mut() {
+                    work.transition(ResidentUdpWorkStage::Processing);
+                }
+                last_activity = time::Instant::now();
                 packets += 1;
                 if session.is_none() {
                     let opened = tokio::select! {
@@ -247,7 +256,7 @@ async fn run_udp_direct_session_actor(
                     }
                 }
                 if let Some(session) = session.as_mut() {
-                    let drain = drain_direct_udp_session_responses(&key, &context, session);
+                    let drain = drain_direct_udp_session_responses(&key, &context, session, &mut last_activity);
                     tokio::select! {
                         biased;
                         _ = stop_listener.cancelled() => {
@@ -267,7 +276,7 @@ async fn run_udp_direct_session_actor(
                     break;
                 }
                 if let Some(session) = session.as_mut() {
-                    let drain = drain_direct_udp_session_responses(&key, &context, session);
+                    let drain = drain_direct_udp_session_responses(&key, &context, session, &mut last_activity);
                     tokio::select! {
                         biased;
                         _ = stop_listener.cancelled() => {
@@ -282,6 +291,9 @@ async fn run_udp_direct_session_actor(
                 }
             }
             _ = &mut idle_timer => {
+                if time::Instant::now() < last_activity + idle_timeout {
+                    continue;
+                }
                 stop_reason = "idle-timeout".to_owned();
                 break;
             }
@@ -339,11 +351,17 @@ async fn drain_direct_udp_session_responses(
     key: &UdpDirectSessionKey,
     context: &UdpDirectSessionActorContext,
     session: &mut DirectUdpSession,
+    last_activity: &mut time::Instant,
 ) -> Result<(), String> {
     for _ in 0..UDP_DIRECT_RESPONSE_DRAIN_BUDGET {
         let Some((upstream_peer, response)) = session.try_recv_response()? else {
             return Ok(());
         };
+        let _work = ResidentUdpWorkGuard::new(
+            Arc::clone(&context.metrics),
+            ResidentUdpWorkStage::Processing,
+        );
+        context.metrics.udp_response_received();
         let fixed_target =
             validate_direct_udp_response(key.original_destination(), upstream_peer, response);
         let response_len = fixed_target.payload_len();
@@ -355,7 +373,6 @@ async fn drain_direct_udp_session_responses(
             }
             UdpFixedTargetValidation::Dropped(_) => {
                 context.metrics.udp_response_dropped(response_len);
-                continue;
             }
         }
         if matches!(validation, UdpFixedTargetValidation::Dropped(_)) {
@@ -365,6 +382,7 @@ async fn drain_direct_udp_session_responses(
         let Some(response) = fixed_target.into_payload().ok() else {
             continue;
         };
+        *last_activity = time::Instant::now();
         match context
             .udp_reply
             .send_reclaimable(key.original_destination(), key.peer(), response)

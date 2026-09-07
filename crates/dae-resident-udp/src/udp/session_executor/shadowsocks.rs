@@ -95,6 +95,13 @@ impl ShadowsocksAeadDatagramSession {
             .await
     }
 
+    pub(super) fn response_buffer_reclaim_deadline(
+        &self,
+        timeout: Duration,
+    ) -> Option<time::Instant> {
+        self.relay.response_buffer_reclaim_deadline(timeout)
+    }
+
     pub(super) fn has_response_buffer(&self) -> bool {
         self.relay.has_response_buffer()
     }
@@ -242,6 +249,13 @@ impl Shadowsocks2022DatagramSession {
             .await?;
         self.observe_replay_metrics(replay_metrics);
         decoded
+    }
+
+    pub(super) fn response_buffer_reclaim_deadline(
+        &self,
+        timeout: Duration,
+    ) -> Option<time::Instant> {
+        self.relay.response_buffer_reclaim_deadline(timeout)
     }
 
     pub(super) fn has_response_buffer(&self) -> bool {

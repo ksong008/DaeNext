@@ -67,7 +67,7 @@
     },
     "dae-resident-udp": {
       "production": 12946,
-      "tests": 1457
+      "tests": 1650
     },
     "dae-resident-dns": {
       "production": 20904,

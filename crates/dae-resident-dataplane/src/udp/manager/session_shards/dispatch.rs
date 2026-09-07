@@ -4,10 +4,14 @@ impl ResidentUdpSessionShardHandle {
     pub(in super::super) fn try_dispatch_proxy(
         &self,
         key: UdpSessionKey,
-        managed: ManagedUdpPacket,
+        mut managed: ManagedUdpPacket,
         route: ResidentUdpRouteSelection,
         sniffed_domain: SharedUdpSniffedDomain,
     ) {
+        managed.work = Some(ResidentUdpWorkGuard::new(
+            Arc::clone(&self.metrics),
+            ResidentUdpWorkStage::Dispatch,
+        ));
         let shard_index = stable_udp_shard_index(&key, self.senders.len());
         let packet = ResidentUdpShardPacket::Proxy(ResidentUdpProxyShardPacket {
             key,
@@ -21,10 +25,14 @@ impl ResidentUdpSessionShardHandle {
     pub(in super::super) fn try_dispatch_direct(
         &self,
         key: UdpDirectSessionKey,
-        managed: ManagedDirectUdpPacket,
+        mut managed: ManagedDirectUdpPacket,
         route: ResidentUdpRouteSelection,
         sniffed_domain: SharedUdpSniffedDomain,
     ) {
+        managed.work = Some(ResidentUdpWorkGuard::new(
+            Arc::clone(&self.metrics),
+            ResidentUdpWorkStage::Dispatch,
+        ));
         let shard_index = stable_udp_shard_index(&key, self.senders.len());
         let packet = ResidentUdpShardPacket::Direct(ResidentUdpDirectShardPacket {
             key,

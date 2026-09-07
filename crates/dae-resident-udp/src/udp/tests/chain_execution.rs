@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-fn proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
+pub(super) fn proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
     let mut proxy = ResidentProxyPlan {
         graph_id: "resident-graph:redacted".to_owned(),
         graph_link_hash: "sha256:redacted".to_owned(),
@@ -47,7 +47,7 @@ fn proxy_plan(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
     proxy
 }
 
-fn proxy_binding(proxy: &ResidentProxyPlan) -> ResidentProxyBinding {
+pub(super) fn proxy_binding(proxy: &ResidentProxyPlan) -> ResidentProxyBinding {
     let mut proxy = proxy.clone();
     proxy.materialize_execution();
     ResidentProxyBinding::configuration(Arc::new(proxy))

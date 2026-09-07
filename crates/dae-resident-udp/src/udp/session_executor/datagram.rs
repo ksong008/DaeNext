@@ -12,6 +12,7 @@ pub(super) struct DatagramRelay {
     selected_index: usize,
     response_buf: Vec<u8>,
     response_buffer_reclaimed: bool,
+    response_buffer_last_used: Option<time::Instant>,
 }
 
 impl DatagramRelay {
@@ -105,6 +106,7 @@ impl DatagramRelay {
             self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
         }
         self.response_buffer_reclaimed = false;
+        self.response_buffer_last_used = Some(time::Instant::now());
         match socket.try_recv_from(&mut self.response_buf) {
             Ok((read, from)) => {
                 if from != self.remote_candidates[self.selected_index] {
@@ -129,25 +131,39 @@ impl DatagramRelay {
             return Err(format!("{label} UDP relay socket is not initialized"));
         };
         if self.response_buffer_reclaimed {
+            // Readiness can remain cached after the previous datagram. Peek
+            // without allocating or consuming it, including zero-length UDP,
+            // so a spurious readiness wake cannot refill an idle scratch buffer.
+            let mut probe = [0_u8; 1];
             socket
-                .readable()
+                .peek_from(&mut probe)
                 .await
                 .map_err(|err| format!("await {label} UDP response readiness: {err}"))?;
         }
         if self.response_buf.len() < UDP_DATAGRAM_RESPONSE_CAPACITY {
             self.response_buf.resize(UDP_DATAGRAM_RESPONSE_CAPACITY, 0);
         }
+        self.response_buffer_last_used
+            .get_or_insert_with(time::Instant::now);
         loop {
             let (read, from) = socket
                 .recv_from(&mut self.response_buf)
                 .await
                 .map_err(|err| format!("receive {label} UDP datagram: {err}"))?;
+            self.response_buffer_last_used = Some(time::Instant::now());
             if from != self.remote_candidates[self.selected_index] {
                 continue;
             }
             self.response_buffer_reclaimed = false;
             return decode(&self.response_buf[..read]);
         }
+    }
+
+    pub(super) fn response_buffer_reclaim_deadline(
+        &self,
+        timeout: Duration,
+    ) -> Option<time::Instant> {
+        self.response_buffer_last_used.map(|used| used + timeout)
     }
 
     pub(super) fn has_response_buffer(&self) -> bool {
@@ -160,6 +176,7 @@ impl DatagramRelay {
         }
         self.response_buf = Vec::new();
         self.response_buffer_reclaimed = true;
+        self.response_buffer_last_used = None;
         true
     }
 

@@ -43,6 +43,7 @@ pub(super) async fn record_udp_exchange_result(
     udp_reply: &UdpReplyHandle,
     packet_session: &Value,
     exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
+    last_activity: &mut time::Instant,
 ) {
     record_udp_session_exchange_result(
         proxy,
@@ -57,6 +58,7 @@ pub(super) async fn record_udp_exchange_result(
         udp_reply,
         packet_session,
         exchange,
+        last_activity,
         UdpExchangeSessionScope::ManagedSession,
     )
     .await;
@@ -72,6 +74,7 @@ pub(super) async fn record_udp_session_response_result(
     udp_reply: &UdpReplyHandle,
     packet_session: &Value,
     exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
+    last_activity: &mut time::Instant,
 ) {
     record_udp_session_exchange_result(
         proxy,
@@ -86,6 +89,7 @@ pub(super) async fn record_udp_session_response_result(
         udp_reply,
         packet_session,
         exchange,
+        last_activity,
         UdpExchangeSessionScope::ManagedSession,
     )
     .await;
@@ -104,6 +108,7 @@ async fn record_udp_session_exchange_result(
     udp_reply: &UdpReplyHandle,
     packet_session: &Value,
     exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
+    last_activity: &mut time::Instant,
     session_scope: UdpExchangeSessionScope,
 ) {
     if count_upload {
@@ -113,6 +118,7 @@ async fn record_udp_session_exchange_result(
         Ok((event_kind, mut response)) => {
             let (response_len, response_validation, forwarded_payload) = if response.reply_forwarded
             {
+                metrics.udp_response_received();
                 let expectation = response.fixed_target_expectation(original_dst);
                 let payload = response.take_fixed_target_payload(expectation);
                 let response_len = payload.payload_len();
@@ -134,6 +140,7 @@ async fn record_udp_session_exchange_result(
                 response.reply_forwarded = validation.should_forward();
             }
             if let Some(payload) = forwarded_payload {
+                *last_activity = time::Instant::now();
                 if let Err(err) = udp_reply.try_send_detached(original_dst, peer, payload, true) {
                     if err.should_log() {
                         append_event_with_metadata(
@@ -145,7 +152,6 @@ async fn record_udp_session_exchange_result(
                     }
                     return;
                 }
-                metrics.add_download(response_len);
             }
             append_event_with_metadata(
                 &event_file,
