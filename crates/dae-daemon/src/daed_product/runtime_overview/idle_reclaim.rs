@@ -13,6 +13,7 @@ mod activity;
 use self::activity::*;
 #[path = "idle_reclaim/pressure.rs"]
 mod pressure;
+pub(super) use self::pressure::publish_resident_memory_pressure;
 use self::pressure::*;
 
 #[cfg(test)]

@@ -139,6 +139,7 @@ fn run_product_runtime_sampler(
         };
         let allocator = allocator_stats_snapshot();
         let cgroup_memory = cgroup_memory_snapshot_json();
+        super::super::idle_reclaim::publish_resident_memory_pressure(&cgroup_memory);
         if let Ok(mut state) = state.lock() {
             if runtime_traffic.availability == RuntimeTrafficAvailability::Active {
                 let (traffic, totals_reset) = runtime_traffic_observation(

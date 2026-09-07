@@ -40,6 +40,8 @@ pub use generation_identity::{
     GenerationToken, LogicalGenerationId, PhysicalRuntimeId, PublicationEpoch,
 };
 pub use generation_lifecycle::{ResidentGenerationLifecycle, ResidentGenerationState};
+mod memory_pressure;
+pub use memory_pressure::{resident_memory_pressure, set_resident_memory_pressure};
 pub use metrics::{
     ProxiedDoh3CleanupMetricObservation, ResidentDataplaneMetrics, ResidentTcpConnectionGuard,
     ResidentTrafficCounters, ResidentUdpActivityGuard, UdpIngressMetricObservation,

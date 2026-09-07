@@ -99,6 +99,17 @@ impl ResidentUdpRuntimeConfig {
         }
     }
 
+    pub(crate) fn session_resource_budget_bytes(&self) -> usize {
+        // The profile is already resolved when this runtime configuration is built.
+        match self.profile {
+            "low-memory" => ResidentRuntimeProfile::LowMemory.udp_session_resource_budget_bytes(),
+            "high-performance" => {
+                ResidentRuntimeProfile::HighPerformance.udp_session_resource_budget_bytes()
+            }
+            _ => ResidentRuntimeProfile::Balanced.udp_session_resource_budget_bytes(),
+        }
+    }
+
     pub(crate) fn payload_pool_capacity(&self) -> usize {
         self.session_soft_watermark
             .saturating_mul(self.session_queue_depth)

@@ -71,6 +71,7 @@ pub struct UdpPayloadPool {
 struct UdpPayloadPoolInner {
     shards: Box<[UdpPayloadPoolShard]>,
     next_take_shard: AtomicUsize,
+    pressure: std::sync::atomic::AtomicBool,
 }
 
 struct UdpPayloadPoolShard {
@@ -88,6 +89,7 @@ struct UdpPayloadPoolLease {
 struct UdpPayloadPoolState {
     buffers: Vec<Vec<u8>>,
     retained_bytes: usize,
+    last_used: Option<Instant>,
 }
 
 impl UdpPayloadPool {
@@ -110,8 +112,36 @@ impl UdpPayloadPool {
             inner: Arc::new(UdpPayloadPoolInner {
                 shards,
                 next_take_shard: AtomicUsize::new(0),
+                pressure: std::sync::atomic::AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Keep one warm buffer per idle shard; pressure releases all cached payloads
+    /// and prevents outstanding leases from immediately refilling the pool.
+    pub fn trim_idle(&self, now: Instant, idle_timeout: Duration, pressure: bool) -> usize {
+        self.inner.pressure.store(pressure, Ordering::Release);
+        let mut released = 0_usize;
+        for shard in &self.inner.shards {
+            let mut state = shard.state.lock().unwrap_or_else(|e| e.into_inner());
+            if pressure
+                || state
+                    .last_used
+                    .is_some_and(|used| now.saturating_duration_since(used) >= idle_timeout)
+            {
+                let keep = usize::from(!pressure);
+                while state.buffers.len() > keep {
+                    if let Some(buffer) = state.buffers.pop() {
+                        released = released.saturating_add(buffer.capacity());
+                        state.retained_bytes =
+                            state.retained_bytes.saturating_sub(buffer.capacity());
+                    }
+                }
+                // The container itself also follows the reduced idle budget.
+                state.buffers.shrink_to(keep);
+            }
+        }
+        released
     }
 
     fn take(&self, min_capacity: usize) -> (Vec<u8>, UdpPayloadPoolLease) {
@@ -130,6 +160,7 @@ impl UdpPayloadPool {
             .pop()
             .unwrap_or_else(|| Vec::with_capacity(min_capacity));
         state.retained_bytes = state.retained_bytes.saturating_sub(buffer.capacity());
+        state.last_used = Some(Instant::now());
         drop(state);
         buffer.clear();
         if buffer.capacity() < min_capacity {
@@ -174,7 +205,10 @@ impl UdpPayloadPool {
 
 impl UdpPayloadPoolLease {
     fn recycle(self, mut buffer: Vec<u8>) {
-        if buffer.capacity() == 0 || buffer.capacity() > UDP_RECV_MAX_RETAINED_CAPACITY {
+        if self.pool.inner.pressure.load(Ordering::Acquire)
+            || buffer.capacity() == 0
+            || buffer.capacity() > UDP_RECV_MAX_RETAINED_CAPACITY
+        {
             return;
         }
         buffer.clear();
@@ -184,7 +218,11 @@ impl UdpPayloadPoolLease {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let retained_bytes = state.retained_bytes.saturating_add(buffer.capacity());
-        if state.buffers.len() < shard.max_idle && retained_bytes <= shard.max_idle_bytes {
+        if !self.pool.inner.pressure.load(Ordering::Acquire)
+            && state.buffers.len() < shard.max_idle
+            && retained_bytes <= shard.max_idle_bytes
+        {
+            state.last_used = Some(Instant::now());
             state.retained_bytes = retained_bytes;
             state.buffers.push(buffer);
         }
@@ -586,6 +624,32 @@ mod tests {
         lease.recycle(buffer);
 
         assert_eq!(pool.retained_snapshot(), (1, UDP_RECV_DEFAULT_CAPACITY));
+    }
+
+    #[test]
+    fn idle_pool_trims_excess_and_pressure_prevents_late_lease_refill() {
+        let pool = UdpPayloadPool::new(8, 1);
+        let leases: Vec<_> = (0..4)
+            .map(|_| pool.take(UDP_RECV_DEFAULT_CAPACITY))
+            .collect();
+        for (buffer, lease) in leases {
+            lease.recycle(buffer);
+        }
+        assert_eq!(pool.retained_snapshot().0, 4);
+        let timeout = Duration::from_secs(30);
+        assert_eq!(pool.trim_idle(Instant::now(), timeout, false), 0);
+        assert_eq!(
+            pool.trim_idle(Instant::now() + timeout, timeout, false),
+            3 * UDP_RECV_DEFAULT_CAPACITY
+        );
+        let (held, lease) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+        pool.trim_idle(Instant::now(), timeout, true);
+        lease.recycle(held);
+        assert_eq!(pool.retained_snapshot(), (0, 0));
+        pool.trim_idle(Instant::now(), timeout, false);
+        let (buffer, lease) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+        lease.recycle(buffer);
+        assert_eq!(pool.retained_snapshot().0, 1);
     }
 
     #[test]

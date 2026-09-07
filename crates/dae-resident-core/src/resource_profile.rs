@@ -1625,6 +1625,14 @@ impl ResidentRuntimeProfile {
         }
     }
 
+    pub const fn udp_session_resource_budget_bytes(self) -> usize {
+        match self {
+            Self::LowMemory => 32 * 1024 * 1024,
+            Self::Balanced => 128 * 1024 * 1024,
+            Self::HighPerformance => 512 * 1024 * 1024,
+        }
+    }
+
     pub const fn udp_session_idle_timeout(self) -> Duration {
         Duration::from_secs(match self {
             Self::LowMemory => LOW_MEMORY_UDP_SESSION_IDLE_SECONDS,
