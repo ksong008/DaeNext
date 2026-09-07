@@ -220,7 +220,7 @@ fn http_simple_obfs_request(
     // appends the remaining encrypted bytes verbatim after the HTTP header.
     // Keeping the prefix bounded avoids producing an enormous URL and is
     // accepted by servers whose configured head length is in the 1..=64 range.
-    let head_len = stream_payload.len().min(64).max(1);
+    let head_len = stream_payload.len().clamp(1, 64);
     let encoded = percent_encode(&stream_payload[..head_len]);
     let body = &stream_payload[head_len..];
     Ok(format!(
