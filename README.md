@@ -201,6 +201,28 @@ Emergency cgroup usage bypasses the ordinary reclaim cooldown even when
 `memory.high` is unset. Application objects that remain live are not freed by
 allocator reclaim.
 
+TCP raw relay buffers are released after 30 seconds without progress once their
+pending bytes have been written, and allocated again when data becomes readable.
+UDP session idle deadlines follow accepted traffic in both directions, including
+empty datagrams. Rejected responses do not renew a session. Datagram scratch
+buffers use the profile's 15/30/60-second idle timeout; stream framing buffers
+retain incomplete messages. UDP queued work and downstream packet rates also
+participate in allocator activity checks. Runtime workers acknowledge cache flush
+epochs without waiting for their peers; missing acknowledgments produce a bounded
+partial result.
+
+Automatic UDP session admission uses 32/128/512 MiB resource budgets for the
+low-memory/balanced/high-performance profiles, with a 128 KiB reservation estimate
+per session (256/1024/4096 sessions). This estimate is not measured RSS; queued
+payloads and shared transports have separate budgets. `RESIDENT_UDP_SESSION_LIMIT`
+overrides the automatic count limit. At 85% of the lower finite cgroup
+`memory.high`/`memory.max` limit, new session admission is rejected until pressure
+subsides, and the idle UDP payload pool is cleared; existing sessions continue.
+Normal idle pool maintenance retains
+at most one warm buffer per shard after 30 seconds. Pressure sampling continues
+when automatic allocator reclaim is disabled. Retired generations keep their
+independent deadlines and count limits; session activity does not extend them.
+
 On Linux glibc, `allocator-system` builds now execute `malloc_trim` by default for
 explicit requests and urgent cgroup pressure after activity checks. They do not
 have jemalloc statistics or dedicated control-plane arenas, so these trims are
