@@ -181,7 +181,7 @@ struct StreamCipherSpec {
 }
 
 fn http_simple_obfs_request(obfs_host: &str, obfs_port: u16, stream_payload: &[u8]) -> Vec<u8> {
-    let head_len = stream_payload.len().min(64).max(1);
+    let head_len = stream_payload.len().clamp(1, 64);
     let encoded = percent_encode(&stream_payload[..head_len]);
     let body = &stream_payload[head_len..];
     let mut request = format!(
