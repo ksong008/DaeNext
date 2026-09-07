@@ -72,6 +72,10 @@ impl AllocatorWorkerState {
         if allocator_flush_current_thread_cache().is_err() {
             self.failed_epoch.store(epoch, Ordering::Relaxed);
         }
+        let _guard = reclaim
+            .wait_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         self.acknowledged_epoch.store(epoch, Ordering::Release);
         reclaim.waiter.notify_all();
     }
@@ -90,7 +94,15 @@ impl AllocatorReclaimWorker {
 impl Drop for AllocatorReclaimWorker {
     fn drop(&mut self) {
         self.poll();
-        self.state.active.store(false, Ordering::Release);
+        {
+            let reclaim = worker_reclaim();
+            let _guard = reclaim
+                .wait_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.state.active.store(false, Ordering::Release);
+            reclaim.waiter.notify_all();
+        }
         ATTACHED_WORKER.with(|attached| {
             let mut attached = attached.borrow_mut();
             if attached
@@ -101,7 +113,6 @@ impl Drop for AllocatorReclaimWorker {
                 *attached = None;
             }
         });
-        worker_reclaim().waiter.notify_all();
     }
 }
 
@@ -326,4 +337,41 @@ pub(super) fn allocator_worker_reclaim_snapshot_json() -> Value {
         "registeredByClass": registered_by_kind,
         "last": last,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_worker_reclaim_acknowledgement_shares_the_wait_mutex() {
+        let reclaim = Arc::new(AllocatorWorkerReclaim::default());
+        reclaim.desired_epoch.store(1, Ordering::Release);
+        let worker = Arc::new(AllocatorWorkerState::new(AllocatorWorkerKind::Http, 0));
+        let polling_reclaim = Arc::clone(&reclaim);
+        let polling_worker = Arc::clone(&worker);
+        let guard = reclaim.wait_lock.lock().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let polling = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            polling_worker.poll(&polling_reclaim);
+            done_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        let premature = done_rx.recv_timeout(Duration::from_millis(25)).is_ok();
+        let (guard, timeout) = reclaim
+            .waiter
+            .wait_timeout_while(guard, Duration::from_secs(2), |_| {
+                worker.acknowledged_epoch.load(Ordering::Acquire) < 1
+            })
+            .unwrap();
+        drop(guard);
+        polling.join().unwrap();
+        assert!(!premature, "worker acknowledgement bypassed the wait mutex");
+        assert!(
+            !timeout.timed_out(),
+            "acknowledgement notification was lost"
+        );
+    }
 }

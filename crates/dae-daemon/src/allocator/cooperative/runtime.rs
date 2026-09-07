@@ -88,6 +88,46 @@ impl Default for AllocatorRuntimeFlushBatch {
     }
 }
 
+impl AllocatorRuntimeFlushBatch {
+    fn release(&self) {
+        let _guard = self.lock.lock().unwrap_or_else(|error| error.into_inner());
+        self.released.store(true, Ordering::Release);
+        self.waiter.notify_all();
+    }
+
+    fn flush_worker(&self, deadline: Instant) {
+        let mut guard = self.lock.lock().unwrap_or_else(|error| error.into_inner());
+        if self.released.load(Ordering::Acquire) {
+            return;
+        }
+        // Every predicate change shares the wait mutex. Atomics alone do not
+        // prevent a notification from being lost just before Condvar::wait.
+        self.started.fetch_add(1, Ordering::AcqRel);
+        self.waiter.notify_all();
+        while !self.released.load(Ordering::Acquire) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.released.store(true, Ordering::Release);
+                self.waiter.notify_all();
+                break;
+            }
+            guard = self
+                .waiter
+                .wait_timeout(guard, remaining)
+                .unwrap_or_else(|error| error.into_inner())
+                .0;
+        }
+        drop(guard);
+        let failed = allocator_flush_current_thread_cache().is_err();
+        let _guard = self.lock.lock().unwrap_or_else(|error| error.into_inner());
+        if failed {
+            self.failures.fetch_add(1, Ordering::Relaxed);
+        }
+        self.completed.fetch_add(1, Ordering::Release);
+        self.waiter.notify_all();
+    }
+}
+
 pub(super) struct AllocatorRuntimeFlushReport {
     pub(super) kind: AllocatorWorkerKind,
     pub(super) expected: usize,
@@ -138,32 +178,12 @@ fn flush_runtime_workers_blocking(
     for _ in 0..task_count {
         let batch = Arc::clone(&batch);
         handle.spawn(async move {
-            if batch.released.load(Ordering::Acquire) {
-                return;
-            }
-            batch.started.fetch_add(1, Ordering::AcqRel);
-            batch.waiter.notify_all();
-            let Ok(mut guard) = batch.lock.lock() else {
-                return;
-            };
-            while !batch.released.load(Ordering::Acquire) {
-                let Ok(next) = batch.waiter.wait(guard) else {
-                    return;
-                };
-                guard = next;
-            }
-            drop(guard);
-            if allocator_flush_current_thread_cache().is_err() {
-                batch.failures.fetch_add(1, Ordering::Relaxed);
-            }
-            batch.completed.fetch_add(1, Ordering::Release);
-            batch.waiter.notify_all();
+            batch.flush_worker(deadline);
         });
     }
     wait_for_runtime_count(&batch, &batch.started, task_count as u64, deadline);
     let started = batch.started.load(Ordering::Acquire).min(task_count as u64);
-    batch.released.store(true, Ordering::Release);
-    batch.waiter.notify_all();
+    batch.release();
     wait_for_runtime_count(&batch, &batch.completed, started, deadline);
     AllocatorRuntimeFlushReport {
         kind: runtime.kind,
@@ -201,6 +221,47 @@ fn wait_for_runtime_count(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_reclaim_release_cannot_race_the_worker_wait_transition() {
+        let batch = Arc::new(AllocatorRuntimeFlushBatch::default());
+        let guard = batch.lock.lock().unwrap();
+        assert!(!batch.released.load(Ordering::Acquire));
+        let releasing = Arc::clone(&batch);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let releaser = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            releasing.release();
+            done_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        // Force the notifier to run between the worker's predicate check and
+        // wait. It must wait for our mutex, then wake the worker's actual wait.
+        let premature = done_rx.recv_timeout(Duration::from_millis(25)).is_ok();
+        let (guard, timeout) = batch
+            .waiter
+            .wait_timeout_while(guard, Duration::from_secs(2), |_| {
+                !batch.released.load(Ordering::Acquire)
+            })
+            .unwrap();
+        drop(guard);
+        releaser.join().unwrap();
+        assert!(!premature, "release bypassed the worker's wait mutex");
+        assert!(!timeout.timed_out(), "worker lost the release notification");
+    }
+
+    #[test]
+    fn runtime_reclaim_worker_stops_waiting_at_the_batch_deadline() {
+        let batch = AllocatorRuntimeFlushBatch::default();
+        batch.flush_worker(Instant::now() + Duration::from_millis(10));
+        assert!(batch.released.load(Ordering::Acquire));
+        assert_eq!(batch.completed.load(Ordering::Acquire), 1);
+        // Late tasks cannot count the same runtime worker a second time.
+        batch.flush_worker(Instant::now());
+        assert_eq!(batch.started.load(Ordering::Acquire), 1);
+        assert_eq!(batch.completed.load(Ordering::Acquire), 1);
+    }
 
     #[test]
     fn runtime_flush_occupies_each_worker_before_releasing_the_batch() {
