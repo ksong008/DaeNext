@@ -194,6 +194,20 @@ package-manager labels, not Rust CPU tuning values.
 | `allocator-jemalloc` | Selects jemalloc and its runtime statistics/reclaim controls; this is the production default. |
 | `allocator-system` | Selects the system allocator for controlled comparison builds. It is mutually exclusive with `allocator-jemalloc`, so it requires a complete `--no-default-features` feature list. |
 
+Setting `allocator_idle_reclaim_enabled: false` disables periodic idle reclaim;
+explicit lifecycle and control-plane requests still run through the coordinator's
+activity checks. A stopped runtime counts as zero traffic once cleanup finishes.
+Emergency cgroup usage bypasses the ordinary reclaim cooldown even when
+`memory.high` is unset. Application objects that remain live are not freed by
+allocator reclaim.
+
+On Linux glibc, `allocator-system` builds now execute `malloc_trim` by default for
+explicit requests and urgent cgroup pressure after activity checks. They do not
+have jemalloc statistics or dedicated control-plane arenas, so these trims are
+process-wide. Set `ALLOCATOR_SYSTEM_TRIM=0` to opt out for comparison runs; the
+legacy `DAED_ALLOCATOR_SYSTEM_TRIM` variable remains a fallback. Other system
+allocator targets report trim as unsupported.
+
 Features prefixed with `test-` are internal A/B or regression switches. The
 historically named `test-boringssl-tcp-tls` and `test-boringssl-quic` gates are
 already part of the current production default and select the sole admitted

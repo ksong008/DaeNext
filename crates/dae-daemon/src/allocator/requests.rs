@@ -10,6 +10,14 @@ const MAX_PUBLICATION_PURGE_HISTORY: usize = 128;
 static RECLAIM_REQUEST_REGISTRY: OnceLock<Mutex<AllocatorReclaimRequestRegistry>> = OnceLock::new();
 static RECLAIM_REQUEST_WAKE: OnceLock<(Mutex<u64>, Condvar)> = OnceLock::new();
 
+#[cfg(test)]
+pub(crate) fn allocator_reset_reclaim_requests_for_test() {
+    *RECLAIM_REQUEST_REGISTRY
+        .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
+        .lock()
+        .unwrap() = AllocatorReclaimRequestRegistry::default();
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum AllocatorReclaimScope {
     ControlPlane,
@@ -52,6 +60,7 @@ struct PendingAllocatorReclaimRequests {
     urgency: AllocatorReclaimUrgency,
     publication_ids: Vec<u64>,
     publication_overflow: u64,
+    publication_through: Option<u64>,
     requested_at: Option<Instant>,
 }
 
@@ -64,6 +73,7 @@ impl Default for PendingAllocatorReclaimRequests {
             urgency: AllocatorReclaimUrgency::Ordinary,
             publication_ids: Vec::new(),
             publication_overflow: 0,
+            publication_through: None,
             requested_at: None,
         }
     }
@@ -92,6 +102,7 @@ impl PendingAllocatorReclaimRequests {
         if let Some(publication_id) = publication_id
             && !self.publication_ids.contains(&publication_id)
         {
+            self.publication_through = self.publication_through.max(Some(publication_id));
             if self.publication_ids.len() < MAX_PENDING_PUBLICATION_IDS {
                 self.publication_ids.push(publication_id);
             } else {
@@ -123,6 +134,7 @@ impl PendingAllocatorReclaimRequests {
         self.publication_overflow = self
             .publication_overflow
             .saturating_add(batch.publication_overflow);
+        self.publication_through = self.publication_through.max(batch.publication_through);
     }
 
     fn take(&mut self) -> AllocatorReclaimRequestBatch {
@@ -134,6 +146,7 @@ impl PendingAllocatorReclaimRequests {
             urgency: pending.urgency,
             publication_ids: pending.publication_ids,
             publication_overflow: pending.publication_overflow,
+            publication_through: pending.publication_through,
             requested_at: pending.requested_at,
         }
     }
@@ -152,6 +165,11 @@ struct AllocatorReclaimRequestRegistry {
     publication_deduplicated_total: u64,
     publication_overflow_total: u64,
     publication_purges: VecDeque<(u64, u64)>,
+    // Publication IDs increase process-wide. A successful global purge covers
+    // all publications through this watermark, including IDs omitted from the
+    // bounded diagnostic lists. Retired-generation releases have separate requests.
+    publication_purged_through: Option<u64>,
+    publication_in_flight_through: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -162,6 +180,7 @@ pub(crate) struct AllocatorReclaimRequestBatch {
     urgency: AllocatorReclaimUrgency,
     publication_ids: Vec<u64>,
     publication_overflow: u64,
+    publication_through: Option<u64>,
     requested_at: Option<Instant>,
 }
 
@@ -224,6 +243,27 @@ impl AllocatorReclaimReason {
 }
 
 impl AllocatorReclaimRequestBatch {
+    pub(crate) fn has_publication(&self) -> bool {
+        self.publication_through.is_some()
+    }
+
+    pub(crate) fn is_only(&self, reason: AllocatorReclaimReason) -> bool {
+        !self.is_empty() && self.reason_bits == reason.request_bit()
+    }
+
+    pub(crate) fn requires_lifecycle_reclaim(&self) -> bool {
+        self.has_publication()
+            || self.reasons().any(|reason| {
+                matches!(
+                    reason,
+                    AllocatorReclaimReason::StartupControlBuilt
+                        | AllocatorReclaimReason::ReloadCompleted
+                        | AllocatorReclaimReason::ReloadFailedAfterCleanup
+                        | AllocatorReclaimReason::StopRuntime
+                )
+            })
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.reason_bits == 0 || self.request_count == 0
     }
@@ -280,6 +320,7 @@ impl AllocatorReclaimRequestBatch {
             "urgency": self.urgency.as_str(),
             "publicationIds": self.publication_ids,
             "publicationOverflow": self.publication_overflow,
+            "publicationThrough": self.publication_through,
             "oldestRequestAgeMillis": self.requested_at.map(|at| at.elapsed().as_millis().to_string()),
         })
     }
@@ -347,11 +388,16 @@ fn allocator_request_reclaim_with(
         registry.publication_requested_total =
             registry.publication_requested_total.saturating_add(1);
         let already_purged = registry
-            .publication_purges
-            .iter()
-            .any(|(known, _)| *known == publication_id);
-        let already_pending = registry.pending.publication_ids.contains(&publication_id);
-        if already_purged || already_pending {
+            .publication_purged_through
+            .is_some_and(|through| publication_id <= through);
+        let already_pending = registry
+            .pending
+            .publication_through
+            .is_some_and(|through| publication_id <= through);
+        let already_in_flight = registry
+            .publication_in_flight_through
+            .is_some_and(|through| publication_id <= through);
+        if already_purged || already_pending || already_in_flight {
             registry.publication_deduplicated_total =
                 registry.publication_deduplicated_total.saturating_add(1);
             return json!({
@@ -362,18 +408,23 @@ fn allocator_request_reclaim_with(
                 "publicationId": publication_id,
                 "alreadyPurged": already_purged,
                 "alreadyPending": already_pending,
+                "alreadyInFlight": already_in_flight,
             });
         }
     }
     if !registry.pending.is_empty() {
         registry.merged_total = registry.merged_total.saturating_add(1);
     }
+    let previous_overflow = registry.pending.publication_overflow;
     registry
         .pending
         .merge_request(reason, scope, urgency, publication_id, requested_at);
-    if registry.pending.publication_overflow > registry.publication_overflow_total {
-        registry.publication_overflow_total = registry.pending.publication_overflow;
-    }
+    registry.publication_overflow_total = registry.publication_overflow_total.saturating_add(
+        registry
+            .pending
+            .publication_overflow
+            .saturating_sub(previous_overflow),
+    );
     let receipt = json!({
         "status": "requested",
         "reason": reason.as_str(),
@@ -423,12 +474,13 @@ pub(crate) fn allocator_pending_reclaim_requests() -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn allocator_pending_publication_reclaim() -> bool {
+#[cfg(test)]
+fn allocator_pending_publication_reclaim() -> bool {
     RECLAIM_REQUEST_REGISTRY
         .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
         .lock()
         .map(|registry| {
-            !registry.pending.is_empty() && !registry.pending.publication_ids.is_empty()
+            !registry.pending.is_empty() && registry.pending.publication_through.is_some()
         })
         .unwrap_or(false)
 }
@@ -442,7 +494,8 @@ fn allocator_pending_reclaim_reason(reason: AllocatorReclaimReason) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn allocator_pending_reclaim_is_only(reason: AllocatorReclaimReason) -> bool {
+#[cfg(test)]
+fn allocator_pending_reclaim_is_only(reason: AllocatorReclaimReason) -> bool {
     RECLAIM_REQUEST_REGISTRY
         .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
         .lock()
@@ -452,7 +505,8 @@ pub(crate) fn allocator_pending_reclaim_is_only(reason: AllocatorReclaimReason) 
         .unwrap_or(false)
 }
 
-pub(crate) fn allocator_pending_reclaim_scope() -> Option<AllocatorReclaimScope> {
+#[cfg(test)]
+fn allocator_pending_reclaim_scope() -> Option<AllocatorReclaimScope> {
     RECLAIM_REQUEST_REGISTRY
         .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
         .lock()
@@ -468,6 +522,9 @@ pub(crate) fn allocator_take_reclaim_requests() -> AllocatorReclaimRequestBatch 
         return AllocatorReclaimRequestBatch::default();
     };
     let batch = registry.pending.take();
+    registry.publication_in_flight_through = registry
+        .publication_in_flight_through
+        .max(batch.publication_through);
     if !batch.is_empty() {
         registry.batch_total = registry.batch_total.saturating_add(1);
     }
@@ -483,6 +540,19 @@ pub(crate) fn allocator_restore_reclaim_requests(batch: &AllocatorReclaimRequest
         .lock()
     {
         registry.pending.merge_batch(batch);
+        if registry.publication_in_flight_through == batch.publication_through {
+            registry.publication_in_flight_through = None;
+        }
+    }
+}
+
+pub(crate) fn allocator_discard_reclaim_requests(batch: &AllocatorReclaimRequestBatch) {
+    if let Ok(mut registry) = RECLAIM_REQUEST_REGISTRY
+        .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
+        .lock()
+        && registry.publication_in_flight_through == batch.publication_through
+    {
+        registry.publication_in_flight_through = None;
     }
 }
 
@@ -496,13 +566,19 @@ pub(crate) fn allocator_record_trailing_reclaim_evaluation() {
 }
 
 pub(crate) fn allocator_record_publication_reclaim(batch: &AllocatorReclaimRequestBatch) {
-    if batch.scope != AllocatorReclaimScope::Global || batch.publication_ids.is_empty() {
+    if batch.scope != AllocatorReclaimScope::Global || !batch.has_publication() {
         return;
     }
     if let Ok(mut registry) = RECLAIM_REQUEST_REGISTRY
         .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
         .lock()
     {
+        registry.publication_purged_through = registry
+            .publication_purged_through
+            .max(batch.publication_through);
+        if registry.publication_in_flight_through == batch.publication_through {
+            registry.publication_in_flight_through = None;
+        }
         for publication_id in &batch.publication_ids {
             if let Some((_, count)) = registry
                 .publication_purges
@@ -537,6 +613,8 @@ pub(super) fn allocator_reclaim_request_snapshot_json() -> Value {
         "trailingEvaluationTotal": registry.trailing_evaluation_total,
         "publicationDeduplicatedTotal": registry.publication_deduplicated_total,
         "publicationOverflowTotal": registry.publication_overflow_total,
+        "publicationPurgedThrough": registry.publication_purged_through,
+        "publicationInFlightThrough": registry.publication_in_flight_through,
         "pending": AllocatorReclaimRequestBatch {
             reason_bits: registry.pending.reason_bits,
             request_count: registry.pending.request_count,
@@ -544,6 +622,7 @@ pub(super) fn allocator_reclaim_request_snapshot_json() -> Value {
             urgency: registry.pending.urgency,
             publication_ids: registry.pending.publication_ids.clone(),
             publication_overflow: registry.pending.publication_overflow,
+            publication_through: registry.pending.publication_through,
             requested_at: registry.pending.requested_at,
         }.json(),
         "publicationPurges": registry.publication_purges.iter().map(|(publication_id, count)| {
@@ -622,6 +701,75 @@ mod tests {
             allocator_reclaim_request_snapshot_json()["publicationPurges"][0]["purgeCount"],
             json!(1)
         );
+    }
+
+    #[test]
+    fn publication_reclaim_overflow_remains_deduplicated_during_retry_and_after_purge() {
+        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
+        reset_requests();
+        for id in 1..=256 {
+            assert_eq!(
+                allocator_request_reclaim_for_publication(
+                    AllocatorReclaimReason::ReloadCompleted,
+                    id
+                )["status"],
+                "requested"
+            );
+        }
+        let pending = allocator_reclaim_request_snapshot_json();
+        assert_eq!(
+            pending["pending"]["publicationIds"]
+                .as_array()
+                .unwrap()
+                .len(),
+            MAX_PENDING_PUBLICATION_IDS
+        );
+        assert_eq!(pending["pending"]["publicationOverflow"], 192);
+        assert_eq!(pending["pending"]["publicationThrough"], 256);
+        let duplicate =
+            allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 256);
+        assert_eq!(duplicate["alreadyPending"], true);
+
+        let batch = allocator_take_reclaim_requests();
+        let in_flight =
+            allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 256);
+        assert_eq!(in_flight["alreadyInFlight"], true);
+        allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 257);
+        allocator_restore_reclaim_requests(&batch);
+        let restored = allocator_take_reclaim_requests();
+        assert_eq!(restored.publication_through, Some(257));
+        assert_eq!(restored.publication_ids.len(), MAX_PENDING_PUBLICATION_IDS);
+        allocator_record_publication_reclaim(&restored);
+        for id in [1, 65, 256, 257] {
+            let receipt = allocator_request_reclaim_for_publication(
+                AllocatorReclaimReason::ReloadCompleted,
+                id,
+            );
+            assert_eq!(receipt["alreadyPurged"], true);
+        }
+        assert!(!allocator_pending_reclaim_requests());
+        reset_requests();
+    }
+
+    #[test]
+    fn publication_reclaim_history_eviction_does_not_forget_successful_purges() {
+        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
+        reset_requests();
+        for id in 1..=(MAX_PUBLICATION_PURGE_HISTORY as u64 + 2) {
+            allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, id);
+            allocator_record_publication_reclaim(&allocator_take_reclaim_requests());
+        }
+        let snapshot = allocator_reclaim_request_snapshot_json();
+        assert_eq!(
+            snapshot["publicationPurges"].as_array().unwrap().len(),
+            MAX_PUBLICATION_PURGE_HISTORY
+        );
+        assert_eq!(
+            allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 1)["alreadyPurged"],
+            true
+        );
+        assert!(!allocator_pending_reclaim_requests());
+        reset_requests();
     }
 
     #[test]

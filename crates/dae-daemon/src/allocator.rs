@@ -29,10 +29,11 @@ pub(crate) use self::control_plane::{
     allocator_purge_control_plane_arena,
 };
 mod requests;
+#[cfg(test)]
+pub(crate) use self::requests::allocator_reset_reclaim_requests_for_test;
 pub(crate) use self::requests::{
-    AllocatorReclaimRequestBatch, AllocatorReclaimScope, allocator_notify_reclaim_monitor,
-    allocator_pending_publication_reclaim, allocator_pending_reclaim_is_only,
-    allocator_pending_reclaim_requests, allocator_pending_reclaim_scope,
+    AllocatorReclaimRequestBatch, AllocatorReclaimScope, allocator_discard_reclaim_requests,
+    allocator_notify_reclaim_monitor, allocator_pending_reclaim_requests,
     allocator_reclaim_request_wake_epoch, allocator_record_publication_reclaim,
     allocator_record_trailing_reclaim_evaluation, allocator_request_control_plane_reclaim,
     allocator_request_reclaim, allocator_request_reclaim_for_publication,
