@@ -75,7 +75,7 @@ pub(super) fn observe_cgroup_reclaim_pressure() -> CgroupReclaimPressure {
     cgroup_reclaim_pressure_from_snapshot(&snapshot, true)
 }
 
-fn cgroup_reclaim_pressure_from_snapshot(
+pub(super) fn cgroup_reclaim_pressure_from_snapshot(
     snapshot: &Value,
     update_observation: bool,
 ) -> CgroupReclaimPressure {

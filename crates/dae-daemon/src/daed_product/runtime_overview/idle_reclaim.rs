@@ -1,9 +1,9 @@
 use super::*;
 use crate::allocator::{
-    AllocatorReclaimRequestBatch, allocator_pending_publication_reclaim,
-    allocator_pending_reclaim_is_only, allocator_pending_reclaim_requests,
+    AllocatorReclaimRequestBatch, allocator_pending_reclaim_requests,
     allocator_take_reclaim_requests,
 };
+use dae_product_control::runtime::RuntimeTrafficAvailability;
 
 #[path = "idle_reclaim/adaptive.rs"]
 mod adaptive;
@@ -14,6 +14,10 @@ use self::activity::*;
 #[path = "idle_reclaim/pressure.rs"]
 mod pressure;
 use self::pressure::*;
+
+#[cfg(test)]
+#[path = "idle_reclaim/coordinator_tests.rs"]
+mod coordinator_tests;
 
 const ALLOCATOR_IDLE_RECLAIM_MONITOR_STACK_BYTES: usize = 256 * 1024;
 const ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL: Duration = Duration::from_secs(5);
@@ -433,28 +437,67 @@ fn evaluate_allocator_idle_reclaim(
     policy: AllocatorIdleReclaimPolicy,
     admit_deferred_requests: bool,
 ) -> Value {
+    evaluate_allocator_idle_reclaim_with_observers(
+        policy,
+        admit_deferred_requests,
+        || idle_reclaim_observation(app),
+        observe_cgroup_reclaim_pressure,
+    )
+}
+
+// A batch is claimed atomically before making decisions about its scope. New
+// requests remain queued, and every early return (including unwinding) restores
+// the claimed batch unless a terminal decision explicitly consumes it.
+struct AllocatorReclaimEvaluationBatch(AllocatorReclaimRequestBatch);
+
+impl AllocatorReclaimEvaluationBatch {
+    fn take(&mut self) -> AllocatorReclaimRequestBatch {
+        if !self.0.is_empty() {
+            allocator_record_trailing_reclaim_evaluation();
+        }
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for AllocatorReclaimEvaluationBatch {
+    fn drop(&mut self) {
+        allocator_restore_reclaim_requests(&self.0);
+    }
+}
+
+fn evaluate_allocator_idle_reclaim_with_observers(
+    policy: AllocatorIdleReclaimPolicy,
+    admit_deferred_requests: bool,
+    observe_traffic: impl FnOnce() -> Option<AllocatorIdleObservation>,
+    observe_pressure: impl FnOnce() -> CgroupReclaimPressure,
+) -> Value {
     let deferred_waiting = allocator_pending_reclaim_requests();
-    let deferred_pending = admit_deferred_requests && deferred_waiting;
-    let publication_reclaim_pending = deferred_pending && allocator_pending_publication_reclaim();
-    if !policy.enabled && !publication_reclaim_pending {
+    let mut pending = AllocatorReclaimEvaluationBatch(if admit_deferred_requests {
+        allocator_take_reclaim_requests()
+    } else {
+        AllocatorReclaimRequestBatch::default()
+    });
+    let deferred_pending = !pending.0.is_empty();
+    let publication_reclaim_pending = pending.0.has_publication();
+    let required_reclaim =
+        pending.0.requires_lifecycle_reclaim() || (!policy.enabled && deferred_pending);
+    if !policy.enabled && !deferred_pending {
         reset_idle_reclaim_observation();
         clear_cgroup_reclaim_pressure_latch();
-        let deferred = if admit_deferred_requests {
-            let batch = allocator_take_reclaim_requests();
-            if !batch.is_empty() {
-                allocator_record_trailing_reclaim_evaluation();
-            }
-            batch
-        } else {
-            AllocatorReclaimRequestBatch::default()
-        };
-        return json!({"status": "skipped", "reason": "disabled", "deferred": deferred.json()});
+        // Disabling the automatic idle policy must not discard lifecycle or
+        // control-plane requests queued by explicit operations.
+        return json!({
+            "status": "skipped",
+            "reason": "disabled",
+            "deferred": AllocatorReclaimRequestBatch::default().json(),
+        });
     }
 
     let now = Instant::now();
-    let retired_generation_release_only = deferred_pending
-        && allocator_pending_reclaim_is_only(AllocatorReclaimReason::RetiredGenerationReleased);
-    let cgroup_pressure = observe_cgroup_reclaim_pressure();
+    let retired_generation_release_only = pending
+        .0
+        .is_only(AllocatorReclaimReason::RetiredGenerationReleased);
+    let cgroup_pressure = observe_pressure();
     let busy_count = allocator_reclaim_busy_count();
     let busy_completion_count = allocator_reclaim_busy_completion_count();
     let busy_quiet_required = if cgroup_pressure.level.is_urgent() {
@@ -486,11 +529,11 @@ fn evaluate_allocator_idle_reclaim(
         });
     }
     if deferred_pending
-        && allocator_pending_reclaim_scope() == Some(AllocatorReclaimScope::ControlPlane)
+        && pending.0.scope() == AllocatorReclaimScope::ControlPlane
+        && allocator_profile() == "jemalloc"
     {
-        let deferred = allocator_take_reclaim_requests();
-        allocator_record_trailing_reclaim_evaluation();
-        let reclaim_reason = deferred
+        let reclaim_reason = pending
+            .0
             .primary_reason()
             .unwrap_or(AllocatorReclaimReason::ControlPlaneIdle);
         let reclaim = allocator_reclaim_control_plane(reclaim_reason);
@@ -500,9 +543,11 @@ fn evaluate_allocator_idle_reclaim(
             Some("subsumed") => "subsumed",
             _ => "failed",
         };
-        if evaluation_status == "failed" {
-            allocator_restore_reclaim_requests(&deferred);
-        }
+        let deferred = if evaluation_status == "reclaimed" {
+            pending.take()
+        } else {
+            pending.0.clone()
+        };
         return json!({
             "status": evaluation_status,
             "state": "cold",
@@ -513,7 +558,7 @@ fn evaluate_allocator_idle_reclaim(
             "cgroupPressure": cgroup_pressure.json(),
         });
     }
-    let Some(observation) = idle_reclaim_observation(app) else {
+    let Some(observation) = observe_traffic() else {
         reset_idle_reclaim_observation();
         return json!({"status": "skipped", "reason": "runtime_metrics_unavailable"});
     };
@@ -557,7 +602,8 @@ fn evaluate_allocator_idle_reclaim(
     // and therefore still observes the low-traffic window. If it is merged with a completed
     // reload (or any other explicit reclaim request), it must not suppress that request and
     // leave a publication-scoped purge pending indefinitely.
-    let known_heavy_task_finished = deferred_pending && !retired_generation_release_only;
+    let known_heavy_task_finished =
+        deferred_pending && (!retired_generation_release_only || !policy.enabled);
     if !known_heavy_task_finished && !cgroup_pressure.level.is_urgent() && !low_traffic.ready {
         return json!({
             "status": "skipped",
@@ -578,12 +624,11 @@ fn evaluate_allocator_idle_reclaim(
         policy.min_interval,
         policy.sources.min_interval == "default",
     );
-    let effective_min_interval =
-        if cgroup_pressure.level.is_emergency() && cgroup_pressure.high_event_increased {
-            Duration::ZERO
-        } else {
-            adaptive_min_interval
-        };
+    let effective_min_interval = if cgroup_pressure.level.is_emergency() {
+        Duration::ZERO
+    } else {
+        adaptive_min_interval
+    };
     if !publication_reclaim_pending
         && let Some(wait_remaining) = idle_reclaim_wait_remaining(now, effective_min_interval)
     {
@@ -604,6 +649,10 @@ fn evaluate_allocator_idle_reclaim(
         });
     }
 
+    if allocator_profile() == "system" {
+        return evaluate_system_allocator_reclaim(&mut pending, now, &cgroup_pressure);
+    }
+
     let Some(stats) = allocator_stats_snapshot() else {
         return json!({"status": "skipped", "reason": "allocator_stats_unavailable"});
     };
@@ -619,7 +668,7 @@ fn evaluate_allocator_idle_reclaim(
     if post_burst
         && !post_burst_quiet.ready
         && !cgroup_pressure.level.is_urgent()
-        && !publication_reclaim_pending
+        && !required_reclaim
     {
         return json!({
             "status": "skipped",
@@ -640,11 +689,9 @@ fn evaluate_allocator_idle_reclaim(
         cgroup_pressure.level,
         post_burst,
     );
-    if pressure < effective_pressure_threshold && !publication_reclaim_pending {
+    if pressure < effective_pressure_threshold && !required_reclaim {
         let deferred = if deferred_pending {
-            let batch = allocator_take_reclaim_requests();
-            allocator_record_trailing_reclaim_evaluation();
-            batch
+            pending.take()
         } else {
             AllocatorReclaimRequestBatch::default()
         };
@@ -674,14 +721,8 @@ fn evaluate_allocator_idle_reclaim(
         });
     }
 
-    let deferred = if deferred_pending {
-        let batch = allocator_take_reclaim_requests();
-        allocator_record_trailing_reclaim_evaluation();
-        batch
-    } else {
-        AllocatorReclaimRequestBatch::default()
-    };
-    let reclaim_reason = deferred
+    let reclaim_reason = pending
+        .0
         .primary_reason()
         .unwrap_or(AllocatorReclaimReason::IdleMemoryPressure);
     let reclaim = allocator_reclaim(reclaim_reason);
@@ -690,9 +731,11 @@ fn evaluate_allocator_idle_reclaim(
     let reclaim_executed = matches!(reclaim_status, Some("pass" | "partial"));
     let publication_reclaim_satisfied =
         allocator_publication_reclaim_satisfied(publication_reclaim_pending, reclaim_status);
-    if !reclaim_executed || !publication_reclaim_satisfied {
-        allocator_restore_reclaim_requests(&deferred);
-    }
+    let deferred = if reclaim_executed && publication_reclaim_satisfied {
+        pending.take()
+    } else {
+        pending.0.clone()
+    };
     if reclaim_executed {
         if publication_reclaim_satisfied {
             allocator_record_publication_reclaim(&deferred);
@@ -736,6 +779,47 @@ fn evaluate_allocator_idle_reclaim(
     })
 }
 
+fn evaluate_system_allocator_reclaim(
+    pending: &mut AllocatorReclaimEvaluationBatch,
+    now: Instant,
+    pressure: &CgroupReclaimPressure,
+) -> Value {
+    // System builds have no jemalloc statistics or dedicated control-plane
+    // arena. Explicit requests and urgent cgroup pressure still reach trim.
+    if pending.0.is_empty() && !pressure.level.is_urgent() {
+        return json!({"status": "skipped", "reason": "allocator_stats_unavailable"});
+    }
+    let reason = pending
+        .0
+        .primary_reason()
+        .unwrap_or(AllocatorReclaimReason::IdleMemoryPressure);
+    let reclaim = allocator_reclaim(reason);
+    let status = reclaim.get("status").and_then(Value::as_str);
+    let executed = status == Some("pass");
+    let skipped = matches!(status, Some("skipped" | "unsupported"));
+    let deferred = if executed || skipped {
+        if executed {
+            allocator_record_publication_reclaim(&pending.0);
+        } else {
+            crate::allocator::allocator_discard_reclaim_requests(&pending.0);
+        }
+        record_idle_reclaim_attempt(now);
+        clear_cgroup_reclaim_pressure_latch();
+        pending.take()
+    } else {
+        pending.0.clone()
+    };
+    json!({
+        "status": if executed { "reclaimed" } else if skipped { "skipped" }
+            else if status == Some("merged_pending") { "merged_pending" } else { "failed" },
+        "scope": "global",
+        "reason": reason.as_str(),
+        "deferred": deferred.json(),
+        "cgroupPressure": pressure.json(),
+        "reclaim": reclaim,
+    })
+}
+
 fn allocator_publication_reclaim_satisfied(
     publication_reclaim_pending: bool,
     reclaim_status: Option<&str>,
@@ -757,7 +841,19 @@ fn deferred_reclaim_evaluation_due(
 }
 
 fn idle_reclaim_observation(app: &AppState) -> Option<AllocatorIdleObservation> {
-    let counters = app.runtime.resident_traffic_counters()?;
+    let read = app.runtime.resident_traffic_read();
+    idle_reclaim_observation_from_read(read)
+}
+
+fn idle_reclaim_observation_from_read(
+    read: dae_product_control::runtime::RuntimeTrafficRead,
+) -> Option<AllocatorIdleObservation> {
+    if read.availability == RuntimeTrafficAvailability::TemporarilyUnavailable {
+        return None;
+    }
+    // A stopped runtime has authoritative zero traffic. Treating it as missing
+    // telemetry prevented StopRuntime and merged control-plane requests forever.
+    let counters = read.counters;
     Some(AllocatorIdleObservation {
         active_tcp: counters.active_tcp_connections,
         active_udp: counters.active_udp_sessions,
