@@ -42,6 +42,25 @@ impl UdpSessionExecutor {
         }
     }
 
+    pub fn response_buffer_reclaim_deadline(&self, timeout: Duration) -> Option<time::Instant> {
+        match self {
+            Self::ShadowsocksAead(session) => session.response_buffer_reclaim_deadline(timeout),
+            Self::Shadowsocks2022(session) => session.response_buffer_reclaim_deadline(timeout),
+            Self::Socks5(session) => session.response_buffer_reclaim_deadline(timeout),
+            _ => None,
+        }
+    }
+
+    pub fn reclaim_response_buffer_if_idle(
+        &mut self,
+        now: time::Instant,
+        timeout: Duration,
+    ) -> bool {
+        self.response_buffer_reclaim_deadline(timeout)
+            .is_some_and(|deadline| now >= deadline)
+            && self.reclaim_response_buffer()
+    }
+
     pub fn has_response_buffer(&self) -> bool {
         match self {
             Self::ShadowsocksAead(session) => session.has_response_buffer(),

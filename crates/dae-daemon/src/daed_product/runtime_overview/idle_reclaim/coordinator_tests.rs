@@ -265,3 +265,37 @@ fn system_reclaim_opt_out_finishes_requests_without_recording_a_purge() {
         allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 42);
     assert_eq!(retry["status"], "requested");
 }
+
+#[test]
+fn downstream_packets_and_stable_udp_backlog_defer_ordinary_reclaim() {
+    for scenario in 0..3 {
+        let _fixture = ReclaimFixture::new();
+        let mut observation = stopped().unwrap();
+        observation.active_udp = 1;
+        match scenario {
+            0 => observation.queue_depth = 1,
+            1 => {
+                observation.udp_inflight_work = 1;
+                observation.inflight_work = 1;
+            }
+            _ => {}
+        }
+        let _ = idle_reclaim_traffic_rate(Instant::now() - Duration::from_secs(120), observation);
+        if scenario == 2 {
+            // High packet rate with zero payload bytes must still be hot.
+            observation.packet_total_counter = 120 * 1024;
+        }
+        allocator_request_reclaim(AllocatorReclaimReason::RetiredGenerationReleased);
+        let report = evaluate_allocator_idle_reclaim_with_observers(
+            policy(true),
+            true,
+            || Some(observation),
+            CgroupReclaimPressure::default,
+        );
+        assert_eq!(
+            report["reason"], "traffic_active",
+            "scenario {scenario}: {report}"
+        );
+        assert!(allocator_pending_reclaim_requests());
+    }
+}

@@ -13,7 +13,7 @@ mod traffic;
 
 pub use self::proxied_doh3::ProxiedDoh3CleanupMetricObservation;
 use self::proxied_doh3::ProxiedDoh3CleanupMetrics;
-pub use self::traffic::ResidentTrafficCounters;
+pub use self::traffic::{ResidentTrafficCounters, ResidentUdpWorkGuard, ResidentUdpWorkStage};
 
 #[derive(Debug, Default)]
 pub struct ResidentDataplaneMetrics {
@@ -45,6 +45,11 @@ pub struct ResidentDataplaneMetrics {
     udp_session_shutdown_deadline_hits: AtomicU64,
     udp_generation_pin_unavailable: AtomicU64,
     udp_ingress_packets: AtomicU64,
+    udp_response_packets: AtomicU64,
+    udp_dispatch_queued_current: AtomicU64,
+    udp_session_queued_current: AtomicU64,
+    udp_reply_queued_current: AtomicU64,
+    udp_processing_current: AtomicU64,
     udp_ingress_drain_batches: AtomicU64,
     udp_ingress_drain_budget_hits: AtomicU64,
     udp_ingress_syscalls: AtomicU64,
@@ -670,6 +675,10 @@ impl ResidentDataplaneMetrics {
         self.udp_reply_queue_full.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn udp_response_received(&self) {
+        self.udp_response_packets.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn udp_reply_sent(&self) {
         self.udp_reply_sent.fetch_add(1, Ordering::Relaxed);
         self.udp_reply_datagrams.fetch_add(1, Ordering::Relaxed);
@@ -819,6 +828,15 @@ impl ResidentDataplaneMetrics {
             "udpReplySocketIdleEvicted": self.udp_reply_socket_idle_evicted.load(Ordering::Relaxed),
             "udpReplyFailed": self.udp_reply_failed.load(Ordering::Relaxed),
         });
+        snapshot["udpResponsePackets"] = json!(self.udp_response_packets.load(Ordering::Relaxed));
+        snapshot["udpDispatchQueuedCurrent"] =
+            json!(self.udp_dispatch_queued_current.load(Ordering::Relaxed));
+        snapshot["udpSessionQueuedCurrent"] =
+            json!(self.udp_session_queued_current.load(Ordering::Relaxed));
+        snapshot["udpReplyQueuedCurrent"] =
+            json!(self.udp_reply_queued_current.load(Ordering::Relaxed));
+        snapshot["udpProcessingCurrent"] =
+            json!(self.udp_processing_current.load(Ordering::Relaxed));
         snapshot["udpIngressSyscalls"] = json!(self.udp_ingress_syscalls.load(Ordering::Relaxed));
         snapshot["udpIngressDatagrams"] = json!(self.udp_ingress_datagrams.load(Ordering::Relaxed));
         snapshot["udpIngressBatches"] =

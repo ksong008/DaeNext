@@ -192,6 +192,9 @@ async fn dispatch_proxy_packet(
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
 ) {
+    if let Some(work) = managed.work.as_mut() {
+        work.transition(ResidentUdpWorkStage::Session);
+    }
     let peer = managed.packet.peer;
     let original_dst = managed.original_dst;
     let dscp = managed.dscp;
@@ -310,6 +313,9 @@ async fn dispatch_direct_packet(
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
 ) {
+    if let Some(work) = managed.work.as_mut() {
+        work.transition(ResidentUdpWorkStage::Session);
+    }
     let peer = managed.packet.peer;
     let original_dst = managed.original_dst;
     let dscp = managed.dscp;

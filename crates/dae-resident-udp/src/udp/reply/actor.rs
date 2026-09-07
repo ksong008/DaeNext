@@ -57,6 +57,7 @@ enum UdpReplyCompletion {
 }
 
 struct UdpReplyRequest {
+    work: ResidentUdpWorkGuard,
     original_dst: SocketAddr,
     peer: SocketAddr,
     payload: Vec<u8>,
@@ -112,6 +113,7 @@ impl UdpReplyHandle {
             return Err(UdpReplyError::Closing);
         }
         permit.send(UdpReplyRequest {
+            work: ResidentUdpWorkGuard::new(Arc::clone(&self.metrics), ResidentUdpWorkStage::Reply),
             original_dst,
             peer,
             payload,
@@ -165,6 +167,7 @@ impl UdpReplyHandle {
             return Err(UdpReplyError::Closing);
         }
         permit.send(UdpReplyRequest {
+            work: ResidentUdpWorkGuard::new(Arc::clone(&self.metrics), ResidentUdpWorkStage::Reply),
             original_dst,
             peer,
             payload,
@@ -202,6 +205,10 @@ impl UdpReplyHandle {
         };
         self.sender_for(original_dst, peer)
             .try_send(UdpReplyRequest {
+                work: ResidentUdpWorkGuard::new(
+                    Arc::clone(&self.metrics),
+                    ResidentUdpWorkStage::Reply,
+                ),
                 original_dst,
                 peer,
                 payload,
@@ -415,6 +422,9 @@ async fn run_udp_reply_actor(
                         }
                     }
                 }
+                for request in &mut requests {
+                    request.work.transition(ResidentUdpWorkStage::Processing);
+                }
                 let results = if requests.len() > 1 {
                     send_udp_reply_batch(&mut cache, &metrics, &requests).await
                 } else {
@@ -446,6 +456,38 @@ async fn run_udp_reply_actor(
     }
     receiver.close();
     cache.len()
+}
+
+#[cfg(test)]
+pub(in crate::udp) fn test_reply_handle(
+    metrics: Arc<ResidentDataplaneMetrics>,
+) -> (UdpReplyHandle, mpsc::Receiver<Vec<u8>>, JoinHandle<()>) {
+    let (sender, mut receiver) = mpsc::channel::<UdpReplyRequest>(16);
+    let (delivered, packets) = mpsc::channel(64);
+    let handle = UdpReplyHandle {
+        senders: Arc::new(vec![sender]),
+        closing: Arc::new(AtomicBool::new(false)),
+        metrics: Arc::clone(&metrics),
+        payload_admission: ResidentUdpPayloadAdmission::new(1, 1024 * 1024),
+    };
+    let task = tokio::spawn(async move {
+        while let Some(request) = receiver.recv().await {
+            metrics.add_download(request.download_bytes_on_success);
+            if delivered.send(request.payload.clone()).await.is_err() {
+                break;
+            }
+            match request.response {
+                Some(UdpReplyCompletion::Reclaim(sender)) => {
+                    let _ = sender.send(Ok(request.payload));
+                }
+                Some(UdpReplyCompletion::Result(sender)) => {
+                    let _ = sender.send(Ok(()));
+                }
+                None => {}
+            }
+        }
+    });
+    (handle, packets, task)
 }
 
 #[cfg(test)]
@@ -513,6 +555,10 @@ mod tests {
         let (response, _response_rx) = oneshot::channel();
         handle.senders[0]
             .try_send(UdpReplyRequest {
+                work: ResidentUdpWorkGuard::new(
+                    Arc::clone(&handle.metrics),
+                    ResidentUdpWorkStage::Reply,
+                ),
                 original_dst: target,
                 peer,
                 payload: vec![1],
@@ -642,6 +688,10 @@ mod tests {
         let occupied_payload = payload_admission.try_acquire(1).unwrap();
         handle.senders[0]
             .try_send(UdpReplyRequest {
+                work: ResidentUdpWorkGuard::new(
+                    Arc::clone(&handle.metrics),
+                    ResidentUdpWorkStage::Reply,
+                ),
                 original_dst: target,
                 peer: first_peer,
                 payload: vec![1],

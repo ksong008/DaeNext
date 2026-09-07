@@ -9,6 +9,7 @@ mod response;
 use self::response::{drain_udp_session_responses, wait_and_record_udp_session_response};
 
 pub struct ManagedUdpPacket {
+    pub work: Option<ResidentUdpWorkGuard>,
     pub packet: UdpOriginalDstPacket,
     pub original_dst: SocketAddr,
     pub proxy: ResidentProxyBinding,
@@ -88,13 +89,24 @@ async fn run_udp_session_actor(
     let mut executor: Option<Box<UdpSessionExecutor>> = None;
     let mut session_proxy: Option<ResidentProxyBinding> = None;
     let idle_timeout = key.idle_timeout(context.proxy_session_idle_timeout);
+    let mut last_activity = time::Instant::now();
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
-    let response_buffer_timer = time::sleep(context.response_buffer_idle_timeout);
-    tokio::pin!(response_buffer_timer);
-    let mut response_buffer_timer_armed = false;
     let mut stop_listener = context.actor_stop.listener();
     'session: loop {
+        // Invalid/partial responses must not starve the deadline through the
+        // biased receive branch when the upstream stays continuously readable.
+        if time::Instant::now() >= last_activity + idle_timeout {
+            stop_reason = "idle-timeout".to_owned();
+            break;
+        }
+        idle_timer.as_mut().reset(last_activity + idle_timeout);
+        let response_buffer_deadline = executor.as_ref().and_then(|executor| {
+            executor.response_buffer_reclaim_deadline(context.response_buffer_idle_timeout)
+        });
+        let response_buffer_timer =
+            time::sleep_until(response_buffer_deadline.unwrap_or_else(time::Instant::now));
+        tokio::pin!(response_buffer_timer);
         tokio::select! {
             biased;
             _ = stop_listener.cancelled() => {
@@ -102,12 +114,15 @@ async fn run_udp_session_actor(
                 break;
             }
             maybe_managed = receiver.recv() => {
-                let managed = match maybe_managed {
+                let mut managed = match maybe_managed {
                     Some(managed) => managed,
                     None => break,
                 };
-                let activity_at = time::Instant::now();
-                idle_timer.as_mut().reset(activity_at + idle_timeout);
+                let mut work = managed.work.take();
+                if let Some(work) = work.as_mut() {
+                    work.transition(ResidentUdpWorkStage::Processing);
+                }
+                last_activity = time::Instant::now();
                 packets += 1;
                 if executor.is_none() {
                     let mut selected_executor = if managed.force_proxy_packet {
@@ -186,6 +201,7 @@ async fn run_udp_session_actor(
                         &context.udp_reply,
                         &packet_session,
                         exchange,
+                        &mut last_activity,
                     ) => {}
                 }
                 if execute_timed_out {
@@ -200,6 +216,7 @@ async fn run_udp_session_actor(
                         executor,
                         proxy,
                         &packet_session,
+                        &mut last_activity,
                     );
                     tokio::select! {
                         biased;
@@ -213,16 +230,6 @@ async fn run_udp_session_actor(
                         }
                     }
                 }
-                if !response_buffer_timer_armed
-                    && executor
-                        .as_ref()
-                        .is_some_and(|executor| executor.has_response_buffer())
-                {
-                    response_buffer_timer
-                        .as_mut()
-                        .reset(activity_at + context.response_buffer_idle_timeout);
-                    response_buffer_timer_armed = true;
-                }
             }
             response = wait_and_record_udp_session_response(
                 &key,
@@ -230,29 +237,24 @@ async fn run_udp_session_actor(
                 &mut executor,
                 session_proxy.as_ref(),
                 &packet_session,
+                &mut last_activity,
             ), if executor.is_some() && session_proxy.is_some() => {
                 if let Err(err) = response {
                     stop_reason = err;
                     break;
                 }
-                if !response_buffer_timer_armed
-                    && executor
-                        .as_ref()
-                        .is_some_and(|executor| executor.has_response_buffer())
-                {
-                    response_buffer_timer.as_mut().reset(
-                        time::Instant::now() + context.response_buffer_idle_timeout,
-                    );
-                    response_buffer_timer_armed = true;
-                }
             }
-            _ = &mut response_buffer_timer, if response_buffer_timer_armed => {
+            _ = &mut response_buffer_timer, if response_buffer_deadline.is_some() => {
                 if let Some(executor) = executor.as_mut() {
-                    executor.reclaim_response_buffer();
+                    executor.reclaim_response_buffer_if_idle(
+                        time::Instant::now(), context.response_buffer_idle_timeout,
+                    );
                 }
-                response_buffer_timer_armed = false;
             }
             _ = &mut idle_timer => {
+                if time::Instant::now() < last_activity + idle_timeout {
+                    continue;
+                }
                 stop_reason = "idle-timeout".to_owned();
                 break;
             }
