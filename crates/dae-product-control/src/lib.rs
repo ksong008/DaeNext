@@ -28,6 +28,7 @@ pub use bundle::{ImportBundleOutcome, export_bundle, import_bundle};
 pub trait ProductControlRuntimeHooks: Send + Sync {
     fn on_thread_start(&self) {}
     fn on_thread_stop(&self) {}
+    fn on_thread_poll(&self) {}
     fn activate(&self, _handle: tokio::runtime::Handle) {}
     fn deactivate(&self) {}
 }
@@ -126,6 +127,8 @@ impl ProductControlRuntime {
     ) -> io::Result<Arc<Self>> {
         let start_hooks = Arc::clone(&hooks);
         let stop_hooks = Arc::clone(&hooks);
+        let park_hooks = Arc::clone(&hooks);
+        let unpark_hooks = Arc::clone(&hooks);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(config.worker_threads)
             .max_blocking_threads(config.maximum_blocking_threads)
@@ -133,6 +136,8 @@ impl ProductControlRuntime {
             .thread_stack_size(config.worker_stack_bytes)
             .on_thread_start(move || start_hooks.on_thread_start())
             .on_thread_stop(move || stop_hooks.on_thread_stop())
+            .on_thread_park(move || park_hooks.on_thread_poll())
+            .on_thread_unpark(move || unpark_hooks.on_thread_poll())
             .enable_all()
             .build()
             .map_err(|error| io::Error::other(format!("start product control runtime: {error}")))?;

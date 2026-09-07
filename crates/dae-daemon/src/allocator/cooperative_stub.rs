@@ -26,6 +26,7 @@ impl AllocatorRuntimeReclaimHooks {
     pub(crate) fn thread_start(&self) {}
 
     pub(crate) fn thread_stop(&self) {}
+    pub(crate) fn thread_poll(&self) {}
 
     pub(crate) fn activate(&self, _handle: tokio::runtime::Handle) {}
 
