@@ -8,6 +8,7 @@ pub struct ResidentTrafficCounters {
     pub request_total: u64,
     pub queue_depth: u64,
     pub inflight_work: u64,
+    pub udp_inflight_work: u64,
     pub active_tcp_connections: u64,
     pub active_udp_sessions: u64,
 }
@@ -17,7 +18,10 @@ impl ResidentDataplaneMetrics {
         ResidentTrafficCounters {
             upload_total: self.upload_total.load(Ordering::Relaxed),
             download_total: self.download_total.load(Ordering::Relaxed),
-            packet_total: self.udp_ingress_packets.load(Ordering::Relaxed),
+            packet_total: self
+                .udp_ingress_packets
+                .load(Ordering::Relaxed)
+                .saturating_add(self.udp_response_packets.load(Ordering::Relaxed)),
             request_total: self
                 .tcp_admission_accepted_total
                 .load(Ordering::Relaxed)
@@ -26,21 +30,133 @@ impl ResidentDataplaneMetrics {
                 .dns_udp_pending_current
                 .load(Ordering::Relaxed)
                 .saturating_add(self.proxy_dns_udp_queued_current.load(Ordering::Relaxed))
-                .saturating_add(self.proxy_dns_udp_pending_current.load(Ordering::Relaxed)),
+                .saturating_add(self.proxy_dns_udp_pending_current.load(Ordering::Relaxed))
+                .saturating_add(self.udp_dispatch_queued_current.load(Ordering::Relaxed))
+                .saturating_add(self.udp_session_queued_current.load(Ordering::Relaxed))
+                .saturating_add(self.udp_reply_queued_current.load(Ordering::Relaxed)),
             inflight_work: self
                 .tcp_admission_active
                 .load(Ordering::Relaxed)
                 .saturating_add(self.dns_fast_path_active.load(Ordering::Relaxed))
-                .saturating_add(self.health_rounds_active.load(Ordering::Relaxed)),
+                .saturating_add(self.health_rounds_active.load(Ordering::Relaxed))
+                .saturating_add(self.udp_processing_current.load(Ordering::Relaxed)),
+            udp_inflight_work: self.udp_processing_current.load(Ordering::Relaxed),
             active_tcp_connections: self.active_tcp_connections.load(Ordering::Relaxed),
             active_udp_sessions: self.active_udp_sessions.load(Ordering::Relaxed),
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResidentUdpWorkStage {
+    Dispatch,
+    Session,
+    Reply,
+    Processing,
+}
+
+/// Follows ownership through queues, failures, and cancellation. Creating the
+/// guard before enqueue prevents a fast receiver from decrementing first.
+pub struct ResidentUdpWorkGuard {
+    metrics: Arc<ResidentDataplaneMetrics>,
+    stage: ResidentUdpWorkStage,
+}
+
+impl ResidentUdpWorkGuard {
+    pub fn new(metrics: Arc<ResidentDataplaneMetrics>, stage: ResidentUdpWorkStage) -> Self {
+        let guard = Self { metrics, stage };
+        guard.counter().fetch_add(1, Ordering::Relaxed);
+        guard
+    }
+
+    pub fn transition(&mut self, stage: ResidentUdpWorkStage) {
+        if self.stage != stage {
+            let previous = self.stage;
+            self.stage = stage;
+            self.counter().fetch_add(1, Ordering::Relaxed);
+            self.stage = previous;
+            self.counter().fetch_sub(1, Ordering::Relaxed);
+            self.stage = stage;
+        }
+    }
+
+    fn counter(&self) -> &AtomicU64 {
+        match self.stage {
+            ResidentUdpWorkStage::Dispatch => &self.metrics.udp_dispatch_queued_current,
+            ResidentUdpWorkStage::Session => &self.metrics.udp_session_queued_current,
+            ResidentUdpWorkStage::Reply => &self.metrics.udp_reply_queued_current,
+            ResidentUdpWorkStage::Processing => &self.metrics.udp_processing_current,
+        }
+    }
+}
+
+impl Drop for ResidentUdpWorkGuard {
+    fn drop(&mut self) {
+        self.counter().fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn udp_work_gauges_follow_failed_enqueue_and_cancelled_processing() {
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        sender
+            .try_send(ResidentUdpWorkGuard::new(
+                Arc::clone(&metrics),
+                ResidentUdpWorkStage::Dispatch,
+            ))
+            .unwrap_or_else(|_| panic!("first enqueue"));
+        let failed = sender.try_send(ResidentUdpWorkGuard::new(
+            Arc::clone(&metrics),
+            ResidentUdpWorkStage::Dispatch,
+        ));
+        assert!(failed.is_err());
+        drop(failed);
+        assert_eq!(metrics.traffic_counters().queue_depth, 1);
+        let mut work = receiver.recv().await.unwrap();
+        work.transition(ResidentUdpWorkStage::Session);
+        assert_eq!(metrics.traffic_counters().queue_depth, 1);
+        work.transition(ResidentUdpWorkStage::Processing);
+        assert_eq!(metrics.traffic_counters().queue_depth, 0);
+        assert_eq!(metrics.traffic_counters().udp_inflight_work, 1);
+        let task = tokio::spawn(async move {
+            let _work = work;
+            std::future::pending::<()>().await;
+        });
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(metrics.traffic_counters().udp_inflight_work, 0);
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        sender
+            .try_send(ResidentUdpWorkGuard::new(
+                Arc::clone(&metrics),
+                ResidentUdpWorkStage::Reply,
+            ))
+            .unwrap_or_else(|_| panic!("reply enqueue"));
+        drop(receiver);
+        assert_eq!(metrics.traffic_counters().queue_depth, 0);
+    }
+
+    #[test]
+    fn udp_work_releases_during_unwind_and_downstream_counts_empty_packets() {
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        let result = std::panic::catch_unwind({
+            let metrics = Arc::clone(&metrics);
+            move || {
+                let _work = ResidentUdpWorkGuard::new(metrics, ResidentUdpWorkStage::Processing);
+                panic!("injected processing panic");
+            }
+        });
+        assert!(result.is_err());
+        assert_eq!(metrics.traffic_counters().udp_inflight_work, 0);
+        metrics.udp_response_received();
+        assert_eq!(metrics.traffic_counters().packet_total, 1);
+        assert_eq!(metrics.traffic_counters().download_total, 0);
+    }
 
     #[test]
     fn typed_traffic_counters_match_detailed_metrics_json() {
@@ -77,6 +193,7 @@ mod tests {
                 request_total: 30,
                 queue_depth: 9,
                 inflight_work: 18,
+                udp_inflight_work: 0,
                 active_tcp_connections: 3,
                 active_udp_sessions: 4,
             }
