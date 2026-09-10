@@ -1,9 +1,30 @@
+use dae_product_core::{ProductShutdown, ProductShutdownWakeHook};
 use std::{
     io,
     net::TcpListener,
     os::fd::AsRawFd,
     time::{Duration, Instant},
 };
+
+struct ListenerShutdownWake(TcpListener);
+
+impl ProductShutdownWakeHook for ListenerShutdownWake {
+    fn wake(&self) {
+        // SAFETY: the cloned listener owns this live descriptor. Shutting down
+        // the listening socket wakes poll without touching accepted connections.
+        unsafe { libc::shutdown(self.0.as_raw_fd(), libc::SHUT_RDWR) };
+    }
+}
+
+pub fn wake_listener_on_shutdown(
+    listener: &TcpListener,
+    shutdown: &ProductShutdown,
+) -> io::Result<()> {
+    shutdown.register_wake_hook(std::sync::Arc::new(ListenerShutdownWake(
+        listener.try_clone()?,
+    )));
+    Ok(())
+}
 
 pub const LISTENER_SHUTDOWN_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -89,5 +110,28 @@ mod tests {
             ListenerReadiness::TimedOut
         );
         assert!(started.elapsed() >= Duration::from_millis(10));
+    }
+
+    #[test]
+    fn shutdown_wakes_listener_and_preserves_accepted_connections() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        let shutdown = std::sync::Arc::new(ProductShutdown::default());
+        wake_listener_on_shutdown(&listener, &shutdown).unwrap();
+        let requested = shutdown.clone();
+        let requester = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            requested.request(15);
+        });
+        let started = Instant::now();
+        assert_eq!(
+            wait_for_listener_readiness(&listener, Duration::from_secs(2)).unwrap(),
+            ListenerReadiness::Ready,
+        );
+        assert!(started.elapsed() < Duration::from_millis(200));
+        requester.join().unwrap();
+        assert!(accepted.peer_addr().is_ok());
     }
 }

@@ -19,7 +19,7 @@ pub struct ProductShutdown {
     signal: AtomicI32,
     wake_lock: Mutex<()>,
     wake: Condvar,
-    hook: Arc<dyn ProductShutdownWakeHook>,
+    hooks: Mutex<Vec<Arc<dyn ProductShutdownWakeHook>>>,
 }
 
 impl std::fmt::Debug for ProductShutdown {
@@ -47,7 +47,20 @@ impl ProductShutdown {
             signal: AtomicI32::new(0),
             wake_lock: Mutex::new(()),
             wake: Condvar::new(),
-            hook,
+            hooks: Mutex::new(vec![hook]),
+        }
+    }
+
+    pub fn register_wake_hook(&self, hook: Arc<dyn ProductShutdownWakeHook>) {
+        let mut hooks = self
+            .hooks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.is_requested() {
+            drop(hooks);
+            hook.wake();
+        } else {
+            hooks.push(hook);
         }
     }
 
@@ -64,7 +77,15 @@ impl ProductShutdown {
         self.requested.store(true, Ordering::Release);
         drop(guard);
         self.wake.notify_all();
-        self.hook.wake();
+        let hooks = std::mem::take(
+            &mut *self
+                .hooks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for hook in hooks {
+            hook.wake();
+        }
         true
     }
 
@@ -132,5 +153,18 @@ mod tests {
         assert!(joined.join().unwrap());
         assert_eq!(shutdown.signal(), Some(15));
         assert_eq!(hook.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn registered_hooks_wake_once_even_after_shutdown_was_requested() {
+        let shutdown = ProductShutdown::default();
+        let early = Arc::new(CountingWakeHook(AtomicU64::new(0)));
+        shutdown.register_wake_hook(early.clone());
+        assert!(shutdown.request(15));
+        let late = Arc::new(CountingWakeHook(AtomicU64::new(0)));
+        shutdown.register_wake_hook(late.clone());
+        assert!(!shutdown.request(15));
+        assert_eq!(early.0.load(Ordering::Relaxed), 1);
+        assert_eq!(late.0.load(Ordering::Relaxed), 1);
     }
 }
