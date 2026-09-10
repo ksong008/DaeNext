@@ -339,7 +339,7 @@ pub(crate) fn restore_runtime_from_state(
         let _ = append_startup_step_completed_for_config(
             log_config_dir,
             state,
-            "post-startup.gc",
+            "post-startup.gc.requested",
             control_plane_started_at,
             BTreeMap::new(),
         );

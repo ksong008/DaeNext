@@ -48,6 +48,83 @@ fn warm_traffic() {
 }
 
 #[test]
+fn startup_reclaim_runs_before_traffic_samples_despite_background_work_and_cooldown() {
+    for enabled in [true, false] {
+        let _fixture = ReclaimFixture::new();
+        {
+            let mut state = ALLOCATOR_IDLE_RECLAIM_STATE.get().unwrap().lock().unwrap();
+            state.last_sample = None;
+            state.last_attempt = Some(Instant::now());
+            state.low_yield_streak = 3;
+            state.heavy_task_quiet_since = Some(Instant::now());
+        }
+        let _busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::GroupHealth);
+        allocator_request_reclaim_for_publication(AllocatorReclaimReason::StartupControlBuilt, 42);
+        let report = evaluate_allocator_idle_reclaim_with_observers(
+            policy(enabled),
+            true,
+            || panic!("startup reclaim must not depend on traffic telemetry"),
+            CgroupReclaimPressure::default,
+        );
+        assert_eq!(report["status"], "reclaimed", "{report}");
+        assert_eq!(report["reason"], "startup_control_built");
+        assert_eq!(report["scope"], "global");
+        assert!(!allocator_pending_reclaim_requests());
+    }
+}
+
+#[test]
+fn reload_reclaim_still_waits_for_background_work() {
+    let _fixture = ReclaimFixture::new();
+    let _busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::GroupHealth);
+    allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 42);
+    let report = evaluate_allocator_idle_reclaim_with_observers(
+        policy(true),
+        true,
+        stopped,
+        CgroupReclaimPressure::default,
+    );
+    assert_eq!(report["reason"], "reclaim_busy_lease_active");
+    assert!(allocator_pending_reclaim_requests());
+}
+
+#[cfg(feature = "allocator-jemalloc")]
+#[test]
+fn startup_reclaim_retries_publication_after_a_partial_worker_flush() {
+    let _fixture = ReclaimFixture::new();
+    let (ready, wait_ready) = std::sync::mpsc::channel();
+    let (release, wait_release) = std::sync::mpsc::channel::<()>();
+    let worker = std::thread::spawn(move || {
+        let _worker = crate::allocator::allocator_register_reclaim_worker(
+            crate::allocator::AllocatorWorkerKind::ControlAux,
+        );
+        ready.send(()).unwrap();
+        let _ = wait_release.recv();
+    });
+    wait_ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    allocator_request_reclaim_for_publication(AllocatorReclaimReason::StartupControlBuilt, 42);
+    let report = evaluate_allocator_idle_reclaim_with_observers(
+        policy(true),
+        true,
+        || None,
+        CgroupReclaimPressure::default,
+    );
+    drop(release);
+    worker.join().unwrap();
+    assert_eq!(report["reclaim"]["status"], "partial", "{report}");
+    assert_eq!(report["status"], "partial_retry_pending", "{report}");
+    assert!(allocator_pending_reclaim_requests());
+    let retry = evaluate_allocator_idle_reclaim_with_observers(
+        policy(true),
+        true,
+        || None,
+        CgroupReclaimPressure::default,
+    );
+    assert_eq!(retry["status"], "reclaimed", "{retry}");
+    assert!(!allocator_pending_reclaim_requests());
+}
+
+#[test]
 fn disabled_idle_reclaim_preserves_unadmitted_requests_and_executes_explicit_work() {
     let _fixture = ReclaimFixture::new();
     allocator_request_reclaim(AllocatorReclaimReason::GeodataUpdate);

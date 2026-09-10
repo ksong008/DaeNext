@@ -288,7 +288,7 @@ pub(crate) fn append_startup_reclaim_decision_log_for_config(
         config_dir,
         state,
         "info",
-        "[Startup] post-startup gc decision",
+        "[Startup] post-startup gc requested",
         fields,
     )
 }

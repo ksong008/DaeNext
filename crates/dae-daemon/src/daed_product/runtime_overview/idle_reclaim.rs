@@ -316,6 +316,43 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
         state.started = true;
     }
 
+    // Evaluate startup work before READY; incomplete worker flushes remain
+    // queued for the monitor to retry.
+    if allocator_pending_reclaim_requests() {
+        let config = app.runtime.current_config();
+        let policy = AllocatorIdleReclaimPolicy::from_config(config.as_deref());
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            allocator_idle_reclaim_tick(app, policy, true)
+        })) {
+            Ok(report) => {
+                let mut fields = BTreeMap::new();
+                for key in ["status", "reason"] {
+                    if let Some(value) = report.get(key).and_then(Value::as_str) {
+                        fields.insert(key.to_owned(), value.to_owned());
+                    }
+                }
+                fields.insert(
+                    "pending".to_owned(),
+                    allocator_pending_reclaim_requests().to_string(),
+                );
+                if let Some(value) = report
+                    .pointer("/reclaim/detail/physicalResidentReleasedBytes")
+                    .and_then(Value::as_str)
+                {
+                    fields.insert("releasedBytes".to_owned(), value.to_owned());
+                }
+                let _ = append_lifecycle_log_fields_for_config(
+                    &app.config_dir,
+                    &app.state,
+                    "info",
+                    "[Startup] allocator reclaim evaluated",
+                    fields,
+                );
+            }
+            Err(_) => record_idle_reclaim_tick_panic(),
+        }
+    }
+
     let app = Arc::clone(app);
     let join = thread::Builder::new()
         .name("allocator-idle-reclaim".to_owned())
@@ -407,15 +444,16 @@ fn allocator_idle_reclaim_tick(
     app: &AppState,
     policy: AllocatorIdleReclaimPolicy,
     admit_deferred_requests: bool,
-) {
+) -> Value {
     let report = evaluate_allocator_idle_reclaim(app, policy, admit_deferred_requests);
     record_idle_reclaim_evaluation(&report);
     if let Ok(mut state) = ALLOCATOR_IDLE_RECLAIM_STATE
         .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
         .lock()
     {
-        state.last_report = report;
+        state.last_report = report.clone();
     }
+    report
 }
 
 fn record_idle_reclaim_evaluation(report: &Value) {
@@ -503,6 +541,62 @@ fn evaluate_allocator_idle_reclaim_with_observers(
         .0
         .is_only(AllocatorReclaimReason::RetiredGenerationReleased);
     let cgroup_pressure = observe_pressure();
+    // The startup publication has already completed. Reclaim its temporary
+    // allocations even while background health checks are busy or traffic
+    // samples are unavailable. The allocator gate and worker acknowledgments
+    // still protect the purge; ordinary requests retain the idle policy.
+    let startup_reclaim = required_reclaim
+        && pending
+            .0
+            .reasons()
+            .any(|reason| reason == AllocatorReclaimReason::StartupControlBuilt);
+    if startup_reclaim {
+        let reclaim_reason = pending
+            .0
+            .primary_reason()
+            .unwrap_or(AllocatorReclaimReason::IdleMemoryPressure);
+        if allocator_profile() == "system" {
+            return evaluate_system_allocator_reclaim(&mut pending, now, &cgroup_pressure);
+        }
+        let reclaim = allocator_reclaim(reclaim_reason);
+        let reclaim_status = reclaim.get("status").and_then(Value::as_str);
+        let reclaim_executed = matches!(reclaim_status, Some("pass" | "partial"));
+        let publication_reclaim_satisfied =
+            allocator_publication_reclaim_satisfied(publication_reclaim_pending, reclaim_status);
+        let deferred = if reclaim_executed && publication_reclaim_satisfied {
+            pending.take()
+        } else {
+            pending.0.clone()
+        };
+        if reclaim_executed {
+            if publication_reclaim_satisfied {
+                allocator_record_publication_reclaim(&deferred);
+            }
+            record_idle_reclaim_attempt(now);
+            if let Some(stats) = allocator_stats_snapshot() {
+                reset_idle_reclaim_allocated_high_water(stats.allocated);
+            }
+            clear_cgroup_reclaim_pressure_latch();
+        }
+        return json!({
+            "status": if reclaim_status == Some("merged_pending") {
+                "merged_pending"
+            } else if reclaim_executed && !publication_reclaim_satisfied {
+                "partial_retry_pending"
+            } else if reclaim_executed {
+                "reclaimed"
+            } else {
+                "failed"
+            },
+            "state": "lifecycle",
+            "reason": reclaim_reason.as_str(),
+            "scope": deferred.scope().as_str(),
+            "deferred": deferred.json(),
+            "reclaim": reclaim,
+            "cgroupPressure": cgroup_pressure.json(),
+        });
+    }
+
     let busy_count = allocator_reclaim_busy_count();
     let busy_completion_count = allocator_reclaim_busy_completion_count();
     let busy_quiet_required = if cgroup_pressure.level.is_urgent() {
