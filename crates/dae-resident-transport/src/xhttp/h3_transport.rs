@@ -210,6 +210,7 @@ async fn open_xhttp_h3_connection(
         },
     )
     .await?;
+    let cancellation_guard = quic_endpoint.cancellation_guard();
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let remaining = deadline
         .remaining_at(Instant::now())
@@ -232,6 +233,7 @@ async fn open_xhttp_h3_connection(
         }
         Ok(Ok(client)) => client,
     };
+    cancellation_guard.disarm();
     quic_endpoint.mark_ready();
     let endpoint = Arc::new(std::sync::Mutex::new(Some(quic_endpoint)));
     let driver_endpoint = Arc::clone(&endpoint);
@@ -242,7 +244,9 @@ async fn open_xhttp_h3_connection(
             .ok()
             .and_then(|mut endpoint| endpoint.take());
         if let Some(endpoint) = endpoint {
+            let guard = endpoint.cancellation_guard();
             endpoint.wait_idle().await;
+            guard.disarm();
         }
     });
     Ok(XhttpH3Connection {
@@ -363,6 +367,25 @@ fn update_xhttp_h3_identity_part(digest: &mut Sha256, part: &[u8]) {
 }
 
 impl XhttpH3Connection {
+    pub async fn shutdown_until(mut self, reason: &[u8], deadline: time::Instant) -> bool {
+        self.connection.close(0_u32.into(), reason);
+        let endpoint = self.take_endpoint();
+        if let Some(endpoint) = endpoint.as_ref() {
+            endpoint.close(0_u32.into(), reason);
+        }
+        let mut joined = true;
+        if let Some(mut task) = self.driver_task.take() {
+            task.abort();
+            joined = time::timeout_at(deadline, &mut task).await.is_ok();
+        }
+        drop(self);
+        let released =
+            crate::shutdown_quic_endpoints_until(endpoint.into_iter().collect(), deadline)
+                .await
+                .is_complete();
+        joined && released
+    }
+
     pub fn is_finished(&self) -> bool {
         self.driver_task
             .as_ref()

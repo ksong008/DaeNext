@@ -383,6 +383,11 @@ async fn stop_tuic_owner_registry(
     tokio::task::spawn_blocking(move || owner_thread.join().unwrap())
         .await
         .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "TUIC stop: {:?}",
+        started.elapsed()
+    );
     started.elapsed()
 }
 
@@ -895,4 +900,59 @@ async fn low_memory_tuic_owner_budget_rejects_excess_nodes_before_endpoint_creat
         stop_tuic_owner_registry(stop, owner_thread).await < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE
     );
     assert_tuic_owner_resources_released(&registry, generation);
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tuic_stop_releases_stalled_handshake_on_shared_executor() {
+    let blackhole = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let generation = 91901;
+    let proxy = tuic_proxy(blackhole.local_addr().unwrap(), generation);
+    let stop = ResidentStopSignal::shared();
+    let (registry, owner) = dae_resident_transport::start_tuic_owner_registry_on(
+        &tokio::runtime::Handle::current(),
+        generation,
+        Arc::clone(&stop),
+    );
+    let acquiring = registry.clone();
+    let acquire = tokio::spawn(async move {
+        acquiring
+            .acquire(
+                proxy,
+                QuicEndpointCallerClass::BackgroundHealth,
+                dae_runtime_control::AbsoluteDeadline::from_now(
+                    Instant::now(),
+                    Duration::from_secs(30),
+                ),
+            )
+            .await
+    });
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        blackhole.recv_from(&mut [0_u8; 2048]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let started = Instant::now();
+    stop.store(true, Ordering::Release);
+    tokio::time::timeout(Duration::from_millis(500), owner)
+        .await
+        .expect("owner stop must not wait for the handshake deadline")
+        .unwrap();
+    assert!(acquire.await.unwrap().is_err());
+    tokio::time::timeout(Duration::from_millis(500), async {
+        loop {
+            let endpoint = quic_endpoint_metrics_snapshot(generation);
+            if endpoint["liveStates"]["total"] == 0
+                && endpoint["endpointDriverTasks"]["live"] == 0
+                && endpoint["chargedBytes"]["total"] == 0
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stopped build retained its endpoint on the shared executor");
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert_eq!(registry.metrics_snapshot()["shutdownTimedOut"], false);
 }

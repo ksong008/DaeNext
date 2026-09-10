@@ -332,6 +332,7 @@ impl VlessMuxGenerationOwnerHandle {
 }
 
 struct VlessMuxPhysicalHandle {
+    stop: SharedResidentStopSignal,
     instance_id: u64,
     sender: mpsc::Sender<VlessMuxPhysicalCommand>,
     active_logical: AtomicUsize,
@@ -1137,6 +1138,7 @@ async fn build_vless_mux_physical_on_owner(
         .max(1);
     let (sender, receiver) = mpsc::channel(owner.resources.command_queue_depth().max(1));
     let physical = Arc::new(VlessMuxPhysicalHandle {
+        stop: dae_resident_core::ResidentStopSignal::shared(),
         instance_id,
         sender: sender.clone(),
         active_logical: AtomicUsize::new(0),
@@ -1234,136 +1236,139 @@ async fn run_vless_mux_physical(
     let mut decoder = MuxFrameDecoder::default();
     let mut read_buffer = vec![0_u8; owner.resources.frame_bytes().max(1024)];
     let mut terminal_error = None::<String>;
-    loop {
-        tokio::select! {
-            command = commands.recv() => {
-                let Some(command) = command else {
-                    terminal_error = Some("VLESS mux command channel closed".to_owned());
-                    break;
-                };
-                match command {
-                    VlessMuxPhysicalCommand::Open(command) => {
-                        if let Err(error) = open_vless_mux_session(
+    let relay = async {
+        loop {
+            tokio::select! {
+                command = commands.recv() => {
+                    let Some(command) = command else {
+                        terminal_error = Some("VLESS mux command channel closed".to_owned());
+                        break;
+                    };
+                    match command {
+                        VlessMuxPhysicalCommand::Open(command) => {
+                            if let Err(error) = open_vless_mux_session(
+                                &mut client,
+                                &mut sessions,
+                                &mut allocator,
+                                &sender,
+                                &physical,
+                                &owner,
+                                tls_underlay,
+                                command,
+                            ).await {
+                                terminal_error = Some(error);
+                                break;
+                            }
+                        }
+                        VlessMuxPhysicalCommand::Payload { sid, payload } => {
+                            if !sessions.contains_key(&sid) {
+                                continue;
+                            }
+                            let frame = match mux_data_frame(sid.to_be_bytes(), &payload) {
+                                Ok(frame) => frame,
+                                Err(error) => {
+                                    terminal_error = Some(format!("build VLESS mux payload frame: {error}"));
+                                    break;
+                                }
+                            };
+                            if let Err(error) = client.write_all(&frame).await
+                            {
+                                terminal_error = Some(format!("write VLESS mux logical payload: {error}"));
+                                break;
+                            }
+                        }
+                        VlessMuxPhysicalCommand::LocalEnd { sid } => {
+                            if sessions.contains_key(&sid) {
+                                if let Err(error) = client
+                                    .write_all(&mux_end_frame(sid.to_be_bytes()))
+                                    .await
+                                {
+                                    terminal_error = Some(format!("write VLESS mux logical end: {error}"));
+                                    break;
+                                }
+                                retire_vless_mux_session(
+                                    sid,
+                                    &mut sessions,
+                                    &mut allocator,
+                                    owner.resources,
+                                    None,
+                                    false,
+                                );
+                                owner.metrics.cumulative_retirements.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        VlessMuxPhysicalCommand::LogicalFault { sid, error } => {
+                            if sessions.contains_key(&sid) {
+                                if let Err(write_error) = client
+                                    .write_all(&mux_error_frame(sid.to_be_bytes()))
+                                    .await
+                                {
+                                    terminal_error = Some(format!("write VLESS mux logical error: {write_error}"));
+                                    break;
+                                }
+                                retire_vless_mux_session(
+                                    sid,
+                                    &mut sessions,
+                                    &mut allocator,
+                                    owner.resources,
+                                    Some(error),
+                                    true,
+                                );
+                                owner.metrics.cumulative_retirements.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        VlessMuxPhysicalCommand::Close => break,
+                    }
+                }
+                read = client.read(&mut read_buffer) => {
+                    let read = match read {
+                        Ok(0) => {
+                            terminal_error = Some("VLESS mux physical closed by peer".to_owned());
+                            break;
+                        }
+                        Ok(read) => read,
+                        Err(error) => {
+                            terminal_error = Some(format!("read VLESS mux physical: {error}"));
+                            break;
+                        }
+                    };
+                    let payload = match response_header.consume(&read_buffer[..read]) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            terminal_error = Some(error);
+                            break;
+                        }
+                    };
+                    if payload.is_empty() {
+                        continue;
+                    }
+                    let frames = match decoder.push(&payload) {
+                        Ok(frames) => frames,
+                        Err(error) => {
+                            terminal_error = Some(format!("decode VLESS mux response: {error}"));
+                            break;
+                        }
+                    };
+                    for frame in frames {
+                        if let Err(error) = handle_vless_mux_response_frame(
                             &mut client,
+                            frame,
                             &mut sessions,
                             &mut allocator,
-                            &sender,
-                            &physical,
                             &owner,
-                            tls_underlay,
-                            command,
                         ).await {
                             terminal_error = Some(error);
                             break;
                         }
                     }
-                    VlessMuxPhysicalCommand::Payload { sid, payload } => {
-                        if !sessions.contains_key(&sid) {
-                            continue;
-                        }
-                        let frame = match mux_data_frame(sid.to_be_bytes(), &payload) {
-                            Ok(frame) => frame,
-                            Err(error) => {
-                                terminal_error = Some(format!("build VLESS mux payload frame: {error}"));
-                                break;
-                            }
-                        };
-                        if let Err(error) = client.write_all(&frame).await
-                        {
-                            terminal_error = Some(format!("write VLESS mux logical payload: {error}"));
-                            break;
-                        }
-                    }
-                    VlessMuxPhysicalCommand::LocalEnd { sid } => {
-                        if sessions.contains_key(&sid) {
-                            if let Err(error) = client
-                                .write_all(&mux_end_frame(sid.to_be_bytes()))
-                                .await
-                            {
-                                terminal_error = Some(format!("write VLESS mux logical end: {error}"));
-                                break;
-                            }
-                            retire_vless_mux_session(
-                                sid,
-                                &mut sessions,
-                                &mut allocator,
-                                owner.resources,
-                                None,
-                                false,
-                            );
-                            owner.metrics.cumulative_retirements.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    VlessMuxPhysicalCommand::LogicalFault { sid, error } => {
-                        if sessions.contains_key(&sid) {
-                            if let Err(write_error) = client
-                                .write_all(&mux_error_frame(sid.to_be_bytes()))
-                                .await
-                            {
-                                terminal_error = Some(format!("write VLESS mux logical error: {write_error}"));
-                                break;
-                            }
-                            retire_vless_mux_session(
-                                sid,
-                                &mut sessions,
-                                &mut allocator,
-                                owner.resources,
-                                Some(error),
-                                true,
-                            );
-                            owner.metrics.cumulative_retirements.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    VlessMuxPhysicalCommand::Close => break,
-                }
-            }
-            read = client.read(&mut read_buffer) => {
-                let read = match read {
-                    Ok(0) => {
-                        terminal_error = Some("VLESS mux physical closed by peer".to_owned());
+                    if terminal_error.is_some() {
                         break;
                     }
-                    Ok(read) => read,
-                    Err(error) => {
-                        terminal_error = Some(format!("read VLESS mux physical: {error}"));
-                        break;
-                    }
-                };
-                let payload = match response_header.consume(&read_buffer[..read]) {
-                    Ok(payload) => payload,
-                    Err(error) => {
-                        terminal_error = Some(error);
-                        break;
-                    }
-                };
-                if payload.is_empty() {
-                    continue;
-                }
-                let frames = match decoder.push(&payload) {
-                    Ok(frames) => frames,
-                    Err(error) => {
-                        terminal_error = Some(format!("decode VLESS mux response: {error}"));
-                        break;
-                    }
-                };
-                for frame in frames {
-                    if let Err(error) = handle_vless_mux_response_frame(
-                        &mut client,
-                        frame,
-                        &mut sessions,
-                        &mut allocator,
-                        &owner,
-                    ).await {
-                        terminal_error = Some(error);
-                        break;
-                    }
-                }
-                if terminal_error.is_some() {
-                    break;
                 }
             }
         }
-    }
+    };
+    dae_resident_core::run_until_resident_stop(&physical.stop, relay).await;
     physical.accepting.store(false, Ordering::Release);
     commands.close();
     while let Ok(command) = commands.try_recv() {
@@ -1387,7 +1392,7 @@ async fn run_vless_mux_physical(
             "VLESS mux physical owner closed",
         );
     }
-    let _ = client.shutdown().await;
+    let _ = dae_resident_core::run_until_resident_stop(&physical.stop, client.shutdown()).await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1782,7 +1787,7 @@ async fn cleanup_vless_mux_owner(owner: &Arc<VlessMuxGenerationOwner>) {
         .unwrap_or_default();
     for physical in &physical {
         physical.accepting.store(false, Ordering::Release);
-        physical.close();
+        physical.stop.store(true, Ordering::Release);
     }
     let cleanup = async {
         while owner.metrics.active_physical.load(Ordering::Relaxed) != 0
@@ -1828,6 +1833,7 @@ mod tests {
     ) -> Arc<VlessMuxPhysicalHandle> {
         let (sender, _receiver) = mpsc::channel(1);
         Arc::new(VlessMuxPhysicalHandle {
+            stop: dae_resident_core::ResidentStopSignal::shared(),
             instance_id,
             sender,
             active_logical: AtomicUsize::new(active_logical),

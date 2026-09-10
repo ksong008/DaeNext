@@ -43,6 +43,15 @@ impl QuicEndpointDrainReport {
 type QuicEndpointIdleFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type IndexedQuicEndpointFuture = Pin<Box<dyn Future<Output = usize> + Send>>;
 
+pub async fn shutdown_quic_endpoints_until(
+    endpoints: Vec<ObservedQuicEndpoint>,
+    deadline: time::Instant,
+) -> QuicEndpointDrainReport {
+    // Service shutdown does not wait for QUIC's peer drain timer. The release
+    // probes still verify that the driver, socket, and admission charge are gone.
+    wait_quic_endpoints_idle_or_released_until(endpoints, time::Instant::now(), deadline).await
+}
+
 pub fn quic_endpoint_drain_deadlines(
     started: time::Instant,
     resource_grace: std::time::Duration,

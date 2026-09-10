@@ -315,17 +315,17 @@ pub async fn shutdown_cached_dns_quic(
     if let Some(connection) = connection {
         connection.close(0_u32.into(), b"DNS QUIC cache shutdown");
     }
-    let mut idle = true;
+    let mut drain = dae_resident_transport::QuicEndpointDrainReport::default();
     if let Some(endpoint) = endpoint {
         endpoint.close(0_u32.into(), b"DNS QUIC cache shutdown");
-        idle = time::timeout_at(deadline, endpoint.wait_idle())
-            .await
-            .is_ok();
+        drain =
+            dae_resident_transport::shutdown_quic_endpoints_until(vec![endpoint], deadline).await;
     }
     json!({
-        "status": if idle { "pass" } else { "fail" },
+        "status": if drain.is_complete() { "pass" } else { "fail" },
         "transport": "doq",
-        "endpointIdle": idle,
+        "endpointIdle": drain.idle_completed() == drain.requested(),
+        "endpointReleased": drain.is_complete(),
     })
 }
 
