@@ -332,10 +332,16 @@ async fn meek_round_trip_from_fresh_runtime(
 }
 
 async fn stop_meek_owner(stop: SharedResidentStopSignal, thread: std::thread::JoinHandle<()>) {
+    let started = Instant::now();
     stop.store(true, Ordering::Release);
     tokio::task::spawn_blocking(move || thread.join().unwrap())
         .await
         .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "Meek stop: {:?}",
+        started.elapsed()
+    );
 }
 
 fn assert_meek_owner_released(owner: &MeekTransportGenerationOwnerHandle) {

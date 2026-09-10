@@ -33,6 +33,7 @@ type VlessMuxTestPayloads = Arc<Mutex<Vec<(u16, Vec<u8>)>>>;
 enum VlessMuxTestInjection {
     UnknownSid,
     ServerNew,
+    StallRead,
 }
 
 struct VlessMuxTestServer {
@@ -90,6 +91,15 @@ impl VlessMuxTestServer {
                             let Ok(stream) = tokio_boring::accept(&connection_acceptor, stream).await else {
                                 return;
                             };
+                            let stall = matches!(
+                                *connection_injection.lock().unwrap(),
+                                Some(VlessMuxTestInjection::StallRead),
+                            );
+                            if stall {
+                                let _stream = stream;
+                                std::future::pending::<()>().await;
+                                return;
+                            }
                             serve_vless_mux_test_connection(
                                 stream,
                                 connection_new_sids,
@@ -191,7 +201,7 @@ async fn serve_vless_mux_test_connection(
                             &MuxFrameOptions::new(u16::MAX.to_be_bytes(), "127.0.0.1", 80, "tcp"),
                         )
                         .ok(),
-                        None => None,
+                        Some(VlessMuxTestInjection::StallRead) | None => None,
                     };
                     if let Some(injected_frame) = injected_frame
                         && (stream.write_all(&injected_frame).await.is_err()
@@ -283,10 +293,16 @@ fn vless_mux_test_deadline(duration: Duration) -> dae_runtime_control::AbsoluteD
 }
 
 async fn stop_vless_mux_owner(stop: SharedResidentStopSignal, thread: std::thread::JoinHandle<()>) {
+    let started = Instant::now();
     stop.store(true, Ordering::Release);
     tokio::task::spawn_blocking(move || thread.join().unwrap())
         .await
         .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "VLESS Mux stop: {:?}",
+        started.elapsed()
+    );
 }
 
 fn assert_vless_mux_owner_released(owner: &VlessMuxGenerationOwnerHandle) {
@@ -334,6 +350,60 @@ async fn acquire_vless_mux_from_fresh_runtime(
     })
     .await
     .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn vless_mux_stop_cancels_backpressured_physical_and_logical_tasks() {
+    let server =
+        VlessMuxTestServer::start_with_injection(Some(VlessMuxTestInjection::StallRead)).await;
+    let generation = NEXT_VLESS_MUX_TEST_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let proxy = vless_mux_test_proxy(server.address, generation, "sha256:mux-stop");
+    let stop = ResidentStopSignal::shared();
+    let (owner, task) = dae_resident_transport::start_vless_mux_generation_owner_on(
+        &tokio::runtime::Handle::current(),
+        generation,
+        Arc::clone(&stop),
+        2,
+    )
+    .unwrap();
+    let stream = acquire_vless_mux_from_fresh_runtime(proxy, "127.0.0.1:443")
+        .await
+        .unwrap();
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let upload = tokio::spawn(async move {
+        let payload = vec![0x5a; 64 * 1024];
+        for _ in 0..1024 {
+            writer.write_all(&payload).await?;
+        }
+        Ok::<(), std::io::Error>(())
+    });
+    time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !upload.is_finished(),
+        "test must establish physical backpressure"
+    );
+    stop.store(true, Ordering::Release);
+    time::timeout(Duration::from_millis(500), task)
+        .await
+        .expect("VLESS mux stop waited for a blocked network write")
+        .unwrap();
+    assert!(
+        time::timeout(Duration::from_millis(500), upload)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    let mut response = [0_u8; 1];
+    assert!(
+        time::timeout(Duration::from_millis(500), reader.read(&mut response))
+            .await
+            .unwrap()
+            .is_err()
+    );
+    drop(reader);
+    assert_vless_mux_owner_released(&owner);
+    server.stop().await;
 }
 
 #[test]

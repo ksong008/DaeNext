@@ -276,12 +276,19 @@ pub(in super::super) async fn shutdown_cached_proxy_dns_quic(
     if let Some(connection) = connection {
         connection.close(0_u32.into(), b"proxied DoQ cache shutdown");
     }
+    let mut drain = dae_resident_transport::QuicEndpointDrainReport::default();
+    if let Some(endpoint) = endpoint {
+        endpoint.close(0_u32.into(), b"proxied DoQ cache shutdown");
+        drain =
+            dae_resident_transport::shutdown_quic_endpoints_until(vec![endpoint], deadline).await;
+    }
     let context = ProxyDnsRequestContext::from_deadline(deadline);
-    let cleanup = cleanup_proxy_dns_quic_resources(endpoint, bridge, context).await;
+    let cleanup = cleanup_proxy_dns_quic_resources(None, bridge, context).await;
     json!({
-        "status": if cleanup.failed() { "fail" } else { "pass" },
+        "status": if cleanup.failed() || !drain.is_complete() { "fail" } else { "pass" },
         "transport": "proxied-doq",
-        "endpointIdle": cleanup.endpoint_idle,
+        "endpointIdle": drain.idle_completed() == drain.requested(),
+        "endpointReleased": drain.is_complete(),
         "bridgeCompletion": cleanup.bridge_label(),
         "forced": cleanup.bridge_aborted(),
         "failures": cleanup.failures,

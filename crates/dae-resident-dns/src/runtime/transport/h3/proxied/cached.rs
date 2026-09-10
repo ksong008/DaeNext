@@ -421,6 +421,19 @@ pub(in super::super::super) async fn shutdown_cached_proxy_dns_h3(
     let mut resources = take_resources(&mut state);
     let metrics = Arc::clone(&state.metrics);
     drop(state);
+    resources.discard_client();
+    resources.close_connection();
+    let mut driver_joined = true;
+    if let Some(mut driver) = resources.driver_task.take() {
+        driver.abort();
+        driver_joined = time::timeout_at(deadline, &mut driver).await.is_ok();
+    }
+    let mut drain = dae_resident_transport::QuicEndpointDrainReport::default();
+    if let Some(endpoint) = resources.endpoint.take() {
+        endpoint.close(0_u32.into(), PROXIED_DOH3_CLOSE_REASON);
+        drain =
+            dae_resident_transport::shutdown_quic_endpoints_until(vec![endpoint], deadline).await;
+    }
     let outcome = cleanup_proxied_doh3_resources(
         &mut resources,
         ProxiedDoh3CleanupDeadline::from_instant(deadline),
@@ -428,8 +441,10 @@ pub(in super::super::super) async fn shutdown_cached_proxy_dns_h3(
     .await;
     outcome.record_metrics(&metrics);
     json!({
-        "status": if outcome.failed() { "fail" } else { "pass" },
+        "status": if outcome.failed() || !driver_joined || !drain.is_complete() { "fail" } else { "pass" },
         "transport": "proxied-doh3",
+        "driverJoined": driver_joined,
+        "endpointReleased": drain.is_complete(),
         "cleanup": outcome.to_string(),
         "forced": outcome.has_forced_completion(),
         "failures": outcome.failures,

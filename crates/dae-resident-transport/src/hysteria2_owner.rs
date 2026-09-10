@@ -41,8 +41,8 @@ use crate::quic_connections::{
 };
 use crate::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointDrainReport,
-    quic_endpoint_drain_deadlines, wait_quic_endpoint_idle_after_close_for,
-    wait_quic_endpoints_idle_or_released_until,
+    shutdown_quic_endpoints_until, wait_quic_endpoint_idle_after_close_for,
+    wait_quic_endpoint_idle_after_close_or_stop,
 };
 
 async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
@@ -1513,6 +1513,7 @@ async fn run_hysteria2_owner_registry(
     let mut stop_listener = stop.listener();
     loop {
         tokio::select! {
+            biased;
             _ = stop_listener.cancelled() => break,
             command = receiver.recv() => match command {
                 Some(Hysteria2OwnerCommand::Build(command)) => {
@@ -1550,6 +1551,7 @@ async fn run_hysteria2_owner_registry(
                                     previous,
                                     Arc::clone(&metrics),
                                     resources.owner_limit(),
+                                    &stop,
                                 )
                                 .await;
                             }
@@ -1600,6 +1602,7 @@ async fn run_hysteria2_owner_registry(
                                 owner,
                                 Arc::clone(&metrics),
                                 resources.owner_limit(),
+                                &stop,
                             )
                             .await;
                         }
@@ -1639,15 +1642,8 @@ async fn run_hysteria2_owner_registry(
     }
     while retirements.join_next().await.is_some() {}
     let drain_guard = Hysteria2EndpointDrainGuard::new(Arc::clone(&metrics), endpoints.len());
-    let drain_started = time::Instant::now();
-    let (peer_close_deadline, resource_release_deadline) =
-        quic_endpoint_drain_deadlines(drain_started, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE);
-    let report = wait_quic_endpoints_idle_or_released_until(
-        endpoints,
-        peer_close_deadline,
-        resource_release_deadline,
-    )
-    .await;
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    let report = shutdown_quic_endpoints_until(endpoints, deadline).await;
     drain_guard.finish(report);
     if let Some(session_cache) = session_cache {
         let _ = session_cache.clear();
@@ -1660,14 +1656,21 @@ async fn enqueue_hysteria2_retirement(
     owner: Hysteria2OwnedTransport,
     metrics: Arc<Hysteria2OwnerRegistryMetrics>,
     limit: usize,
+    stop: &SharedResidentStopSignal,
 ) {
     while retirements.len() >= limit.max(1) {
-        let _ = retirements.join_next().await;
+        if dae_resident_core::run_until_resident_stop(stop, retirements.join_next())
+            .await
+            .is_none()
+        {
+            break;
+        }
     }
     owner.cell.begin_drain(OwnerDrainReason::Fault);
+    let stop = Arc::clone(stop);
     retirements.spawn(async move {
         let endpoint = owner.shared.begin_close();
-        let _ = wait_quic_endpoint_idle_after_close(&endpoint).await;
+        wait_quic_endpoint_idle_after_close_or_stop(&endpoint, &stop).await;
         owner.cell.close();
         metrics.owner_closed();
     });
@@ -1917,6 +1920,7 @@ async fn build_hysteria2_transport(
             ));
         }
     };
+    let cancellation_guard = endpoint.cancellation_guard();
     let auth_result = tokio::select! {
         result = time::timeout(
             remaining,
@@ -1941,11 +1945,13 @@ async fn build_hysteria2_transport(
                     "Hysteria2 owner authentication was cancelled",
                 ),
             };
+            cancellation_guard.disarm();
             return Err(Hysteria2OwnerBuildError::from_failure_with_cleanup(
                 failure, endpoint,
             ));
         }
     };
+    cancellation_guard.disarm();
     let auth_session = match auth_result {
         Ok(Ok(session)) if session.report().auth_ok => session,
         Ok(Ok(_session)) => {

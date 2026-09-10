@@ -21,7 +21,8 @@ use crate::quic_connections::{
 };
 use crate::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointDrainReport,
-    wait_quic_endpoint_idle_after_close_for, wait_quic_endpoints_idle_until,
+    shutdown_quic_endpoints_until, wait_quic_endpoint_idle_after_close_for,
+    wait_quic_endpoint_idle_after_close_or_stop,
 };
 
 async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
@@ -347,9 +348,9 @@ impl JuicityOwnedTransport {
         self.endpoint
     }
 
-    async fn close(self) {
+    async fn close(self, stop: &SharedResidentStopSignal) {
         let endpoint = self.begin_close();
-        wait_quic_endpoint_idle_after_close(&endpoint).await;
+        wait_quic_endpoint_idle_after_close_or_stop(&endpoint, stop).await;
     }
 }
 
@@ -591,6 +592,7 @@ async fn run_juicity_owner_registry(
 
     loop {
         tokio::select! {
+            biased;
             _ = stop_listener.cancelled() => break,
             command = receiver.recv() => match command {
                 Some(JuicityOwnerCommand::Acquire(command)) => {
@@ -635,7 +637,7 @@ async fn run_juicity_owner_registry(
                             physical_slots = physical_slots.saturating_sub(1);
                             metrics.remote_closes.fetch_add(1, Ordering::Relaxed);
                             metrics.physical_owner_closed();
-                            transport.close().await;
+                            transport.close(&stop).await;
                         }
                         remove_empty_juicity_pool(&event.key, &mut pools, &metrics);
                     }
@@ -667,7 +669,7 @@ async fn run_juicity_owner_registry(
     metrics.active_builds.store(0, Ordering::Relaxed);
     let drain_guard = JuicityEndpointDrainGuard::new(Arc::clone(&metrics), endpoints.len());
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-    let report = wait_quic_endpoints_idle_until(endpoints, deadline).await;
+    let report = shutdown_quic_endpoints_until(endpoints, deadline).await;
     drain_guard.finish(report);
     if let Some(session_cache) = session_cache {
         let _ = session_cache.clear();
@@ -955,6 +957,7 @@ async fn build_juicity_transport(
         session_cache,
     )
     .await?;
+    let cancellation_guard = endpoint.cancellation_guard();
     let Some(remaining) = deadline.remaining_at(Instant::now()) else {
         endpoint.mark_failed();
         endpoint.close(0_u32.into(), b"juicity auth deadline elapsed");
@@ -981,6 +984,7 @@ async fn build_juicity_transport(
             return Err("Juicity owner authentication deadline elapsed".to_owned());
         }
     };
+    cancellation_guard.disarm();
     endpoint.mark_ready();
     Ok(JuicityOwnedTransport {
         shared: Arc::new(JuicitySharedTransport {

@@ -310,10 +310,16 @@ async fn acquire_h2_from_fresh_runtime(
 }
 
 async fn stop_h2_owner(stop: SharedResidentStopSignal, thread: std::thread::JoinHandle<()>) {
+    let started = Instant::now();
     stop.store(true, Ordering::Release);
     tokio::task::spawn_blocking(move || thread.join().unwrap())
         .await
         .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "H2 stop: {:?}",
+        started.elapsed()
+    );
 }
 
 fn assert_h2_owner_released(owner: &H2CarrierGenerationOwnerHandle) {

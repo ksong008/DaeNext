@@ -35,6 +35,9 @@ pub(super) fn shutdown_resident_runtime_workloads(
     let mut thread_shutdown =
         wait_for_resident_runtime_tasks(std::mem::take(&mut owner.tasks), started, deadline, grace);
     owner.tasks.append(&mut thread_shutdown.pending);
+    // Once workloads have released their leases, transport cleanup can overlap
+    // the host's eBPF and topology teardown instead of starting after it.
+    owner.transport_stop.store(true, Ordering::Release);
     ResidentRuntimeWorkloadShutdown {
         started,
         grace,

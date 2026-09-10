@@ -26,8 +26,8 @@ use crate::{
 use dae_resident_core::ResidentRuntimeProfile;
 use dae_resident_core::{
     ANYTLS_LOCAL_CLOSE_DRAIN_TIMEOUT, AnyTlsOwnerResourceProfile,
-    RESIDENT_ANYTLS_RELAY_BUFFER_SIZE, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
-    SharedResidentStopSignal,
+    RESIDENT_ANYTLS_RELAY_BUFFER_SIZE, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, ResidentStopSignal,
+    SharedResidentStopSignal, run_until_resident_stop,
 };
 use dae_resident_model::{ResidentProxyBinding, ResidentProxyPlan, ResidentProxyProtocolPlan};
 
@@ -1200,6 +1200,7 @@ async fn run_anytls_owner_registry(
 ) {
     let (events, mut event_receiver) = mpsc::channel(resources.command_queue_depth().max(1));
     let mut tasks = JoinSet::<AnyTlsPhysicalCompletion>::new();
+    let physical_stop = ResidentStopSignal::shared();
     let mut stop_listener = stop.listener();
     loop {
         tokio::select! {
@@ -1224,26 +1225,21 @@ async fn run_anytls_owner_registry(
                         &events,
                         resources,
                         &metrics,
+                        &physical_stop,
                     );
                 }
                 None => break,
             },
         }
     }
-    let senders = {
-        let mut index = index
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        index.draining = true;
-        index
-            .pools
-            .values()
-            .flat_map(|pool| pool.physical.values().map(|slot| slot.sender.clone()))
-            .collect::<Vec<_>>()
-    };
-    for sender in senders {
-        let _ = sender.try_send(AnyTlsPhysicalCommand::Close);
-    }
+    index
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .draining = true;
+    receiver.close();
+    // Physical tasks may be blocked in TLS, a heartbeat, or a full event queue.
+    // Cancelling their scope releases sockets even when no command can be read.
+    physical_stop.store(true, Ordering::Release);
     let drain = async {
         while let Some(completion) = tasks.join_next().await {
             if let Ok(completion) = completion {
@@ -1275,6 +1271,7 @@ fn admit_anytls_acquire(
     events: &mpsc::Sender<AnyTlsPhysicalEvent>,
     resources: AnyTlsOwnerResourceProfile,
     metrics: &Arc<AnyTlsOwnerMetrics>,
+    stop: &SharedResidentStopSignal,
 ) {
     let mut index_guard = index
         .lock()
@@ -1366,15 +1363,19 @@ fn admit_anytls_acquire(
     let events = events.clone();
     let metrics = Arc::clone(metrics);
     let completion_key = command.key;
+    let stop = Arc::clone(stop);
     tasks.spawn(async move {
-        run_anytls_physical(
-            command,
-            instance_id,
-            initial_padding_scheme,
-            physical_receiver,
-            events,
-            resources,
-            metrics,
+        run_until_resident_stop(
+            &stop,
+            run_anytls_physical(
+                command,
+                instance_id,
+                initial_padding_scheme,
+                physical_receiver,
+                events,
+                resources,
+                metrics,
+            ),
         )
         .await;
         AnyTlsPhysicalCompletion {

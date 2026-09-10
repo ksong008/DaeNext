@@ -32,7 +32,8 @@ use crate::quic_connections::{
 };
 use crate::{
     ObservedQuicEndpoint, QuicEndpointCallerClass, QuicEndpointDrainReport,
-    wait_quic_endpoint_idle_after_close_for, wait_quic_endpoints_idle_until,
+    shutdown_quic_endpoints_until, wait_quic_endpoint_idle_after_close_for,
+    wait_quic_endpoint_idle_after_close_or_stop,
 };
 
 async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
@@ -1215,6 +1216,7 @@ async fn run_tuic_owner_registry(
     let mut stop_listener = stop.listener();
     loop {
         tokio::select! {
+            biased;
             _ = stop_listener.cancelled() => break,
             command = receiver.recv() => match command {
                 Some(TuicOwnerCommand::Build(command)) => {
@@ -1252,6 +1254,7 @@ async fn run_tuic_owner_registry(
                                     previous,
                                     Arc::clone(&metrics),
                                     resources.owner_limit(),
+                                    &stop,
                                 )
                                 .await;
                             }
@@ -1299,6 +1302,7 @@ async fn run_tuic_owner_registry(
                             resources.owner_limit(),
                             key,
                             instance_id,
+                            &stop,
                         )
                         .await;
                     }
@@ -1320,6 +1324,7 @@ async fn run_tuic_owner_registry(
                                 resources.owner_limit(),
                                 key,
                                 instance_id,
+                                &stop,
                             )
                             .await;
                         }
@@ -1360,7 +1365,7 @@ async fn run_tuic_owner_registry(
     while retirements.join_next().await.is_some() {}
     let drain_guard = TuicEndpointDrainGuard::new(Arc::clone(&metrics), endpoints.len());
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
-    let report = wait_quic_endpoints_idle_until(endpoints, deadline).await;
+    let report = shutdown_quic_endpoints_until(endpoints, deadline).await;
     drain_guard.finish(report);
     if let Some(session_cache) = session_cache {
         let _ = session_cache.clear();
@@ -1376,6 +1381,7 @@ async fn retire_tuic_owner(
     retirement_limit: usize,
     key: TuicOwnerKey,
     instance_id: u64,
+    stop: &SharedResidentStopSignal,
 ) {
     let is_current = owners
         .get(&key)
@@ -1398,7 +1404,14 @@ async fn retire_tuic_owner(
             index.cells.remove(&key);
         }
     }
-    enqueue_tuic_retirement(retirements, owner, Arc::clone(metrics), retirement_limit).await;
+    enqueue_tuic_retirement(
+        retirements,
+        owner,
+        Arc::clone(metrics),
+        retirement_limit,
+        stop,
+    )
+    .await;
 }
 
 async fn enqueue_tuic_retirement(
@@ -1406,14 +1419,21 @@ async fn enqueue_tuic_retirement(
     owner: TuicOwnedTransport,
     metrics: Arc<TuicOwnerRegistryMetrics>,
     limit: usize,
+    stop: &SharedResidentStopSignal,
 ) {
     while retirements.len() >= limit.max(1) {
-        let _ = retirements.join_next().await;
+        if dae_resident_core::run_until_resident_stop(stop, retirements.join_next())
+            .await
+            .is_none()
+        {
+            break;
+        }
     }
     owner.cell.begin_drain(OwnerDrainReason::Fault);
+    let stop = Arc::clone(stop);
     retirements.spawn(async move {
         let endpoint = owner.shared.begin_close();
-        let _ = wait_quic_endpoint_idle_after_close(&endpoint).await;
+        wait_quic_endpoint_idle_after_close_or_stop(&endpoint, &stop).await;
         owner.cell.close();
         metrics.owner_closed();
     });
@@ -1697,6 +1717,7 @@ async fn build_tuic_transport(
         endpoint,
         connection,
     } = connected;
+    let cancellation_guard = endpoint.cancellation_guard();
     let remaining = match deadline.remaining_at(Instant::now()) {
         Some(remaining) => remaining,
         None => {
@@ -1738,6 +1759,7 @@ async fn build_tuic_transport(
             });
         }
     };
+    cancellation_guard.disarm();
     endpoint.mark_ready();
     let leases = Arc::new(TuicLogicalLeaseAdmission::new(
         resources.logical_lease_limit(),

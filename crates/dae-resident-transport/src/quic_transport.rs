@@ -541,6 +541,7 @@ impl Drop for QuicCandidateEndpointGuard {
         if let Some(endpoint) = self.endpoint.take() {
             endpoint.mark_failed();
             endpoint.close(0_u32.into(), b"QUIC candidate attempt dropped");
+            drop(endpoint.cancellation_guard());
         }
     }
 }

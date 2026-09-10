@@ -432,14 +432,13 @@ async fn close_xhttp_h3_manager(
     let connections = state.take_connections();
     let clients = connections.len();
     drop(state);
+    let mut released = true;
     for connection in connections {
-        let _ = tokio::time::timeout_at(
-            deadline,
-            connection.close(b"resident xhttp h3 xmux runtime cleanup"),
-        )
-        .await;
+        released &= connection
+            .shutdown_until(b"resident xhttp h3 xmux runtime cleanup", deadline)
+            .await;
     }
-    (clients, false)
+    (clients, !released)
 }
 
 pub(in super::super) async fn select_xhttp_h3_xmux_client<F, Fut>(

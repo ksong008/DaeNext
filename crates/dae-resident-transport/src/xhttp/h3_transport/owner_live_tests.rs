@@ -168,6 +168,7 @@ async fn h3_goaway_retires_the_old_physical_before_rebuild() {
     .await
     .unwrap();
     assert!(first_response.recv_data().await.unwrap().is_none());
+    drop(first_response);
     goaway_observed.await.unwrap();
 
     let rejected = match open_xhttp_h3_download_stream(
@@ -201,9 +202,11 @@ async fn h3_goaway_retires_the_old_physical_before_rebuild() {
     .await
     .unwrap();
     assert!(replacement_response.recv_data().await.unwrap().is_none());
+    drop(replacement_response);
     assert_eq!(accepted_connections.load(Ordering::Relaxed), 2);
     drop(replacement);
 
+    let stopping = Instant::now();
     let report = shutdown_xhttp_xmux_generation_owner(
         &owner,
         owner_thread,
@@ -213,8 +216,12 @@ async fn h3_goaway_retires_the_old_physical_before_rebuild() {
     assert_eq!(report.h3.clients, 1);
     assert!(!report.cleanup_timed_out);
     assert!(report.owner_thread_joined);
+    assert!(stopping.elapsed() < Duration::from_millis(500));
+    let metrics = crate::quic_endpoint_metrics_snapshot(generation);
+    assert_eq!(metrics["endpointDriverTasks"]["live"], 0);
+    assert_eq!(metrics["chargedBytes"]["total"], 0);
 
-    server_task.await.unwrap();
     server_endpoint.close(0_u32.into(), b"xhttp h3 owner test complete");
+    server_task.await.unwrap();
     server_endpoint.wait_idle().await;
 }

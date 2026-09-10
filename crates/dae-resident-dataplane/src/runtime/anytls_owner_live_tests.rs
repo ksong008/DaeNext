@@ -523,6 +523,123 @@ fn assert_anytls_owner_resources_released(registry: &AnyTlsOwnerRegistryHandle) 
     assert_eq!(owner["shutdownTimedOut"], false);
 }
 
+async fn stop_anytls_owner_registry_promptly(
+    stop: SharedResidentStopSignal,
+    owner_thread: std::thread::JoinHandle<()>,
+) {
+    let started = Instant::now();
+    stop_anytls_owner_registry(stop, owner_thread).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "AnyTLS owner stop waited for network progress: {:?}",
+        started.elapsed(),
+    );
+}
+
+#[test]
+fn anytls_owner_stop_cancels_stalled_tls_handshake() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let generation = 9_106;
+            let proxy = anytls_proxy(listener.local_addr().unwrap(), generation);
+            let stop = ResidentStopSignal::shared();
+            let (registry, owner_thread) = start_anytls_owner_registry_with_resources(
+                generation,
+                Arc::clone(&stop),
+                RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+                AnyTlsOwnerResourceProfile::from_runtime_profile(ResidentRuntimeProfile::LowMemory),
+            )
+            .unwrap();
+            let acquiring = registry.clone();
+            let acquire = tokio::spawn(async move {
+                acquiring
+                    .acquire(
+                        proxy,
+                        TEST_TARGET.to_owned(),
+                        dae_runtime_control::AbsoluteDeadline::from_now(
+                            Instant::now(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+            });
+            let (mut peer, _) = time::timeout(Duration::from_secs(2), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut hello = [0_u8; 5];
+            time::timeout(Duration::from_secs(2), peer.read_exact(&mut hello))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(registry.metrics_snapshot()["activeBuilds"], 1);
+
+            stop_anytls_owner_registry_promptly(stop, owner_thread).await;
+            assert!(acquire.await.unwrap().is_err());
+            assert_anytls_owner_resources_released(&registry);
+            time::timeout(Duration::from_secs(1), peer.read_to_end(&mut Vec::new()))
+                .await
+                .expect("cancelled TLS build must close its socket")
+                .unwrap();
+        });
+}
+
+#[test]
+fn anytls_owner_stop_cancels_stalled_idle_probe() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let server = AnyTlsTestServer::start(false).await;
+            let generation = 9_107;
+            let proxy = anytls_proxy(server.addr, generation);
+            let stop = ResidentStopSignal::shared();
+            let resources = anytls_owner_resources(
+                Duration::from_secs(30),
+                Duration::ZERO,
+                Duration::from_secs(30),
+            );
+            let (registry, owner_thread) = start_anytls_owner_registry_with_resources(
+                generation,
+                Arc::clone(&stop),
+                RESIDENT_TCP_FLOW_STACK_BYTES_DEFAULT,
+                resources,
+            )
+            .unwrap();
+            let mut lease = registry
+                .acquire(
+                    proxy.clone(),
+                    TEST_TARGET.to_owned(),
+                    anytls_owner_deadline(),
+                )
+                .await
+                .unwrap();
+            assert_echo(&mut lease, b"before-stop").await;
+            lease.shutdown().await.unwrap();
+            drop(lease);
+            wait_until(|| registry.metrics_snapshot()["idlePhysicalSessions"] == 1).await;
+            let acquiring = registry.clone();
+            let acquire = tokio::spawn(async move {
+                acquiring
+                    .acquire(proxy, TEST_TARGET.to_owned(), anytls_owner_deadline())
+                    .await
+            });
+            wait_until(|| server.observation.heartbeats.load(Ordering::Relaxed) == 1).await;
+
+            stop_anytls_owner_registry_promptly(stop, owner_thread).await;
+            assert!(acquire.await.unwrap().is_err());
+            assert_anytls_owner_resources_released(&registry);
+            server.stop().await;
+        });
+}
+
 #[test]
 fn anytls_physical_upload_backpressure_does_not_block_download_frames() {
     tokio::runtime::Builder::new_current_thread()
@@ -586,13 +703,15 @@ fn anytls_physical_upload_backpressure_does_not_block_download_frames() {
             .unwrap();
             assert_eq!(response, RESPONSE);
 
-            upload.abort();
-            let _ = upload.await;
+            stop_anytls_owner_registry_promptly(stop, owner_thread).await;
+            assert!(
+                time::timeout(Duration::from_secs(1), upload)
+                    .await
+                    .expect("owner shutdown must unblock the logical writer")
+                    .unwrap()
+                    .is_err()
+            );
             drop(logical_read);
-            server.observation.set_latest_read_paused(false).await;
-            wait_until(|| registry.metrics_snapshot()["activeLogicalStreams"] == 0).await;
-
-            stop_anytls_owner_registry(stop, owner_thread).await;
             assert_anytls_owner_resources_released(&registry);
             server.stop().await;
         });

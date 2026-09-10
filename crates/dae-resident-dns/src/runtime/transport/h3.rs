@@ -405,17 +405,17 @@ pub async fn shutdown_cached_dns_h3(
         task.abort();
         driver_joined = time::timeout_at(deadline, &mut task).await.is_ok();
     }
-    let mut endpoint_idle = true;
+    let mut drain = dae_resident_transport::QuicEndpointDrainReport::default();
     if let Some(endpoint) = endpoint {
         endpoint.close(0_u32.into(), b"DNS H3 cache shutdown");
-        endpoint_idle = time::timeout_at(deadline, endpoint.wait_idle())
-            .await
-            .is_ok();
+        drain =
+            dae_resident_transport::shutdown_quic_endpoints_until(vec![endpoint], deadline).await;
     }
     json!({
-        "status": if endpoint_idle && driver_joined { "pass" } else { "fail" },
+        "status": if drain.is_complete() && driver_joined { "pass" } else { "fail" },
         "transport": "doh3",
-        "endpointIdle": endpoint_idle,
+        "endpointIdle": drain.idle_completed() == drain.requested(),
+        "endpointReleased": drain.is_complete(),
         "driverJoined": driver_joined,
     })
 }

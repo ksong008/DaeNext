@@ -17,7 +17,7 @@ use dae_runtime_control::OwnerResourceBudget;
 use dae_runtime_control::{AbsoluteDeadline, OwnerAdmissionRejection, OwnerCancellationSignal};
 
 pub use self::drain::{
-    QuicEndpointDrainReport, quic_endpoint_drain_deadlines,
+    QuicEndpointDrainReport, quic_endpoint_drain_deadlines, shutdown_quic_endpoints_until,
     wait_quic_endpoints_idle_or_released_until, wait_quic_endpoints_idle_until,
 };
 pub use self::metrics::{
@@ -50,6 +50,24 @@ struct EndpointHandleLifecycle {
 pub(crate) struct QuicEndpointReleaseProbe {
     signal: Arc<metrics::QuicEndpointReleaseSignal>,
     driver_release: EndpointDriverReleaseHandle,
+}
+
+pub(crate) struct QuicEndpointCancellationGuard {
+    release: Option<EndpointDriverReleaseHandle>,
+}
+
+impl QuicEndpointCancellationGuard {
+    pub(crate) fn disarm(mut self) {
+        self.release = None;
+    }
+}
+
+impl Drop for QuicEndpointCancellationGuard {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release.release();
+        }
+    }
 }
 
 impl QuicEndpointReleaseProbe {
@@ -109,6 +127,12 @@ impl Drop for ObservedQuicEndpoint {
 }
 
 impl ObservedQuicEndpoint {
+    pub(crate) fn cancellation_guard(&self) -> QuicEndpointCancellationGuard {
+        QuicEndpointCancellationGuard {
+            release: Some(self.handle_lifecycle.driver_release.clone()),
+        }
+    }
+
     pub fn mark_ready(&self) {
         self.handle_lifecycle.observation.mark_ready();
     }
@@ -139,9 +163,12 @@ pub async fn wait_quic_endpoint_idle_after_close_for(
     endpoint: &ObservedQuicEndpoint,
     timeout: std::time::Duration,
 ) -> bool {
-    tokio::time::timeout(timeout, endpoint.wait_idle())
+    let guard = endpoint.cancellation_guard();
+    let idle = tokio::time::timeout(timeout, endpoint.wait_idle())
         .await
-        .is_ok()
+        .is_ok();
+    guard.disarm();
+    idle
 }
 
 pub async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint) -> bool {
@@ -150,6 +177,21 @@ pub async fn wait_quic_endpoint_idle_after_close(endpoint: &ObservedQuicEndpoint
         dae_resident_core::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
     )
     .await
+}
+
+pub(crate) async fn wait_quic_endpoint_idle_after_close_or_stop(
+    endpoint: &ObservedQuicEndpoint,
+    stop: &dae_resident_core::SharedResidentStopSignal,
+) {
+    if dae_resident_core::run_until_resident_stop(
+        stop,
+        wait_quic_endpoint_idle_after_close(endpoint),
+    )
+    .await
+    .is_none()
+    {
+        endpoint.release_probe().force_driver_release();
+    }
 }
 
 pub fn open_marked_quic_endpoint_for_remote(
