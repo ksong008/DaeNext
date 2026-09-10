@@ -131,6 +131,13 @@ pub(super) fn read_c_string(name: &[u8]) -> Result<String, String> {
 }
 
 #[cfg(feature = "allocator-jemalloc")]
+pub(super) fn write_bool(name: &[u8], value: bool) -> Result<(), String> {
+    validate_name(name)?;
+    // jemalloc's bool controls use the C bool ABI.
+    unsafe { tikv_jemalloc_ctl::raw::write(name, value) }.map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "allocator-jemalloc")]
 pub(super) fn write_u32(name: &[u8], value: u32) -> Result<(), String> {
     validate_name(name)?;
     let result = unsafe {

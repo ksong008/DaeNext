@@ -50,6 +50,7 @@ impl AllocatorWorkerKind {
 struct AllocatorWorkerState {
     kind: AllocatorWorkerKind,
     active: AtomicBool,
+    parked_cache_empty: AtomicBool,
     acknowledged_epoch: AtomicU64,
     failed_epoch: AtomicU64,
 }
@@ -59,9 +60,16 @@ impl AllocatorWorkerState {
         Self {
             kind,
             active: AtomicBool::new(true),
+            parked_cache_empty: AtomicBool::new(false),
             acknowledged_epoch: AtomicU64::new(epoch),
             failed_epoch: AtomicU64::new(0),
         }
+    }
+
+    fn acknowledged(&self, epoch: u64) -> bool {
+        !self.active.load(Ordering::Acquire)
+            || self.acknowledged_epoch.load(Ordering::Acquire) >= epoch
+            || self.parked_cache_empty.load(Ordering::Acquire)
     }
 
     fn poll(&self, reclaim: &AllocatorWorkerReclaim) {
@@ -250,9 +258,7 @@ fn allocator_flush_registered_worker_caches_blocking() -> (bool, Value) {
     }
     for worker in &workers {
         *expected_by_kind.entry(worker.kind.as_str()).or_default() += 1;
-        if !worker.active.load(Ordering::Acquire)
-            || worker.acknowledged_epoch.load(Ordering::Acquire) >= epoch
-        {
+        if worker.acknowledged(epoch) {
             *acknowledged_by_kind
                 .entry(worker.kind.as_str())
                 .or_default() += 1;
@@ -304,10 +310,7 @@ fn wait_for_direct_workers(
     let Ok(mut guard) = reclaim.wait_lock.lock() else {
         return;
     };
-    while workers.iter().any(|worker| {
-        worker.active.load(Ordering::Acquire)
-            && worker.acknowledged_epoch.load(Ordering::Acquire) < epoch
-    }) {
+    while workers.iter().any(|worker| !worker.acknowledged(epoch)) {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
