@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 const STEADY_POLL: Duration = Duration::from_secs(2);
 const HOST_UNAVAILABLE_POLL: Duration = Duration::from_millis(250);
 const RECOVERY_SETTLE_POLL: Duration = Duration::from_secs(1);
-const STOP_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(super) fn interval(
     reattach_required: bool,
@@ -53,7 +52,7 @@ pub(super) fn sleep_interruptibly(stop: &AtomicBool, duration: Duration) {
         if now >= deadline {
             return;
         }
-        thread::sleep((deadline - now).min(STOP_CHECK_INTERVAL));
+        thread::park_timeout(deadline - now);
     }
 }
 
@@ -67,5 +66,22 @@ mod tests {
         assert_eq!(interval(true, false, false), Duration::from_millis(250));
         assert_eq!(interval(true, true, false), Duration::from_secs(1));
         assert_eq!(interval(true, true, true), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn stop_unparks_interface_monitor_before_poll_deadline() {
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let (ready, started) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            ready.send(()).unwrap();
+            sleep_interruptibly(&worker_stop, Duration::from_secs(10));
+        });
+        started.recv().unwrap();
+        let stopping = Instant::now();
+        stop.store(true, Ordering::Relaxed);
+        worker.thread().unpark();
+        worker.join().unwrap();
+        assert!(stopping.elapsed() < Duration::from_millis(200));
     }
 }

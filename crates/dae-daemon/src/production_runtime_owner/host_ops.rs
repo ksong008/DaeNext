@@ -1,4 +1,5 @@
 use std::io::{self, Read};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -298,6 +299,7 @@ fn run_output_with_timeout(spec: &HostOpSpec, timeout: Duration) -> HostCommandO
     };
 
     let started = Instant::now();
+    let exit_notification = child_exit_notification(&child);
     let mut timed_out = false;
     let wait_result = loop {
         match child.try_wait() {
@@ -310,7 +312,10 @@ fn run_output_with_timeout(spec: &HostOpSpec, timeout: Duration) -> HostCommandO
                 // block until an unrelated grandchild finally exits.
                 break terminate_child_process_group(&mut child);
             }
-            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Ok(None) => wait_for_child_notification(
+                exit_notification.as_ref(),
+                timeout.saturating_sub(started.elapsed()),
+            ),
             Err(err) => {
                 // try_wait failed (e.g. ECHILD). Kill and reap to close the
                 // pipes so the reader threads can finish before we join them.
@@ -335,6 +340,34 @@ fn run_output_with_timeout(spec: &HostOpSpec, timeout: Duration) -> HostCommandO
         (Err(err), _, _) => Err(err),
     };
     HostCommandOutput { output, timed_out }
+}
+
+fn child_exit_notification(child: &std::process::Child) -> Option<OwnedFd> {
+    // SAFETY: pidfd_open takes a process ID and flags, with no pointer arguments.
+    let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, child.id(), 0_u32) };
+    if descriptor < 0 {
+        return None;
+    }
+    // SAFETY: pidfd_open returned a new owned descriptor with close-on-exec set.
+    Some(unsafe { OwnedFd::from_raw_fd(descriptor as libc::c_int) })
+}
+
+fn wait_for_child_notification(notification: Option<&OwnedFd>, remaining: Duration) {
+    if let Some(notification) = notification {
+        let mut descriptor = libc::pollfd {
+            fd: notification.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout_ms = remaining.as_millis().min(libc::c_int::MAX as u128) as libc::c_int;
+        // SAFETY: the pollfd references the owned pidfd, which stays live for the call.
+        let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+        if result >= 0 || io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            return;
+        }
+    }
+    // Older kernels or restricted hosts may not provide pidfd notifications.
+    thread::sleep(remaining.min(Duration::from_millis(20)));
 }
 
 fn terminate_child_process_group(

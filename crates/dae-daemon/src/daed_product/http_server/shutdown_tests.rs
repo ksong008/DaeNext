@@ -72,8 +72,10 @@ fn finish_test_product_server(fixture: TestProductServer) {
 #[test]
 fn product_shutdown_wakes_accept_loop_joins_workers_and_removes_control_socket() {
     let fixture = start_test_product_server("shutdown");
+    let started = Instant::now();
     assert!(fixture.shutdown.request(libc::SIGTERM));
     finish_test_product_server(fixture);
+    assert!(started.elapsed() < Duration::from_millis(200));
 }
 
 #[test]

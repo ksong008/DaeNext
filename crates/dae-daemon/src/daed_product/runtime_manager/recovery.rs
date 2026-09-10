@@ -71,6 +71,7 @@ impl ProductRuntimeInterfaceRecoverySupervisor {
     pub(super) fn shutdown(&mut self) {
         self.stop.store(true, AtomicOrdering::Relaxed);
         if let Some(handle) = self.handle.take() {
+            handle.thread().unpark();
             let _ = handle.join();
         }
     }
@@ -224,7 +225,7 @@ fn sleep_interface_recovery_poll(stop: &AtomicBool) {
         if now >= deadline {
             return;
         }
-        thread::sleep((deadline - now).min(PRODUCT_RUNTIME_RECOVERY_STOP_CHECK_INTERVAL));
+        thread::park_timeout(deadline - now);
     }
 }
 

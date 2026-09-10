@@ -106,7 +106,10 @@ impl ResidentInterfaceMonitorRuntime {
 
     pub(super) fn shutdown(&mut self, cleanup_steps: &mut Vec<Value>) {
         self.stop.store(true, Ordering::Relaxed);
-        let joined = self.handle.take().map(|handle| handle.join().is_ok());
+        let joined = self.handle.take().map(|handle| {
+            handle.thread().unpark();
+            handle.join().is_ok()
+        });
         cleanup_steps.push(json!({
             "name": "resident-interface-monitor-shutdown",
             "status": if joined.unwrap_or(true) { "pass" } else { "warn" },

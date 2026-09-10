@@ -8,6 +8,7 @@ pub(super) fn serve_forever(
     let listen_started_at = Instant::now();
     let listener = TcpListener::bind(listen)?;
     listener.set_nonblocking(true)?;
+    wake_listener_on_shutdown(&listener, &app.shutdown)?;
     if let Some(config) = app.runtime.current_config() {
         app.runtime
             .configure_pprof_port(config.global.pprof_port)
@@ -149,6 +150,7 @@ pub(super) fn serve_forever(
                     }
                 }
             }
+            Err(_) if app.shutdown.is_requested() => break,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                 if let Err(err) =
                     wait_for_listener_readiness(&listener, LISTENER_SHUTDOWN_CHECK_INTERVAL)

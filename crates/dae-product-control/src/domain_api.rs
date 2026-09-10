@@ -63,8 +63,8 @@ pub mod http {
         http_request_read_error_response, integer_array, json_body, product_openapi_skeleton,
         query_bool, query_u64, query_usize, read_http_request, read_http_request_with_policy,
         required_str, serve_static_file, split_path_query, status_reason, string_array,
-        wait_for_listener_readiness, webui_route_audit_report, write_http_response,
-        write_http_response_for_request, write_http_response_with_timeout,
+        wait_for_listener_readiness, wake_listener_on_shutdown, webui_route_audit_report,
+        write_http_response, write_http_response_for_request, write_http_response_with_timeout,
         write_static_file_response,
     };
 }

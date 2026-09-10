@@ -326,7 +326,6 @@ pub(super) const PRODUCT_RUNTIME_FAKE_START_LEGACY_ENV: &str = "DAED_PRODUCT_RUN
 const PRODUCT_RUNTIME_CLEANUP_INTERLOCK_WAIT: Duration = Duration::from_secs(5);
 const PRODUCT_RUNTIME_INTERFACE_RECOVERY_POLL: Duration = Duration::from_millis(250);
 const PRODUCT_RUNTIME_STARTUP_RECOVERY_POLL: Duration = Duration::from_secs(2);
-const PRODUCT_RUNTIME_RECOVERY_STOP_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const PRODUCT_RUNTIME_INTERFACE_RECOVERY_RETRY: Duration = Duration::from_secs(30);
 const PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE: &str = "interface-monitor";
 
