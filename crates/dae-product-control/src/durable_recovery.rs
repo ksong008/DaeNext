@@ -20,7 +20,7 @@ impl RecoveryOwner {
 pub fn recover_product_durable_state(
     state: &Path,
     config_dir: &Path,
-    geodata_dir: &Path,
+    geodata_paths: &dae_product_geodata::ProductGeodataPaths,
 ) -> Result<(), String> {
     let steps = [
         RecoveryOwner::SubscriptionPersistence,
@@ -38,10 +38,13 @@ pub fn recover_product_durable_state(
             RecoveryOwner::RuntimeMaterialization => {
                 dae_product_runtime::recover_runtime_apply_transaction(state, config_dir)
             }
-            RecoveryOwner::GeodataGeneration => {
-                dae_product_geodata::recover_geodata_transactions(geodata_dir, state)
-                    .map_err(|error| error.to_string())
-            }
+            RecoveryOwner::GeodataGeneration => [
+                dae_product_geodata::GeodataKind::Geosite,
+                dae_product_geodata::GeodataKind::Geoip,
+            ]
+            .into_iter()
+            .try_for_each(|kind| geodata_paths.recover(state, kind))
+            .map_err(|error| error.to_string()),
         };
         result.map_err(|error| format!("recover interrupted {} failed: {error}", owner.label()))?;
     }
@@ -107,8 +110,12 @@ mod tests {
             .expect("activate runtime transaction");
         std::mem::forget(transaction);
 
-        recover_product_durable_state(&state, &config_dir, &geodata_dir)
-            .expect("recover product durable state");
+        recover_product_durable_state(
+            &state,
+            &config_dir,
+            &dae_product_geodata::ProductGeodataPaths::for_directory(&geodata_dir),
+        )
+        .expect("recover product durable state");
 
         assert_eq!(
             fs::read(&output).expect("read recovered runtime"),

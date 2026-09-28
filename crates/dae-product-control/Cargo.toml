@@ -28,3 +28,4 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 argon2.workspace = true
+dae-product-geodata = { workspace = true, features = ["test-support"] }

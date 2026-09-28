@@ -4,7 +4,9 @@ use super::update_admission::ProductGeodataUpdateLease;
 use super::*;
 use super::{GeodataKind, GeodataRelease, GeodataSourceMode};
 use dae_product_control::geodata::geodata_source;
-use dae_product_control::geodata::{GeodataUpdateCallbacks, summarize_geodata_file};
+use dae_product_control::geodata::{
+    GeodataUpdateCallbacks, GeodataUpdateRuntimeContext, summarize_geodata_file,
+};
 
 pub(super) fn update_geodata(app: &AppState, kind: GeodataKind) -> io::Result<Value> {
     let context = ProductGeodataUpdateContext::from_app(app);
@@ -30,7 +32,7 @@ pub(super) fn update_geodata_with_lease_using(
         context,
         &context.updates,
         &context.state,
-        &context.dir,
+        &context.directory(kind)?,
         kind,
         update_lease,
         preparation_mode,

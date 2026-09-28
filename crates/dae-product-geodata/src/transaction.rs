@@ -1,5 +1,5 @@
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use dae_product_persistence::{
     ValidatedLeafName, bump_runtime_external_input_version_with_connection,
@@ -271,6 +271,15 @@ fn restore_live_file(
     journal: &GeodataUpdateJournal,
 ) -> io::Result<()> {
     if let Some(backup_name) = backup_name {
+        match fs::symlink_metadata(live_path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // A recoverable journal can outlive its live file. Recreate it
+                // exclusively; the copy still rejects symlinks and non-files.
+                drop(dae_product_persistence::reserve_private_file(live_path)?);
+            }
+            Err(error) => return Err(error),
+            Ok(_) => {}
+        }
         copy_regular_file_synced(&journal.artifact_path(dir, backup_name), live_path)
     } else {
         remove_file_if_exists(live_path)

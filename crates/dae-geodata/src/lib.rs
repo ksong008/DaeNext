@@ -1,6 +1,7 @@
 pub mod error;
 pub mod hex;
 pub mod model;
+pub mod paths;
 pub mod wire;
 
 pub use error::GeoDataError;

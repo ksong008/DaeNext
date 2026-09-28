@@ -2,7 +2,7 @@ use super::GeodataKind;
 use serde_json::Value;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 #[cfg(unix)]
@@ -30,6 +30,7 @@ enum GeodataFileIdentity {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeodataResourceIdentity {
+    directory: PathBuf,
     data: GeodataFileIdentity,
     version: GeodataFileIdentity,
 }
@@ -86,6 +87,7 @@ impl GeodataStatusCacheEntry {
 impl GeodataResourceIdentity {
     pub fn capture(dir: &Path, kind: GeodataKind) -> io::Result<Self> {
         Ok(Self {
+            directory: dir.to_path_buf(),
             data: GeodataFileIdentity::capture(&dir.join(kind.file_name()), false)?,
             version: GeodataFileIdentity::capture(&dir.join(kind.version_file_name()), true)?,
         })

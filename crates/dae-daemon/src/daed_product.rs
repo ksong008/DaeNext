@@ -149,6 +149,7 @@ struct AppState {
     http_metrics: Arc<ProductHttpMetrics>,
     ui_runtime: Arc<ProductUiRuntime>,
     auth_runtime: Arc<ProductAuthRuntime>,
+    geodata_paths: Arc<geodata::ProductGeodataPaths>,
     geodata_updates: Arc<geodata::ProductGeodataUpdateCoordinator>,
     geodata_status_cache: Arc<Mutex<GeodataStatusCache>>,
     geodata_update_runtime: Option<Arc<geodata::ProductGeodataUpdateRuntime>>,

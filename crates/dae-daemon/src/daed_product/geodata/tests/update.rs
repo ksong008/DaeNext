@@ -26,6 +26,9 @@ fn concurrent_same_kind_update_is_rejected_before_a_second_download() {
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         ui_runtime: product_ui_runtime(),
         auth_runtime: product_test_auth_runtime(),
+        geodata_paths: Arc::new(geodata::ProductGeodataPaths::for_directory(
+            dir.to_path_buf(),
+        )),
         geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         geodata_update_runtime: None,
@@ -110,6 +113,9 @@ fn geodata_update_api_reports_same_kind_conflict_truthfully() {
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         ui_runtime: product_ui_runtime(),
         auth_runtime: product_test_auth_runtime(),
+        geodata_paths: Arc::new(geodata::ProductGeodataPaths::for_directory(
+            dir.to_path_buf(),
+        )),
         geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         geodata_update_runtime: None,

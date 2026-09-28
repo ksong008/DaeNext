@@ -1,19 +1,12 @@
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dae_product_core::{product_civil_from_days, product_iso8601_utc};
 use serde_json::{Value, json};
 
 use crate::{GeodataKind, advise_file_dontneed, sha256_file, summarize_geodata_file};
-
-pub fn geodata_dir_for_web_root(web_root: &Path) -> PathBuf {
-    web_root
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| web_root.to_path_buf())
-}
 
 pub fn geodata_resource_status(dir: &Path, kind: GeodataKind) -> Value {
     match geodata_resource_status_result(dir, kind) {
