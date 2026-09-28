@@ -20,9 +20,10 @@ pub fn subscription_http_request(url: &url::Url) -> io::Result<String> {
         path.push('?');
         path.push_str(query);
     }
+    // Providers may use User-Agent to select formats or filter protocols.
+    // Leave it unset instead of advertising another client's capabilities.
     Ok(format!(
-        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: {}\r\nAccept: text/plain, application/octet-stream, */*\r\nAccept-Encoding: gzip, br\r\nConnection: close\r\n\r\n",
-        subscription_user_agent()
+        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nAccept: text/plain, application/octet-stream, */*\r\nAccept-Encoding: gzip, br\r\nConnection: close\r\n\r\n"
     ))
 }
 
@@ -46,13 +47,6 @@ fn subscription_http_authority(url: &url::Url) -> io::Result<String> {
     } else {
         Ok(format!("{host}:{port}"))
     }
-}
-
-fn subscription_user_agent() -> String {
-    format!(
-        "dae/{} (like v2rayA/1.0 WebRequestHelper) (like v2rayN/1.0 WebRequestHelper)",
-        env!("CARGO_PKG_VERSION")
-    )
 }
 
 pub fn read_subscription_http_response_with_limit<R: Read>(
