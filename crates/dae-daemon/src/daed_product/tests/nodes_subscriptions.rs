@@ -73,7 +73,8 @@ pub(crate) fn subscription_http_response_decodes_gzip_and_brotli_with_limits() {
 }
 
 #[test]
-pub(crate) fn subscription_http_fetch_follows_bounded_relative_redirects() {
+pub(crate) fn subscription_http_fetch_follows_redirects_without_losing_hysteria2_to_user_agent() {
+    const COMPLETE_SUBSCRIPTION: &str = "socks://127.0.0.1:1080#redirected\nhysteria2://secret@hy2.example:443?sni=hy2.example#official\nhy2://secret@hy2.example:8443?sni=hy2.example#alias";
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
@@ -100,7 +101,16 @@ pub(crate) fn subscription_http_fetch_follows_bounded_relative_redirects() {
                     )
                     .unwrap();
             } else {
-                let body = b"socks://127.0.0.1:1080#redirected";
+                // Subscription providers may omit protocols based on the client UA.
+                let legacy_client = requests.last().unwrap().lines().any(|line| {
+                    let lower = line.to_ascii_lowercase();
+                    lower.starts_with("user-agent:") && lower.contains("v2ray")
+                });
+                let body = STANDARD.encode(if legacy_client {
+                    "socks://127.0.0.1:1080#redirected"
+                } else {
+                    COMPLETE_SUBSCRIPTION
+                });
                 stream
                     .write_all(
                         format!(
@@ -110,7 +120,7 @@ pub(crate) fn subscription_http_fetch_follows_bounded_relative_redirects() {
                         .as_bytes(),
                     )
                     .unwrap();
-                stream.write_all(body).unwrap();
+                stream.write_all(body.as_bytes()).unwrap();
             }
         }
         requests
@@ -119,7 +129,11 @@ pub(crate) fn subscription_http_fetch_follows_bounded_relative_redirects() {
     let fetched =
         fetch_subscription_content(Path::new("/tmp"), None, &format!("http://{address}/start"))
             .unwrap();
-    assert_eq!(fetched, "socks://127.0.0.1:1080#redirected");
+    let links = subscription_links_from_content(&fetched);
+    assert_eq!(links, COMPLETE_SUBSCRIPTION.lines().collect::<Vec<_>>());
+    for link in &links[1..] {
+        assert_eq!(parse_node_link(link, None).protocol, "hysteria2");
+    }
     let requests = server.join().unwrap();
     assert!(requests[0].starts_with("GET /start HTTP/1.1\r\n"));
     assert!(requests[1].starts_with("GET /final HTTP/1.1\r\n"));
@@ -128,6 +142,11 @@ pub(crate) fn subscription_http_fetch_follows_bounded_relative_redirects() {
             .iter()
             .all(|request| request.contains(&format!("\r\nHost: {address}\r\n")))
     );
+    assert!(requests.iter().all(|request| {
+        !request
+            .lines()
+            .any(|line| line.to_ascii_lowercase().starts_with("user-agent:"))
+    }));
 }
 
 #[test]
