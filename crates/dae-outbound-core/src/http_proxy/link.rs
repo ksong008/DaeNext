@@ -1,9 +1,10 @@
+use crate::tls_options::parse_allow_insecure;
 use url::Url;
 
 use crate::error::OutboundError;
 
 use super::EffectiveHttpProxyApplicationProtocol;
-use super::contract::{ALLOW_INSECURE_ALIASES, HTTPS_DEFAULT_ALPN_QUERY_VALUE};
+use super::contract::HTTPS_DEFAULT_ALPN_QUERY_VALUE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HttpScheme {
@@ -36,7 +37,7 @@ pub struct HttpProxyLink {
     pub password: String,
     pub sni: String,
     pub protocol: HttpScheme,
-    pub allow_insecure: bool,
+    pub allow_insecure: Option<bool>,
     pub host: String,
     pub path: String,
     pub transport: bool,
@@ -80,7 +81,8 @@ impl HttpProxyLink {
             password: url.password().unwrap_or_default().to_owned(),
             sni: query_value(&query, "sni").unwrap_or_default(),
             protocol,
-            allow_insecure: parse_allow_insecure(&query),
+            allow_insecure: parse_allow_insecure(&query)
+                .map_err(|err| OutboundError::BadHttpProxy(err.to_owned()))?,
             host: query_value(&query, "host").unwrap_or_default(),
             path: normalize_path(url.path()),
             transport: query_value(&query, "transport")
@@ -112,8 +114,8 @@ impl HttpProxyLink {
         }
         out.push_str(&self.address());
         let mut query = Vec::new();
-        if self.allow_insecure {
-            query.push("allowInsecure=1".to_owned());
+        if let Some(insecure) = self.allow_insecure {
+            query.push(format!("allowInsecure={}", u8::from(insecure)));
         }
         if !self.sni.is_empty() {
             query.push(format!("sni={}", self.sni));
@@ -146,14 +148,6 @@ fn query_value(
         .iter()
         .find(|(candidate, _)| candidate.as_ref() == key)
         .map(|(_, value)| value.to_string())
-}
-
-fn parse_allow_insecure(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)]) -> bool {
-    ALLOW_INSECURE_ALIASES.iter().any(|key| {
-        query_value(query, key)
-            .and_then(|value| parse_bool(&value))
-            .unwrap_or(false)
-    })
 }
 
 fn parse_bool(input: &str) -> Option<bool> {

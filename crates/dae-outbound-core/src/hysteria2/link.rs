@@ -33,7 +33,8 @@ pub struct Hysteria2Link {
     pub user: String,
     pub password: String,
     pub server: String,
-    pub insecure: bool,
+    /// None inherits the global policy; an explicit false requires certificate verification.
+    pub insecure: Option<bool>,
     pub sni: String,
     pub pin_sha256: String,
     pub obfs: String,
@@ -73,9 +74,11 @@ impl Hysteria2Link {
         validate_query_shape(&query)?;
         reject_unsupported_tls_fields(&query)?;
         let insecure = match query_value(&query, "insecure") {
-            Some(value) if !value.is_empty() => parse_bool(&value)
-                .ok_or_else(|| OutboundError::BadHysteria2("invalid insecure".to_owned()))?,
-            _ => false,
+            Some(value) if !value.is_empty() => Some(
+                parse_bool(&value)
+                    .ok_or_else(|| OutboundError::BadHysteria2("invalid insecure".to_owned()))?,
+            ),
+            _ => None,
         };
         let max_tx_value = query_value(&query, "maxTx");
         let max_rx_value = query_value(&query, "maxRx");
@@ -145,8 +148,8 @@ impl Hysteria2Link {
         out.push('@');
         out.push_str(&self.server);
         let mut query = Vec::<(&str, Cow<'_, str>)>::new();
-        if self.insecure {
-            query.push(("insecure", Cow::Borrowed("1")));
+        if let Some(insecure) = self.insecure {
+            query.push(("insecure", Cow::Borrowed(if insecure { "1" } else { "0" })));
         }
         if !self.sni.is_empty() {
             query.push(("sni", Cow::Borrowed(&self.sni)));
@@ -415,4 +418,35 @@ fn percent_encode_uri_component(input: &str) -> String {
         }
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insecure_override_survives_link_roundtrip() {
+        for (query, expected) in [
+            ("", None),
+            ("insecure=", None),
+            ("insecure=0", Some(false)),
+            ("insecure=false", Some(false)),
+            ("insecure=F", Some(false)),
+            ("insecure=FALSE", Some(false)),
+            ("insecure=False", Some(false)),
+            ("insecure=1", Some(true)),
+            ("insecure=true", Some(true)),
+            ("insecure=T", Some(true)),
+            ("insecure=TRUE", Some(true)),
+            ("insecure=True", Some(true)),
+        ] {
+            let link =
+                Hysteria2Link::parse(&format!("hy2://auth@example.com:443?{query}")).unwrap();
+            assert_eq!(link.insecure, expected, "{query}");
+            let exported = link.export_url();
+            assert_eq!(exported.contains("insecure="), expected.is_some());
+            assert_eq!(Hysteria2Link::parse(&exported).unwrap(), link);
+        }
+        assert!(Hysteria2Link::parse("hy2://auth@example.com:443?insecure=invalid").is_err());
+    }
 }

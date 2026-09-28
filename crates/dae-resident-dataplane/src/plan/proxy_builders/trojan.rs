@@ -26,7 +26,9 @@ pub(crate) fn build_trojan_proxy_plan(
             "resident dataplane trojan inner Shadowsocks layer admits WebSocket transport only for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
-    let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
+    let allow_insecure = parsed
+        .allow_insecure
+        .unwrap_or(config.global.allow_insecure);
     let parsed_alpn = split_alpn(&parsed.alpn);
     let net = if websocket {
         "websocket"

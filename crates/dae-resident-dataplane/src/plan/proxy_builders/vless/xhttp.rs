@@ -292,13 +292,12 @@ fn resident_xhttp_download_tls_settings(
     let alpn = optional_alpn(tls_settings.get("alpn"), "tlsSettings.alpn", node_tag)?
         .unwrap_or_else(|| vec!["h2".to_owned()]);
     validate_resident_xhttp_endpoint_alpn(&alpn, node_tag)?;
-    let allow_insecure = global_allow_insecure
-        || optional_bool(
-            tls_settings.get("allowInsecure"),
-            "tlsSettings.allowInsecure",
-            node_tag,
-        )?
-        .unwrap_or(false);
+    let allow_insecure = optional_bool(
+        tls_settings.get("allowInsecure"),
+        "tlsSettings.allowInsecure",
+        node_tag,
+    )?
+    .unwrap_or(global_allow_insecure);
     let fingerprint = optional_string(
         tls_settings.get("fingerprint"),
         "tlsSettings.fingerprint",
@@ -396,13 +395,12 @@ fn resident_xhttp_download_reality_settings(
         &alpn,
         node_tag,
     )?;
-    let allow_insecure = global_allow_insecure
-        || optional_bool(
-            reality_settings.get("allowInsecure"),
-            "realitySettings.allowInsecure",
-            node_tag,
-        )?
-        .unwrap_or(false);
+    let allow_insecure = optional_bool(
+        reality_settings.get("allowInsecure"),
+        "realitySettings.allowInsecure",
+        node_tag,
+    )?
+    .unwrap_or(global_allow_insecure);
     let fingerprint = optional_string(
         reality_settings.get("fingerprint"),
         "realitySettings.fingerprint",

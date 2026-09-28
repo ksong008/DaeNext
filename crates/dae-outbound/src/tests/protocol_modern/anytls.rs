@@ -39,7 +39,10 @@ pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
             parsed.tls_server_name,
             case["tls_server_name"].as_str().unwrap()
         );
-        assert_eq!(parsed.insecure, case["insecure"].as_bool().unwrap());
+        assert_eq!(
+            parsed.insecure.unwrap_or(false),
+            case["insecure"].as_bool().unwrap()
+        );
         assert_eq!(parsed.protocol, case["protocol"].as_str().unwrap());
         assert_eq!(parsed.export_url(), case["property_link"].as_str().unwrap());
         assert_eq!(parsed.address(), case["property_address"].as_str().unwrap());
@@ -58,7 +61,10 @@ pub(super) fn anytls_rust_native_matches_nativelden_fixture() {
 
     for case in fixture["insecure_cases"].as_array().unwrap() {
         let parsed = crate::anytls::AnyTLSLink::parse(case["input"].as_str().unwrap()).unwrap();
-        assert_eq!(parsed.insecure, case["insecure"].as_bool().unwrap());
+        assert_eq!(
+            parsed.insecure.unwrap_or(false),
+            case["insecure"].as_bool().unwrap()
+        );
     }
 
     let tls = &fixture["tls_contract"];

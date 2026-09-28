@@ -151,7 +151,7 @@ pub fn run_true_quic_dataplane_smoke(
         password_present: !link.password.is_empty(),
         server: link.server,
         sni: link.sni,
-        insecure: link.insecure,
+        insecure: link.insecure.unwrap_or(false),
         max_tx: link.max_tx,
         max_rx: link.max_rx,
         underlay,

@@ -94,7 +94,7 @@ pub(super) fn bench_vmess_parse_link(iters: u64, warmup: u64) -> Result<Measurem
         alpn: String::new(),
         ech: None,
         security: String::new(),
-        allow_insecure: false,
+        allow_insecure: None,
         fingerprint: String::new(),
         v: "2".to_owned(),
         protocol: "vmess".to_owned(),

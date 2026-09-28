@@ -8,7 +8,7 @@ pub const LIVE_SMOKE_REQUIRED: &[&str] = &[
 ];
 
 pub const EMPTY_SNI_SERVER_NAME: &str = "127.0.0.1";
-pub const INSECURE_ONLY_WHEN: &str = "insecure=1";
+pub const INSECURE_ONLY_WHEN: &str = "insecure=1|true|t (case variants supported)";
 pub const PEER_OVERRIDES_SNI: bool = true;
 
 pub const UDP_MAGIC_DOMAIN: &str = "sp.v2.udp-over-tcp.arpa";

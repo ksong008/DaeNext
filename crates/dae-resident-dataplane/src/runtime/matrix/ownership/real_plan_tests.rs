@@ -206,7 +206,7 @@ fn vless_link(net: &str, security: &str, alpn: &str, path: &str) -> VLESSLink {
         tls: security.to_owned(),
         flow: String::new(),
         alpn: alpn.to_owned(),
-        allow_insecure: false,
+        allow_insecure: None,
         fingerprint: String::new(),
         public_key: String::new(),
         short_id: String::new(),
@@ -255,7 +255,7 @@ fn vmess_link(net: &str, tls: &str) -> VMessLink {
         alpn: String::new(),
         ech: None,
         security: String::new(),
-        allow_insecure: false,
+        allow_insecure: None,
         fingerprint: String::new(),
         v: "2".to_owned(),
         protocol: "vmess".to_owned(),
@@ -275,7 +275,7 @@ fn trojan_inner_link() -> TrojanLink {
         host: "trojan.example.test".to_owned(),
         path: "/trojan".to_owned(),
         service_name: String::new(),
-        allow_insecure: false,
+        allow_insecure: None,
         protocol: "trojan-go".to_owned(),
     }
 }

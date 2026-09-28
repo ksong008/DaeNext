@@ -4,14 +4,18 @@ pub(crate) fn hysteria2_fixture_url(_ps: &str, add: &str, port: u16) -> String {
 }
 
 pub(crate) fn hysteria2_fixture_url_with_pin(_ps: &str, server: &str, pin_sha256: &str) -> String {
-    hysteria2_fixture_url_with_tls_mode(server, false, pin_sha256)
+    hysteria2_fixture_url_with_tls_mode(server, None, pin_sha256)
 }
 
 pub(crate) fn hysteria2_insecure_fixture_url(server: &str) -> String {
-    hysteria2_fixture_url_with_tls_mode(server, true, "")
+    hysteria2_fixture_url_with_tls_mode(server, Some(true), "")
 }
 
-fn hysteria2_fixture_url_with_tls_mode(server: &str, insecure: bool, pin_sha256: &str) -> String {
+fn hysteria2_fixture_url_with_tls_mode(
+    server: &str,
+    insecure: Option<bool>,
+    pin_sha256: &str,
+) -> String {
     Hysteria2Link {
         name: String::new(),
         user: fixture_user(),
@@ -37,7 +41,7 @@ pub(crate) fn hysteria2_salamander_fixture_url(add: &str, port: u16) -> String {
         user: fixture_user(),
         password: String::new(),
         server: format!("{add}:{port}"),
-        insecure: false,
+        insecure: None,
         sni: fixture_host(FixtureEndpoint::Authority),
         pin_sha256: fixture_pin_sha256(),
         obfs: "salamander".to_owned(),
@@ -59,7 +63,7 @@ pub(crate) fn tuic_fixture_url(_ps: &str, add: &str, port: u16, allow_insecure: 
         server: add.to_owned(),
         port,
         sni: fixture_host(FixtureEndpoint::Authority),
-        allow_insecure,
+        allow_insecure: allow_insecure.then_some(true),
         disable_sni: false,
         congestion_control: String::new(),
         alpn: vec!["h3".to_owned()],
@@ -77,7 +81,7 @@ pub(crate) fn juicity_fixture_url(_ps: &str, add: &str, port: u16, allow_insecur
         server: add.to_owned(),
         port,
         sni: fixture_host(FixtureEndpoint::Authority),
-        allow_insecure,
+        allow_insecure: allow_insecure.then_some(true),
         congestion_control: String::new(),
         pinned_certchain_sha256: String::new(),
         protocol: "juicity".to_owned(),

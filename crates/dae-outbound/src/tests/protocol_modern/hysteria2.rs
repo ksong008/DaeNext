@@ -24,7 +24,10 @@ pub(super) fn hysteria2_rust_native_matches_nativelden_fixture() {
         assert_eq!(parsed.user, case["user"].as_str().unwrap());
         assert_eq!(parsed.password, case["password"].as_str().unwrap());
         assert_eq!(parsed.server, case["server"].as_str().unwrap());
-        assert_eq!(parsed.insecure, case["insecure"].as_bool().unwrap());
+        assert_eq!(
+            parsed.insecure.unwrap_or(false),
+            case["insecure"].as_bool().unwrap()
+        );
         assert_eq!(parsed.sni, case["sni"].as_str().unwrap());
         assert_eq!(parsed.pin_sha256, case["pinSHA256"].as_str().unwrap());
         assert_eq!(parsed.obfs, case["obfs"].as_str().unwrap());
@@ -298,7 +301,7 @@ pub(super) fn hysteria2_export_round_trips_reserved_userinfo_and_fragment_bytes(
 }
 
 #[test]
-pub(super) fn hysteria2_insecure_inputs_map_to_the_secure_default_boolean() {
+pub(super) fn hysteria2_insecure_inputs_preserve_explicit_overrides() {
     let absent =
         crate::hysteria2::Hysteria2Link::parse("hysteria2://auth@example.com:443#tls-policy")
             .unwrap();
@@ -315,14 +318,20 @@ pub(super) fn hysteria2_insecure_inputs_map_to_the_secure_default_boolean() {
     )
     .unwrap();
 
-    assert!(!absent.insecure);
-    assert!(!explicit_false.insecure);
-    assert!(!explicit_zero.insecure);
-    assert!(explicit_true.insecure);
-    assert_eq!(absent.export_url(), explicit_false.export_url());
-    assert_eq!(absent.export_url(), explicit_zero.export_url());
-    assert!(!explicit_false.export_url().contains("insecure"));
+    assert_eq!(absent.insecure, None);
+    assert_eq!(explicit_false.insecure, Some(false));
+    assert_eq!(explicit_zero.insecure, Some(false));
+    assert_eq!(explicit_true.insecure, Some(true));
+    assert_eq!(explicit_false.export_url(), explicit_zero.export_url());
+    assert!(!absent.export_url().contains("insecure"));
+    assert!(explicit_false.export_url().contains("insecure=0"));
     assert!(explicit_true.export_url().contains("insecure=1"));
+    for link in [absent, explicit_false, explicit_zero, explicit_true] {
+        assert_eq!(
+            crate::hysteria2::Hysteria2Link::parse(&link.export_url()).unwrap(),
+            link
+        );
+    }
 }
 
 #[test]
@@ -337,7 +346,8 @@ pub(super) fn hysteria2_certificate_pin_does_not_enable_insecure_parsing() {
     ))
     .unwrap();
 
-    assert!(!absent.insecure);
-    assert!(!explicit_false.insecure);
-    assert_eq!(absent.export_url(), explicit_false.export_url());
+    assert_eq!(absent.insecure, None);
+    assert_eq!(explicit_false.insecure, Some(false));
+    assert!(!absent.export_url().contains("insecure"));
+    assert!(explicit_false.export_url().contains("insecure=0"));
 }

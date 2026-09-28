@@ -15,7 +15,7 @@
     },
     {
       "input": "anytls://auth@fixture.invalid:443?insecure=true#true",
-      "insecure": false,
+      "insecure": true,
       "name": "true-string"
     },
     {
@@ -48,7 +48,7 @@
       "host": "fixture.invalid:8443",
       "hostname": "fixture.invalid",
       "input": "anytls://auth@fixture.invalid:8443?sni=sni.fixture.invalid&peer=peer.fixture.invalid&insecure=true#peer",
-      "insecure": false,
+      "insecure": true,
       "link_preserved": "anytls://auth@fixture.invalid:8443?sni=sni.fixture.invalid&peer=peer.fixture.invalid&insecure=true#peer",
       "name": "peer",
       "property_address": "fixture.invalid:8443",
@@ -129,7 +129,7 @@
   },
   "tls_contract": {
     "empty_sni_server_name": "127.0.0.1",
-    "insecure_only_when": "insecure=1",
+    "insecure_only_when": "insecure=1|true|t (case variants supported)",
     "peer_overrides_sni": true
   },
   "underlay_contract": {

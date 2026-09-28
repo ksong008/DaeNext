@@ -132,7 +132,7 @@ fn http_rust_native_matches_nativelden_fixture() {
         assert_eq!(parsed.sni, case["sni"].as_str().unwrap());
         assert_eq!(parsed.protocol.as_str(), case["protocol"].as_str().unwrap());
         assert_eq!(
-            parsed.allow_insecure,
+            parsed.allow_insecure.unwrap_or(false),
             case["allowInsecure"].as_bool().unwrap()
         );
         assert_eq!(parsed.export_url(), case["export"].as_str().unwrap());

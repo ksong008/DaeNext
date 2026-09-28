@@ -455,7 +455,7 @@ pub(in crate::udp) mod tests {
                     tls_identity:
                         dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
                             "fixture.invalid",
-                            false,
+                            Some(false),
                             false,
                             "",
                         )

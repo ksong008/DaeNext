@@ -12,7 +12,7 @@ pub(crate) fn trojan_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         host: String::new(),
         path: String::new(),
         service_name: String::new(),
-        allow_insecure: false,
+        allow_insecure: None,
         protocol: "trojan".to_owned(),
     }
     .export_url()
@@ -31,7 +31,7 @@ pub(crate) fn trojan_insecure_fixture_url(_ps: &str, add: &str, port: u16) -> St
         host: String::new(),
         path: String::new(),
         service_name: String::new(),
-        allow_insecure: true,
+        allow_insecure: Some(true),
         protocol: "trojan".to_owned(),
     }
     .export_url()
@@ -60,7 +60,7 @@ pub(crate) fn trojan_websocket_fixture_url(_ps: &str, add: &str, port: u16) -> S
         host: fixture_host(FixtureEndpoint::Authority),
         path: "/resource".to_owned(),
         service_name: String::new(),
-        allow_insecure: false,
+        allow_insecure: None,
         protocol: "trojan-go".to_owned(),
     }
     .export_url()
@@ -79,7 +79,7 @@ pub(crate) fn trojan_httpupgrade_fixture_url(_ps: &str, add: &str, port: u16) ->
         host: fixture_host(FixtureEndpoint::Authority),
         path: "/resource".to_owned(),
         service_name: String::new(),
-        allow_insecure: false,
+        allow_insecure: None,
         protocol: "trojan-go".to_owned(),
     }
     .export_url()
@@ -98,7 +98,7 @@ pub(crate) fn trojan_grpc_fixture_url(_ps: &str, add: &str, port: u16) -> String
         host: fixture_host(FixtureEndpoint::Authority),
         path: String::new(),
         service_name: "ServiceEndpoint".to_owned(),
-        allow_insecure: false,
+        allow_insecure: None,
         protocol: "trojan-go".to_owned(),
     }
     .export_url()
@@ -117,7 +117,7 @@ pub(crate) fn trojan_inner_shadowsocks_fixture_url(cipher: &str) -> String {
         host: String::new(),
         path: String::new(),
         service_name: String::new(),
-        allow_insecure: false,
+        allow_insecure: None,
         protocol: "trojan-go".to_owned(),
     }
     .export_url()

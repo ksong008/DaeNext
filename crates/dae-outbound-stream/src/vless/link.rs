@@ -1,3 +1,4 @@
+use dae_outbound_core::tls_options::parse_allow_insecure;
 use serde_json::Value;
 use url::Url;
 
@@ -27,7 +28,7 @@ pub struct VLESSLink {
     pub tls: String,
     pub flow: String,
     pub alpn: String,
-    pub allow_insecure: bool,
+    pub allow_insecure: Option<bool>,
     pub fingerprint: String,
     pub public_key: String,
     pub short_id: String,
@@ -72,7 +73,8 @@ impl VLESSLink {
             tls: query_value(&query, "security").unwrap_or_default(),
             flow: canonical_flow(&query_value(&query, "flow").unwrap_or_default()),
             alpn: query_value(&query, "alpn").unwrap_or_default(),
-            allow_insecure: parse_allow_insecure(&query),
+            allow_insecure: parse_allow_insecure(&query)
+                .map_err(|err| OutboundError::BadVless(err.to_owned()))?,
             fingerprint: query_value(&query, "fp").unwrap_or_default(),
             public_key: query_value(&query, "pbk").unwrap_or_default(),
             short_id: query_value(&query, "sid").unwrap_or_default(),
@@ -189,10 +191,9 @@ impl VLESSLink {
             if let Some(ech) = &self.ech {
                 push_if_non_empty(&mut query, "ech", ech.canonical_base64());
             }
-            query.push((
-                "allowInsecure".to_owned(),
-                if self.allow_insecure { "1" } else { "0" }.to_owned(),
-            ));
+            if let Some(insecure) = self.allow_insecure {
+                query.push(("allowInsecure".to_owned(), u8::from(insecure).to_string()));
+            }
             if self.tls == "reality" {
                 push_if_non_empty(&mut query, "pbk", &self.public_key);
                 push_if_non_empty(&mut query, "sid", &self.short_id);
@@ -276,30 +277,6 @@ fn query_value(
         .iter()
         .find(|(candidate, _)| candidate.as_ref() == key)
         .map(|(_, value)| value.to_string())
-}
-
-fn parse_allow_insecure(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)]) -> bool {
-    [
-        "allowInsecure",
-        "allow_insecure",
-        "allowinsecure",
-        "insecure",
-        "skipVerify",
-    ]
-    .iter()
-    .any(|key| {
-        query_value(query, key)
-            .and_then(|value| parse_bool(&value))
-            .unwrap_or(false)
-    })
-}
-
-fn parse_bool(input: &str) -> Option<bool> {
-    match input {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
-        _ => None,
-    }
 }
 
 fn format_authority(host: &str, port: &str) -> String {

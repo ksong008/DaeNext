@@ -54,7 +54,8 @@ pub(super) fn run_trojan_link(args: &[String]) -> RunnerOutput {
                 "host": parsed.host,
                 "path": parsed.path,
                 "serviceName": parsed.service_name,
-                "allowInsecure": parsed.allow_insecure,
+                "allowInsecure": parsed.allow_insecure.unwrap_or(false),
+                "allow_insecure_configured": parsed.allow_insecure.is_some(),
                 "protocol": parsed.protocol,
                 "export": parsed.export_url(),
             })

@@ -5,12 +5,7 @@ pub const LIVE_SMOKE_REQUIRED: &[&str] = &[
     "local fake HTTP proxy CONNECT with Basic auth",
     "local fake HTTP transport PUT request",
 ];
-pub const ALLOW_INSECURE_ALIASES: &[&str] = &[
-    "allowInsecure",
-    "allow_insecure",
-    "allowinsecure",
-    "skipVerify",
-];
+pub use crate::tls_options::ALLOW_INSECURE_ALIASES;
 pub const HTTPS_DEFAULT_ALPN_QUERY_VALUE: &str = super::HTTP_1_1_ALPN;
 pub const HTTPS_DEFAULT_TLS_IMPLEMENTATION: &str = "tls";
 pub const HTTPS_H2_ROUTE_CONTEXT_REQUIRED: bool = true;

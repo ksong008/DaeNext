@@ -163,7 +163,7 @@ async fn run_hysteria2_quic_loopback_smoke_async(
     let configured_pin_sha256 = colon_dash_pin(&raw_cert_hash);
     let tls_identity = Hysteria2TlsIdentity::from_node_and_global(
         options.server_name.clone(),
-        true,
+        Some(true),
         false,
         &configured_pin_sha256,
     )?;

@@ -1,3 +1,4 @@
+use crate::tls_options::parse_allow_insecure;
 use url::Url;
 
 use crate::error::OutboundError;
@@ -24,7 +25,7 @@ pub struct TrojanLink {
     pub host: String,
     pub path: String,
     pub service_name: String,
-    pub allow_insecure: bool,
+    pub allow_insecure: Option<bool>,
     pub protocol: String,
 }
 
@@ -73,7 +74,8 @@ impl TrojanLink {
             host: String::new(),
             path: String::new(),
             service_name: String::new(),
-            allow_insecure: parse_allow_insecure(&query),
+            allow_insecure: parse_allow_insecure(&query)
+                .map_err(|err| OutboundError::BadTrojan(err.to_owned()))?,
             protocol: protocol.to_owned(),
         };
         if protocol == "trojan-go" {
@@ -116,8 +118,8 @@ impl TrojanLink {
         out.push_str(&self.address());
 
         let mut query = Vec::<(String, String)>::new();
-        if self.allow_insecure {
-            query.push(("allowInsecure".to_owned(), "1".to_owned()));
+        if let Some(insecure) = self.allow_insecure {
+            query.push(("allowInsecure".to_owned(), u8::from(insecure).to_string()));
         }
         if !self.sni.is_empty() {
             query.push(("sni".to_owned(), self.sni.clone()));
@@ -164,29 +166,6 @@ fn query_value(
         .iter()
         .find(|(candidate, _)| candidate.as_ref() == key)
         .map(|(_, value)| value.to_string())
-}
-
-fn parse_allow_insecure(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)]) -> bool {
-    [
-        "allowInsecure",
-        "allow_insecure",
-        "allowinsecure",
-        "skipVerify",
-    ]
-    .iter()
-    .any(|key| {
-        query_value(query, key)
-            .and_then(|value| parse_bool(&value))
-            .unwrap_or(false)
-    })
-}
-
-fn parse_bool(input: &str) -> Option<bool> {
-    match input {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
-        _ => None,
-    }
 }
 
 fn percent_decode(input: &str) -> Result<String, OutboundError> {

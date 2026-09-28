@@ -26,7 +26,7 @@ pub struct VMessLink {
     pub alpn: String,
     pub ech: Option<EchConfigList>,
     pub security: String,
-    pub allow_insecure: bool,
+    pub allow_insecure: Option<bool>,
     pub fingerprint: String,
     pub v: String,
     pub protocol: String,
@@ -94,6 +94,10 @@ impl VMessLink {
     }
 
     pub fn export_url(&self) -> String {
+        let insecure = self
+            .allow_insecure
+            .map(|value| format!(",\"allowInsecure\":{value}"))
+            .unwrap_or_default();
         let security = if self.security.is_empty() {
             String::new()
         } else {
@@ -116,7 +120,7 @@ impl VMessLink {
             String::new()
         };
         let json = format!(
-            "{{\"ps\":{},\"add\":{},\"port\":{},\"id\":{},\"aid\":{},\"net\":{},\"type\":{},\"host\":{},\"sni\":{},\"path\":{},\"tls\":{},\"allowInsecure\":{},\"Fingerprint\":{},\"v\":{},\"protocol\":{}{}{}{}{}{}}}",
+            "{{\"ps\":{},\"add\":{},\"port\":{},\"id\":{},\"aid\":{},\"net\":{},\"type\":{},\"host\":{},\"sni\":{},\"path\":{},\"tls\":{}{},\"Fingerprint\":{},\"v\":{},\"protocol\":{}{}{}{}{}{}}}",
             json_string(&self.ps),
             json_string(&self.add),
             json_string(&self.port),
@@ -128,7 +132,7 @@ impl VMessLink {
             json_string(&self.sni),
             json_string(&self.path),
             json_string(&self.tls),
-            self.allow_insecure,
+            insecure,
             json_string(&self.fingerprint),
             json_string("2"),
             json_string("vmess"),
@@ -230,8 +234,16 @@ struct VMessJsonFields {
     scy: String,
     #[serde(default)]
     security: String,
-    #[serde(default, rename = "allowInsecure")]
-    allow_insecure: bool,
+    #[serde(
+        default,
+        rename = "allowInsecure",
+        alias = "allow_insecure",
+        alias = "allowinsecure",
+        alias = "insecure",
+        alias = "skipVerify",
+        deserialize_with = "deserialize_allow_insecure"
+    )]
+    allow_insecure: Option<bool>,
     #[serde(default, rename = "Fingerprint")]
     fingerprint: String,
     #[serde(default)]
@@ -307,7 +319,8 @@ fn parse_legacy(raw_url: &str, decoded: &str) -> Result<VMessLink, OutboundError
         alpn: String::new(),
         ech: None,
         security,
-        allow_insecure: false,
+        allow_insecure: dae_outbound_core::tls_options::parse_allow_insecure(&query)
+            .map_err(|err| OutboundError::BadVmess(err.to_owned()))?,
         fingerprint: String::new(),
         v: String::new(),
         protocol: String::new(),
@@ -317,6 +330,88 @@ fn parse_legacy(raw_url: &str, decoded: &str) -> Result<VMessLink, OutboundError
 fn decode_base64(input: &str) -> Result<String, OutboundError> {
     decode_base64_with(input, &base64::engine::general_purpose::STANDARD)
         .or_else(|_| decode_base64_with(input, &base64::engine::general_purpose::URL_SAFE))
+}
+
+fn deserialize_allow_insecure<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Bool(bool),
+        Number(u8),
+        Text(String),
+    }
+    let value = match Option::<Value>::deserialize(deserializer)? {
+        None => return Ok(None),
+        Some(Value::Bool(value)) => Some(value),
+        Some(Value::Number(0)) => Some(false),
+        Some(Value::Number(1)) => Some(true),
+        Some(Value::Text(value)) if value.is_empty() => return Ok(None),
+        Some(Value::Text(value)) => dae_outbound_core::tls_options::parse_bool(&value),
+        Some(Value::Number(_)) => None,
+    };
+    value
+        .map(Some)
+        .ok_or_else(|| serde::de::Error::custom("invalid certificate verification boolean"))
+}
+
+#[cfg(test)]
+mod tls_override_tests {
+    use super::*;
+
+    #[test]
+    fn vmess_json_preserves_unset_false_true_and_accepted_spellings() {
+        for (raw, expected) in [
+            ("null", None),
+            ("false", Some(false)),
+            ("0", Some(false)),
+            ("\"0\"", Some(false)),
+            ("\"false\"", Some(false)),
+            ("true", Some(true)),
+            ("1", Some(true)),
+            ("\"true\"", Some(true)),
+        ] {
+            let json = format!(
+                r#"{{"add":"example.com","port":"443","id":"fixture","tls":"tls","allowInsecure":{raw}}}"#
+            );
+            let parsed = parse_json(&json).unwrap();
+            assert_eq!(parsed.allow_insecure, expected);
+            let exported = parsed.export_url();
+            assert_eq!(
+                VMessLink::parse(&exported).unwrap().allow_insecure,
+                expected
+            );
+            if expected.is_none() {
+                assert!(
+                    !decode_base64(exported.strip_prefix("vmess://").unwrap())
+                        .unwrap()
+                        .contains("allowInsecure")
+                );
+            }
+        }
+        assert!(parse_json(r#"{"allowInsecure":"invalid"}"#).is_err());
+        assert!(parse_json(r#"{"allowInsecure":2}"#).is_err());
+    }
+
+    #[test]
+    fn vmess_legacy_query_preserves_explicit_certificate_policy() {
+        for (query, expected) in [
+            ("", None),
+            ("&insecure=0", Some(false)),
+            ("&allowInsecure=true", Some(true)),
+        ] {
+            let auth =
+                base64::engine::general_purpose::STANDARD.encode("auto:fixture@example.com:443");
+            let raw = format!("vmess://{auth}?tls=1{query}");
+            let link = VMessLink::parse(&raw).unwrap();
+            assert_eq!(link.allow_insecure, expected);
+            assert_eq!(
+                VMessLink::parse(&link.export_url()).unwrap().allow_insecure,
+                expected
+            );
+        }
+    }
 }
 
 fn decode_base64_with(

@@ -61,7 +61,7 @@ impl CertificateChain {
 
 fn identity(
     server_name: &str,
-    node_allow_insecure: bool,
+    node_allow_insecure: Option<bool>,
     global_allow_insecure: bool,
     pin: &str,
 ) -> Hysteria2TlsIdentity {
@@ -134,7 +134,7 @@ async fn webpki_and_leaf_pin_are_composed_during_real_handshakes() {
     assert!(
         completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, false, false, ""),
+            &identity(TRUSTED_SERVER_NAME, Some(false), true, ""),
             true,
         )
         .await
@@ -142,7 +142,7 @@ async fn webpki_and_leaf_pin_are_composed_during_real_handshakes() {
     assert!(
         completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, false, false, &right_pin),
+            &identity(TRUSTED_SERVER_NAME, Some(false), true, &right_pin),
             true,
         )
         .await
@@ -150,7 +150,7 @@ async fn webpki_and_leaf_pin_are_composed_during_real_handshakes() {
     assert!(
         !completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, false, false, &wrong_pin),
+            &identity(TRUSTED_SERVER_NAME, Some(false), true, &wrong_pin),
             true,
         )
         .await
@@ -158,7 +158,7 @@ async fn webpki_and_leaf_pin_are_composed_during_real_handshakes() {
     assert!(
         !completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, false, false, ""),
+            &identity(TRUSTED_SERVER_NAME, Some(false), true, ""),
             false,
         )
         .await
@@ -166,7 +166,7 @@ async fn webpki_and_leaf_pin_are_composed_during_real_handshakes() {
     assert!(
         !completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, false, false, &right_pin),
+            &identity(TRUSTED_SERVER_NAME, Some(false), true, &right_pin),
             false,
         )
         .await
@@ -174,7 +174,7 @@ async fn webpki_and_leaf_pin_are_composed_during_real_handshakes() {
     assert!(
         !completes_handshake(
             &chain,
-            &identity(WRONG_SERVER_NAME, false, false, &right_pin),
+            &identity(WRONG_SERVER_NAME, Some(false), true, &right_pin),
             true,
         )
         .await
@@ -191,7 +191,7 @@ async fn certificate_validity_remains_required_when_a_pin_matches() {
         assert!(
             !completes_handshake(
                 &chain,
-                &identity(TRUSTED_SERVER_NAME, false, false, &chain.leaf_pin(),),
+                &identity(TRUSTED_SERVER_NAME, Some(false), true, &chain.leaf_pin()),
                 true,
             )
             .await
@@ -205,7 +205,7 @@ async fn explicit_insecure_mode_accepts_any_certificate_but_still_enforces_a_pin
     assert!(
         completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, true, false, ""),
+            &identity(TRUSTED_SERVER_NAME, Some(true), false, ""),
             false,
         )
         .await
@@ -213,7 +213,7 @@ async fn explicit_insecure_mode_accepts_any_certificate_but_still_enforces_a_pin
     assert!(
         completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, true, false, &chain.leaf_pin(),),
+            &identity(TRUSTED_SERVER_NAME, Some(true), false, &chain.leaf_pin()),
             false,
         )
         .await
@@ -221,7 +221,12 @@ async fn explicit_insecure_mode_accepts_any_certificate_but_still_enforces_a_pin
     assert!(
         !completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, true, false, &chain.wrong_leaf_pin(),),
+            &identity(
+                TRUSTED_SERVER_NAME,
+                Some(true),
+                false,
+                &chain.wrong_leaf_pin()
+            ),
             false,
         )
         .await
@@ -234,7 +239,15 @@ async fn inherited_insecure_mode_and_node_pin_form_pin_only_verification() {
     assert!(
         completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, false, true, &chain.leaf_pin(),),
+            &identity(TRUSTED_SERVER_NAME, None, true, ""),
+            false,
+        )
+        .await
+    );
+    assert!(
+        completes_handshake(
+            &chain,
+            &identity(TRUSTED_SERVER_NAME, None, true, &chain.leaf_pin()),
             false,
         )
         .await
@@ -242,7 +255,7 @@ async fn inherited_insecure_mode_and_node_pin_form_pin_only_verification() {
     assert!(
         !completes_handshake(
             &chain,
-            &identity(TRUSTED_SERVER_NAME, false, true, &chain.wrong_leaf_pin(),),
+            &identity(TRUSTED_SERVER_NAME, None, true, &chain.wrong_leaf_pin()),
             false,
         )
         .await
@@ -251,7 +264,7 @@ async fn inherited_insecure_mode_and_node_pin_form_pin_only_verification() {
 
 #[test]
 fn typed_identity_fixes_the_application_and_client_security_shape() {
-    let identity = identity(TRUSTED_SERVER_NAME, false, false, "");
+    let identity = identity(TRUSTED_SERVER_NAME, None, false, "");
     assert_eq!(
         identity.application_protocol(),
         Hysteria2ApplicationProtocol::Http3

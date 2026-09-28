@@ -49,7 +49,8 @@ pub(super) fn run_http_link(args: &[String]) -> RunnerOutput {
                 "sni": parsed.sni,
                 "effective_sni": parsed.effective_sni(),
                 "protocol": parsed.protocol.as_str(),
-                "allowInsecure": parsed.allow_insecure,
+                "allowInsecure": parsed.allow_insecure.unwrap_or(false),
+                "allow_insecure_configured": parsed.allow_insecure.is_some(),
                 "export": parsed.export_url(),
             })
         )),

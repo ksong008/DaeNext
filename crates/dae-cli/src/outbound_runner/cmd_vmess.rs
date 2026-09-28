@@ -71,7 +71,8 @@ pub(super) fn run_vmess_link(args: &[String]) -> RunnerOutput {
                 "sni": parsed.sni,
                 "path": parsed.path,
                 "tls": parsed.tls,
-                "allowInsecure": parsed.allow_insecure,
+                "allowInsecure": parsed.allow_insecure.unwrap_or(false),
+                "allow_insecure_configured": parsed.allow_insecure.is_some(),
                 "protocol": parsed.protocol,
                 "export": parsed.export_url(),
             })

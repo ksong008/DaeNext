@@ -26,7 +26,7 @@ pub(super) fn juicity_rust_native_matches_nativelden_fixture() {
         assert_eq!(parsed.port, case["port"].as_u64().unwrap() as u16);
         assert_eq!(parsed.sni, case["sni"].as_str().unwrap());
         assert_eq!(
-            parsed.allow_insecure,
+            parsed.allow_insecure.unwrap_or(false),
             case["allowInsecure"].as_bool().unwrap()
         );
         assert_eq!(
@@ -73,7 +73,7 @@ pub(super) fn juicity_rust_native_matches_nativelden_fixture() {
     for case in fixture["allow_insecure_aliases"].as_array().unwrap() {
         let parsed = crate::juicity::JuicityLink::parse(case["input"].as_str().unwrap()).unwrap();
         assert_eq!(
-            parsed.allow_insecure,
+            parsed.allow_insecure.unwrap_or(false),
             case["allowInsecure"].as_bool().unwrap()
         );
         assert_eq!(parsed.export_url(), case["export"].as_str().unwrap());

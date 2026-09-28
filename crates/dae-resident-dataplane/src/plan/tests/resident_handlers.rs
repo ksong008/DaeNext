@@ -417,7 +417,7 @@ pub(super) fn resident_protocol_executor_contract_covers_all_plan_variants() {
             auth: fixture_secret(),
             tls_identity: dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
                 fixture_host(FixtureEndpoint::Authority),
-                false,
+                Some(false),
                 false,
                 &fixture_pin_sha256(),
             )

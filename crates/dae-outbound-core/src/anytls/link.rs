@@ -16,7 +16,7 @@ pub struct AnyTLSLink {
     pub hostname: String,
     pub sni: String,
     pub tls_server_name: String,
-    pub insecure: bool,
+    pub insecure: Option<bool>,
     pub protocol: String,
 }
 
@@ -72,7 +72,8 @@ impl AnyTLSLink {
             hostname,
             sni,
             tls_server_name,
-            insecure: query_value(&query, "insecure").as_deref() == Some("1"),
+            insecure: crate::tls_options::parse_allow_insecure(&query)
+                .map_err(|err| OutboundError::BadAnyTLS(err.to_owned()))?,
             protocol: "anytls".to_owned(),
         })
     }
