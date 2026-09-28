@@ -6,6 +6,8 @@ use std::process::Command;
 
 use serde_json::{Map, Value, json};
 
+mod lan;
+
 fn interface_address_entry(addr: &Value, only_global_scope: bool) -> Option<(String, Value)> {
     let scope = addr["scope"].as_str();
     if only_global_scope && scope.is_some_and(|value| value != "global") {
@@ -38,10 +40,13 @@ fn inferred_address_family(local: &str) -> &'static str {
 
 pub fn list_system_interfaces(up: Option<bool>, only_global_scope: bool) -> io::Result<Vec<Value>> {
     let routes_by_iface = default_routes_by_iface();
-    match ip_address_interfaces(up, only_global_scope, &routes_by_iface) {
-        Ok(items) => Ok(items),
-        Err(_) => sysfs_interfaces(up, &routes_by_iface),
-    }
+    let mut items = match ip_address_interfaces(None, only_global_scope, &routes_by_iface) {
+        Ok(items) => items,
+        Err(_) => sysfs_interfaces(None, &routes_by_iface)?,
+    };
+    lan::annotate_lan_recommendations(&mut items);
+    items.retain(|item| up.is_none_or(|wanted| item["up"].as_bool() == Some(wanted)));
+    Ok(items)
 }
 
 pub fn ip_address_interfaces(
@@ -118,21 +123,35 @@ pub fn collect_default_routes(
     let Ok(routes) = serde_json::from_slice::<Value>(&output.stdout) else {
         return;
     };
+    collect_default_route_values(out, ip_version, &routes);
+}
+
+fn collect_default_route_values(
+    out: &mut HashMap<String, Vec<Value>>,
+    ip_version: &str,
+    routes: &Value,
+) {
     for route in routes.as_array().into_iter().flatten() {
-        let Some(dev) = route["dev"].as_str().filter(|value| !value.is_empty()) else {
-            continue;
-        };
-        let mut item = Map::new();
-        item.insert("ipVersion".to_owned(), json!(ip_version));
-        if let Some(gateway) = route["gateway"].as_str() {
-            item.insert("gateway".to_owned(), json!(gateway));
+        let hops = std::iter::once(route).chain(route["nexthops"].as_array().into_iter().flatten());
+        for hop in hops {
+            let Some(dev) = hop["dev"].as_str().filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            let mut item = Map::new();
+            item.insert("ipVersion".to_owned(), json!(ip_version));
+            if let Some(gateway) = hop["gateway"]
+                .as_str()
+                .or_else(|| route["gateway"].as_str())
+            {
+                item.insert("gateway".to_owned(), json!(gateway));
+            }
+            if let Some(source) = route["prefsrc"].as_str().or_else(|| route["src"].as_str()) {
+                item.insert("source".to_owned(), json!(source));
+            }
+            out.entry(dev.to_owned())
+                .or_default()
+                .push(Value::Object(item));
         }
-        if let Some(source) = route["prefsrc"].as_str().or_else(|| route["src"].as_str()) {
-            item.insert("source".to_owned(), json!(source));
-        }
-        out.entry(dev.to_owned())
-            .or_default()
-            .push(Value::Object(item));
     }
 }
 
@@ -181,6 +200,32 @@ pub fn sysfs_interfaces(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_routes_include_all_multipath_uplinks() {
+        let mut routes = HashMap::new();
+        collect_default_route_values(
+            &mut routes,
+            "4",
+            &json!([
+                {"dst": "default", "nexthops": [
+                    {"dev": "wan1", "gateway": "192.0.2.1"},
+                    {"dev": "wan2", "gateway": "198.51.100.1"}
+                ]},
+                {"dst": "default", "dev": "wan3", "gateway": "203.0.113.1"}
+            ]),
+        );
+        assert_eq!(routes.len(), 3);
+        assert_eq!(routes["wan2"][0]["gateway"], "198.51.100.1");
+        collect_default_route_values(
+            &mut routes,
+            "6",
+            &json!([
+                {"dst": "default", "dev": "wan1", "gateway": "fe80::1"}
+            ]),
+        );
+        assert_eq!(routes["wan1"].len(), 2);
+    }
 
     #[test]
     fn interface_address_entry_preserves_ipv6_details() {
