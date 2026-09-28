@@ -24,3 +24,5 @@ mod resident_handlers;
 mod socket_mark;
 #[cfg(test)]
 mod source_shape_reconciliation;
+#[cfg(test)]
+mod tls_overrides;

@@ -1,3 +1,4 @@
+use crate::tls_options::parse_allow_insecure;
 use std::borrow::Cow;
 
 use dae_netutil::{MagicNetworkEncoding, encode_magic_network_with_encoding};
@@ -13,7 +14,7 @@ pub struct TuicLink {
     pub server: String,
     pub port: u16,
     pub sni: String,
-    pub allow_insecure: bool,
+    pub allow_insecure: Option<bool>,
     pub disable_sni: bool,
     pub congestion_control: String,
     pub alpn: Vec<String>,
@@ -87,7 +88,8 @@ impl TuicLink {
             .filter(|value| !value.is_empty())
             .or_else(|| query_value(&query, "sni").filter(|value| !value.is_empty()))
             .unwrap_or_else(|| host.clone());
-        let allow_insecure = parse_allow_insecure(&query);
+        let allow_insecure =
+            parse_allow_insecure(&query).map_err(|err| OutboundError::BadTuic(err.to_owned()))?;
         let disable_sni = query_value(&query, "disable_sni")
             .and_then(|value| parse_bool(&value))
             .unwrap_or(false);
@@ -127,8 +129,11 @@ impl TuicLink {
 
     pub fn export_url(&self) -> String {
         let mut query = Vec::<(&str, Cow<'_, str>)>::new();
-        if self.allow_insecure {
-            query.push(("allow_insecure", Cow::Borrowed("1")));
+        if let Some(insecure) = self.allow_insecure {
+            query.push((
+                "allow_insecure",
+                Cow::Borrowed(if insecure { "1" } else { "0" }),
+            ));
         }
         push_if_non_empty(&mut query, "sni", &self.sni);
         if self.disable_sni {
@@ -238,22 +243,6 @@ fn query_value(
 
 fn query_has(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)], key: &str) -> bool {
     query.iter().any(|(candidate, _)| candidate.as_ref() == key)
-}
-
-fn parse_allow_insecure(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)]) -> bool {
-    for key in [
-        "allowInsecure",
-        "allow_insecure",
-        "allowinsecure",
-        "skipVerify",
-    ] {
-        if let Some(value) = query_value(query, key)
-            && parse_bool(&value).unwrap_or(false)
-        {
-            return true;
-        }
-    }
-    false
 }
 
 fn parse_bool(input: &str) -> Option<bool> {
@@ -406,7 +395,7 @@ mod tests {
             server: "example.com".to_owned(),
             port: 443,
             sni: "sni.example.com".to_owned(),
-            allow_insecure: true,
+            allow_insecure: Some(true),
             disable_sni: false,
             congestion_control: "bbr".to_owned(),
             alpn: vec!["h3".to_owned(), "h2".to_owned()],

@@ -82,7 +82,8 @@ pub(super) fn run_anytls_link(args: &[String]) -> RunnerOutput {
                 "hostname": parsed.hostname,
                 "sni": parsed.sni,
                 "tls_server_name": parsed.tls_server_name,
-                "insecure": parsed.insecure,
+                "insecure": parsed.insecure.unwrap_or(false),
+                "insecure_configured": parsed.insecure.is_some(),
                 "protocol": parsed.protocol,
                 "link_preserved": parsed.export_url(),
             })
@@ -215,7 +216,8 @@ pub(super) fn run_anytls_smoke(args: &[String]) -> RunnerOutput {
             "export": parsed.export_url(),
             "sni": parsed.sni,
             "tls_server_name": parsed.tls_server_name,
-            "insecure": parsed.insecure,
+            "insecure": parsed.insecure.unwrap_or(false),
+                "insecure_configured": parsed.insecure.is_some(),
             "auth_key_hex": hex_encode(&anytls::link::auth_key(&parsed.auth)),
             "udp_stream_target": stream_target,
             "underlay": {

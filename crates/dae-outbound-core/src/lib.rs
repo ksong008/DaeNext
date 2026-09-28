@@ -22,6 +22,7 @@ pub mod socks5;
 pub mod source_shape_registry;
 pub mod stream_wrapper_capability;
 pub mod surface;
+pub mod tls_options;
 pub mod trojan;
 pub mod tuic;
 pub mod types;

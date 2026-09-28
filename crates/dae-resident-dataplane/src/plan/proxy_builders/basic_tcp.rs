@@ -74,7 +74,9 @@ pub(crate) fn build_http_proxy_plan(
         ));
     }
     let allow_insecure = parsed.protocol == HttpScheme::Https
-        && (parsed.allow_insecure || config.global.allow_insecure);
+        && (parsed
+            .allow_insecure
+            .unwrap_or(config.global.allow_insecure));
     let utls_fingerprint = match parsed.protocol {
         HttpScheme::Http => None,
         HttpScheme::Https if !parsed.utls_imitate.trim().is_empty() => {

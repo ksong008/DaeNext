@@ -195,7 +195,7 @@ fn vmess_rust_native_matches_nativelden_fixture() {
         assert_eq!(parsed.path, case["path"].as_str().unwrap());
         assert_eq!(parsed.tls, case["tls"].as_str().unwrap());
         assert_eq!(
-            parsed.allow_insecure,
+            parsed.allow_insecure.unwrap_or(false),
             case["allowInsecure"].as_bool().unwrap()
         );
         assert_eq!(parsed.protocol, case["protocol"].as_str().unwrap());
@@ -324,7 +324,7 @@ fn vless_rust_native_matches_nativelden_fixture() {
         assert_eq!(parsed.flow, case["flow"].as_str().unwrap());
         assert_eq!(parsed.alpn, case["alpn"].as_str().unwrap());
         assert_eq!(
-            parsed.allow_insecure,
+            parsed.allow_insecure.unwrap_or(false),
             case["allowInsecure"].as_bool().unwrap()
         );
         assert_eq!(parsed.fingerprint, case["fp"].as_str().unwrap());
@@ -349,7 +349,7 @@ fn vless_rust_native_matches_nativelden_fixture() {
     for case in fixture["allow_insecure_aliases"].as_array().unwrap() {
         let parsed = crate::vless::VLESSLink::parse(case["input"].as_str().unwrap()).unwrap();
         assert_eq!(
-            parsed.allow_insecure,
+            parsed.allow_insecure.unwrap_or(false),
             case["allowInsecure"].as_bool().unwrap()
         );
         assert_eq!(parsed.export_url(), case["export"].as_str().unwrap());

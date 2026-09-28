@@ -55,7 +55,7 @@ async fn port_hopping_preserves_the_live_quic_connection_across_streams() {
     .unwrap();
     let tls_identity = dae_outbound::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
         "localhost".to_owned(),
-        true,
+        Some(true),
         false,
         "",
     )

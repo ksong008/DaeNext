@@ -191,7 +191,7 @@ fn http_proxy_url(
         password: fixture_secret(),
         sni: String::new(),
         protocol,
-        allow_insecure,
+        allow_insecure: allow_insecure.then_some(true),
         host: String::new(),
         path: "/".to_owned(),
         transport: false,

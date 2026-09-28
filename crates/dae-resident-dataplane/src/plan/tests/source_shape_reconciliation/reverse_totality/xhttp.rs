@@ -65,7 +65,7 @@ fn h3_covers_both_verification_modes_and_normalizes_fragment_for_every_mode() {
         assert_h3_shape(verified_shape, mode, MaterializedQuicVerification::WebPki);
 
         let mut insecure = VLESSLink::parse(&verified).unwrap();
-        insecure.allow_insecure = true;
+        insecure.allow_insecure = Some(true);
         let insecure = insecure.export_url();
         let insecure_shape = assert_exact_source(
             &insecure,
@@ -124,7 +124,7 @@ fn download_and_xmux_extensions_have_only_the_aggregate_disposition() {
 
 fn xhttp_tls_source(mode: &str, alpn: &str, extra: &str, profile: TlsProfile) -> String {
     let mut link = VLESSLink::parse(&vless_xhttp_parser_fixture_url(mode, alpn, extra)).unwrap();
-    link.allow_insecure = profile.allow_insecure();
+    link.allow_insecure = Some(profile.allow_insecure());
     link.fingerprint = profile.link_fingerprint().to_owned();
     link.export_url()
 }

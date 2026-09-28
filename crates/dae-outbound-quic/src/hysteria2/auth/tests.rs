@@ -37,7 +37,7 @@ async fn authenticated_session_keeps_quic_open_for_hysteria2_streams() {
         .unwrap();
         let tls_identity = Hysteria2TlsIdentity::from_node_and_global(
             DEFAULT_HYSTERIA2_SERVER_NAME,
-            true,
+            Some(true),
             false,
             &raw_cert_sha256_hex(cert_der.as_ref()),
         )

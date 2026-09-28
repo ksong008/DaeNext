@@ -10,12 +10,12 @@ fn vless_native_and_wrapped_tls_variants_have_exact_production_dispositions() {
             profile.link_fingerprint(),
         ))
         .unwrap();
-        native.allow_insecure = profile.allow_insecure();
+        native.allow_insecure = Some(profile.allow_insecure());
         assert_exact_tls_source(native.export_url(), profile, &["vless-native-tcp-endpoint"]);
 
         let mut vision =
             VLESSLink::parse(&vless_vision_fixture_url(profile.link_fingerprint())).unwrap();
-        vision.allow_insecure = profile.allow_insecure();
+        vision.allow_insecure = Some(profile.allow_insecure());
         assert_exact_tls_source(
             vision.export_url(),
             profile,
@@ -40,7 +40,7 @@ fn vless_native_and_wrapped_tls_variants_have_exact_production_dispositions() {
                 profile.link_fingerprint(),
             ))
             .unwrap();
-            link.allow_insecure = profile.allow_insecure();
+            link.allow_insecure = Some(profile.allow_insecure());
             assert_exact_tls_source(link.export_url(), profile, &[expected_id]);
         }
     }
@@ -115,7 +115,7 @@ fn vmess_tls_variants_have_exact_transport_rows() {
                 &authority,
             );
             let mut link = VMessLink::parse(&source).unwrap();
-            link.allow_insecure = profile.allow_insecure();
+            link.allow_insecure = Some(profile.allow_insecure());
             link.fingerprint = profile.link_fingerprint().to_owned();
             assert_exact_tls_source(link.export_url(), profile, &[expected_id]);
         }
@@ -128,7 +128,7 @@ fn trojan_tls_variants_respect_plain_and_wrapped_fingerprint_boundaries() {
     for profile in TlsProfile::ALL {
         let mut plain =
             TrojanLink::parse(&trojan_fixture_url("", &primary, fixture_port(4))).unwrap();
-        plain.allow_insecure = profile.allow_insecure();
+        plain.allow_insecure = Some(profile.allow_insecure());
         assert_exact_tls_source(plain.export_url(), profile, &["baseline-tls-auth-endpoint"]);
     }
 
@@ -152,7 +152,7 @@ fn trojan_tls_variants_respect_plain_and_wrapped_fingerprint_boundaries() {
             ),
         ] {
             let mut link = TrojanLink::parse(&source).unwrap();
-            link.allow_insecure = profile.allow_insecure();
+            link.allow_insecure = Some(profile.allow_insecure());
             assert_exact_tls_source(link.export_url(), profile, &[expected_id]);
         }
     }

@@ -183,7 +183,7 @@ fn trojan_type_tcp_is_plain_transport() {
         parsed.transport_kind(),
         crate::trojan::TrojanTransportType::None
     );
-    assert!(!parsed.allow_insecure);
+    assert!(!parsed.allow_insecure.unwrap_or(false));
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn trojan_rust_native_matches_nativelden_fixture() {
         assert_eq!(parsed.path, case["path"].as_str().unwrap());
         assert_eq!(parsed.service_name, case["serviceName"].as_str().unwrap());
         assert_eq!(
-            parsed.allow_insecure,
+            parsed.allow_insecure.unwrap_or(false),
             case["allowInsecure"].as_bool().unwrap()
         );
         assert_eq!(parsed.protocol, case["protocol"].as_str().unwrap());

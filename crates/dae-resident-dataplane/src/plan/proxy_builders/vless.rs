@@ -99,7 +99,7 @@ pub(crate) fn build_vless_proxy_plan(
             vless.tls
         ));
     }
-    let requested_allow_insecure = vless.allow_insecure || config.global.allow_insecure;
+    let requested_allow_insecure = vless.allow_insecure.unwrap_or(config.global.allow_insecure);
     let xhttp_primary_http_version = (net == "xhttp").then(|| {
         let alpn = if vless.alpn.trim().is_empty() {
             Vec::new()

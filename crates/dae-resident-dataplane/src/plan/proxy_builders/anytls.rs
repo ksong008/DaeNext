@@ -7,7 +7,7 @@ pub(crate) fn build_anytls_proxy_plan(
 ) -> Result<ResidentProxyPlan, String> {
     let parsed =
         AnyTLSLink::parse(&link).map_err(|err| format!("parse AnyTLS node {node_tag}: {err}"))?;
-    let allow_insecure = parsed.insecure || config.global.allow_insecure;
+    let allow_insecure = parsed.insecure.unwrap_or(config.global.allow_insecure);
     let url =
         Url::parse(&link).map_err(|err| format!("parse AnyTLS endpoint {node_tag}: {err}"))?;
     let server_host = url

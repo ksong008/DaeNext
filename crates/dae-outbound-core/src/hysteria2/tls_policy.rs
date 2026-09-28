@@ -93,11 +93,11 @@ pub struct Hysteria2TlsPolicy {
 
 impl Hysteria2TlsPolicy {
     pub fn from_node_and_global(
-        node_allow_insecure: bool,
+        node_allow_insecure: Option<bool>,
         global_allow_insecure: bool,
         configured_pin_sha256: &str,
     ) -> Result<Self, OutboundError> {
-        let verification = if node_allow_insecure || global_allow_insecure {
+        let verification = if node_allow_insecure.unwrap_or(global_allow_insecure) {
             Hysteria2CertificateVerification::ExplicitInsecure
         } else {
             Hysteria2CertificateVerification::WebPki
@@ -167,7 +167,7 @@ pub struct Hysteria2TlsIdentity {
 impl Hysteria2TlsIdentity {
     pub fn from_node_and_global(
         server_name: impl Into<String>,
-        node_allow_insecure: bool,
+        node_allow_insecure: Option<bool>,
         global_allow_insecure: bool,
         configured_pin_sha256: &str,
     ) -> Result<Self, OutboundError> {
@@ -286,11 +286,11 @@ mod tests {
 
     #[test]
     fn effective_policy_preserves_trust_and_pin_as_independent_dimensions() {
-        let secure = Hysteria2TlsPolicy::from_node_and_global(false, false, "").unwrap();
-        let secure_pin = Hysteria2TlsPolicy::from_node_and_global(false, false, PIN).unwrap();
-        let insecure = Hysteria2TlsPolicy::from_node_and_global(true, false, "").unwrap();
+        let secure = Hysteria2TlsPolicy::from_node_and_global(Some(false), false, "").unwrap();
+        let secure_pin = Hysteria2TlsPolicy::from_node_and_global(Some(false), false, PIN).unwrap();
+        let insecure = Hysteria2TlsPolicy::from_node_and_global(Some(true), false, "").unwrap();
         let inherited_insecure_pin =
-            Hysteria2TlsPolicy::from_node_and_global(false, true, PIN).unwrap();
+            Hysteria2TlsPolicy::from_node_and_global(None, true, PIN).unwrap();
 
         assert_eq!(secure.verification_label(), "webpki");
         assert_eq!(
@@ -314,11 +314,11 @@ mod tests {
             .join(":")
             .to_ascii_uppercase();
         let canonical =
-            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", false, false, PIN)
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", Some(false), false, PIN)
                 .unwrap();
         let alternate = Hysteria2TlsIdentity::from_node_and_global(
             "fixture.invalid",
-            false,
+            Some(false),
             false,
             &colon_separated,
         )
@@ -333,16 +333,15 @@ mod tests {
     #[test]
     fn effective_identity_tracks_policy_and_pin_without_source_provenance() {
         let secure =
-            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", false, false, "")
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", Some(false), true, "")
                 .unwrap();
         let same_secure =
-            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", false, false, "")
-                .unwrap();
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", None, false, "").unwrap();
         let secure_pin =
-            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", false, false, PIN)
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", Some(false), true, PIN)
                 .unwrap();
         let insecure =
-            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", true, false, "").unwrap();
+            Hysteria2TlsIdentity::from_node_and_global("fixture.invalid", None, true, "").unwrap();
 
         assert_eq!(
             secure.effective_identity_sha256(),
@@ -361,18 +360,20 @@ mod tests {
     #[test]
     fn malformed_pin_is_rejected_before_transport_construction() {
         for pin in ["00", "not-a-hash", "--::"] {
-            assert!(Hysteria2TlsPolicy::from_node_and_global(false, false, pin).is_err());
+            assert!(Hysteria2TlsPolicy::from_node_and_global(Some(false), false, pin).is_err());
         }
     }
 
     #[test]
     fn invalid_server_name_is_rejected_before_transport_construction() {
-        assert!(Hysteria2TlsIdentity::from_node_and_global("bad name", false, false, "").is_err());
+        assert!(
+            Hysteria2TlsIdentity::from_node_and_global("bad name", Some(false), false, "").is_err()
+        );
     }
 
     #[test]
     fn debug_output_redacts_the_configured_pin() {
-        let policy = Hysteria2TlsPolicy::from_node_and_global(false, false, PIN).unwrap();
+        let policy = Hysteria2TlsPolicy::from_node_and_global(Some(false), false, PIN).unwrap();
         let rendered = format!("{policy:?}");
         assert!(rendered.contains("leaf_certificate_pin_configured: true"));
         assert!(!rendered.contains(PIN));

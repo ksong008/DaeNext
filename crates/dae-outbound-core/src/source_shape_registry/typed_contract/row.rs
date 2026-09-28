@@ -96,7 +96,7 @@ impl SourceShapeRegistryRow {
 
     fn pin_requirement(self) -> &'static str {
         match self.protocol_family {
-            "hysteria2" => "certificate-pin-required",
+            "hysteria2" => "certificate-pin-supported",
             "juicity" => "certificate-chain-pin-supported",
             _ if self.security_underlay == "verified-quic-tls" => {
                 "certificate-verification-required"

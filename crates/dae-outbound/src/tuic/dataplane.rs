@@ -130,7 +130,7 @@ pub fn run_true_quic_dataplane_smoke(
         && quic.alpn_protocols == vec![DEFAULT_TUIC_ALPN.to_owned()];
     let disable_sni_contract_admitted = disable_sni_probe.disable_sni
         && disable_sni_probe.sni.is_empty()
-        && !disable_sni_probe.allow_insecure;
+        && !disable_sni_probe.allow_insecure.unwrap_or(false);
     let udp_relay_mode_native_admitted = udp_relay_mode == TuicUdpRelayMode::Native;
     let underlay_contract_admitted = underlay.tcp_underlay_uses_udp
         && underlay.tcp_underlay_preserves_mark
@@ -169,10 +169,10 @@ pub fn run_true_quic_dataplane_smoke(
         password_present: !link.password.is_empty(),
         server,
         sni: link.sni,
-        allow_insecure: link.allow_insecure,
+        allow_insecure: link.allow_insecure.unwrap_or(false),
         disable_sni: link.disable_sni,
         disable_sni_probe_sni: disable_sni_probe.sni,
-        disable_sni_probe_allow_insecure: disable_sni_probe.allow_insecure,
+        disable_sni_probe_allow_insecure: disable_sni_probe.allow_insecure.unwrap_or(false),
         congestion_control: link.congestion_control,
         alpn: link.alpn,
         udp_relay_mode: link.udp_relay_mode,

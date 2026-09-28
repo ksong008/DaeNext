@@ -151,7 +151,10 @@ pub(crate) fn build_vmess_proxy_plan(
     if tls == "tls" {
         validate_resident_h2_carrier_alpn(&alpn, &net, &node_tag)?;
     }
-    let allow_insecure = tls == "tls" && (parsed.allow_insecure || config.global.allow_insecure);
+    let allow_insecure = tls == "tls"
+        && (parsed
+            .allow_insecure
+            .unwrap_or(config.global.allow_insecure));
     let graph = resident_graph_identity(&link);
     Ok(ResidentProxyPlan {
         graph_id: graph.graph_id,

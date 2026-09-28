@@ -25,8 +25,11 @@ pub(crate) fn build_tuic_proxy_plan(
     } else {
         parsed.alpn.clone()
     };
-    let allow_insecure =
-        parsed.allow_insecure || config.global.allow_insecure || parsed.disable_sni;
+    // Preserve TUIC's legacy disable_sni certificate-verification bypass.
+    let allow_insecure = parsed
+        .allow_insecure
+        .unwrap_or(config.global.allow_insecure)
+        || parsed.disable_sni;
     let congestion =
         dae_outbound_quic::tuic::TuicCongestionController::from_config(&parsed.congestion_control)
             .map_err(|err| format!("validate TUIC congestion controller for {node_tag}: {err}"))?;
@@ -256,7 +259,9 @@ pub(crate) fn build_juicity_proxy_plan(
             "resident dataplane generic QUIC handler requires Juicity password for node {node_tag}; resident shape remains fail-closed for this config"
         ));
     }
-    let allow_insecure = parsed.allow_insecure || config.global.allow_insecure;
+    let allow_insecure = parsed
+        .allow_insecure
+        .unwrap_or(config.global.allow_insecure);
     let congestion = dae_outbound_quic::juicity::JuicityCongestionController::from_config(
         &parsed.congestion_control,
     )

@@ -5,7 +5,7 @@ use dae_outbound::{MaterializedSecurity, MaterializedTlsFeatures, MaterializedTl
 fn meek_tls_and_reality_variants_have_exact_dispositions() {
     for profile in TlsProfile::ALL {
         let mut link = VLESSLink::parse(&meek_tls_source()).unwrap();
-        link.allow_insecure = profile.allow_insecure();
+        link.allow_insecure = Some(profile.allow_insecure());
         link.fingerprint = profile.link_fingerprint().to_owned();
         assert_exact_tls_source(
             link.export_url(),
@@ -36,7 +36,7 @@ fn meek_tls_and_reality_variants_have_exact_dispositions() {
 fn mux_reaches_its_exact_row_for_every_stream_tls_variant() {
     for profile in TlsProfile::ALL {
         let mut link = VLESSLink::parse(&vless_mux_fixture_url()).unwrap();
-        link.allow_insecure = profile.allow_insecure();
+        link.allow_insecure = Some(profile.allow_insecure());
         link.fingerprint = profile.link_fingerprint().to_owned();
         assert_exact_tls_source(link.export_url(), profile, &["mux-transport-wrapper"]);
     }

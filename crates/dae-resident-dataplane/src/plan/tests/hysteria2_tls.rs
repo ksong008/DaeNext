@@ -25,6 +25,49 @@ fn fixture_endpoint() -> String {
 }
 
 #[test]
+fn node_insecure_overrides_global_only_when_explicitly_configured() {
+    let pin = fixture_pin_sha256();
+    for global in [false, true] {
+        for (query, expected_insecure) in [
+            ("", global),
+            ("insecure=", global),
+            ("insecure=0", false),
+            ("insecure=false", false),
+            ("insecure=1", true),
+            ("insecure=true", true),
+        ] {
+            for pin in ["", pin.as_str()] {
+                let proxy = build_resident_proxy_plan_for_node(
+                    &config_with_global_insecure(global),
+                    "proxy".to_owned(),
+                    "hysteria2_tls_override".to_owned(),
+                    format!(
+                        "hysteria2://auth@{}?{query}&pinSHA256={pin}",
+                        fixture_endpoint()
+                    ),
+                )
+                .unwrap();
+                let ResidentProxyProtocolPlan::Hysteria2QuicTcp { tls_identity, .. } =
+                    proxy.handler
+                else {
+                    panic!("expected a Hysteria2 plan");
+                };
+                assert_eq!(
+                    tls_identity.policy().allow_insecure(),
+                    expected_insecure,
+                    "global={global}, query={query}"
+                );
+                assert_eq!(tls_identity.policy().requires_webpki(), !expected_insecure);
+                assert_eq!(
+                    tls_identity.policy().has_leaf_certificate_pin(),
+                    !pin.is_empty()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn inherited_insecure_mode_preserves_the_node_certificate_pin() {
     let config = config_with_global_insecure(true);
     let proxy = build_resident_proxy_plan_for_node(

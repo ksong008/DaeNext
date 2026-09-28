@@ -1,3 +1,4 @@
+use crate::tls_options::parse_allow_insecure;
 use base64::{Engine as _, engine::general_purpose};
 use dae_netutil::{MagicNetworkEncoding, encode_magic_network_with_encoding};
 use url::Url;
@@ -12,7 +13,7 @@ pub struct JuicityLink {
     pub server: String,
     pub port: u16,
     pub sni: String,
-    pub allow_insecure: bool,
+    pub allow_insecure: Option<bool>,
     pub congestion_control: String,
     pub pinned_certchain_sha256: String,
     pub protocol: String,
@@ -73,7 +74,8 @@ impl JuicityLink {
             server: host,
             port,
             sni,
-            allow_insecure: parse_allow_insecure(&query),
+            allow_insecure: parse_allow_insecure(&query)
+                .map_err(|err| OutboundError::BadJuicity(err.to_owned()))?,
             congestion_control: query_value(&query, "congestion_control").unwrap_or_default(),
             pinned_certchain_sha256: query_value(&query, "pinned_certchain_sha256")
                 .unwrap_or_default(),
@@ -95,8 +97,8 @@ impl JuicityLink {
 
     pub fn export_url(&self) -> String {
         let mut query = Vec::<(String, String)>::new();
-        if self.allow_insecure {
-            query.push(("allow_insecure".to_owned(), "1".to_owned()));
+        if let Some(insecure) = self.allow_insecure {
+            query.push(("allow_insecure".to_owned(), u8::from(insecure).to_string()));
         }
         push_if_non_empty(&mut query, "sni", &self.sni);
         push_if_non_empty(&mut query, "congestion_control", &self.congestion_control);
@@ -228,30 +230,6 @@ fn query_value(
         .map(|(_, value)| value.to_string())
 }
 
-fn parse_allow_insecure(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)]) -> bool {
-    for key in [
-        "allowInsecure",
-        "allow_insecure",
-        "allowinsecure",
-        "skipVerify",
-    ] {
-        if let Some(value) = query_value(query, key)
-            && parse_bool(&value).unwrap_or(false)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn parse_bool(input: &str) -> Option<bool> {
-    match input {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
-        _ => None,
-    }
-}
-
 fn push_if_non_empty(query: &mut Vec<(String, String)>, key: &str, value: &str) {
     if !value.is_empty() {
         query.push((key.to_owned(), value.to_owned()));
@@ -361,7 +339,7 @@ mod tests {
             server: "example.com".to_owned(),
             port: 443,
             sni: "sni.example.com".to_owned(),
-            allow_insecure: true,
+            allow_insecure: Some(true),
             congestion_control: "bbr".to_owned(),
             pinned_certchain_sha256: String::new(),
             protocol: "juicity".to_owned(),
