@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn geodata_status_follows_per_file_fallback_independently_of_web_root() {
+    let root = test_dir("paths");
+    let preferred = root.join("override");
+    let fallback = root.join("fallback");
+    fs::create_dir_all(&preferred).unwrap();
+    fs::create_dir_all(&fallback).unwrap();
+    write_geoip(&preferred, "override", &[(&[10, 0, 0, 0], 8)]);
+    write_geosite(&fallback, "fallback", &["fallback.example"]);
+    let mut app = test_app(&root);
+    app.web_root = root.join("unrelated/web");
+    app.geodata_paths = Arc::new(geodata::ProductGeodataPaths::for_search_directories(
+        vec![preferred.clone(), fallback.clone()],
+        Some(preferred.clone()),
+    ));
+    let status = geodata_status(&app).unwrap();
+    assert_eq!(status["geoip"]["available"], true);
+    assert_eq!(status["geosite"]["available"], true);
+    assert_eq!(status["geosite"]["ruleCount"], 1);
+    let context = ProductGeodataUpdateContext::from_app(&app);
+    use dae_product_control::geodata::GeodataUpdateRuntimeContext;
+    assert_eq!(context.directory(GeodataKind::Geosite).unwrap(), preferred);
+    write_geosite(&preferred, "override", &["one.example", "two.example"]);
+    assert_eq!(geodata_status(&app).unwrap()["geosite"]["ruleCount"], 2);
+    fs::remove_file(preferred.join(GEOSITE_FILE)).unwrap();
+    assert_eq!(geodata_status(&app).unwrap()["geosite"]["ruleCount"], 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn geodata_environment_override_is_used_by_web_and_runtime_search() {
+    const CHILD: &str = "DAED_TEST_GEODATA_PATH_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let dir = PathBuf::from(std::env::var_os("DAE_LOCATION_ASSET").unwrap());
+        let mut app = test_app(&dir);
+        app.web_root = dir.join("other/web");
+        app.geodata_paths = Arc::new(geodata::ProductGeodataPaths::from_environment());
+        assert_eq!(app.geodata_paths.read_directory(GeodataKind::Geoip), dir);
+        assert_eq!(app.geodata_paths.read_directory(GeodataKind::Geosite), dir);
+        assert_eq!(geodata_status(&app).unwrap()["geosite"]["ruleCount"], 2);
+        assert_eq!(
+            dae_geodata::paths::geodata_asset_dirs("daed", Vec::<PathBuf>::new())[0],
+            dir
+        );
+        return;
+    }
+    let dir = test_dir("environment");
+    write_geoip(&dir, "override", &[(&[10, 0, 0, 0], 8)]);
+    write_geosite(&dir, "override", &["one.example", "two.example"]);
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "daed_product::geodata::tests::status_cache::geodata_environment_override_is_used_by_web_and_runtime_search", "--nocapture"])
+        .env(CHILD, "1").env("DAE_LOCATION_ASSET", &dir).output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn geodata_status_cache_detects_external_file_deletion() {
     let dir = test_dir("delete");
     write_geosite(&dir, "cached", &["cached.example"]);
@@ -114,6 +175,9 @@ fn test_app(dir: &Path) -> AppState {
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         ui_runtime: product_ui_runtime(),
         auth_runtime: product_test_auth_runtime(),
+        geodata_paths: Arc::new(geodata::ProductGeodataPaths::for_directory(
+            dir.to_path_buf(),
+        )),
         geodata_updates: Arc::new(ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         geodata_update_runtime: None,

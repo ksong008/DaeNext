@@ -3,7 +3,7 @@ use super::*;
 #[derive(Clone, Debug)]
 pub(crate) struct ProductGeodataUpdateContext {
     pub(super) state: PathBuf,
-    pub(super) dir: PathBuf,
+    pub(super) paths: Arc<ProductGeodataPaths>,
     pub(super) runtime: Arc<ProductRuntimeManager>,
     pub(super) control_runtime: Arc<ProductControlRuntime>,
     pub(super) updates: Arc<ProductGeodataUpdateCoordinator>,
@@ -14,7 +14,7 @@ impl ProductGeodataUpdateContext {
     pub(super) fn from_app(app: &AppState) -> Self {
         Self {
             state: app.state.clone(),
-            dir: super::status::geodata_dir(app),
+            paths: Arc::clone(&app.geodata_paths),
             runtime: Arc::clone(&app.runtime),
             control_runtime: Arc::clone(&app.control_runtime),
             updates: Arc::clone(&app.geodata_updates),
@@ -33,7 +33,9 @@ impl ProductGeodataUpdateContext {
     ) -> Self {
         Self {
             state,
-            dir: super::status::geodata_dir_for_web_root(web_root),
+            paths: Arc::new(ProductGeodataPaths::for_directory(
+                web_root.parent().unwrap_or(web_root),
+            )),
             runtime,
             control_runtime,
             updates,
@@ -47,7 +49,8 @@ impl dae_product_control::geodata::GeodataUpdateRuntimeContext for ProductGeodat
         &self.state
     }
 
-    fn directory(&self) -> &Path {
-        &self.dir
+    fn directory(&self, kind: GeodataKind) -> io::Result<PathBuf> {
+        self.paths.recover(&self.state, kind)?;
+        Ok(self.paths.update_directory(kind))
     }
 }

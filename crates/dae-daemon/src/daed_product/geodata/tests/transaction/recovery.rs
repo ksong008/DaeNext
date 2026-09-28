@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn geodata_startup_recovery_finds_override_journal_when_live_file_is_missing() {
+    let fixture = GeodataTransactionFixture::new("startup-override");
+    fixture.prepare_crash_journal(None);
+    fs::remove_file(fixture.dir.join(GEOSITE_FILE)).unwrap();
+    let fallback = fixture.dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+    fs::write(fallback.join(GEOSITE_FILE), &fixture.new_data).unwrap();
+    let paths = geodata::ProductGeodataPaths::for_search_directories(
+        vec![fixture.dir.clone(), fallback.clone()],
+        Some(fixture.dir.clone()),
+    );
+    assert_eq!(paths.read_directory(GeodataKind::Geosite), fallback);
+    recover_product_durable_state(&fixture.state, &fixture.dir, &paths).unwrap();
+    fixture.assert_old_generation();
+    assert_eq!(paths.read_directory(GeodataKind::Geosite), fixture.dir);
+    fixture.cleanup();
+}
+
+#[test]
 fn geodata_activating_crash_recovers_the_old_generation() {
     let fixture = GeodataTransactionFixture::new("recover-activating");
     let (_journal, _version_stage) = fixture.prepare_crash_journal(None);

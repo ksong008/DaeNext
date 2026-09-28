@@ -574,7 +574,7 @@ fn run_product_geodata_update_job<C, J>(
                 context,
                 updates,
                 context.state_path(),
-                context.directory(),
+                &context.directory(kind)?,
                 kind,
                 lease,
                 preparation_mode,
@@ -592,7 +592,7 @@ fn run_product_geodata_update_job<C, J>(
 
 pub trait GeodataUpdateRuntimeContext: GeodataUpdateCallbacks {
     fn state_path(&self) -> &std::path::Path;
-    fn directory(&self) -> &std::path::Path;
+    fn directory(&self, kind: GeodataKind) -> io::Result<std::path::PathBuf>;
 }
 
 struct ProductGeodataUpdateJobCompletion {

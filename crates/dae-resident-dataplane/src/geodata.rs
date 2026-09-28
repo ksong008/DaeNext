@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    env, fs, io,
+    fs, io,
     ops::Range,
     os::fd::AsRawFd,
     path::{Path, PathBuf},
@@ -21,6 +21,7 @@ use dae_routing::{DomainKey, IpPrefix, SharedDomainSet, WeakSharedDomainSet};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
 const DAE_PRODUCT_DIR_NAME: &str = "dae";
 const PRODUCT_BINARY_NAME: &str = "daed";
 
@@ -546,71 +547,9 @@ fn split_geosite_code_attr(code: &str) -> (String, Option<String>) {
     (code.to_owned(), (!attr.is_empty()).then(|| attr.to_owned()))
 }
 
-fn product_geodata_dir_names(product_binary_name: &str) -> Vec<String> {
-    let primary = if product_binary_name.is_empty() {
-        DAE_PRODUCT_DIR_NAME
-    } else {
-        product_binary_name
-    };
-    vec![primary.to_owned()]
-}
-
-fn product_system_geodata_dirs(product_binary_name: &str) -> Vec<PathBuf> {
-    product_geodata_dir_names(product_binary_name)
-        .into_iter()
-        .flat_map(|name| {
-            [
-                PathBuf::from(format!("/etc/{name}")),
-                PathBuf::from(format!("/usr/local/share/{name}")),
-                PathBuf::from(format!("/usr/share/{name}")),
-            ]
-        })
-        .collect()
-}
-
-fn product_xdg_geodata_dirs(product_binary_name: &str) -> Vec<PathBuf> {
-    let product_names = product_geodata_dir_names(product_binary_name);
-    let mut dirs = Vec::new();
-    if let Ok(data_home) = env::var("XDG_DATA_HOME") {
-        dirs.extend(
-            product_names
-                .iter()
-                .map(|name| PathBuf::from(&data_home).join(name)),
-        );
-    } else if let Ok(home) = env::var("HOME") {
-        dirs.extend(
-            product_names
-                .iter()
-                .map(|name| PathBuf::from(&home).join(".local/share").join(name)),
-        );
-    }
-    if let Ok(data_dirs) = env::var("XDG_DATA_DIRS") {
-        dirs.extend(
-            data_dirs
-                .split(':')
-                .filter(|dir| !dir.is_empty())
-                .flat_map(|dir| {
-                    product_names
-                        .iter()
-                        .map(move |name| PathBuf::from(dir).join(name))
-                }),
-        );
-    }
-    dirs
-}
-
 impl GeodataResolver {
     pub fn new(asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>) -> Self {
-        let mut dirs = Vec::new();
-        if let Ok(dir) = env::var("DAE_LOCATION_ASSET")
-            && !dir.is_empty()
-        {
-            dirs.push(PathBuf::from(dir));
-        }
-        dirs.extend(asset_dirs.into_iter().map(Into::into));
-        dirs.extend(product_system_geodata_dirs(PRODUCT_BINARY_NAME));
-        dirs.extend(product_xdg_geodata_dirs(PRODUCT_BINARY_NAME));
-        dirs.dedup();
+        let dirs = dae_geodata::paths::geodata_asset_dirs(PRODUCT_BINARY_NAME, asset_dirs);
         Self {
             asset_dirs: dirs,
             asset_cache: Mutex::new(BTreeMap::new()),
@@ -829,15 +768,7 @@ impl GeodataResolver {
             });
         }
 
-        let filename_path = Path::new(filename);
-        if filename_path.is_absolute() && filename_path.is_file() {
-            return self.read_uncached_asset(filename, filename_path);
-        }
-        for dir in &self.asset_dirs {
-            let path = dir.join(filename);
-            if !path.is_file() {
-                continue;
-            }
+        if let Some(path) = dae_geodata::paths::find_geodata_asset(&self.asset_dirs, filename) {
             return self.read_uncached_asset(filename, &path);
         }
         Err(format!(
@@ -1028,6 +959,8 @@ pub fn geodata_report_json(report: &GeodataResolutionReport) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use dae_geodata::paths::product_system_geodata_dirs;
 
     const DAED_PRODUCT_DIR_NAME: &str = "daed";
 

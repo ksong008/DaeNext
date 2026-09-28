@@ -12,9 +12,9 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
     if let Err(err) = ensure_state_schema(&options.state) {
         return DaedProductOutput::error(format!("init state failed: {err}"));
     }
-    let geodata_dir = geodata_dir_for_web_root(&options.web_root);
+    let geodata_paths = Arc::new(geodata::ProductGeodataPaths::from_environment());
     if let Err(err) =
-        recover_product_durable_state(&options.state, &options.config_dir, &geodata_dir)
+        recover_product_durable_state(&options.state, &options.config_dir, &geodata_paths)
     {
         return DaedProductOutput::error(err);
     }
@@ -100,6 +100,7 @@ pub(crate) fn run_product_server_command(args: &[String], _version: &str) -> Dae
         http_metrics: Arc::new(ProductHttpMetrics::default()),
         ui_runtime: product_ui_runtime(),
         auth_runtime,
+        geodata_paths,
         geodata_updates: Arc::new(geodata::ProductGeodataUpdateCoordinator::default()),
         geodata_status_cache: Arc::new(Mutex::new(GeodataStatusCache::default())),
         geodata_update_runtime: None,
