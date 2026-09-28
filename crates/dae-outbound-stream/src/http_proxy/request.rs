@@ -155,7 +155,7 @@ pub fn forward_http_request(raw: &[u8]) -> Result<Vec<u8>, OutboundError> {
     out.push_str(&request.path);
     out.push_str(" HTTP/1.1\r\nHost: ");
     out.push_str(&request.host);
-    out.push_str("\r\nUser-Agent: dae-rust-native/1.0\r\n");
+    out.push_str("\r\n");
     for (name, value) in request.headers {
         if name.eq_ignore_ascii_case("host") || name.eq_ignore_ascii_case("proxy-connection") {
             continue;
@@ -271,6 +271,28 @@ mod tests {
         let request = forward_http_request(raw).unwrap();
         let text = String::from_utf8(request).unwrap();
         assert!(text.contains("Host: origin.example"));
+    }
+
+    #[test]
+    fn forward_http_request_preserves_client_user_agent_without_inventing_one() {
+        for header in [
+            "",
+            "User-Agent: client/2.0\r\n",
+            "uSeR-aGeNt: client/2.0\r\n",
+            "User-Agent: \r\n",
+        ] {
+            let raw = format!(
+                "GET /sub HTTP/1.1\r\nHost: origin.example\r\n{header}Proxy-Connection: keep-alive\r\n\r\n"
+            );
+            let forwarded =
+                String::from_utf8(forward_http_request(raw.as_bytes()).unwrap()).unwrap();
+            let user_agents = forwarded
+                .lines()
+                .filter(|line| line.to_ascii_lowercase().starts_with("user-agent:"))
+                .collect::<Vec<_>>();
+            assert_eq!(user_agents, header.lines().collect::<Vec<_>>());
+            assert!(!forwarded.to_ascii_lowercase().contains("proxy-connection:"));
+        }
     }
 
     #[test]
