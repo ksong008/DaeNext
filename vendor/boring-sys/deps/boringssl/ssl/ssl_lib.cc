@@ -2266,9 +2266,19 @@ int DAE_SSL_set1_reality_config(SSL *ssl, const uint8_t *server_public_key,
       return 0;
     }
   } else {
-    static const uint16_t kDaeRealityX25519Only[] = {SSL_GROUP_X25519};
-    if (!SSL_set1_client_key_shares(ssl, kDaeRealityX25519Only,
-                                    std::size(kDaeRealityX25519Only))) {
+    // Current REALITY servers require the hybrid share before X25519, even
+    // when the target negotiates plain X25519. Keep that second share for the
+    // REALITY authentication key and compatibility with earlier servers.
+    // Explicit uTLS templates above continue to own their exact wire shape.
+    static const uint16_t kDaeRealityGroups[] = {
+        SSL_GROUP_X25519_MLKEM768, SSL_GROUP_X25519, SSL_GROUP_SECP256R1,
+        SSL_GROUP_SECP384R1};
+    static const uint16_t kDaeRealityKeyShares[] = {
+        SSL_GROUP_X25519_MLKEM768, SSL_GROUP_X25519};
+    if (!SSL_set1_group_ids(ssl, kDaeRealityGroups,
+                           std::size(kDaeRealityGroups)) ||
+        !SSL_set1_client_key_shares(ssl, kDaeRealityKeyShares,
+                                   std::size(kDaeRealityKeyShares))) {
       return 0;
     }
   }

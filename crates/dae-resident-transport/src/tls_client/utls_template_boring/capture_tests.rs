@@ -55,6 +55,28 @@ async fn reality_boring_template_clienthello_matches_runtime_templates_before_se
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn reality_default_clienthello_advertises_hybrid_before_authentication_share() {
+    for name in ["chrome", "chrome_auto"] {
+        let fingerprint =
+            dae_outbound::shared_transport::resolve_utls_client_hello_id(name).unwrap();
+        let captured = capture_boring_client_hello(test_reality_proxy(&fingerprint))
+            .await
+            .unwrap();
+        // Xray's current admission rule is independent of minClientVer and
+        // requires MLKEM before the X25519 share used for REALITY auth.
+        let shares = normalized_optional_u16_values(&captured.key_share_groups)
+            .into_iter()
+            .filter(|&group| group != 0x0a0a)
+            .collect::<Vec<_>>();
+        assert_eq!(shares, [0x11ec, 0x001d]);
+        let supported = normalized_optional_u16_values(&captured.supported_groups);
+        assert!(supported.contains(&0x11ec));
+        assert!(supported.contains(&0x001d));
+        assert_eq!(captured.session_id_len, 32);
+    }
+}
+
 async fn capture_boring_client_hello(
     mut proxy: ResidentProxyPlan,
 ) -> Result<UtlsClientHelloProfile, String> {
