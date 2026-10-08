@@ -750,7 +750,7 @@ pub fn xhttp_h3_transport_config(
         Duration::from_secs(dae_outbound_quic::XHTTP_H3_KEEPALIVE_SECS),
     )?);
     transport.max_idle_timeout(Some(
-        Duration::from_secs(dae_outbound_quic::XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS)
+        Duration::from_secs(dae_outbound_quic::XHTTP_H3_MAX_IDLE_TIMEOUT_SECS)
             .try_into()
             .map_err(|err| format!("xHTTP H3 idle timeout config: {err}"))?,
     ));
