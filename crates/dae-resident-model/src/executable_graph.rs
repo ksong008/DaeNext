@@ -723,6 +723,12 @@ fn xhttp_settings_evidence_value(settings: &ResidentXhttpSettingsPlan) -> Value 
             "seqPlacement": settings.seq_placement.as_str(),
             "seqFieldName": settings.normalized_seq_key(),
         },
+        "clientUploadLimits": {
+            "maxInFlightPosts": ResidentXhttpSettingsPlan::client_max_in_flight_posts(),
+            "maxBufferedPostBytes": ResidentXhttpSettingsPlan::client_max_post_bytes(),
+            "source": "local-resource-profile",
+        },
+        "serverOnlyFields": ["noSSEHeader", "scMaxBufferedPosts", "scStreamUpServerSecs", "serverMaxHeaderBytes"],
         "headersPolicy": {
             "noGRPCHeader": settings.no_grpc_header,
             "noSSEHeader": settings.no_sse_header,

@@ -104,7 +104,7 @@ async fn chrome_boring_provider_completes_h3_and_emits_quic_client_hello() {
         boring_sys::SSL_CTX_set_msg_callback(crypto.ctx_mut().as_ptr(), Some(capture_client_hello));
     }
     let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
-    client_config.transport_config(Arc::new(xhttp_h3_transport_config().unwrap()));
+    client_config.transport_config(Arc::new(xhttp_h3_transport_config(&plan).unwrap()));
     let mut client_endpoint =
         dae_outbound::shared_transport::test_support::boring_quic_client_endpoint(
             "0.0.0.0:0".parse().unwrap(),

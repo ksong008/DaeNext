@@ -1,5 +1,5 @@
 pub const XHTTP_H3_ALPN: &str = "h3";
-pub const XHTTP_H3_KEEPALIVE_SECS: u64 = 5;
+pub const XHTTP_H3_KEEPALIVE_SECS: u64 = 10;
 pub const XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS: u64 = 8;
 
 pub mod boring_quic {

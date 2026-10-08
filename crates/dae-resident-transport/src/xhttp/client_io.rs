@@ -79,9 +79,12 @@ pub async fn begin_xhttp_packet_up_request(
             binding,
             endpoint,
             mptcp,
+            pool,
         } => {
-            begin_xhttp_h1_packet_up_request(binding, endpoint, *mptcp, session_id, seq, payload)
-                .await
+            begin_xhttp_h1_packet_up_request(
+                binding, endpoint, *mptcp, session_id, seq, payload, pool,
+            )
+            .await
         }
         XhttpUploadClient::H2 {
             endpoint, sender, ..
@@ -125,11 +128,23 @@ pub fn reserve_xhttp_packet_up_post(upload: &XhttpUploadClient) -> bool {
     }
 }
 
+async fn poll_xhttp_response_ready<T>(response: &mut XhttpResponseBody<T>) -> Result<bool, String> {
+    poll_fn(|cx| match response.poll_ready(cx) {
+        Poll::Ready(result) => Poll::Ready(result.map(|()| true)),
+        Poll::Pending => Poll::Ready(Ok(false)),
+    })
+    .await
+}
+
 pub async fn poll_xhttp_download_data(
     download: &mut XhttpDownloadClient,
 ) -> Result<Option<Bytes>, String> {
     match download {
         XhttpDownloadClient::H1 { body } => {
+            if !poll_xhttp_response_ready(body).await? {
+                return Ok(None);
+            }
+            let body = body.ready_mut().expect("response headers resolved");
             let data = poll_fn(|cx| match body.poll_next(cx) {
                 Poll::Ready(value) => Poll::Ready(Some(value)),
                 Poll::Pending => Poll::Ready(None),
@@ -141,6 +156,10 @@ pub async fn poll_xhttp_download_data(
             }
         }
         XhttpDownloadClient::H2 { recv, .. } => {
+            if !poll_xhttp_response_ready(recv).await? {
+                return Ok(None);
+            }
+            let recv = recv.ready_mut().expect("response headers resolved");
             let data = {
                 let data_future = recv.data();
                 tokio::pin!(data_future);
@@ -165,6 +184,10 @@ pub async fn poll_xhttp_download_data(
         XhttpDownloadClient::H3 {
             recv, xmux_lease, ..
         } => {
+            if !poll_xhttp_response_ready(recv).await? {
+                return Ok(None);
+            }
+            let recv = recv.ready_mut().expect("response headers resolved");
             let data_future = recv.recv_data();
             tokio::pin!(data_future);
             let data = poll_fn(|cx| match data_future.as_mut().poll(cx) {
@@ -186,6 +209,10 @@ pub async fn poll_xhttp_download_data(
             }
         }
         XhttpDownloadClient::H3StreamOne { recv } => {
+            if !poll_xhttp_response_ready(recv).await? {
+                return Ok(None);
+            }
+            let recv = recv.ready_mut().expect("response headers resolved");
             let data_future = recv.recv_data();
             tokio::pin!(data_future);
             let data = poll_fn(|cx| match data_future.as_mut().poll(cx) {
@@ -210,20 +237,23 @@ pub async fn read_xhttp_download_data(
     download: &mut XhttpDownloadClient,
 ) -> Result<Option<Bytes>, String> {
     match download {
-        XhttpDownloadClient::H1 { body } => body.read_next().await,
-        XhttpDownloadClient::H2 { recv, .. } => match recv.data().await {
-            Some(Ok(bytes)) => {
-                recv.flow_control()
-                    .release_capacity(bytes.len())
-                    .map_err(|err| format!("release xHTTP HTTP/2 download capacity: {err}"))?;
-                Ok(Some(bytes))
+        XhttpDownloadClient::H1 { body } => body.resolve().await?.read_next().await,
+        XhttpDownloadClient::H2 { recv, .. } => {
+            let recv = recv.resolve().await?;
+            match recv.data().await {
+                Some(Ok(bytes)) => {
+                    recv.flow_control()
+                        .release_capacity(bytes.len())
+                        .map_err(|err| format!("release xHTTP HTTP/2 download capacity: {err}"))?;
+                    Ok(Some(bytes))
+                }
+                Some(Err(err)) => Err(format!("read xHTTP HTTP/2 download data: {err}")),
+                None => Ok(None),
             }
-            Some(Err(err)) => Err(format!("read xHTTP HTTP/2 download data: {err}")),
-            None => Ok(None),
-        },
+        }
         XhttpDownloadClient::H3 {
             recv, xmux_lease, ..
-        } => match recv.recv_data().await {
+        } => match recv.resolve().await?.recv_data().await {
             Ok(Some(mut chunk)) => {
                 let remaining = chunk.remaining();
                 Ok(Some(chunk.copy_to_bytes(remaining)))
@@ -234,20 +264,22 @@ pub async fn read_xhttp_download_data(
                 Err(format!("read xHTTP H3 download data: {err:?}"))
             }
         },
-        XhttpDownloadClient::H3StreamOne { recv } => match recv.recv_data().await {
-            Ok(Some(mut chunk)) => {
-                let remaining = chunk.remaining();
-                Ok(Some(chunk.copy_to_bytes(remaining)))
+        XhttpDownloadClient::H3StreamOne { recv } => {
+            match recv.resolve().await?.recv_data().await {
+                Ok(Some(mut chunk)) => {
+                    let remaining = chunk.remaining();
+                    Ok(Some(chunk.copy_to_bytes(remaining)))
+                }
+                Ok(None) => Ok(None),
+                Err(err) => Err(format!("read xHTTP H3 stream-one data: {err:?}")),
             }
-            Ok(None) => Ok(None),
-            Err(err) => Err(format!("read xHTTP H3 stream-one data: {err:?}")),
-        },
+        }
     }
 }
 
 pub async fn close_xhttp_upload_client(mut upload: XhttpUploadClient) {
     match &mut upload {
-        XhttpUploadClient::H1 { .. } => {}
+        XhttpUploadClient::H1 { pool, .. } => pool.close(),
         XhttpUploadClient::H2 {
             connection_task,
             xmux_lease,
@@ -274,7 +306,9 @@ pub async fn close_xhttp_upload_client(mut upload: XhttpUploadClient) {
 pub async fn close_xhttp_download_client(mut download: XhttpDownloadClient) {
     match &mut download {
         XhttpDownloadClient::H1 { body } => {
-            body.shutdown().await;
+            if let Some(body) = body.ready_mut() {
+                body.shutdown().await;
+            }
         }
         XhttpDownloadClient::H2 {
             connection_task,

@@ -18,12 +18,16 @@ mod xmux;
 
 mod request;
 
+mod response;
+pub use self::response::XhttpResponseBody;
+
 mod h3_boring_tls;
 
 mod h3_transport;
 use self::h3_transport::{XhttpH3Connection, XhttpH3EndpointClient};
 
 mod h1;
+pub use self::h1::XhttpH1UploadPool;
 use self::h1::{XhttpH1ChunkedWriter, XhttpH1DownloadBody};
 
 mod h2_transport;
@@ -57,6 +61,25 @@ pub use self::xmux::{
     stop_xhttp_xmux_generation_owner,
 };
 use self::xmux::{XhttpXmuxClientLease, XhttpXmuxRequestHandle};
+
+fn xhttp_keep_alive_interval(
+    xmux: Option<&ResidentXhttpXmuxPlan>,
+    default: Duration,
+) -> Result<Option<Duration>, String> {
+    let configured = xmux.map_or(0, |xmux| xmux.h_keep_alive_period);
+    if configured < 0 {
+        return Ok(None);
+    }
+    let interval = if configured == 0 {
+        default
+    } else {
+        Duration::from_secs(configured as u64)
+    };
+    if time::Instant::now().checked_add(interval).is_none() {
+        return Err("xHTTP xmux.hKeepAlivePeriod exceeds the supported timer range".to_owned());
+    }
+    Ok(Some(interval))
+}
 
 pub trait ResidentXhttpEndpointView {
     fn server_name(&self) -> &str;
@@ -124,6 +147,7 @@ pub enum XhttpUploadClient {
         binding: ResidentProxyBinding,
         endpoint: ResidentXhttpEndpointPlan,
         mptcp: bool,
+        pool: XhttpH1UploadPool,
     },
     H2 {
         binding: ResidentProxyBinding,
@@ -168,21 +192,21 @@ pub enum XhttpStreamUploadClient {
 
 pub enum XhttpDownloadClient {
     H1 {
-        body: XhttpH1DownloadBody,
+        body: XhttpResponseBody<XhttpH1DownloadBody>,
     },
     H2 {
-        recv: h2::RecvStream,
+        recv: XhttpResponseBody<h2::RecvStream>,
         _keepalive_sender: Option<h2::client::SendRequest<Bytes>>,
         connection_task: Option<tokio::task::JoinHandle<()>>,
         xmux_lease: Option<XhttpXmuxClientLease>,
     },
     H3 {
-        recv: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+        recv: XhttpResponseBody<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>,
         connection: Option<XhttpH3Connection>,
         xmux_lease: Option<XhttpXmuxClientLease>,
     },
     H3StreamOne {
-        recv: h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
+        recv: XhttpResponseBody<h3::client::RequestStream<h3_quinn::RecvStream, Bytes>>,
     },
 }
 

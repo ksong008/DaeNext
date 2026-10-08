@@ -19,14 +19,15 @@ impl XhttpPacketUpPipeline {
             | XhttpUploadClient::H2 { endpoint, .. }
             | XhttpUploadClient::H3 { endpoint, .. } => &endpoint.settings,
         };
-        let max_in_flight = usize::try_from(settings.normalized_sc_max_buffered_posts())
-            .unwrap_or(usize::MAX)
-            .max(1);
+        let max_in_flight = match upload {
+            XhttpUploadClient::H1 { pool, .. } => pool.limit(),
+            _ => ResidentXhttpSettingsPlan::client_max_in_flight_posts(),
+        };
         let max_post_bytes = usize::try_from(ResidentXhttpSettingsPlan::sample_range(
             settings.normalized_sc_max_each_post_bytes(),
         ))
         .unwrap_or(usize::MAX)
-        .max(1);
+        .clamp(1, ResidentXhttpSettingsPlan::client_max_post_bytes());
         Self {
             completions: FuturesUnordered::new(),
             max_in_flight,

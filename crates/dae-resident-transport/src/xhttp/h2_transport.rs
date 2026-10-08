@@ -1,9 +1,11 @@
+mod idle;
 use super::request::{xhttp_h2_packet_up_request, xhttp_h2_request, xhttp_session_path_suffix};
 use super::xmux::{
     XhttpXmuxClientLease, XhttpXmuxKey, XhttpXmuxRequestHandle, note_xhttp_xmux_request,
     select_xhttp_h2_xmux_client,
 };
 use super::*;
+use idle::{ReadActivity, ReadActivityIo};
 
 pub struct XhttpH2EndpointSender {
     pub sender: h2::client::SendRequest<Bytes>,
@@ -21,9 +23,10 @@ pub async fn open_xhttp_h2_proxy_sender(
     mptcp: bool,
 ) -> Result<XhttpH2EndpointSender, String> {
     let mark = binding.effective_socket_mark();
+    let keep_alive = xhttp_keep_alive_interval(endpoint.xmux.as_ref(), Duration::from_secs(45))?;
     let Some(xmux) = binding.persistent_xhttp_xmux() else {
         let client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
-        let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+        let (sender, connection_task) = open_xhttp_h2_sender(client, keep_alive).await?;
         return Ok(XhttpH2EndpointSender {
             sender,
             connection_task: Some(connection_task),
@@ -43,7 +46,7 @@ pub async fn open_xhttp_h2_proxy_sender(
                 mptcp,
             )
             .await?;
-            let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let (sender, connection_task) = open_xhttp_h2_sender(client, keep_alive).await?;
             Ok(XhttpH2EndpointSender {
                 sender,
                 connection_task: Some(connection_task),
@@ -65,9 +68,10 @@ pub async fn open_xhttp_h2_endpoint_sender(
     mptcp: bool,
 ) -> Result<XhttpH2EndpointSender, String> {
     let mark = binding.effective_socket_mark();
+    let keep_alive = xhttp_keep_alive_interval(endpoint.xmux.as_ref(), Duration::from_secs(45))?;
     let Some(xmux) = binding.persistent_xhttp_download_xmux() else {
         let client = open_async_xhttp_endpoint_tls_client(endpoint, mark, mptcp).await?;
-        let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+        let (sender, connection_task) = open_xhttp_h2_sender(client, keep_alive).await?;
         return Ok(XhttpH2EndpointSender {
             sender,
             connection_task: Some(connection_task),
@@ -87,7 +91,7 @@ pub async fn open_xhttp_h2_endpoint_sender(
                 mptcp,
             )
             .await?;
-            let (sender, connection_task) = open_xhttp_h2_sender(client).await?;
+            let (sender, connection_task) = open_xhttp_h2_sender(client, keep_alive).await?;
             Ok(XhttpH2EndpointSender {
                 sender,
                 connection_task: Some(connection_task),
@@ -105,21 +109,71 @@ pub async fn open_xhttp_h2_endpoint_sender(
 
 async fn open_xhttp_h2_sender(
     client: AsyncResidentTlsClient,
+    keep_alive: Option<Duration>,
 ) -> Result<(h2::client::SendRequest<Bytes>, tokio::task::JoinHandle<()>), String> {
     let mut h2_builder = h2::client::Builder::new();
     let resources = H2CarrierOwnerResourceProfile::selected();
     h2_builder
         .initial_window_size(resources.stream_receive_window_bytes())
         .initial_connection_window_size(resources.connection_receive_window_bytes());
+    let activity = Arc::new(ReadActivity::new());
+    let client = ReadActivityIo::new(client, Arc::clone(&activity));
     let (sender, connection) =
         time::timeout(RESIDENT_CONNECT_TIMEOUT, h2_builder.handshake(client))
             .await
             .map_err(|_| "xHTTP HTTP/2 handshake timeout".to_owned())?
             .map_err(|err| format!("xHTTP HTTP/2 client handshake: {err}"))?;
-    let connection_task = tokio::spawn(async move {
-        let _ = connection.await;
-    });
+    let connection_task = tokio::spawn(drive_xhttp_h2_connection(
+        connection,
+        keep_alive,
+        RESIDENT_CONNECT_TIMEOUT,
+        Some(activity),
+    ));
     Ok((sender, connection_task))
+}
+
+async fn drive_xhttp_h2_connection<T>(
+    mut connection: h2::client::Connection<T, Bytes>,
+    keep_alive: Option<Duration>,
+    pong_timeout: Duration,
+    activity: Option<Arc<ReadActivity>>,
+) where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let Some(interval) = keep_alive else {
+        let _ = connection.await;
+        return;
+    };
+    let Some(mut ping_pong) = connection.ping_pong() else {
+        let _ = connection.await;
+        return;
+    };
+    tokio::pin!(connection);
+    loop {
+        // Any received bytes postpone the next probe. Reuse the carrier task.
+        let deadline = activity.as_ref().map_or_else(
+            || time::Instant::now() + interval,
+            |activity| activity.deadline(interval),
+        );
+        tokio::select! {
+            _ = &mut connection => return,
+            _ = time::sleep_until(deadline) => {},
+        }
+        if activity
+            .as_ref()
+            .is_some_and(|activity| activity.deadline(interval) > time::Instant::now())
+        {
+            continue;
+        }
+        tokio::select! {
+            _ = &mut connection => return,
+            pong = time::timeout(pong_timeout, ping_pong.ping(h2::Ping::opaque())) => {
+                if !matches!(pong, Ok(Ok(_))) {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 pub async fn open_xhttp_h2_download_stream(
@@ -127,7 +181,7 @@ pub async fn open_xhttp_h2_download_stream(
     endpoint: &ResidentXhttpEndpointPlan,
     session_id: &str,
     xmux_lease: Option<&XhttpXmuxClientLease>,
-) -> Result<h2::RecvStream, String> {
+) -> Result<XhttpResponseBody<h2::RecvStream>, String> {
     note_xhttp_xmux_request(xmux_lease);
     let request = xhttp_h2_request(
         http::Method::GET,
@@ -138,17 +192,22 @@ pub async fn open_xhttp_h2_download_stream(
     let (response, _send_stream) = sender
         .send_request(request, true)
         .map_err(|err| format!("send xHTTP HTTP/2 download request headers: {err}"))?;
-    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
-        .await
-        .map_err(|_| "xHTTP HTTP/2 download response headers timeout".to_owned())?
-        .map_err(|err| format!("read xHTTP HTTP/2 download response headers: {err}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "xHTTP HTTP/2 download response status {}",
-            response.status()
-        ));
-    }
-    Ok(response.into_body())
+    Ok(xhttp_h2_response_body(response, "xHTTP HTTP/2 download"))
+}
+
+pub(super) fn xhttp_h2_response_body(
+    response: h2::client::ResponseFuture,
+    context: &'static str,
+) -> XhttpResponseBody<h2::RecvStream> {
+    XhttpResponseBody::pending(context, async move {
+        let response = response
+            .await
+            .map_err(|err| format!("read {context} response headers: {err}"))?;
+        if !response.status().is_success() {
+            return Err(format!("{context} response status {}", response.status()));
+        }
+        Ok(response.into_body())
+    })
 }
 
 pub async fn begin_xhttp_h2_packet_up_request(

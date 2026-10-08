@@ -11,7 +11,7 @@ pub fn build_chrome_boring_xhttp_h3_client_config(
     let policy = chrome_boring_xhttp_h3_policy(endpoint)?;
     dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache(
         &policy,
-        Arc::new(xhttp_h3_transport_config()?),
+        Arc::new(xhttp_h3_transport_config(endpoint)?),
         session_cache,
     )
     .map_err(|err| format!("build xHTTP H3 Chrome BoringSSL QUIC config: {err}"))
@@ -25,7 +25,7 @@ pub fn build_chrome_boring_xhttp_h3_client_config_with_system_ca(
     let policy = chrome_boring_xhttp_h3_policy(endpoint)?;
     dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
         &policy,
-        Arc::new(xhttp_h3_transport_config()?),
+        Arc::new(xhttp_h3_transport_config(endpoint)?),
         session_cache,
         system_ca,
     )

@@ -28,3 +28,5 @@ mod source_shape_reconciliation;
 mod tls_overrides;
 #[cfg(test)]
 mod xhttp_compatibility;
+#[cfg(test)]
+mod xhttp_official;
