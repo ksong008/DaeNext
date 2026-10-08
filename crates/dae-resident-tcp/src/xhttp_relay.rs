@@ -30,7 +30,7 @@ pub async fn relay_tcp_over_xhttp_packet_up(
         let mut inbound = XhttpUploadChunkReader::new(inbound_read);
         loop {
             match inbound.read_chunk(pipeline.max_post_bytes()).await {
-                Ok(None) => return pipeline.finish().await,
+                Ok(None) => return finish_xhttp_packet_up_upload(&mut pipeline, upload).await,
                 Ok(Some(chunk)) => {
                     let read = chunk.len();
                     pipeline.send(upload, session_id, &mut seq, chunk).await?;
@@ -38,7 +38,7 @@ pub async fn relay_tcp_over_xhttp_packet_up(
                     metrics.add_upload(read);
                 }
                 Err(err) if is_graceful_stream_close_error(&err) => {
-                    return pipeline.finish().await;
+                    return finish_xhttp_packet_up_upload(&mut pipeline, upload).await;
                 }
                 Err(err) => return Err(format!("read inbound TCP for xHTTP relay: {err}")),
             }
@@ -74,6 +74,19 @@ pub async fn relay_tcp_over_xhttp_packet_up(
         Some(RESIDENT_TCP_HALF_CLOSE_DRAIN_IDLE_TIMEOUT),
     )
     .await
+}
+
+async fn finish_xhttp_packet_up_upload(
+    pipeline: &mut XhttpPacketUpPipeline,
+    upload: &XhttpUploadClient,
+) -> Result<(), String> {
+    let result = pipeline.finish().await;
+    // All POSTs have completed (or failed). This session will never upload
+    // again, even if the independently owned download is still draining.
+    if let XhttpUploadClient::H1 { pool, .. } = upload {
+        pool.close();
+    }
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
