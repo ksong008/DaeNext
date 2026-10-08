@@ -26,3 +26,5 @@ mod socket_mark;
 mod source_shape_reconciliation;
 #[cfg(test)]
 mod tls_overrides;
+#[cfg(test)]
+mod xhttp_compatibility;

@@ -1654,8 +1654,8 @@ pub(super) fn resident_dataplane_plan_rejects_remaining_invalid_vless_xhttp_shap
             "rejected ALPN",
         ),
         (
-            "xhttp_non_positive_max_post",
-            vless_xhttp_parser_fixture_url("packet-up", "h2", r#"{"scMaxEachPostBytes":0}"#),
+            "xhttp_mixed_zero_positive_max_post",
+            vless_xhttp_parser_fixture_url("packet-up", "h2", r#"{"scMaxEachPostBytes":"0-1024"}"#),
             "scMaxEachPostBytes must be greater than 0",
         ),
         (

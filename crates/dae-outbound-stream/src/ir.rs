@@ -250,6 +250,13 @@ pub fn validate_xhttp_alpn(security: &str, alpn: &str) -> XHttpAlpnResult {
 }
 
 pub fn normalize_xhttp_path_and_query(input: &str) -> XHttpPathResult {
+    normalize_xhttp_path_and_query_for_placement(input, true)
+}
+
+pub fn normalize_xhttp_path_and_query_for_placement(
+    input: &str,
+    path_metadata: bool,
+) -> XHttpPathResult {
     let (mut path, query) = input.split_once('?').unwrap_or((input, ""));
     if path.is_empty() {
         path = "/";
@@ -258,7 +265,7 @@ pub fn normalize_xhttp_path_and_query(input: &str) -> XHttpPathResult {
     if !normalized.starts_with('/') {
         normalized.insert(0, '/');
     }
-    if !normalized.ends_with('/') {
+    if path_metadata && !normalized.ends_with('/') {
         normalized.push('/');
     }
     XHttpPathResult {

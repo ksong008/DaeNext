@@ -259,8 +259,60 @@ fn canonical_xhttp_extra(raw: &str) -> String {
     }
     serde_json::from_str::<Value>(raw)
         .ok()
-        .and_then(|value| serde_json::to_string(&value).ok())
+        .and_then(|mut value| {
+            canonical_xhttp_reality_password(&mut value);
+            serde_json::to_string(&value).ok()
+        })
         .unwrap_or_else(|| raw.to_owned())
+}
+
+fn canonical_xhttp_reality_password(extra: &mut Value) {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let Some(download) = extra.get_mut("downloadSettings") else {
+        return;
+    };
+    if download.get("security").and_then(Value::as_str) != Some("reality") {
+        return;
+    }
+    let Some(reality) = download
+        .get_mut("realitySettings")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    // Export must not turn a type error or invalid effective password into a
+    // valid node. Keep such input intact for the resident admission checks.
+    if ["password", "publicKey"].iter().any(|key| {
+        reality
+            .get(*key)
+            .is_some_and(|v| !v.is_null() && !v.is_string())
+    }) {
+        return;
+    }
+    let effective = reality
+        .get("password")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            reality
+                .get("publicKey")
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+        });
+    let Some(key) = effective
+        .and_then(|value| crate::ir::reality_pbk_decode(value).ok())
+        .filter(|key| key.len() == 32)
+    else {
+        return;
+    };
+    // Keep the established publicKey spelling for stable identities of older
+    // links. The effective key is shared by export, node dedup and XMUX keys.
+    reality.remove("password");
+    reality.insert(
+        "publicKey".into(),
+        Value::String(URL_SAFE_NO_PAD.encode(key)),
+    );
 }
 
 fn push_if_non_empty(query: &mut Vec<(String, String)>, key: &str, value: &str) {
