@@ -9,7 +9,10 @@ pub mod tuic;
 
 pub const XHTTP_H3_ALPN: &str = "h3";
 pub const XHTTP_H3_KEEPALIVE_SECS: u64 = 10;
-pub const XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS: u64 = 8;
+// QUIC's max_idle_timeout also applies after the handshake. Keep it above the
+// default 10-second keepalive; an 8-second handshake budget here killed idle
+// application streams before their first PING. Match Xray's ConnIdleTimeout.
+pub const XHTTP_H3_MAX_IDLE_TIMEOUT_SECS: u64 = 300;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

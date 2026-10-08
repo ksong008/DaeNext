@@ -251,9 +251,11 @@ async fn stream_one_headers_are_read_after_further_h3_upload() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn h3_keep_alive_parameter_reaches_both_tls_providers() {
-    for provider in [
-        ResidentXhttpQuicTlsProvider::Boring,
-        ResidentXhttpQuicTlsProvider::ChromeBoring,
+    for (provider, period) in [
+        (ResidentXhttpQuicTlsProvider::Boring, 1),
+        (ResidentXhttpQuicTlsProvider::ChromeBoring, 1),
+        (ResidentXhttpQuicTlsProvider::Boring, 0),
+        (ResidentXhttpQuicTlsProvider::ChromeBoring, 0),
     ] {
         let server_endpoint =
             dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
@@ -271,7 +273,7 @@ async fn h3_keep_alive_parameter_reaches_both_tls_providers() {
         });
         let mut endpoint = packet_up_endpoint(address);
         let mut xmux = ResidentXhttpXmuxPlan::official_default();
-        xmux.h_keep_alive_period = 1;
+        xmux.h_keep_alive_period = period;
         endpoint.xmux = Some(xmux);
         let mut client_endpoint =
             dae_outbound::shared_transport::test_support::boring_quic_client_endpoint(
@@ -289,13 +291,18 @@ async fn h3_keep_alive_parameter_reaches_both_tls_providers() {
         // Let handshake ACKs settle before observing the idle keepalive.
         time::sleep(Duration::from_millis(100)).await;
         let initial_pings = connection.stats().frame_tx.ping;
-        time::timeout(Duration::from_millis(2500), async {
+        let timeout = if period == 0 { 12_500 } else { 2_500 };
+        time::timeout(Duration::from_millis(timeout), async {
             while connection.stats().frame_tx.ping == initial_pings {
+                assert!(
+                    connection.close_reason().is_none(),
+                    "H3 closed before its keepalive"
+                );
                 time::sleep(Duration::from_millis(20)).await;
             }
         })
         .await
-        .expect("configured 1-second H3 keepalive was not sent");
+        .expect("configured/default H3 keepalive was not sent");
         release.send(()).unwrap();
         server.await.unwrap();
         connection.close(0_u32.into(), b"keepalive test complete");
