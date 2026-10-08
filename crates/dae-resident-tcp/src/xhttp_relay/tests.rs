@@ -120,3 +120,61 @@ async fn stream_reader_preserves_one_read_per_chunk() {
     assert_eq!(second, Bytes::from_static(b"second"));
     assert!(eof.is_none());
 }
+
+#[tokio::test]
+async fn h3_download_flushes_before_waiting_for_the_next_response() {
+    let (sink, mut peer) = tokio::io::duplex(64);
+    let mut writer = BufWriter::with_capacity(XHTTP_H3_DOWNLOAD_WRITE_BUFFER, sink);
+    writer.write_all(b"request").await.unwrap();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let peer = tokio::spawn(async move {
+        let mut request = [0; 7];
+        peer.read_exact(&mut request).await.unwrap();
+        assert_eq!(&request, b"request");
+        send.send(Bytes::from_static(b"response")).unwrap();
+    });
+    let response = time::timeout(
+        Duration::from_secs(1),
+        read_download_flushing_pending(async { Ok(Some(receive.await.unwrap())) }, &mut writer),
+    )
+    .await
+    .expect("buffered data must reach the peer before waiting for its response")
+    .unwrap();
+    assert_eq!(response, Some(Bytes::from_static(b"response")));
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn h3_download_preserves_buffered_bytes_across_backpressure_and_terminal_reads() {
+    for fail in [false, true] {
+        let (sink, mut peer) = tokio::io::duplex(97);
+        let expected = (0..100_003).map(|n| (n % 251) as u8).collect::<Vec<_>>();
+        let output = tokio::spawn(async move {
+            let mut received = Vec::new();
+            peer.read_to_end(&mut received).await.unwrap();
+            received
+        });
+        let mut writer = BufWriter::with_capacity(XHTTP_H3_DOWNLOAD_WRITE_BUFFER, sink);
+        for chunk in expected.chunks(1408) {
+            let ready = read_download_flushing_pending(
+                std::future::ready(Ok(Some(Bytes::copy_from_slice(chunk)))),
+                &mut writer,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            writer.write_all(&ready).await.unwrap();
+        }
+        let terminal = if fail {
+            Err("remote reset".to_owned())
+        } else {
+            Ok(None)
+        };
+        let result =
+            read_download_flushing_pending(std::future::ready(terminal.clone()), &mut writer).await;
+        assert_eq!(result, terminal);
+        // Drop without shutdown: the terminal read must already have flushed.
+        drop(writer);
+        assert_eq!(output.await.unwrap(), expected);
+    }
+}

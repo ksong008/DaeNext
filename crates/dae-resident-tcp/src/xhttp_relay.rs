@@ -1,9 +1,10 @@
 use super::*;
 use bytes::{Bytes, BytesMut};
 use futures_util::FutureExt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 
 const XHTTP_UPLOAD_READ_CHUNK: usize = 16 * 1024;
+const XHTTP_H3_DOWNLOAD_WRITE_BUFFER: usize = 32 * 1024;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn relay_tcp_over_xhttp_packet_up(
@@ -46,10 +47,15 @@ pub async fn relay_tcp_over_xhttp_packet_up(
     };
     let download_progress = progress.clone();
     let download_direction = async move {
-        let mut inbound_write = inbound_write;
+        let mut inbound_write = xhttp_download_writer(inbound_write, download);
         let mut response_stripper = VlessResponseStripper::default();
         loop {
-            let Some(bytes) = read_xhttp_download_data(download).await? else {
+            let Some(bytes) = read_download_flushing_pending(
+                read_xhttp_download_data(download),
+                &mut inbound_write,
+            )
+            .await?
+            else {
                 let _ = inbound_write.shutdown().await;
                 return Ok(());
             };
@@ -134,10 +140,15 @@ pub async fn relay_tcp_over_xhttp_stream(
     };
     let download_progress = progress.clone();
     let download_direction = async move {
-        let mut inbound_write = inbound_write;
+        let mut inbound_write = xhttp_download_writer(inbound_write, download);
         let mut response_stripper = VlessResponseStripper::default();
         loop {
-            let Some(bytes) = read_xhttp_download_data(download).await? else {
+            let Some(bytes) = read_download_flushing_pending(
+                read_xhttp_download_data(download),
+                &mut inbound_write,
+            )
+            .await?
+            else {
                 let _ = inbound_write.shutdown().await;
                 return Ok(());
             };
@@ -162,6 +173,53 @@ pub async fn relay_tcp_over_xhttp_stream(
         None,
     )
     .await
+}
+
+fn xhttp_download_writer<W: AsyncWrite>(writer: W, download: &XhttpDownloadClient) -> BufWriter<W> {
+    // h3-quinn exposes individual QUIC chunks (often ~1.4 KiB). Sending each
+    // straight to TCP repeats the socket/eBPF path for every small fragment.
+    // Only H3 needs this fixed buffer; capacity zero keeps H1/H2 unbuffered.
+    let capacity = if matches!(
+        download,
+        XhttpDownloadClient::H3 { .. } | XhttpDownloadClient::H3StreamOne { .. }
+    ) {
+        XHTTP_H3_DOWNLOAD_WRITE_BUFFER
+    } else {
+        0
+    };
+    BufWriter::with_capacity(capacity, writer)
+}
+
+async fn read_download_flushing_pending<W: AsyncWrite + Unpin>(
+    read: impl std::future::Future<Output = Result<Option<Bytes>, String>>,
+    writer: &mut BufWriter<W>,
+) -> Result<Option<Bytes>, String> {
+    // There is nothing to flush on an empty buffer. This also preserves the
+    // ordinary single-await read path for the zero-capacity H1/H2 writer.
+    if writer.buffer().is_empty() {
+        return read.await;
+    }
+    tokio::pin!(read);
+    let result = match read.as_mut().now_or_never() {
+        Some(result) => result,
+        None => {
+            // Never wait for another network chunk while retaining a response:
+            // this also avoids adding latency or stalling request/response IO.
+            writer
+                .flush()
+                .await
+                .map_err(|err| format!("flush xHTTP download to inbound: {err}"))?;
+            read.await
+        }
+    };
+    if !matches!(&result, Ok(Some(_))) {
+        // Deliver previously accepted data before propagating EOF or an error.
+        writer
+            .flush()
+            .await
+            .map_err(|err| format!("flush xHTTP download to inbound: {err}"))?;
+    }
+    result
 }
 
 async fn read_xhttp_stream_upload_chunk(
