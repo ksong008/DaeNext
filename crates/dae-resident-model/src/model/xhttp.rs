@@ -199,6 +199,28 @@ impl ResidentXhttpUplinkDataPlacement {
 }
 
 impl ResidentXhttpSettingsPlan {
+    pub const MAX_PADDING_BYTES: i32 = 16 * 1024;
+    pub const MAX_SESSION_LENGTH: i32 = 256;
+    pub const MAX_POST_BYTES: i32 = 4 * 1024 * 1024;
+    pub const MAX_UPLINK_CHUNK_BYTES: i32 = 16 * 1024;
+
+    pub fn uses_path_metadata(&self) -> bool {
+        self.session_id_placement == ResidentXhttpMetaPlacement::Path
+            || self.seq_placement == ResidentXhttpMetaPlacement::Path
+    }
+
+    // Local client budgets are independent of the server's reorder queue.
+    pub fn client_max_in_flight_posts() -> usize {
+        selected_xhttp_physical_connection_limit() * 2
+    }
+
+    pub const fn client_max_post_bytes() -> usize {
+        // Keep the official 1,000,000-byte POST usable on every profile:
+        // reducing the batch with the default 30 ms interval caps throughput.
+        // Bound total buffering through the profile's in-flight window instead.
+        1024 * 1024
+    }
+
     pub fn official_default() -> Self {
         Self {
             headers: BTreeMap::new(),
@@ -594,6 +616,10 @@ mod tests {
         assert_eq!(
             settings.normalized_sc_max_each_post_bytes(),
             (1_000_000, 1_000_000)
+        );
+        assert!(
+            ResidentXhttpSettingsPlan::client_max_post_bytes()
+                >= settings.normalized_sc_max_each_post_bytes().1 as usize
         );
         assert_eq!(settings.normalized_sc_min_posts_interval_ms(), (30, 30));
         assert_eq!(settings.normalized_sc_max_buffered_posts(), 30);

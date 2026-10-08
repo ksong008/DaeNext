@@ -180,7 +180,6 @@ pub(super) fn resident_xhttp_extra_plan(
                 resident_xhttp_download_tls_settings(
                     tls_settings,
                     &server_host,
-                    primary_server_name,
                     global_allow_insecure,
                     node_tag,
                 )?;
@@ -247,17 +246,12 @@ pub(super) fn resident_xhttp_extra_plan(
 fn resident_xhttp_download_tls_settings(
     tls_settings: Option<&serde_json::Map<String, Value>>,
     server_host: &str,
-    primary_server_name: &str,
     global_allow_insecure: bool,
     node_tag: &str,
 ) -> Result<ResidentXhttpDownloadTlsSettings, String> {
     let Some(tls_settings) = tls_settings else {
         return Ok((
-            if primary_server_name.is_empty() {
-                server_host.to_owned()
-            } else {
-                primary_server_name.to_owned()
-            },
+            server_host.to_owned(),
             vec!["h2".to_owned()],
             global_allow_insecure,
             None,
@@ -282,13 +276,7 @@ fn resident_xhttp_download_tls_settings(
         node_tag,
     )?
     .filter(|value| !value.is_empty())
-    .unwrap_or_else(|| {
-        if primary_server_name.is_empty() {
-            server_host.to_owned()
-        } else {
-            primary_server_name.to_owned()
-        }
-    });
+    .unwrap_or_else(|| server_host.to_owned());
     let alpn = optional_alpn(tls_settings.get("alpn"), "tlsSettings.alpn", node_tag)?
         .unwrap_or_else(|| vec!["h2".to_owned()]);
     validate_resident_xhttp_endpoint_alpn(&alpn, node_tag)?;
@@ -361,6 +349,7 @@ fn resident_xhttp_download_reality_settings(
             "serverName",
             "alpn",
             "fingerprint",
+            "password",
             "publicKey",
             "shortId",
             "spiderX",
@@ -416,23 +405,32 @@ fn resident_xhttp_download_reality_settings(
     .transpose()?
     .flatten()
     .or_else(|| primary_fingerprint.cloned());
+    let password = optional_string(
+        reality_settings.get("password"),
+        "realitySettings.password",
+        node_tag,
+    )?;
     let public_key = optional_string(
         reality_settings.get("publicKey"),
         "realitySettings.publicKey",
         node_tag,
-    )?
+    )?;
+    // Official REALITY gives a non-empty password precedence over publicKey.
+    // Decode only the effective value; a malformed password must not fall back.
+    let public_key = password
     .filter(|value| !value.is_empty())
+    .or(public_key.filter(|value| !value.is_empty()))
     .map(|value| {
         ir::reality_pbk_decode(&value)
             .map_err(|err| err.to_string())?
             .try_into()
-            .map_err(|_| "Reality publicKey must decode to 32 bytes".to_owned())
+            .map_err(|_| "Reality password/publicKey must decode to 32 bytes".to_owned())
     })
     .transpose()?
     .or_else(|| primary_reality.map(|reality| reality.public_key))
     .ok_or_else(|| {
         format!(
-            "resident dataplane vless xHTTP downloadSettings.security=reality requires realitySettings.publicKey for node {node_tag}"
+            "resident dataplane vless xHTTP downloadSettings.security=reality requires realitySettings.password or publicKey for node {node_tag}"
         )
     })?;
     let short_id = optional_string(
@@ -545,8 +543,8 @@ fn resident_xhttp_download_transport_settings(
     let host =
         optional_string(settings.get("host"), "xhttpSettings.host", node_tag)?.unwrap_or_default();
     let path = optional_string(settings.get("path"), "xhttpSettings.path", node_tag)?
-        .map(|value| resident_xhttp_stream_path(&value))
-        .unwrap_or_else(|| resident_xhttp_stream_path(""));
+        .map(|value| resident_xhttp_stream_path(&value, &parsed_settings.settings))
+        .unwrap_or_else(|| resident_xhttp_stream_path("", &parsed_settings.settings));
     Ok(ResidentXhttpTransportSettings {
         host,
         path,

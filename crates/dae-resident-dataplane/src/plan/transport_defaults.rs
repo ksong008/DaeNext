@@ -41,8 +41,12 @@ pub(super) fn resident_stream_path(path: &str) -> String {
     }
 }
 
-pub(super) fn resident_xhttp_stream_path(path: &str) -> String {
-    let normalized = ir::normalize_xhttp_path_and_query(path);
+pub(super) fn resident_xhttp_stream_path(
+    path: &str,
+    settings: &ResidentXhttpSettingsPlan,
+) -> String {
+    let normalized =
+        ir::normalize_xhttp_path_and_query_for_placement(path, settings.uses_path_metadata());
     if normalized.query.is_empty() {
         normalized.path
     } else {

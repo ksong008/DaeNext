@@ -235,10 +235,11 @@ fn validate_resident_xhttp_settings_static(
     node_tag: &str,
 ) -> Result<(), String> {
     if let Some((from, to)) = settings.sc_max_each_post_bytes
+        && (from, to) != (0, 0)
         && (from <= 0 || to <= 0)
     {
         return Err(format!(
-            "resident dataplane vless xHTTP {field}.scMaxEachPostBytes must be greater than 0 for node {node_tag}"
+            "resident dataplane vless xHTTP {field}.scMaxEachPostBytes must be greater than 0, or 0 for the default, for node {node_tag}"
         ));
     }
     if settings.sc_max_buffered_posts < 0 {
@@ -251,10 +252,56 @@ fn validate_resident_xhttp_settings_static(
             "resident dataplane vless xHTTP {field}.serverMaxHeaderBytes rejects negative values for node {node_tag}"
         ));
     }
-    if settings.uplink_http_method != "GET" && settings.uplink_http_method != "POST" {
+    if http::Method::from_bytes(settings.uplink_http_method.as_bytes()).is_err() {
         return Err(format!(
-            "resident dataplane vless xHTTP {field}.uplinkHTTPMethod admits GET or POST for node {node_tag}; got {}",
+            "resident dataplane vless xHTTP {field}.uplinkHTTPMethod must be a valid HTTP method for node {node_tag}; got {}",
             settings.uplink_http_method
+        ));
+    }
+    for (name, range, limit) in [
+        (
+            "xPaddingBytes",
+            settings.x_padding_bytes,
+            ResidentXhttpSettingsPlan::MAX_PADDING_BYTES,
+        ),
+        (
+            "sessionIDLength",
+            settings.session_id_length,
+            ResidentXhttpSettingsPlan::MAX_SESSION_LENGTH,
+        ),
+        (
+            "scMaxEachPostBytes",
+            settings.sc_max_each_post_bytes,
+            ResidentXhttpSettingsPlan::MAX_POST_BYTES,
+        ),
+        (
+            "uplinkChunkSize",
+            settings.uplink_chunk_size,
+            ResidentXhttpSettingsPlan::MAX_UPLINK_CHUNK_BYTES,
+        ),
+    ] {
+        if let Some((from, to)) = range
+            && (from < 0 || to > limit)
+        {
+            return Err(format!(
+                "resident dataplane vless xHTTP {field}.{name} must be in 0..={limit} for node {node_tag}"
+            ));
+        }
+    }
+    if settings.session_id_table.len() > 128 {
+        return Err(format!(
+            "resident dataplane vless xHTTP {field}.sessionIDTable exceeds 128 bytes for node {node_tag}"
+        ));
+    }
+    if settings
+        .headers
+        .iter()
+        .map(|(k, v)| k.len() + v.len() + 4)
+        .sum::<usize>()
+        > 64 * 1024
+    {
+        return Err(format!(
+            "resident dataplane vless xHTTP {field}.headers exceeds 65536 bytes for node {node_tag}"
         ));
     }
     if !settings.session_id_table.is_empty() {
@@ -303,15 +350,22 @@ fn validate_resident_xhttp_session_table(
             "resident dataplane vless xHTTP {field}.sessionIDLength.from must be greater than 0 for node {node_tag}"
         ));
     }
-    let table_len = settings.session_id_table.len() as f64;
-    let room = if table_len <= 0.0 {
-        0.0
-    } else {
-        (from..=to.max(from))
-            .map(|len| table_len.powi(len))
-            .sum::<f64>()
-    };
-    if room < ((2_u64 << 30) as f64) {
+    // Saturate once the required space is reached; never iterate an unbounded range.
+    let threshold = 2_u64 << 30;
+    let mut term = 1_u64;
+    let mut room = 0_u64;
+    for length in 1..=to {
+        term = term
+            .saturating_mul(settings.session_id_table.len() as u64)
+            .min(threshold);
+        if length >= from {
+            room = room.saturating_add(term);
+            if room >= threshold {
+                break;
+            }
+        }
+    }
+    if room < threshold {
         return Err(format!(
             "resident dataplane vless xHTTP {field}.sessionIDTable or sessionIDLength is too small for node {node_tag}"
         ));

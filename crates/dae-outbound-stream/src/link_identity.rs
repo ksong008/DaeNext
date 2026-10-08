@@ -54,6 +54,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn xhttp_download_password_identity_uses_effective_key_without_hiding_errors() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use serde_json::json;
+
+        let key = URL_SAFE_NO_PAD.encode([7; 32]);
+        let other = URL_SAFE_NO_PAD.encode([8; 32]);
+        let identity = |credentials: serde_json::Value| {
+            let mut url =
+                url::Url::parse("vless://01010101-0101-4101-8101-010101010101@node.example:443")
+                    .unwrap();
+            let extra = json!({"downloadSettings":{"address":"download.example","security":"reality","realitySettings":credentials}});
+            url.query_pairs_mut().extend_pairs([
+                ("type", "xhttp"),
+                ("security", "tls"),
+                ("extra", &extra.to_string()),
+            ]);
+            canonical_link_without_display_name(url.as_str())
+        };
+        let reference = identity(json!({"publicKey":key}));
+        for credentials in [
+            json!({"password":key}),
+            json!({"password":key,"publicKey":key}),
+            json!({"password":key,"publicKey":other}),
+            json!({"password":"","publicKey":key}),
+            json!({"password":key,"publicKey":"ignored"}),
+        ] {
+            assert_eq!(identity(credentials), reference);
+        }
+        assert_ne!(identity(json!({"password":other})), reference);
+        for invalid in [
+            json!("not!base64"),
+            json!(42),
+            json!(URL_SAFE_NO_PAD.encode([0; 31])),
+        ] {
+            let result = identity(json!({"password":invalid,"publicKey":key}));
+            assert_ne!(result, reference);
+            let link = VLESSLink::parse(&result).unwrap();
+            let extra: serde_json::Value = serde_json::from_str(&link.xhttp_extra).unwrap();
+            assert_eq!(
+                extra["downloadSettings"]["realitySettings"]["password"],
+                invalid
+            );
+        }
+        assert_ne!(identity(json!({"password":key,"publicKey":42})), reference);
+    }
+
+    #[test]
     fn generic_url_identity_ignores_display_fragment_only() {
         let first = canonical_link_without_display_name("socks5://192.0.2.1:1080#first");
         let renamed = canonical_link_without_display_name("socks5://192.0.2.1:1080#renamed");

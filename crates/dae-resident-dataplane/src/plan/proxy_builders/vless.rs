@@ -228,7 +228,7 @@ pub(crate) fn build_vless_proxy_plan(
     } else if net == "h2" {
         resident_stream_path(&vless.path)
     } else if net == "xhttp" {
-        resident_xhttp_stream_path(&vless.path)
+        resident_xhttp_stream_path(&vless.path, &xhttp_extra.settings)
     } else if matches!(net.as_str(), "websocket" | "httpupgrade") {
         resident_stream_path(&vless.path)
     } else {
