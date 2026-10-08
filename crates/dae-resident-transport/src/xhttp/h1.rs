@@ -12,6 +12,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
+mod pool;
+use futures_util::FutureExt;
+pub use pool::XhttpH1UploadPool;
+use pool::{PoolInner, drain_response};
+use tokio::sync::OwnedSemaphorePermit;
+
 pub struct XhttpH1ChunkedWriter {
     writer: XhttpH1ChunkedWriterInner,
     finished: bool,
@@ -51,7 +57,7 @@ pub async fn open_xhttp_h1_download_stream(
     mptcp: bool,
     session_id: &str,
     separate_endpoint: bool,
-) -> Result<XhttpH1DownloadBody, String> {
+) -> Result<XhttpResponseBody<XhttpH1DownloadBody>, String> {
     let client = if separate_endpoint {
         open_async_xhttp_endpoint_tls_client(endpoint, binding.effective_socket_mark(), mptcp)
             .await?
@@ -65,7 +71,7 @@ async fn open_xhttp_h1_download_stream_with_client(
     mut client: AsyncResidentTlsClient,
     endpoint: &ResidentXhttpEndpointPlan,
     session_id: &str,
-) -> Result<XhttpH1DownloadBody, String> {
+) -> Result<XhttpResponseBody<XhttpH1DownloadBody>, String> {
     let request = xhttp_h1_request_bytes(
         http::Method::GET,
         endpoint,
@@ -80,17 +86,22 @@ async fn open_xhttp_h1_download_stream_with_client(
         .await
         .map_err(|_| "flush xHTTP HTTP/1.1 download request timeout".to_owned())?
         .map_err(|err| format!("flush xHTTP HTTP/1.1 download request: {err}"))?;
-    let response = read_xhttp_h1_response_head(&mut client, "download").await?;
-    if !(200..300).contains(&response.status) {
-        return Err(format!(
-            "xHTTP HTTP/1.1 download response status {}",
-            response.status
-        ));
-    }
-    Ok(XhttpH1DownloadBody::new(
-        client,
-        response.headers,
-        response.body_prefix,
+    Ok(XhttpResponseBody::pending(
+        "xHTTP HTTP/1.1 download",
+        async move {
+            let response = read_xhttp_h1_response_head(&mut client, "download").await?;
+            if !(200..300).contains(&response.status) {
+                return Err(format!(
+                    "xHTTP HTTP/1.1 download response status {}",
+                    response.status
+                ));
+            }
+            Ok(XhttpH1DownloadBody::new(
+                client,
+                response.headers,
+                response.body_prefix,
+            ))
+        },
     ))
 }
 
@@ -101,15 +112,40 @@ pub async fn begin_xhttp_h1_packet_up_request(
     session_id: &str,
     seq: u64,
     payload: Bytes,
+    pool: &XhttpH1UploadPool,
 ) -> Result<XhttpPacketUpCompletion, String> {
-    let client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
+    let (client, owner, permit) = pool.take().await?;
+    let client = match client {
+        Some(mut client) => {
+            let mut probe = [0_u8; 1];
+            if client.read(&mut probe).now_or_never().is_none() {
+                client
+            } else {
+                drop(client);
+                open_async_resident_tls_client_with_binding(binding, mptcp).await?
+            }
+        }
+        None => open_async_resident_tls_client_with_binding(binding, mptcp).await?,
+    };
     let request = xhttp_h1_packet_up_request_bytes(endpoint, session_id, seq, payload)?;
-    begin_xhttp_h1_packet_up_request_on_client(client, request).await
+    send_on_connection(client, request, Some((owner, permit))).await
 }
 
+#[cfg(test)]
 async fn begin_xhttp_h1_packet_up_request_on_client<T>(
+    client: T,
+    request: Vec<u8>,
+) -> Result<XhttpPacketUpCompletion, String>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    send_on_connection(client, request, None).await
+}
+
+async fn send_on_connection<T>(
     mut client: T,
     request: Vec<u8>,
+    reuse: Option<(Arc<PoolInner<T>>, OwnedSemaphorePermit)>,
 ) -> Result<XhttpPacketUpCompletion, String>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -130,13 +166,24 @@ where
                 response.status
             ));
         }
-        let _ = client.shutdown().await;
+        if let Some((pool, _permit)) = reuse {
+            let reusable = time::timeout(
+                RESIDENT_CONNECT_TIMEOUT,
+                drain_response(&mut client, response),
+            )
+            .await
+            .map_err(|_| "drain H1 packet-up response timeout".to_owned())??;
+            if reusable {
+                pool.put(client);
+            }
+        }
         Ok(())
     }))
 }
 
 pub struct XhttpH1ResponseHead {
     pub status: u16,
+    pub keep_alive: bool,
     pub headers: Vec<(String, String)>,
     pub body_prefix: Vec<u8>,
 }
@@ -202,8 +249,16 @@ fn parse_xhttp_h1_response_head(
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
         .collect::<Vec<_>>();
+    let keep_alive = version == "HTTP/1.1"
+        && !headers.iter().any(|(name, value)| {
+            name == "connection"
+                && value
+                    .split(',')
+                    .any(|v| v.trim().eq_ignore_ascii_case("close"))
+        });
     Ok(XhttpH1ResponseHead {
         status,
+        keep_alive,
         headers,
         body_prefix,
     })

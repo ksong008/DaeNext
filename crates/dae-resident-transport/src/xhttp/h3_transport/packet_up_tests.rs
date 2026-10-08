@@ -40,6 +40,271 @@ fn packet_up_endpoint(server: SocketAddr) -> ResidentXhttpEndpointPlan {
     }
 }
 
+async fn delayed_h3_download_headers(stream_one: bool, ua: Option<&'static str>) {
+    let server_endpoint =
+        dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            server_config(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .unwrap();
+    let address = server_endpoint.local_addr().unwrap();
+    let accepting = server_endpoint.clone();
+    let (release, released) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let connection = accepting.accept().await.unwrap().await.unwrap();
+        let mut incoming: server::Connection<h3_quinn::Connection, Bytes> =
+            server::Connection::new(h3_quinn::Connection::new(connection))
+                .await
+                .unwrap();
+        let (request, mut download) = incoming
+            .accept()
+            .await
+            .unwrap()
+            .unwrap()
+            .resolve_request()
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        let marker = match ua {
+            None => "Chrome/",
+            Some("firefox") => "Firefox/",
+            Some(custom) => custom,
+        };
+        assert!(
+            request.headers()["user-agent"]
+                .to_str()
+                .unwrap()
+                .contains(marker)
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("sec-fetch-mode")
+                .map(|v| v.to_str().unwrap()),
+            (ua != Some("Custom-UA/1")).then_some("cors")
+        );
+        if stream_one {
+            assert_eq!(request.method(), http::Method::POST);
+            while let Some(mut chunk) = download.recv_data().await.unwrap() {
+                let remaining = chunk.remaining();
+                received.extend_from_slice(&chunk.copy_to_bytes(remaining));
+            }
+            assert_eq!(received, b"prefixpayload");
+        } else {
+            assert_eq!(request.method(), http::Method::GET);
+            let (request, mut upload) = incoming
+                .accept()
+                .await
+                .unwrap()
+                .unwrap()
+                .resolve_request()
+                .await
+                .unwrap();
+            assert_eq!(request.method(), http::Method::POST);
+            while let Some(mut chunk) = upload.recv_data().await.unwrap() {
+                let remaining = chunk.remaining();
+                received.extend_from_slice(&chunk.copy_to_bytes(remaining));
+            }
+            assert_eq!(received, b"first packet");
+            upload.send_response(http::Response::new(())).await.unwrap();
+            upload.finish().await.unwrap();
+        }
+        download
+            .send_response(http::Response::new(()))
+            .await
+            .unwrap();
+        download
+            .send_data(Bytes::from_static(b"reply"))
+            .await
+            .unwrap();
+        download.finish().await.unwrap();
+        let _ = released.await;
+    });
+
+    let mut endpoint = packet_up_endpoint(address);
+    if let Some(ua) = ua {
+        endpoint
+            .settings
+            .headers
+            .insert("user-agent".into(), ua.into());
+    }
+    let mut client_endpoint =
+        dae_outbound::shared_transport::test_support::boring_quic_client_endpoint(
+            "0.0.0.0:0".parse().unwrap(),
+        )
+        .unwrap();
+    client_endpoint.set_default_client_config(
+        build_xhttp_h3_client_config(&endpoint, ResidentXhttpQuicTlsProvider::Boring, None)
+            .unwrap(),
+    );
+    let connection = client_endpoint
+        .connect(address, "localhost")
+        .unwrap()
+        .await
+        .unwrap();
+    let (mut driver, mut client) = h3::client::new(h3_quinn::Connection::new(connection.clone()))
+        .await
+        .unwrap();
+    let driver = tokio::spawn(async move {
+        let _ = std::future::poll_fn(|cx| driver.poll_close(cx)).await;
+    });
+    let mut download;
+    let mut stream_upload = None;
+    if stream_one {
+        let request = xhttp_h3_request(http::Method::POST, &endpoint, "", true).unwrap();
+        let mut stream = client.send_request(request).await.unwrap();
+        stream
+            .send_data(Bytes::from_static(b"prefix"))
+            .await
+            .unwrap();
+        let (send, recv) = stream.split();
+        download = XhttpDownloadClient::H3StreamOne {
+            recv: xhttp_h3_response_body(recv, None, "xHTTP H3 stream-one"),
+        };
+        let mut upload = XhttpStreamUploadClient::H3StreamOne {
+            send,
+            connection: None,
+            xmux_lease: None,
+        };
+        assert!(
+            poll_xhttp_download_data(&mut download)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        send_xhttp_stream_data(&mut upload, Bytes::from_static(b"payload"), true)
+            .await
+            .unwrap();
+        stream_upload = Some(upload);
+    } else {
+        let recv = time::timeout(
+            Duration::from_secs(2),
+            open_xhttp_h3_download_stream(&endpoint, client.clone(), "session", None),
+        )
+        .await
+        .expect("download waited for response headers before allowing upload")
+        .unwrap();
+        download = XhttpDownloadClient::H3 {
+            recv,
+            connection: None,
+            xmux_lease: None,
+        };
+        assert!(
+            poll_xhttp_download_data(&mut download)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        time::timeout(Duration::from_secs(2), async {
+            begin_xhttp_h3_packet_up_request(
+                &mut client,
+                &endpoint,
+                "session",
+                0,
+                Bytes::from_static(b"first packet"),
+                None,
+            )
+            .await
+            .unwrap()
+            .await
+            .unwrap();
+        })
+        .await
+        .expect("upload blocked behind download response headers");
+    }
+    assert_eq!(
+        time::timeout(
+            Duration::from_secs(2),
+            read_xhttp_download_data(&mut download)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        Some(Bytes::from_static(b"reply"))
+    );
+    close_xhttp_download_client(download).await;
+    if let Some(upload) = stream_upload {
+        close_xhttp_stream_upload_client(upload).await;
+    }
+    release.send(()).unwrap();
+    server.await.unwrap();
+    drop(client);
+    connection.close(0_u32.into(), b"deferred headers test complete");
+    driver.abort();
+    let _ = driver.await;
+    client_endpoint.wait_idle().await;
+    server_endpoint.close(0_u32.into(), b"deferred headers test complete");
+    server_endpoint.wait_idle().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_headers_waiting_for_upload_do_not_block_h3_packet_up() {
+    for ua in [None, Some("firefox"), Some("Custom-UA/1")] {
+        delayed_h3_download_headers(false, ua).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stream_one_headers_are_read_after_further_h3_upload() {
+    delayed_h3_download_headers(true, None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h3_keep_alive_parameter_reaches_both_tls_providers() {
+    for provider in [
+        ResidentXhttpQuicTlsProvider::Boring,
+        ResidentXhttpQuicTlsProvider::ChromeBoring,
+    ] {
+        let server_endpoint =
+            dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+                server_config(),
+                "127.0.0.1:0".parse().unwrap(),
+            )
+            .unwrap();
+        let address = server_endpoint.local_addr().unwrap();
+        let accepting = server_endpoint.clone();
+        let (release, released) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let connection = accepting.accept().await.unwrap().await.unwrap();
+            let _ = released.await;
+            drop(connection);
+        });
+        let mut endpoint = packet_up_endpoint(address);
+        let mut xmux = ResidentXhttpXmuxPlan::official_default();
+        xmux.h_keep_alive_period = 1;
+        endpoint.xmux = Some(xmux);
+        let mut client_endpoint =
+            dae_outbound::shared_transport::test_support::boring_quic_client_endpoint(
+                "0.0.0.0:0".parse().unwrap(),
+            )
+            .unwrap();
+        client_endpoint.set_default_client_config(
+            build_xhttp_h3_client_config(&endpoint, provider, None).unwrap(),
+        );
+        let connection = client_endpoint
+            .connect(address, "localhost")
+            .unwrap()
+            .await
+            .unwrap();
+        // Let handshake ACKs settle before observing the idle keepalive.
+        time::sleep(Duration::from_millis(100)).await;
+        let initial_pings = connection.stats().frame_tx.ping;
+        time::timeout(Duration::from_millis(2500), async {
+            while connection.stats().frame_tx.ping == initial_pings {
+                time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("configured 1-second H3 keepalive was not sent");
+        release.send(()).unwrap();
+        server.await.unwrap();
+        connection.close(0_u32.into(), b"keepalive test complete");
+        client_endpoint.wait_idle().await;
+        server_endpoint.close(0_u32.into(), b"keepalive test complete");
+        server_endpoint.wait_idle().await;
+    }
+}
+
 #[test]
 fn h3_ech_fails_closed_for_every_quic_tls_provider() {
     const ECH_CONFIG_LIST: &str =

@@ -2,6 +2,8 @@ use super::*;
 use base64::{Engine as _, engine::general_purpose};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
+mod browser;
+
 pub fn xhttp_h2_request(
     method: http::Method,
     endpoint: &impl ResidentXhttpEndpointView,
@@ -72,7 +74,7 @@ pub fn xhttp_h2_packet_up_request(
         method,
         endpoint,
         XhttpRequestMeta::new(Some(session_id), Some(seq.to_string())),
-        plan.body.is_some(),
+        false,
         plan.headers,
         plan.cookies,
     )?;
@@ -91,7 +93,7 @@ pub fn xhttp_h3_packet_up_request(
         method,
         endpoint,
         XhttpRequestMeta::new(Some(session_id), Some(seq.to_string())),
-        plan.body.is_some(),
+        false,
         plan.headers,
         plan.cookies,
     )?;
@@ -256,20 +258,19 @@ fn xhttp_encoded_payload_chunks(
         return Vec::new();
     }
     let encoded = general_purpose::URL_SAFE_NO_PAD.encode(payload);
-    let chunk_size =
-        ResidentXhttpSettingsPlan::sample_range(settings.normalized_uplink_chunk_size()).max(1)
-            as usize;
-    encoded
-        .as_bytes()
-        .chunks(chunk_size)
-        .enumerate()
-        .map(|(index, chunk)| {
-            (
-                format!("{key}{separator}{index}"),
-                String::from_utf8_lossy(chunk).into_owned(),
-            )
-        })
-        .collect()
+    let mut remaining = encoded.as_str();
+    let mut chunks = Vec::new();
+    while !remaining.is_empty() {
+        let size = ResidentXhttpSettingsPlan::sample_range(settings.normalized_uplink_chunk_size())
+            .max(1) as usize;
+        let (chunk, rest) = remaining.split_at(size.min(remaining.len()));
+        chunks.push((
+            format!("{key}{separator}{}", chunks.len()),
+            chunk.to_owned(),
+        ));
+        remaining = rest;
+    }
+    chunks
 }
 
 struct XhttpPreparedRequestParts {
@@ -288,6 +289,7 @@ fn xhttp_h2_request_with_parts(
 ) -> Result<http::Request<()>, String> {
     let prepared = xhttp_prepare_request_parts(
         endpoint,
+        ResidentXhttpHttpVersion::H2,
         meta,
         grpc_body_header,
         extra_headers,
@@ -312,6 +314,7 @@ fn xhttp_h3_request_with_parts(
 ) -> Result<http::Request<()>, String> {
     let prepared = xhttp_prepare_request_parts(
         endpoint,
+        ResidentXhttpHttpVersion::H3,
         meta,
         grpc_body_header,
         extra_headers,
@@ -357,8 +360,10 @@ fn xhttp_h1_request_head_string(
     extra_headers: Vec<(String, String)>,
     extra_cookies: Vec<(String, String)>,
 ) -> String {
+    let packet_up = meta.seq.is_some();
     let prepared = xhttp_prepare_request_parts(
         endpoint,
+        ResidentXhttpHttpVersion::H1,
         meta,
         grpc_body_header,
         extra_headers,
@@ -369,6 +374,10 @@ fn xhttp_h1_request_head_string(
         prepared.path_and_query,
         xhttp_authority(endpoint)
     );
+    let has_connection = prepared
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("connection"));
     for (name, value) in prepared.headers {
         if name.eq_ignore_ascii_case("host") {
             continue;
@@ -378,7 +387,13 @@ fn xhttp_h1_request_head_string(
         request.push_str(&value);
         request.push_str("\r\n");
     }
-    request.push_str("Connection: close\r\n");
+    if !has_connection {
+        request.push_str(if packet_up {
+            "Connection: keep-alive\r\n"
+        } else {
+            "Connection: close\r\n"
+        });
+    }
     if let Some(content_length) = content_length {
         request.push_str(&format!("Content-Length: {content_length}\r\n"));
     }
@@ -387,13 +402,14 @@ fn xhttp_h1_request_head_string(
 
 fn xhttp_prepare_request_parts(
     endpoint: &impl ResidentXhttpEndpointView,
+    http_version: ResidentXhttpHttpVersion,
     meta: XhttpRequestMeta,
     grpc_body_header: bool,
     extra_headers: Vec<(String, String)>,
     extra_cookies: Vec<(String, String)>,
 ) -> XhttpPreparedRequestParts {
     let settings = endpoint.xhttp_settings();
-    let mut headers = xhttp_default_headers(settings);
+    let mut headers = browser::request_headers(settings, http_version);
     for (name, value) in extra_headers {
         xhttp_set_header(&mut headers, name, value);
     }
@@ -415,41 +431,6 @@ fn xhttp_prepare_request_parts(
         uri,
         path_and_query,
         headers,
-    }
-}
-
-fn xhttp_default_headers(settings: &ResidentXhttpSettingsPlan) -> Vec<(String, String)> {
-    let mut headers = settings
-        .headers
-        .iter()
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect::<Vec<_>>();
-    xhttp_push_default_header(
-        &mut headers,
-        http::header::USER_AGENT.as_str(),
-        "Mozilla/5.0",
-    );
-    xhttp_push_default_header(&mut headers, http::header::ACCEPT.as_str(), "*/*");
-    xhttp_push_default_header(
-        &mut headers,
-        http::header::ACCEPT_LANGUAGE.as_str(),
-        "en-US,en;q=0.9",
-    );
-    xhttp_push_default_header(
-        &mut headers,
-        http::header::CACHE_CONTROL.as_str(),
-        "no-cache",
-    );
-    xhttp_push_default_header(&mut headers, "pragma", "no-cache");
-    headers
-}
-
-fn xhttp_push_default_header(headers: &mut Vec<(String, String)>, name: &str, value: &str) {
-    if !headers
-        .iter()
-        .any(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
-    {
-        headers.push((name.to_owned(), value.to_owned()));
     }
 }
 
@@ -580,9 +561,7 @@ fn xhttp_generate_padding(method: ResidentXhttpPaddingMethod, len: usize) -> Str
         ResidentXhttpPaddingMethod::Tokenish => {
             const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
             let token_len = ((len as f64) / 0.8).ceil().max(1.0) as usize;
-            let mut token: String = (0..token_len)
-                .map(|_| BASE62[random_index(BASE62.len())] as char)
-                .collect();
+            let mut token = random_ascii(BASE62, token_len);
             // Xray sizes tokenish padding against the HTTP/2 HPACK or HTTP/3
             // QPACK Huffman representation, not the raw character count.
             // Correct the estimate so the encoded value stays within two
@@ -625,24 +604,26 @@ fn hpack_huffman_len(input: &[u8]) -> usize {
     bits.div_ceil(8)
 }
 
-fn random_index(bound: usize) -> usize {
-    debug_assert!(bound > 0);
-    let limit = u64::MAX - (u64::MAX % bound as u64);
-    loop {
-        let mut bytes = [0_u8; 8];
-        if getrandom::fill(&mut bytes).is_err() {
-            // Entropy source failure: degrade to the process PRNG for
-            // availability. Padding/session-id randomness is then
-            // predictable (weaker anti-tracking) but functional; the
-            // official implementations fail closed instead. Kept as a
-            // deliberate availability trade-off.
-            return fastrand::usize(..bound);
+fn random_ascii(table: &[u8], len: usize) -> String {
+    debug_assert!(!table.is_empty() && table.len() <= 128 && table.is_ascii());
+    let limit = 256 - 256 % table.len();
+    let mut output = String::with_capacity(len);
+    let mut random = [0_u8; 256];
+    while output.len() < len {
+        if getrandom::fill(&mut random).is_err() {
+            // Preserve the existing availability fallback on entropy failure.
+            fastrand::fill(&mut random);
         }
-        let value = u64::from_ne_bytes(bytes);
-        if value < limit {
-            return (value % bound as u64) as usize;
+        for byte in random {
+            if usize::from(byte) < limit {
+                output.push(table[usize::from(byte) % table.len()] as char);
+                if output.len() == len {
+                    break;
+                }
+            }
         }
     }
+    output
 }
 
 fn xhttp_query_in_header_padding(base_uri: &str, key: &str, padding: &str) -> String {
@@ -688,7 +669,10 @@ fn xhttp_path_and_query_with_meta(
     meta: &XhttpRequestMeta,
     extra_query: &[(String, String)],
 ) -> String {
-    let normalized = ir::normalize_xhttp_path_and_query(endpoint.stream_path());
+    let normalized = ir::normalize_xhttp_path_and_query_for_placement(
+        endpoint.stream_path(),
+        endpoint.xhttp_settings().uses_path_metadata(),
+    );
     let mut path = normalized.path;
     let settings = endpoint.xhttp_settings();
     if settings.session_id_placement == ResidentXhttpMetaPlacement::Path
@@ -721,17 +705,36 @@ fn xhttp_join_query(existing: &str, extra_query: &[(String, String)]) -> String 
         return existing.to_owned();
     }
     let mut encoded = url::form_urlencoded::Serializer::new(String::new());
-    for (key, value) in extra_query {
+    for (index, (key, value)) in extra_query.iter().enumerate() {
+        // Padding is applied before session/sequence metadata, as in the
+        // server's URL query setters: the last generated value wins.
+        if extra_query[index + 1..]
+            .iter()
+            .any(|(later, _)| later == key)
+        {
+            continue;
+        }
         encoded.append_pair(key, value);
     }
     let encoded = encoded.finish();
-    if existing.is_empty() {
-        encoded
-    } else if encoded.is_empty() {
-        existing.to_owned()
-    } else {
-        format!("{existing}&{encoded}")
+    let mut query = String::with_capacity(existing.len() + encoded.len() + 1);
+    for pair in existing.split('&').filter(|pair| !pair.is_empty()) {
+        let replaced = url::form_urlencoded::parse(pair.as_bytes())
+            .next()
+            .is_some_and(|(key, _)| extra_query.iter().any(|(new, _)| new == key.as_ref()));
+        if !replaced {
+            if !query.is_empty() {
+                query.push('&');
+            }
+            // Preserve the encoding of unrelated configured parameters.
+            query.push_str(pair);
+        }
     }
+    if !query.is_empty() && !encoded.is_empty() {
+        query.push('&');
+    }
+    query.push_str(&encoded);
+    query
 }
 
 pub fn xhttp_padding_referer(base_uri: &str, padding: &str) -> String {
@@ -763,12 +766,7 @@ pub fn new_xhttp_session_id_for(settings: &ResidentXhttpSettingsPlan) -> String 
         let len = ResidentXhttpSettingsPlan::sample_range((from, to)) as usize;
         let table = settings.session_id_table.as_bytes();
         if !table.is_empty() {
-            // Table-backed session ids ride in the request path alongside
-            // Tokenish padding; sample from the CSPRNG to stay
-            // indistinguishable from random traffic (see `random_index`).
-            return (0..len)
-                .map(|_| table[random_index(table.len())] as char)
-                .collect();
+            return random_ascii(table, len);
         }
     }
     new_xhttp_uuid_session_id()
@@ -778,7 +776,7 @@ fn new_xhttp_uuid_session_id() -> String {
     // Session ids are exposed in the request path and must not be
     // predictable from the process PRNG state (anti-tracking). Read 16
     // bytes from the OS CSPRNG; a failed entropy source falls back to the
-    // process PRNG for availability, mirroring `random_index`.
+    // process PRNG for availability, mirroring `random_ascii`.
     let mut bytes = [0_u8; 16];
     if getrandom::fill(&mut bytes).is_err() {
         for chunk in bytes.chunks_exact_mut(8) {
@@ -786,7 +784,9 @@ fn new_xhttp_uuid_session_id() -> String {
             chunk.copy_from_slice(&value);
         }
     }
-    let value = u128::from_ne_bytes(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let value = u128::from_be_bytes(bytes);
     format!(
         "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
         (value >> 96) as u32,
@@ -811,6 +811,283 @@ pub fn xhttp_h3_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn xhttp_browser_aliases_reach_each_request_encoder() {
+        for alias in [
+            None,
+            Some("chrome"),
+            Some("edge"),
+            Some("firefox"),
+            Some("safari"),
+            Some("curl"),
+            Some("golang"),
+            Some("Custom-UA/1"),
+            Some("Chrome"),
+            Some(""),
+        ] {
+            let mut settings = ResidentXhttpSettingsPlan::official_default();
+            if let Some(ua) = alias {
+                settings.headers.insert("uSeR-aGeNt".into(), ua.into());
+                settings
+                    .headers
+                    .insert("user-agent".into(), "shadowed-ua".into());
+            }
+            settings
+                .headers
+                .insert("Accept".into(), "application/test".into());
+            settings.headers.insert("priority".into(), "u=7".into());
+            settings
+                .headers
+                .insert("Accept-Language".into(), "custom-language".into());
+            let endpoint = test_xhttp_endpoint(settings);
+            let payload = Bytes::from_static(b"payload");
+            let raw = xhttp_h1_packet_up_request_bytes(&endpoint, "s", 0, payload.clone()).unwrap();
+            let end = raw.windows(4).position(|v| v == b"\r\n\r\n").unwrap();
+            assert_eq!(&raw[end + 4..], b"payload");
+            assert_eq!(
+                std::str::from_utf8(&raw[..end])
+                    .unwrap()
+                    .lines()
+                    .filter(|line| line.to_ascii_lowercase().starts_with("user-agent:"))
+                    .count(),
+                usize::from(alias != Some(""))
+            );
+            let h1 = std::str::from_utf8(&raw[..end])
+                .unwrap()
+                .lines()
+                .skip(1)
+                .map(|line| {
+                    let (key, value) = line.split_once(':').unwrap();
+                    (key.to_ascii_lowercase(), value.trim().to_owned())
+                })
+                .collect::<BTreeMap<_, _>>();
+            let (h2, body2) =
+                xhttp_h2_packet_up_request(&endpoint, "s", 0, payload.clone()).unwrap();
+            let (h3, body3) =
+                xhttp_h3_packet_up_request(&endpoint, "s", 0, payload.clone()).unwrap();
+            assert_eq!(body2, Some(payload.clone()));
+            assert_eq!(body3, Some(payload));
+            for headers in [h2.headers(), h3.headers()] {
+                assert_eq!(
+                    headers.get_all("user-agent").iter().count(),
+                    usize::from(alias != Some(""))
+                );
+            }
+            let maps = [
+                h1,
+                h2.headers()
+                    .iter()
+                    .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap().to_owned()))
+                    .collect(),
+                h3.headers()
+                    .iter()
+                    .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap().to_owned()))
+                    .collect(),
+            ];
+            for (version, headers) in maps.iter().enumerate() {
+                let ua = headers
+                    .get("user-agent")
+                    .map(String::as_str)
+                    .unwrap_or_default();
+                let browser = alias.unwrap_or("chrome");
+                assert_eq!(headers.contains_key("user-agent"), alias != Some(""));
+                match browser {
+                    "chrome" | "edge" => {
+                        assert!(ua.contains("Chrome/"));
+                        assert_eq!(ua.contains("Edg/"), browser == "edge");
+                        let major = ua
+                            .split("Chrome/")
+                            .nth(1)
+                            .unwrap()
+                            .split('.')
+                            .next()
+                            .unwrap();
+                        assert!(headers["sec-ch-ua"].contains(&format!("v=\"{major}\"")));
+                        assert_eq!(headers["sec-ch-ua-platform"], "\"Windows\"");
+                    }
+                    "firefox" => {
+                        assert!(ua.contains("Firefox/"));
+                        assert_eq!(headers["accept-language"], "en-US,en;q=0.5");
+                    }
+                    "safari" => assert!(
+                        ua.contains("Version/")
+                            && ua.contains("Safari/")
+                            && !ua.contains("Chrome/")
+                    ),
+                    "curl" => assert!(ua.starts_with("curl/8.")),
+                    "golang" => assert_eq!(
+                        ua,
+                        ["Go-http-client/1.1", "Go-http-client/2.0", "quic-go HTTP/3"][version]
+                    ),
+                    custom => assert_eq!(ua, custom),
+                }
+                let masqueraded = matches!(browser, "chrome" | "edge" | "firefox" | "safari");
+                assert_eq!(
+                    headers.get("sec-fetch-mode").map(String::as_str),
+                    masqueraded.then_some("cors")
+                );
+                assert_eq!(headers["accept"], "application/test");
+                assert_eq!(headers["priority"], "u=7");
+                assert!(!headers.contains_key("content-type"));
+                assert!(headers.contains_key("referer"));
+                if browser != "golang" {
+                    assert_eq!(headers.get("user-agent"), maps[0].get("user-agent"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn xhttp_h1_packet_reuse_respects_explicit_connection_policy() {
+        let mut endpoint = test_xhttp_endpoint(ResidentXhttpSettingsPlan::official_default());
+        let request = String::from_utf8(
+            xhttp_h1_packet_up_request_bytes(&endpoint, "s", 0, Bytes::new()).unwrap(),
+        )
+        .unwrap();
+        assert!(request.contains("Connection: keep-alive\r\n"));
+        assert!(!request.contains("Connection: close"));
+        endpoint
+            .settings
+            .headers
+            .insert("connection".into(), "close".into());
+        let request = String::from_utf8(
+            xhttp_h1_packet_up_request_bytes(&endpoint, "s", 0, Bytes::new()).unwrap(),
+        )
+        .unwrap();
+        assert!(request.contains("connection: close\r\n"));
+        assert!(!request.contains("Connection: keep-alive"));
+    }
+
+    #[test]
+    fn xhttp_default_session_is_uuid_v4() {
+        for _ in 0..32 {
+            let id = new_xhttp_uuid_session_id();
+            assert_eq!(id.len(), 36);
+            assert_eq!(&id[14..15], "4");
+            assert!(matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
+        }
+    }
+
+    #[test]
+    fn xhttp_payload_chunks_sample_each_boundary_and_reassemble() {
+        let mut settings = ResidentXhttpSettingsPlan::official_default();
+        settings.uplink_chunk_size = Some((64, 128));
+        let payload = Bytes::from(vec![42; 8192]);
+        let chunks = xhttp_encoded_payload_chunks("X-Data", '-', &settings, &payload);
+        assert!(
+            chunks
+                .iter()
+                .take(chunks.len() - 1)
+                .all(|(_, v)| (64..=128).contains(&v.len()))
+        );
+        assert!(chunks.windows(2).any(|c| c[0].1.len() != c[1].1.len()));
+        let encoded = chunks.iter().map(|(_, v)| v.as_str()).collect::<String>();
+        assert_eq!(
+            general_purpose::URL_SAFE_NO_PAD.decode(encoded).unwrap(),
+            payload
+        );
+        assert!(
+            random_ascii(b"abc", 4096)
+                .bytes()
+                .all(|b| b"abc".contains(&b))
+        );
+    }
+
+    #[test]
+    fn packet_up_content_type_is_consistent_across_http_versions() {
+        for configured in [None, Some("application/octet-stream")] {
+            let mut settings = ResidentXhttpSettingsPlan::official_default();
+            if let Some(value) = configured {
+                settings
+                    .headers
+                    .insert("Content-Type".to_owned(), value.to_owned());
+            }
+            let endpoint = test_xhttp_endpoint(settings);
+            let payload = Bytes::from_static(b"packet");
+            let h1 = String::from_utf8(
+                xhttp_h1_packet_up_request_bytes(&endpoint, "session", 0, payload.clone()).unwrap(),
+            )
+            .unwrap();
+            let (h2, h2_body) =
+                xhttp_h2_packet_up_request(&endpoint, "session", 0, payload.clone()).unwrap();
+            let (h3, h3_body) =
+                xhttp_h3_packet_up_request(&endpoint, "session", 0, payload.clone()).unwrap();
+            assert_eq!(
+                h1.to_ascii_lowercase().contains("content-type:"),
+                configured.is_some()
+            );
+            for request in [h2, h3] {
+                assert_eq!(
+                    request
+                        .headers()
+                        .get(http::header::CONTENT_TYPE)
+                        .map(|value| value.to_str().unwrap()),
+                    configured
+                );
+            }
+            assert_eq!(h2_body, Some(payload.clone()));
+            assert_eq!(h3_body, Some(payload));
+        }
+    }
+
+    #[test]
+    fn stream_upload_grpc_header_remains_optional() {
+        for no_grpc_header in [false, true] {
+            let mut settings = ResidentXhttpSettingsPlan::official_default();
+            settings.no_grpc_header = no_grpc_header;
+            let endpoint = test_xhttp_endpoint(settings);
+            let request = xhttp_h2_request(http::Method::POST, &endpoint, "", true).unwrap();
+            assert_eq!(
+                request
+                    .headers()
+                    .get(http::header::CONTENT_TYPE)
+                    .map(|value| value.to_str().unwrap()),
+                (!no_grpc_header).then_some("application/grpc")
+            );
+        }
+    }
+
+    #[test]
+    fn generated_metadata_replaces_existing_query_values() {
+        let mut settings = ResidentXhttpSettingsPlan::official_default();
+        settings.session_id_placement = ResidentXhttpMetaPlacement::Query;
+        settings.seq_placement = ResidentXhttpMetaPlacement::Query;
+        settings.x_padding_obfs_mode = true;
+        settings.x_padding_placement = ResidentXhttpPaddingPlacement::Query;
+        settings.x_padding_bytes = Some((4, 4));
+        let mut endpoint = test_xhttp_endpoint(settings);
+        endpoint.stream_path =
+            "/xhttp?token=a%20b&x_session=old&x%5Fsession=older&x_seq=99&x_padding=old".to_owned();
+        let (request, _) =
+            xhttp_h2_packet_up_request(&endpoint, "current", 7, Bytes::new()).unwrap();
+        let query = request.uri().query().unwrap();
+        assert!(query.starts_with("token=a%20b&"));
+        let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
+        for (key, expected) in [
+            ("x_session", "current"),
+            ("x_seq", "7"),
+            ("x_padding", "XXXX"),
+        ] {
+            let values = pairs
+                .iter()
+                .filter(|(name, _)| name == key)
+                .map(|(_, value)| value.as_ref())
+                .collect::<Vec<_>>();
+            assert_eq!(values, [expected]);
+        }
+        assert_eq!(
+            xhttp_join_query(
+                "same=old",
+                &[
+                    ("same".to_owned(), "padding".to_owned()),
+                    ("same".to_owned(), "session".to_owned())
+                ]
+            ),
+            "same=session"
+        );
+    }
 
     #[test]
     fn tokenish_padding_tracks_hpack_target_within_two_bytes() {
@@ -866,7 +1143,7 @@ mod tests {
         assert!(body.is_none());
         assert_eq!(
             request.uri().path_and_query().unwrap().as_str(),
-            "/x/?ed=2048&pad=XXXX&seq=7"
+            "/x?ed=2048&pad=XXXX&seq=7"
         );
         assert_eq!(request.headers()["X-Test"], "alpha");
         assert_eq!(request.headers()["X-Sid"], "sid-1");
@@ -894,7 +1171,7 @@ mod tests {
                 .unwrap();
         let request = String::from_utf8(bytes).unwrap();
 
-        assert!(request.starts_with("POST /x/?ed=2048 HTTP/1.1\r\n"));
+        assert!(request.starts_with("POST /x?ed=2048 HTTP/1.1\r\n"));
         assert!(
             request.contains("cookie: x_data_0=aGk; x_padding=XXX; x_session=sid-2; x_seq=5\r\n")
         );

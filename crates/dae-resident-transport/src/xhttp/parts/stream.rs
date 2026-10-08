@@ -4,11 +4,11 @@ use super::super::h1::{
 };
 use super::super::h2_transport::{
     drain_xhttp_h2_response_body, open_xhttp_h2_download_stream, open_xhttp_h2_endpoint_sender,
-    open_xhttp_h2_proxy_sender,
+    open_xhttp_h2_proxy_sender, xhttp_h2_response_body,
 };
 use super::super::h3_transport::{
     note_xhttp_h3_stream_error, open_xhttp_h3_download_stream, open_xhttp_h3_endpoint_client,
-    open_xhttp_h3_proxy_client, open_xhttp_h3_request,
+    open_xhttp_h3_proxy_client, open_xhttp_h3_request, xhttp_h3_response_body,
 };
 use super::super::request::{
     new_xhttp_session_id_for, write_xhttp_h1_chunk, write_xhttp_h1_chunked_request_head,
@@ -52,25 +52,26 @@ async fn open_xhttp_stream_one_parts(
             write_xhttp_h1_chunked_request_head(&mut client, &endpoint, "", "stream-one").await?;
             write_xhttp_h1_chunk(&mut client, &initial_payload, false, "stream-one").await?;
             let (mut reader, writer) = tokio::io::split(client);
-            let response = read_xhttp_h1_response_head(&mut reader, "stream-one").await?;
-            if !(200..300).contains(&response.status) {
-                return Err(format!(
-                    "xHTTP HTTP/1.1 stream-one response status {}",
-                    response.status
-                ));
-            }
+            let body = XhttpResponseBody::pending("xHTTP HTTP/1.1 stream-one", async move {
+                let response = read_xhttp_h1_response_head(&mut reader, "stream-one").await?;
+                if !(200..300).contains(&response.status) {
+                    return Err(format!(
+                        "xHTTP HTTP/1.1 stream-one response status {}",
+                        response.status
+                    ));
+                }
+                Ok(XhttpH1DownloadBody::new_with_read_half(
+                    reader,
+                    response.headers,
+                    response.body_prefix,
+                ))
+            });
             Ok(XhttpStreamParts {
                 session_id: None,
                 upload: XhttpStreamUploadClient::H1 {
                     writer: XhttpH1ChunkedWriter::from_write_half(writer),
                 },
-                download: XhttpDownloadClient::H1 {
-                    body: XhttpH1DownloadBody::new_with_read_half(
-                        reader,
-                        response.headers,
-                        response.body_prefix,
-                    ),
-                },
+                download: XhttpDownloadClient::H1 { body },
                 upload_underlay,
                 upload_http_version,
                 download_separate: false,
@@ -94,16 +95,7 @@ async fn open_xhttp_stream_one_parts(
                 "xHTTP HTTP/2 stream-one",
             )
             .await?;
-            let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, response)
-                .await
-                .map_err(|_| "xHTTP HTTP/2 stream-one response headers timeout".to_owned())?
-                .map_err(|err| format!("read xHTTP HTTP/2 stream-one response headers: {err}"))?;
-            if !response.status().is_success() {
-                return Err(format!(
-                    "xHTTP HTTP/2 stream-one response status {}",
-                    response.status()
-                ));
-            }
+            let recv = xhttp_h2_response_body(response, "xHTTP HTTP/2 stream-one");
             Ok(XhttpStreamParts {
                 session_id: None,
                 upload: XhttpStreamUploadClient::H2 {
@@ -113,7 +105,7 @@ async fn open_xhttp_stream_one_parts(
                     xmux_lease: endpoint_sender.xmux_lease,
                 },
                 download: XhttpDownloadClient::H2 {
-                    recv: response.into_body(),
+                    recv,
                     _keepalive_sender: Some(endpoint_sender.sender),
                     connection_task: endpoint_sender.connection_task,
                     xmux_lease: None,
@@ -142,20 +134,15 @@ async fn open_xhttp_stream_one_parts(
                     note_xhttp_h3_stream_error(&err, endpoint_client.xmux_lease.as_ref());
                     format!("send xHTTP H3 stream-one body: {err:?}")
                 })?;
-            let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
-                .await
-                .map_err(|_| "xHTTP H3 stream-one response timeout".to_owned())?
-                .map_err(|err| {
-                    note_xhttp_h3_stream_error(&err, endpoint_client.xmux_lease.as_ref());
-                    format!("recv xHTTP H3 stream-one response: {err:?}")
-                })?;
-            if !response.status().is_success() {
-                return Err(format!(
-                    "xHTTP H3 stream-one response status {}",
-                    response.status()
-                ));
-            }
             let (send, recv) = stream.split();
+            let recv = xhttp_h3_response_body(
+                recv,
+                endpoint_client
+                    .xmux_lease
+                    .as_ref()
+                    .map(XhttpXmuxClientLease::request_handle),
+                "xHTTP H3 stream-one",
+            );
             Ok(XhttpStreamParts {
                 session_id: None,
                 upload: XhttpStreamUploadClient::H3StreamOne {

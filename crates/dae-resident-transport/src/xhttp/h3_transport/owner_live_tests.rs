@@ -167,7 +167,16 @@ async fn h3_goaway_retires_the_old_physical_before_rebuild() {
     )
     .await
     .unwrap();
-    assert!(first_response.recv_data().await.unwrap().is_none());
+    assert!(
+        first_response
+            .resolve()
+            .await
+            .unwrap()
+            .recv_data()
+            .await
+            .unwrap()
+            .is_none()
+    );
     drop(first_response);
     goaway_observed.await.unwrap();
 
@@ -201,7 +210,16 @@ async fn h3_goaway_retires_the_old_physical_before_rebuild() {
     )
     .await
     .unwrap();
-    assert!(replacement_response.recv_data().await.unwrap().is_none());
+    assert!(
+        replacement_response
+            .resolve()
+            .await
+            .unwrap()
+            .recv_data()
+            .await
+            .unwrap()
+            .is_none()
+    );
     drop(replacement_response);
     assert_eq!(accepted_connections.load(Ordering::Relaxed), 2);
     drop(replacement);

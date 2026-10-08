@@ -37,6 +37,9 @@ pub async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H1 {
+                    pool: XhttpH1UploadPool::new(
+                        ResidentXhttpXmuxPlan::official_default().physical_connection_limit(),
+                    ),
                     binding: binding.clone(),
                     endpoint: upload_endpoint,
                     mptcp,
@@ -60,6 +63,9 @@ pub async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H1 {
+                    pool: XhttpH1UploadPool::new(
+                        ResidentXhttpXmuxPlan::official_default().physical_connection_limit(),
+                    ),
                     binding: binding.clone(),
                     endpoint: upload_endpoint,
                     mptcp,
@@ -88,6 +94,9 @@ pub async fn open_xhttp_packet_up_parts(
             Ok(XhttpPacketUpParts {
                 session_id,
                 upload: XhttpUploadClient::H1 {
+                    pool: XhttpH1UploadPool::new(
+                        ResidentXhttpXmuxPlan::official_default().physical_connection_limit(),
+                    ),
                     binding: binding.clone(),
                     endpoint: upload_endpoint,
                     mptcp,

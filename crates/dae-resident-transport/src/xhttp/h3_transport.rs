@@ -496,7 +496,8 @@ pub async fn open_xhttp_h3_download_stream(
     mut client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
     session_id: &str,
     xmux_lease: Option<&XhttpXmuxClientLease>,
-) -> Result<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>, String> {
+) -> Result<XhttpResponseBody<h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>>, String>
+{
     note_xhttp_xmux_request(xmux_lease);
     let request = xhttp_h3_request(
         http::Method::GET,
@@ -519,20 +520,31 @@ pub async fn open_xhttp_h3_download_stream(
             note_xhttp_h3_stream_error(&err, xmux_lease);
             format!("finish xHTTP H3 download request: {err:?}")
         })?;
-    let response = time::timeout(RESIDENT_CONNECT_TIMEOUT, stream.recv_response())
-        .await
-        .map_err(|_| "xHTTP H3 download response timeout".to_owned())?
-        .map_err(|err| {
-            note_xhttp_h3_stream_error(&err, xmux_lease);
-            format!("read xHTTP H3 download response: {err:?}")
+    Ok(xhttp_h3_response_body(
+        stream,
+        xmux_lease.map(XhttpXmuxClientLease::request_handle),
+        "xHTTP H3 download",
+    ))
+}
+
+pub(super) fn xhttp_h3_response_body<S>(
+    mut stream: h3::client::RequestStream<S, Bytes>,
+    xmux_request: Option<XhttpXmuxRequestHandle>,
+    context: &'static str,
+) -> XhttpResponseBody<h3::client::RequestStream<S, Bytes>>
+where
+    S: h3::quic::RecvStream + Send + 'static,
+{
+    XhttpResponseBody::pending(context, async move {
+        let response = stream.recv_response().await.map_err(|err| {
+            note_xhttp_h3_request_error(&err, xmux_request.as_ref());
+            format!("read {context} response: {err:?}")
         })?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "xHTTP H3 download response status {}",
-            response.status()
-        ));
-    }
-    Ok(stream)
+        if !response.status().is_success() {
+            return Err(format!("{context} response status {}", response.status()));
+        }
+        Ok(stream)
+    })
 }
 
 pub async fn begin_xhttp_h3_packet_up_request(
@@ -722,18 +734,21 @@ fn build_xhttp_h3_client_config_with_system_ca(
         .zero_rtt(false);
     dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
         &policy,
-        Arc::new(xhttp_h3_transport_config()?),
+        Arc::new(xhttp_h3_transport_config(endpoint)?),
         session_cache,
         system_ca,
     )
     .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC config: {err}"))
 }
 
-pub fn xhttp_h3_transport_config() -> Result<quinn::TransportConfig, String> {
+pub fn xhttp_h3_transport_config(
+    endpoint: &ResidentXhttpEndpointPlan,
+) -> Result<quinn::TransportConfig, String> {
     let mut transport = quinn::TransportConfig::default();
-    transport.keep_alive_interval(Some(Duration::from_secs(
-        dae_outbound_quic::XHTTP_H3_KEEPALIVE_SECS,
-    )));
+    transport.keep_alive_interval(xhttp_keep_alive_interval(
+        endpoint.xmux.as_ref(),
+        Duration::from_secs(dae_outbound_quic::XHTTP_H3_KEEPALIVE_SECS),
+    )?);
     transport.max_idle_timeout(Some(
         Duration::from_secs(dae_outbound_quic::XHTTP_H3_HANDSHAKE_IDLE_TIMEOUT_SECS)
             .try_into()

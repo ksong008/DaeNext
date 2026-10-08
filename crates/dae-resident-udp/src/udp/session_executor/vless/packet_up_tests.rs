@@ -64,7 +64,7 @@ async fn xhttp_udp_download_progresses_while_packet_up_completion_is_pending() {
     let mut session = VlessXhttpH2UdpSession {
         packet_pipeline: Some(pipeline),
         download: Some(XhttpDownloadClient::H2 {
-            recv: response.into_body(),
+            recv: response.into_body().into(),
             _keepalive_sender: Some(sender),
             connection_task: Some(connection_task),
             xmux_lease: None,

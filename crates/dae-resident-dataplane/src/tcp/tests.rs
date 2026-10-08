@@ -181,7 +181,7 @@ fn resident_tcp_probe_http_request_uses_configured_method_path_and_host() {
     .unwrap();
     assert!(request.starts_with("HEAD /generate_204 HTTP/1.1\r\n"));
     assert!(request.contains("Host: check.fixture.invalid\r\n"));
-    assert!(request.contains("Connection: close\r\n"));
+    assert!(request.contains("Connection: keep-alive\r\n"));
 }
 
 #[test]
@@ -455,7 +455,7 @@ fn xhttp_h1_request_uses_official_packet_up_shape() {
     assert!(request.contains("Host: edge.transport.invalid\r\n"));
     assert!(request.contains("content-type: application/grpc\r\n"));
     assert!(request.contains("Content-Length: 5\r\n"));
-    assert!(request.contains("Connection: close\r\n"));
+    assert!(request.contains("Connection: keep-alive\r\n"));
     assert!(request.ends_with("\r\n\r\nhello"));
     let referer = request
         .lines()
