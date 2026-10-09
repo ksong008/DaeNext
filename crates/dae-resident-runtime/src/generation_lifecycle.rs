@@ -2,8 +2,8 @@ use crate::ResidentDrainControl;
 use dae_resident_core::{
     LogicalGenerationId, ResidentGenerationLifecycle, ResidentStopSignal, SharedResidentStopSignal,
 };
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 static RESIDENT_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static RESIDENT_GENERATIONS_LIVE: AtomicU64 = AtomicU64::new(0);
@@ -50,6 +50,7 @@ pub struct ResidentGenerationDrainControl {
     workload_stop: SharedResidentStopSignal,
     flow_stop: SharedResidentStopSignal,
     udp_stop: SharedResidentStopSignal,
+    udp_maintenance_notify: Mutex<Option<Weak<tokio::sync::Notify>>>,
     udp_router_retained: AtomicBool,
     udp_dns_runtime_retained: AtomicBool,
 }
@@ -79,6 +80,7 @@ impl ResidentGenerationDrainControl {
             workload_stop,
             flow_stop: ResidentStopSignal::shared(),
             udp_stop: ResidentStopSignal::shared(),
+            udp_maintenance_notify: Mutex::new(None),
             udp_router_retained: AtomicBool::new(false),
             udp_dns_runtime_retained: AtomicBool::new(false),
         })
@@ -129,10 +131,36 @@ impl ResidentGenerationDrainControl {
         Arc::clone(&self.flow_stop)
     }
 
+    /// The single UDP manager subscribes before using this generation. Notify
+    /// keeps one pending permit, so retirement between registration and wait is
+    /// observed. Weak ownership avoids retaining a stopped manager.
+    pub fn set_udp_maintenance_notify(&self, notify: &Arc<tokio::sync::Notify>) {
+        *self
+            .udp_maintenance_notify
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(Arc::downgrade(notify));
+        if self.stop_is_requested() || self.udp_stop_is_requested() {
+            notify.notify_one();
+        }
+    }
+
+    fn notify_udp_maintenance(&self) {
+        if let Some(notify) = self
+            .udp_maintenance_notify
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .and_then(Weak::upgrade)
+        {
+            notify.notify_one();
+        }
+    }
+
     #[inline]
     pub fn retire_workloads(&self) {
         self.lifecycle.request_stop();
         self.workload_stop.store(true, Ordering::Release);
+        self.notify_udp_maintenance();
     }
 
     #[inline]
@@ -141,6 +169,7 @@ impl ResidentGenerationDrainControl {
         self.flow_stop.store(true, Ordering::Release);
         self.udp_stop.store(true, Ordering::Release);
         self.lifecycle.stop();
+        self.notify_udp_maintenance();
     }
 
     #[inline]

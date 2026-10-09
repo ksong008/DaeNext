@@ -49,8 +49,7 @@ use self::session_shards::{
 };
 use self::shutdown_evidence::*;
 use self::sniff::{
-    UdpPendingSniffer, UdpSniffDecision, UdpSniffKey, prune_udp_sniffers,
-    udp_sniff_reroute_decision,
+    UdpSniffDecision, UdpSniffKey, UdpSnifferTable, prune_udp_sniffers, udp_sniff_reroute_decision,
 };
 
 const UDP_ROUTE_CHOSEN_EVENT: &str = "udp_route_chosen";
@@ -153,7 +152,7 @@ struct ResidentUdpGenerationRuntime {
     drain_control: Arc<ResidentGenerationDrainControl>,
     router: Option<Arc<ResidentUdpRouter>>,
     runtime_config: ResidentUdpRuntimeConfig,
-    sniffers: HashMap<UdpSniffKey, UdpPendingSniffer>,
+    sniffers: UdpSnifferTable,
     reply_dispatcher: UdpReplyDispatcher,
     udp_reply: UdpReplyHandle,
     dns_runtime: Option<ResidentUdpDnsRuntime>,
@@ -168,7 +167,11 @@ impl ResidentUdpGenerationRuntime {
         event_lock: &Arc<Mutex<()>>,
         active_sessions: &Arc<AtomicUsize>,
         session_admission: &Arc<ResidentUdpSessionAdmission>,
+        maintenance_notify: &Arc<tokio::sync::Notify>,
     ) -> Self {
+        generation
+            .drain_control
+            .set_udp_maintenance_notify(maintenance_notify);
         let plan = &generation.udp;
         let config = plan.runtime_config.clone();
         session_admission.set_limit(config.session_admission_limit);
@@ -212,7 +215,7 @@ impl ResidentUdpGenerationRuntime {
             drain_control: Arc::clone(&generation.drain_control),
             router: Some(Arc::clone(&plan.router)),
             runtime_config: config,
-            sniffers: HashMap::new(),
+            sniffers: UdpSnifferTable::default(),
             reply_dispatcher,
             udp_reply,
             dns_runtime: Some(dns_runtime),
@@ -362,6 +365,8 @@ pub(super) async fn run_resident_udp_session_manager_async(
     event_lock: Arc<Mutex<()>>,
     active_sessions: Arc<AtomicUsize>,
 ) -> Value {
+    let mut publication = active_generation.subscribe_publication();
+    let maintenance_notify = Arc::new(tokio::sync::Notify::new());
     let initial_generation = active_generation.load();
     let initial_plan = &initial_generation.udp;
     let initial_config = &initial_plan.runtime_config;
@@ -474,6 +479,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
             &event_lock,
             &active_sessions,
             &session_admission,
+            &maintenance_notify,
         ),
     );
     drop(initial_generation);
@@ -481,9 +487,12 @@ pub(super) async fn run_resident_udp_session_manager_async(
     let mut stop_listener = stop.listener();
     let mut memory_maintenance = time::interval(Duration::from_secs(1));
     memory_maintenance.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-    let retirement = time::sleep(RESIDENT_IDLE_SLEEP);
+    let retirement = time::sleep(Duration::from_secs(1));
     tokio::pin!(retirement);
+    let mut next_pin_expiry: Option<Instant> = None;
+    let mut retirement_enabled = false;
     while !stop.load(Ordering::Relaxed) {
+        let mut maintenance_due = false;
         tokio::select! {
             batch = recv_udp_batch_with_original_dst_async(
                 &socket,
@@ -539,6 +548,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                             &event_lock,
                                             &active_sessions,
                                             &session_admission,
+                                            &maintenance_notify,
                                         )
                                     });
                                 } else if !generations.contains_key(&generation_id) {
@@ -579,6 +589,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                         ),
                                         active.id.get(),
                                     );
+                                    next_pin_expiry = Some(next_pin_expiry.map_or(pin.expires_at, |old| old.min(pin.expires_at)));
                                     continue;
                                 }
                                 let route =
@@ -599,6 +610,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                     idle_timeout,
                                     active.id.get(),
                                 );
+                                next_pin_expiry = Some(next_pin_expiry.map_or(pin.expires_at, |old| old.min(pin.expires_at)));
                                 continue;
                             }
 
@@ -610,6 +622,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                         &event_lock,
                                         &active_sessions,
                                         &session_admission,
+                                        &maintenance_notify,
                                     )
                             });
                             let generation = generations
@@ -641,11 +654,13 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 if pins.len() >= UDP_GENERATION_PIN_MAX_ENTRIES {
                                     evict_oldest_udp_generation_pin(&mut pins);
                                 }
+                                let expires_at = now + idle_timeout;
+                                next_pin_expiry = Some(next_pin_expiry.map_or(expires_at, |old| old.min(expires_at)));
                                 pins.insert(
                                     pin_key,
                                     UdpGenerationPin {
                                         generation: generation_id,
-                                        expires_at: now + idle_timeout,
+                                        expires_at,
                                         route,
                                     },
                                 );
@@ -672,16 +687,9 @@ pub(super) async fn run_resident_udp_session_manager_async(
                 session_admission.set_memory_pressure(pressure);
                 payload_pool.trim_idle(Instant::now(), Duration::from_secs(30), pressure);
             }
-            _ = &mut retirement => {
-                retire_idle_udp_generations(
-                    &active_generation,
-                    &mut pins,
-                    &mut generations,
-                    &mut retired_shutdowns,
-                    &mut retired_component_shutdowns,
-                );
-                retirement.as_mut().reset(time::Instant::now() + RESIDENT_IDLE_SLEEP);
-            }
+            _ = &mut retirement, if retirement_enabled => maintenance_due = true,
+            _ = publication.changed() => maintenance_due = true,
+            _ = maintenance_notify.notified() => maintenance_due = true,
             completed = retired_shutdowns.join_next(), if !retired_shutdowns.is_empty() => {
                 retired_shutdown_count = retired_shutdown_count.saturating_add(1);
                 match completed {
@@ -713,6 +721,31 @@ pub(super) async fn run_resident_udp_session_manager_async(
                 }
             }
             _ = stop_listener.cancelled() => break,
+        }
+        if maintenance_due {
+            retire_idle_udp_generations(
+                &active_generation,
+                &mut pins,
+                &mut generations,
+                &mut retired_shutdowns,
+                &mut retired_component_shutdowns,
+            );
+            next_pin_expiry = pins.values().map(|pin| pin.expires_at).min();
+        }
+        let next_expiry = next_pin_expiry
+            .into_iter()
+            .chain(
+                generations
+                    .values()
+                    .filter_map(|runtime| runtime.sniffers.next_expiry()),
+            )
+            .min();
+        retirement_enabled = next_expiry.is_some();
+        if let Some(deadline) = next_expiry {
+            let deadline = time::Instant::from_std(deadline);
+            if retirement.deadline() != deadline {
+                retirement.as_mut().reset(deadline);
+            }
         }
     }
 
@@ -883,16 +916,13 @@ fn retire_idle_udp_generations(
 ) {
     let now = Instant::now();
     let active_id = active_generation.load().id.get();
-    pins.retain(|_, pin| pin.expires_at > now && udp_generation_pin_is_eligible(pin, active_id));
-    for (generation_id, runtime) in generations.iter_mut() {
-        if *generation_id != active_id
-            && runtime.drain_control.stop_is_requested()
-            && !runtime.drain_control.udp_stop_is_requested()
-        {
-            runtime.prune_pending_sniffers();
-        }
+    for runtime in generations.values_mut() {
+        runtime.prune_pending_sniffers();
     }
     pins.retain(|key, pin| {
+        if pin.expires_at <= now || !udp_generation_pin_is_eligible(pin, active_id) {
+            return false;
+        }
         let runtime = generations.get(&pin.generation);
         if runtime.is_some_and(|runtime| runtime.drain_control.udp_stop_is_requested()) {
             return false;
@@ -981,7 +1011,7 @@ fn bind_manager_packet(
     router: &ResidentUdpRouter,
     event_file: &Path,
     event_lock: &Arc<Mutex<()>>,
-    sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>,
+    sniffers: &mut UdpSnifferTable,
     dns_fast_path: &ResidentDnsFastPathHandle,
     session_shards: &ResidentUdpSessionShardHandle,
     forced_dns_session_lanes: usize,

@@ -42,6 +42,27 @@ pub(super) struct UdpPendingSniffer {
     created_at: Instant,
 }
 
+#[derive(Default)]
+pub(super) struct UdpSnifferTable {
+    entries: HashMap<UdpSniffKey, UdpPendingSniffer>,
+    next_expiry: Option<Instant>,
+}
+
+impl UdpSnifferTable {
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+        self.next_expiry = None;
+    }
+
+    pub(super) fn contains_key(&self, key: &UdpSniffKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    pub(super) fn next_expiry(&self) -> Option<Instant> {
+        self.next_expiry
+    }
+}
+
 pub(super) struct UdpSniffReady {
     pub(super) packets: Vec<UdpOriginalDstPacket>,
     pub(super) initial: BpfRoutingResult,
@@ -58,9 +79,8 @@ pub(super) fn udp_sniff_reroute_decision(
     router: &ResidentUdpRouter,
     original_dst: SocketAddr,
     initial: BpfRoutingResult,
-    sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>,
+    sniffers: &mut UdpSnifferTable,
 ) -> UdpSniffDecision {
-    prune_udp_sniffers(sniffers);
     if !router.needs_sniffed_domain_for_reroute(original_dst, initial) {
         return UdpSniffDecision::Ready(UdpSniffReady {
             packets: vec![packet],
@@ -69,31 +89,39 @@ pub(super) fn udp_sniff_reroute_decision(
         });
     }
 
+    prune_udp_sniffers(sniffers);
     let key = UdpSniffKey::new(packet.peer, original_dst);
-    if !sniffers.contains_key(&key) {
-        if sniffers.len() >= UDP_PACKET_SNIFFER_MAX_ENTRIES {
+    if !sniffers.entries.contains_key(&key) {
+        if sniffers.entries.len() >= UDP_PACKET_SNIFFER_MAX_ENTRIES {
             evict_oldest_udp_sniffer(sniffers);
         }
-        sniffers.insert(
+        let now = Instant::now();
+        let deadline = now + UDP_PACKET_SNIFFER_TTL;
+        sniffers.next_expiry = Some(
+            sniffers
+                .next_expiry
+                .map_or(deadline, |old| old.min(deadline)),
+        );
+        sniffers.entries.insert(
             key,
             UdpPendingSniffer {
                 sniffer: PacketSniffer::new(&packet.payload),
                 packets: vec![packet],
                 initial,
-                created_at: Instant::now(),
+                created_at: now,
             },
         );
-    } else if let Some(entry) = sniffers.get_mut(&key) {
+    } else if let Some(entry) = sniffers.entries.get_mut(&key) {
         entry.sniffer.append_data(&packet.payload);
         entry.packets.push(packet);
     }
 
-    let Some(entry) = sniffers.get_mut(&key) else {
+    let Some(entry) = sniffers.entries.get_mut(&key) else {
         return UdpSniffDecision::Pending;
     };
     match entry.sniffer.sniff_udp() {
         Ok(sniffed_domain) => {
-            let entry = sniffers.remove(&key).expect("sniffer entry exists");
+            let entry = sniffers.entries.remove(&key).expect("sniffer entry exists");
             UdpSniffDecision::Ready(UdpSniffReady {
                 packets: entry.packets,
                 initial: entry.initial,
@@ -104,7 +132,7 @@ pub(super) fn udp_sniff_reroute_decision(
             UdpSniffDecision::Pending
         }
         Err(_) => {
-            let entry = sniffers.remove(&key).expect("sniffer entry exists");
+            let entry = sniffers.entries.remove(&key).expect("sniffer entry exists");
             UdpSniffDecision::Ready(UdpSniffReady {
                 packets: entry.packets,
                 initial: entry.initial,
@@ -114,18 +142,29 @@ pub(super) fn udp_sniff_reroute_decision(
     }
 }
 
-pub(super) fn prune_udp_sniffers(sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>) {
+pub(super) fn prune_udp_sniffers(sniffers: &mut UdpSnifferTable) {
     let now = Instant::now();
-    sniffers.retain(|_, entry| now.duration_since(entry.created_at) <= UDP_PACKET_SNIFFER_TTL);
+    if sniffers.next_expiry.is_some_and(|deadline| deadline > now) {
+        return;
+    }
+    sniffers
+        .entries
+        .retain(|_, entry| now.duration_since(entry.created_at) < UDP_PACKET_SNIFFER_TTL);
+    sniffers.next_expiry = sniffers
+        .entries
+        .values()
+        .map(|entry| entry.created_at + UDP_PACKET_SNIFFER_TTL)
+        .min();
 }
 
-fn evict_oldest_udp_sniffer(sniffers: &mut HashMap<UdpSniffKey, UdpPendingSniffer>) {
+fn evict_oldest_udp_sniffer(sniffers: &mut UdpSnifferTable) {
     let Some(oldest) = sniffers
+        .entries
         .iter()
         .min_by_key(|(_, entry)| entry.created_at)
         .map(|(key, _)| *key)
     else {
         return;
     };
-    sniffers.remove(&oldest);
+    sniffers.entries.remove(&oldest);
 }

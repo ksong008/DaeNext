@@ -32,6 +32,7 @@ pub(super) struct QuicUdpFragmentBuffer {
     pending: BTreeMap<u16, PendingQuicUdpFragments>,
     pending_bytes: usize,
     quarantined: BTreeMap<u16, Instant>,
+    next_cleanup: Option<Instant>,
     high_water_packets: usize,
     high_water_bytes: usize,
     accepted_fragments: u64,
@@ -68,6 +69,7 @@ impl QuicUdpFragmentBuffer {
             pending: BTreeMap::new(),
             pending_bytes: 0,
             quarantined: BTreeMap::new(),
+            next_cleanup: None,
             high_water_packets: 0,
             high_water_bytes: 0,
             accepted_fragments: 0,
@@ -259,6 +261,10 @@ impl QuicUdpFragmentBuffer {
         let expires_at = now
             .checked_add(self.resources.fragment_ttl())
             .unwrap_or(now);
+        self.next_cleanup = Some(
+            self.next_cleanup
+                .map_or(expires_at, |old| old.min(expires_at)),
+        );
         let complete = {
             let entry = self
                 .pending
@@ -314,6 +320,9 @@ impl QuicUdpFragmentBuffer {
     }
 
     fn expire_at(&mut self, now: Instant) {
+        if self.next_cleanup.is_some_and(|deadline| deadline > now) {
+            return;
+        }
         let expired: Vec<u16> = self
             .pending
             .iter()
@@ -325,6 +334,12 @@ impl QuicUdpFragmentBuffer {
             self.expired_packets = self.expired_packets.saturating_add(1);
         }
         self.quarantined.retain(|_, expires_at| *expires_at > now);
+        self.next_cleanup = self
+            .pending
+            .values()
+            .map(|entry| entry.expires_at)
+            .chain(self.quarantined.values().copied())
+            .min();
     }
 
     fn remove_pending(&mut self, packet_id: u16) {
@@ -349,6 +364,10 @@ impl QuicUdpFragmentBuffer {
             .checked_add(self.resources.fragment_quarantine_ttl())
             .unwrap_or(now);
         self.quarantined.insert(packet_id, expires_at);
+        self.next_cleanup = Some(
+            self.next_cleanup
+                .map_or(expires_at, |old| old.min(expires_at)),
+        );
     }
 
     fn reject(&mut self, bytes: usize) {

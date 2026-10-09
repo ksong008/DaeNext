@@ -387,6 +387,7 @@ impl Drop for TuicLogicalLeaseReservation {
 struct TuicAssociationState {
     sessions: HashMap<u16, TuicAssociationQueue>,
     quarantine: HashMap<u16, Instant>,
+    next_quarantine_expiry: Option<Instant>,
     next_id: u16,
 }
 
@@ -435,6 +436,7 @@ impl TuicAssociationManager {
             state: Mutex::new(TuicAssociationState {
                 sessions: HashMap::new(),
                 quarantine: HashMap::new(),
+                next_quarantine_expiry: None,
                 next_id: fastrand::u16(1..=u16::MAX),
             }),
             resources,
@@ -631,11 +633,24 @@ impl TuicAssociationManager {
         {
             self.metrics.quarantine_added();
         }
+        // Replacement/eviction may leave an early gate, never a late gate.
+        state.next_quarantine_expiry = Some(
+            state
+                .next_quarantine_expiry
+                .map_or(expires_at, |old| old.min(expires_at)),
+        );
     }
 
     fn purge_quarantine(&self, state: &mut TuicAssociationState, now: Instant) {
+        if state
+            .next_quarantine_expiry
+            .is_some_and(|expiry| expiry > now)
+        {
+            return;
+        }
         let before = state.quarantine.len();
         state.quarantine.retain(|_, expires_at| *expires_at > now);
+        state.next_quarantine_expiry = state.quarantine.values().copied().min();
         self.metrics
             .quarantine_released(before.saturating_sub(state.quarantine.len()));
     }
@@ -665,6 +680,7 @@ impl TuicAssociationManager {
             let quarantine = state.quarantine.len();
             state.sessions.clear();
             state.quarantine.clear();
+            state.next_quarantine_expiry = None;
             (sessions, quarantine)
         };
         subtract_count(&self.metrics.active_udp_associations, sessions);
@@ -1300,8 +1316,7 @@ async fn run_tuic_owner_registry(
                             &metrics,
                             &mut retirements,
                             resources.owner_limit(),
-                            key,
-                            instance_id,
+                            (key, instance_id),
                             &stop,
                         )
                         .await;
@@ -1322,8 +1337,7 @@ async fn run_tuic_owner_registry(
                                 &metrics,
                                 &mut retirements,
                                 resources.owner_limit(),
-                                key,
-                                instance_id,
+                                (key, instance_id),
                                 &stop,
                             )
                             .await;
@@ -1379,8 +1393,7 @@ async fn retire_tuic_owner(
     metrics: &Arc<TuicOwnerRegistryMetrics>,
     retirements: &mut JoinSet<()>,
     retirement_limit: usize,
-    key: TuicOwnerKey,
-    instance_id: u64,
+    (key, instance_id): (TuicOwnerKey, u64),
     stop: &SharedResidentStopSignal,
 ) {
     let is_current = owners
@@ -1832,10 +1845,51 @@ mod tests {
     }
 
     #[test]
+    fn quarantine_deadline_preserves_replacement_and_boundary() {
+        let metrics = Arc::new(TuicOwnerRegistryMetrics::default());
+        let (sender, _receiver) = mpsc::channel(1);
+        let manager = TuicAssociationManager::new(
+            TuicOwnerResourceProfile::selected(),
+            Arc::clone(&metrics),
+            sender,
+        );
+        let mut state = manager.state.lock().unwrap();
+        let now = Instant::now();
+        manager.insert_quarantine(&mut state, 7, now);
+        let first = state.next_quarantine_expiry.unwrap();
+        manager.insert_quarantine(&mut state, 7, now + std::time::Duration::from_secs(1));
+        manager.insert_quarantine(&mut state, 8, now);
+        manager.purge_quarantine(&mut state, first - std::time::Duration::from_nanos(1));
+        assert_eq!(state.quarantine.len(), 2);
+        manager.purge_quarantine(&mut state, first);
+        assert!(state.quarantine.contains_key(&7));
+        assert!(!state.quarantine.contains_key(&8));
+        assert_eq!(
+            metrics
+                .active_association_quarantine
+                .load(Ordering::Relaxed),
+            1
+        );
+        let last = state.next_quarantine_expiry.unwrap();
+        manager.purge_quarantine(&mut state, last);
+        assert!(state.quarantine.is_empty());
+        assert!(state.next_quarantine_expiry.is_none());
+        assert_eq!(
+            metrics
+                .active_association_quarantine
+                .load(Ordering::Relaxed),
+            0
+        );
+        drop(state);
+        manager.close();
+    }
+
+    #[test]
     fn association_allocator_skips_active_and_quarantined_ids() {
         let mut state = TuicAssociationState {
             sessions: HashMap::new(),
             quarantine: HashMap::new(),
+            next_quarantine_expiry: None,
             next_id: 7,
         };
         let (sender, _receiver) = mpsc::channel(1);
