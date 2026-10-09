@@ -604,6 +604,8 @@ fn hpack_huffman_len(input: &[u8]) -> usize {
     bits.div_ceil(8)
 }
 
+// Nonsecret length padding only: entropy failure may fall back to fastrand.
+// Session IDs must use secure_random_ascii and propagate entropy errors.
 fn random_ascii(table: &[u8], len: usize) -> String {
     debug_assert!(!table.is_empty() && table.len() <= 128 && table.is_ascii());
     let limit = 256 - 256 % table.len();
@@ -611,7 +613,7 @@ fn random_ascii(table: &[u8], len: usize) -> String {
     let mut random = [0_u8; 256];
     while output.len() < len {
         if getrandom::fill(&mut random).is_err() {
-            // Preserve the existing availability fallback on entropy failure.
+            // Padding carries no key, nonce or session identity.
             fastrand::fill(&mut random);
         }
         for byte in random {
@@ -624,6 +626,26 @@ fn random_ascii(table: &[u8], len: usize) -> String {
         }
     }
     output
+}
+
+fn secure_random_ascii(table: &[u8], len: usize) -> Result<String, String> {
+    debug_assert!(!table.is_empty() && table.len() <= 128 && table.is_ascii());
+    let limit = 256 - 256 % table.len();
+    let mut output = String::with_capacity(len);
+    let mut random = [0_u8; 256];
+    while output.len() < len {
+        dae_resident_core::fill_wire_random(&mut random)
+            .map_err(|error| format!("generate XHTTP session ID: {error}"))?;
+        for byte in random {
+            if usize::from(byte) < limit {
+                output.push(table[usize::from(byte) % table.len()] as char);
+                if output.len() == len {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(output)
 }
 
 fn xhttp_query_in_header_padding(base_uri: &str, key: &str, padding: &str) -> String {
@@ -757,7 +779,7 @@ pub fn xhttp_session_path_suffix(session_id: &str, seq: Option<u64>) -> String {
     }
 }
 
-pub fn new_xhttp_session_id_for(settings: &ResidentXhttpSettingsPlan) -> String {
+pub fn new_xhttp_session_id_for(settings: &ResidentXhttpSettingsPlan) -> Result<String, String> {
     if !settings.session_id_table.is_empty()
         && let Some((from, to)) = settings.session_id_length
         && from > 0
@@ -766,35 +788,27 @@ pub fn new_xhttp_session_id_for(settings: &ResidentXhttpSettingsPlan) -> String 
         let len = ResidentXhttpSettingsPlan::sample_range((from, to)) as usize;
         let table = settings.session_id_table.as_bytes();
         if !table.is_empty() {
-            return random_ascii(table, len);
+            return secure_random_ascii(table, len);
         }
     }
     new_xhttp_uuid_session_id()
 }
 
-fn new_xhttp_uuid_session_id() -> String {
-    // Session ids are exposed in the request path and must not be
-    // predictable from the process PRNG state (anti-tracking). Read 16
-    // bytes from the OS CSPRNG; a failed entropy source falls back to the
-    // process PRNG for availability, mirroring `random_ascii`.
+fn new_xhttp_uuid_session_id() -> Result<String, String> {
     let mut bytes = [0_u8; 16];
-    if getrandom::fill(&mut bytes).is_err() {
-        for chunk in bytes.chunks_exact_mut(8) {
-            let value = fastrand::u64(..).to_ne_bytes();
-            chunk.copy_from_slice(&value);
-        }
-    }
+    dae_resident_core::fill_wire_random(&mut bytes)
+        .map_err(|error| format!("generate XHTTP session ID: {error}"))?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let value = u128::from_be_bytes(bytes);
-    format!(
+    Ok(format!(
         "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
         (value >> 96) as u32,
         ((value >> 80) & 0xffff) as u16,
         ((value >> 64) & 0xffff) as u16,
         ((value >> 48) & 0xffff) as u16,
         value & 0xffff_ffff_ffff
-    )
+    ))
 }
 
 pub fn xhttp_h3_request(
@@ -963,7 +977,7 @@ mod tests {
     #[test]
     fn xhttp_default_session_is_uuid_v4() {
         for _ in 0..32 {
-            let id = new_xhttp_uuid_session_id();
+            let id = new_xhttp_uuid_session_id().unwrap();
             assert_eq!(id.len(), 36);
             assert_eq!(&id[14..15], "4");
             assert!(matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));

@@ -528,6 +528,69 @@ pub struct ShadowsocksAeadUdpPacket {
     pub packet_len: usize,
 }
 
+/// A session's invariant cipher selection and password-derived master key.
+/// Packet salts and HKDF subkeys remain independent for every datagram.
+pub struct AeadUdpCodec {
+    spec: AeadCipherSpec,
+    master_key: Vec<u8>,
+}
+
+impl AeadUdpCodec {
+    pub fn new(cipher: &str, password: &str) -> Result<Self, OutboundError> {
+        let spec = cipher_spec(cipher)?;
+        Ok(Self {
+            spec,
+            master_key: evp_bytes_to_key(password.as_bytes(), spec.key_len),
+        })
+    }
+
+    pub fn salt_len(&self) -> usize {
+        self.spec.salt_len
+    }
+
+    pub fn encode_packet(
+        &self,
+        salt: &[u8],
+        target: &Socks5Address,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, OutboundError> {
+        let packet_cipher = self.packet_cipher(salt)?;
+        let mut plain = Vec::with_capacity(target.encoded_len() + payload.len());
+        target.write_to(&mut plain)?;
+        plain.extend_from_slice(payload);
+        let encrypted = packet_cipher.encrypt(&nonce_from_counter(0), &plain)?;
+        let mut out = Vec::with_capacity(salt.len() + encrypted.len());
+        out.extend_from_slice(salt);
+        out.extend_from_slice(&encrypted);
+        Ok(out)
+    }
+
+    pub fn decode_packet(&self, packet: &[u8]) -> Result<ShadowsocksAeadUdpPacket, OutboundError> {
+        if packet.len() < self.spec.salt_len + TAG_LEN {
+            return Err(OutboundError::BadShadowsocks(
+                "udp packet missing salt or tag".to_owned(),
+            ));
+        }
+        let (salt, encrypted) = packet.split_at(self.spec.salt_len);
+        let plain = self
+            .packet_cipher(salt)?
+            .decrypt(&nonce_from_counter(0), encrypted)?;
+        let (target, consumed) = Socks5Address::decode(&plain)?;
+        Ok(ShadowsocksAeadUdpPacket {
+            target: target.authority(),
+            payload: plain[consumed..].to_vec(),
+            salt_len: salt.len(),
+            packet_len: packet.len(),
+        })
+    }
+
+    fn packet_cipher(&self, salt: &[u8]) -> Result<AeadCipher, OutboundError> {
+        validate_salt_len("udp", salt, self.spec.salt_len)?;
+        let subkey = hkdf_sha1_subkey(&self.master_key, salt, self.spec.key_len)?;
+        AeadCipher::new(self.spec.cipher, &subkey)
+    }
+}
+
 pub fn encode_udp_packet(
     cipher: &str,
     password: &str,
@@ -535,18 +598,11 @@ pub fn encode_udp_packet(
     target: &str,
     payload: &[u8],
 ) -> Result<Vec<u8>, OutboundError> {
-    let spec = cipher_spec(cipher)?;
-    validate_salt_len("udp", salt, spec.salt_len)?;
-    let target_metadata = ShadowsocksMetadata::parse(target)?;
-    let mut plain = target_metadata.encode()?;
-    plain.extend_from_slice(payload);
-    let packet_cipher = udp_packet_cipher(cipher, password, salt)?;
-    let nonce = nonce_from_counter(0);
-    let encrypted = packet_cipher.encrypt(&nonce, &plain)?;
-    let mut out = Vec::with_capacity(salt.len() + encrypted.len());
-    out.extend_from_slice(salt);
-    out.extend_from_slice(&encrypted);
-    Ok(out)
+    AeadUdpCodec::new(cipher, password)?.encode_packet(
+        salt,
+        &Socks5Address::parse(target)?,
+        payload,
+    )
 }
 
 pub fn decode_udp_packet(
@@ -554,35 +610,7 @@ pub fn decode_udp_packet(
     password: &str,
     packet: &[u8],
 ) -> Result<ShadowsocksAeadUdpPacket, OutboundError> {
-    let spec = cipher_spec(cipher)?;
-    if packet.len() < spec.salt_len + TAG_LEN {
-        return Err(OutboundError::BadShadowsocks(
-            "udp packet missing salt or tag".to_owned(),
-        ));
-    }
-    let (salt, encrypted) = packet.split_at(spec.salt_len);
-    let packet_cipher = udp_packet_cipher(cipher, password, salt)?;
-    let nonce = nonce_from_counter(0);
-    let plain = packet_cipher.decrypt(&nonce, encrypted)?;
-    let (target, consumed) = Socks5Address::decode(&plain)?;
-    Ok(ShadowsocksAeadUdpPacket {
-        target: target.authority(),
-        payload: plain[consumed..].to_vec(),
-        salt_len: salt.len(),
-        packet_len: packet.len(),
-    })
-}
-
-fn udp_packet_cipher(
-    cipher: &str,
-    password: &str,
-    salt: &[u8],
-) -> Result<AeadCipher, OutboundError> {
-    let spec = cipher_spec(cipher)?;
-    validate_salt_len("udp", salt, spec.salt_len)?;
-    let master_key = evp_bytes_to_key(password.as_bytes(), spec.key_len);
-    let subkey = hkdf_sha1_subkey(&master_key, salt, spec.key_len)?;
-    AeadCipher::new(spec.cipher, &subkey)
+    AeadUdpCodec::new(cipher, password)?.decode_packet(packet)
 }
 
 impl AeadStreamCodec {

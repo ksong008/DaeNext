@@ -15,7 +15,7 @@ pub async fn open_xhttp_packet_up_parts(
     mptcp: bool,
 ) -> Result<XhttpPacketUpParts, String> {
     let proxy = binding.plan();
-    let session_id = new_xhttp_session_id_for(proxy.xhttp_settings());
+    let session_id = new_xhttp_session_id_for(proxy.xhttp_settings())?;
     let upload_endpoint = ResidentXhttpEndpointPlan::from_proxy(proxy);
     let download_endpoint = proxy
         .xhttp_download

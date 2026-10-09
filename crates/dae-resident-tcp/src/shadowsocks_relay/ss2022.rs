@@ -12,7 +12,8 @@ pub async fn relay_tcp_over_shadowsocks_2022_async(
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<DirectTcpRelayStats, String> {
     let mut client_salt = vec![0_u8; salt_len];
-    fastrand::fill(&mut client_salt);
+    dae_resident_core::fill_wire_random(&mut client_salt)
+        .map_err(|error| format!("generate Shadowsocks wire randomness: {error}"))?;
     let (mut encoder, initial) = ss2022_tcp_client_stream_encoder(
         cipher,
         password,
