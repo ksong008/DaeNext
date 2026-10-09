@@ -20,6 +20,42 @@ use self::writer::*;
 #[cfg(test)]
 mod tests;
 
+pub(crate) fn append_product_log_without_runtime(
+    config_dir: &Path,
+    state: &Path,
+    level: String,
+    message: &str,
+    fields: BTreeMap<String, String>,
+    respect_runtime_log_level: bool,
+) -> io::Result<()> {
+    let policy = ProductLogPolicy::load(state)?;
+    let mut writer = ProductLogWriter::open(config_dir.to_path_buf(), policy)?;
+    writer.append(ProductLogAppendRequest {
+        level,
+        message: message.to_owned(),
+        fields,
+        respect_runtime_log_level,
+    })?;
+    Ok(())
+}
+
+pub(crate) fn apply_product_log_limits_without_runtime(
+    config_dir: &Path,
+    max_entries: i64,
+    max_bytes: i64,
+) -> io::Result<()> {
+    let mut writer = ProductLogWriter::open(
+        config_dir.to_path_buf(),
+        ProductLogPolicy {
+            runtime_level: "trace".to_owned(),
+            max_entries,
+            max_bytes,
+        },
+    )?;
+    writer.apply_limits(max_entries, max_bytes)?;
+    Ok(())
+}
+
 pub(crate) struct ProductLogRuntime {
     config: ProductLogRuntimeConfig,
     registry_key: PathBuf,

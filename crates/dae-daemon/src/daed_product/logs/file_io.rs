@@ -1,6 +1,19 @@
 use super::*;
 use std::borrow::Cow;
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static LOG_CLEAR_INTERRUPT_AFTER_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn interrupt_log_clear_after_rename() -> io::Result<()> {
+    if LOG_CLEAR_INTERRUPT_AFTER_RENAME.replace(false) {
+        return Err(io::Error::other("injected interrupted log clear"));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(crate) struct ProductLogEntry {
     pub(super) id: u64,
@@ -12,6 +25,13 @@ pub(crate) struct ProductLogEntry {
 
 pub(crate) fn product_log_file(config_dir: &Path) -> PathBuf {
     product_log_dir(config_dir).join(PRODUCT_LOG_FILE)
+}
+
+pub(crate) fn product_log_file_lock() -> io::Result<std::sync::MutexGuard<'static, ()>> {
+    LOG_FILE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| io::Error::other("product log file lock poisoned"))
 }
 
 pub(crate) fn product_log_dir(config_dir: &Path) -> PathBuf {
@@ -28,6 +48,209 @@ pub(crate) fn product_log_dir(config_dir: &Path) -> PathBuf {
     }
 }
 
+const PRODUCT_LOG_SEGMENT_PREFIX: &str = "segment-";
+const PRODUCT_LOG_SEGMENT_SUFFIX: &str = ".jsonl";
+const PRODUCT_LOG_VISIBILITY_FILE: &str = "visible-first-id.bin";
+pub(super) const PRODUCT_LOG_VISIBILITY_RECORD_BYTES: u64 = 16;
+pub(super) const PRODUCT_LOG_VISIBILITY_JOURNAL_MAX_BYTES: u64 = 4 * 1024;
+
+pub(crate) fn product_log_visibility_file(config_dir: &Path) -> PathBuf {
+    product_log_dir(config_dir).join(PRODUCT_LOG_VISIBILITY_FILE)
+}
+
+pub(super) fn read_log_visibility(config_dir: &Path) -> io::Result<(u64, u64)> {
+    let path = product_log_visibility_file(config_dir);
+    let data = match fs::read(&path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((0, 0)),
+        Err(error) => return Err(error),
+    };
+    if data.len() as u64
+        > PRODUCT_LOG_VISIBILITY_JOURNAL_MAX_BYTES + PRODUCT_LOG_VISIBILITY_RECORD_BYTES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "product log visibility journal is oversized",
+        ));
+    }
+    let mut last_id = 0;
+    let mut valid_bytes = 0;
+    for record in data.chunks_exact(PRODUCT_LOG_VISIBILITY_RECORD_BYTES as usize) {
+        let id = u64::from_le_bytes(record[..8].try_into().expect("visibility record length"));
+        let complement =
+            u64::from_le_bytes(record[8..].try_into().expect("visibility record length"));
+        if complement != !id || id < last_id {
+            break;
+        }
+        last_id = id;
+        valid_bytes += PRODUCT_LOG_VISIBILITY_RECORD_BYTES;
+    }
+    if valid_bytes != data.len() as u64 {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .set_len(valid_bytes)?;
+    }
+    Ok((last_id, valid_bytes))
+}
+
+pub(crate) fn remove_product_log_visibility_file(config_dir: &Path) -> io::Result<()> {
+    for path in [
+        product_log_visibility_file(config_dir),
+        product_log_dir(config_dir).join("visible-first-id.bin.tmp"),
+    ] {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) struct ProductLogSegmentFile {
+    pub(crate) path: PathBuf,
+    pub(crate) first_id: u64,
+    pub(crate) last_id: u64,
+}
+
+pub(crate) fn product_log_segment_path(config_dir: &Path, first_id: u64, last_id: u64) -> PathBuf {
+    product_log_dir(config_dir).join(format!(
+        "{PRODUCT_LOG_SEGMENT_PREFIX}{first_id:020}-{last_id:020}{PRODUCT_LOG_SEGMENT_SUFFIX}"
+    ))
+}
+
+pub(crate) fn product_log_segments(config_dir: &Path) -> io::Result<Vec<ProductLogSegmentFile>> {
+    let dir = product_log_dir(config_dir);
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut segments = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(bounds) = name
+            .strip_prefix(PRODUCT_LOG_SEGMENT_PREFIX)
+            .and_then(|name| name.strip_suffix(PRODUCT_LOG_SEGMENT_SUFFIX))
+        else {
+            continue;
+        };
+        let Some((first, last)) = bounds.split_once('-') else {
+            continue;
+        };
+        let (Ok(first_id), Ok(last_id)) = (first.parse::<u64>(), last.parse::<u64>()) else {
+            continue;
+        };
+        if first_id > last_id || !entry.file_type()?.is_file() {
+            continue;
+        }
+        segments.push(ProductLogSegmentFile {
+            path: entry.path(),
+            first_id,
+            last_id,
+        });
+    }
+    segments.sort_unstable_by_key(|segment| (segment.first_id, segment.last_id));
+    Ok(segments)
+}
+
+pub(crate) fn product_log_files(config_dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut files: Vec<_> = product_log_segments(config_dir)?
+        .into_iter()
+        .map(|segment| segment.path)
+        .collect();
+    files.push(product_log_file(config_dir));
+    Ok(files)
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LOG_READER_AFTER_ENUMERATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn observe_log_reader_enumeration() {
+    if let Some(callback) = LOG_READER_AFTER_ENUMERATION.with(|slot| slot.borrow_mut().take()) {
+        callback();
+    }
+}
+
+pub(crate) fn remove_product_log_segments(config_dir: &Path) -> io::Result<()> {
+    for segment in product_log_segments(config_dir)? {
+        match fs::remove_file(segment.path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_product_log_temporary_files(config_dir: &Path) -> io::Result<()> {
+    let entries = match fs::read_dir(product_log_dir(config_dir)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !(name.ends_with(".jsonl.compact.tmp")
+            || name == "current.jsonl.clear.tmp"
+            || name == "current.jsonl.install.tmp"
+            || name == "visible-first-id.bin.tmp")
+        {
+            continue;
+        }
+        if entry.file_type()?.is_file() {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+// A durable ready file owns the new snapshot until replacement and reclamation
+// are complete. Installation uses a hard link so retrying does not copy it.
+fn commit_product_log_clear(config_dir: &Path, temporary: &Path) -> io::Result<()> {
+    fs::File::open(temporary)?.sync_all()?;
+    let ready = product_log_file(config_dir).with_extension("jsonl.clear.ready");
+    fs::rename(temporary, &ready)?;
+    fs::File::open(product_log_dir(config_dir))?.sync_all()?;
+    recover_product_log_clear(config_dir)
+}
+
+pub(crate) fn recover_product_log_clear(config_dir: &Path) -> io::Result<()> {
+    let path = product_log_file(config_dir);
+    let ready = path.with_extension("jsonl.clear.ready");
+    match fs::metadata(&ready) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    let install = path.with_extension("jsonl.install.tmp");
+    match fs::remove_file(&install) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::hard_link(&ready, &install)?;
+    fs::rename(&install, &path)?;
+    #[cfg(test)]
+    interrupt_log_clear_after_rename()?;
+    remove_product_log_segments(config_dir)?;
+    remove_product_log_visibility_file(config_dir)?;
+    let directory = fs::File::open(product_log_dir(config_dir))?;
+    directory.sync_all()?;
+    fs::remove_file(ready)?;
+    directory.sync_all()?;
+    set_log_visible_first_id(&path, 0)?;
+    reset_log_id_cache_to_last(&path)
+}
+
 pub(crate) fn clear_log_file(config_dir: &Path) -> io::Result<()> {
     if let Some(runtime) = product_log_runtime_for(config_dir) {
         return runtime.clear();
@@ -42,9 +265,11 @@ pub(crate) fn clear_log_file_direct(config_dir: &Path) -> io::Result<()> {
     let _guard = lock
         .lock()
         .map_err(|_| io::Error::other("product log file lock poisoned"))?;
-    fs::write(&log_file, [])?;
-    set_log_id_cache(&log_file, 0)?;
-    set_log_file_permissions(&log_file)
+    recover_product_log_clear(config_dir)?;
+    let temporary = log_file.with_extension("jsonl.clear.tmp");
+    fs::write(&temporary, [])?;
+    set_log_file_permissions(&temporary)?;
+    commit_product_log_clear(config_dir, &temporary)
 }
 
 pub(crate) fn clear_log_file_preserving_startup_reload_logs(config_dir: &Path) -> io::Result<()> {
@@ -63,47 +288,46 @@ pub(crate) fn clear_log_file_preserving_startup_reload_logs_direct(
     let _guard = lock
         .lock()
         .map_err(|_| io::Error::other("product log file lock poisoned"))?;
+    recover_product_log_clear(config_dir)?;
+    let first_visible_id = read_log_visibility(config_dir)?.0;
     let tmp_path = log_file.with_extension("jsonl.clear.tmp");
     {
         let output = fs::File::create(&tmp_path)?;
         let mut writer = BufWriter::new(output);
-        match fs::File::open(&log_file) {
-            Ok(input) => {
-                let mut reader = io::BufReader::new(input);
-                let mut line = String::new();
-                loop {
-                    line.clear();
-                    let read = reader.read_line(&mut line)?;
-                    if read == 0 {
-                        break;
-                    }
-                    if startup_reload_lifecycle_log_line(&line) {
-                        writer.write_all(line.as_bytes())?;
-                        if !line.ends_with('\n') {
-                            writer.write_all(b"\n")?;
+        for path in product_log_files(config_dir)? {
+            match fs::File::open(path) {
+                Ok(input) => {
+                    let mut reader = io::BufReader::new(input);
+                    let mut line = Vec::new();
+                    loop {
+                        line.clear();
+                        let read = reader.read_until(b'\n', &mut line)?;
+                        if read == 0 {
+                            break;
+                        }
+                        if std::str::from_utf8(&line)
+                            .ok()
+                            .and_then(parse_log_entry_line)
+                            .is_some_and(|entry| {
+                                entry.id >= first_visible_id
+                                    && startup_reload_lifecycle_log_entry(&entry)
+                            })
+                        {
+                            writer.write_all(&line)?;
+                            if !line.ends_with(b"\n") {
+                                writer.write_all(b"\n")?;
+                            }
                         }
                     }
                 }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err),
         }
         writer.flush()?;
     }
     set_log_file_permissions(&tmp_path)?;
-    fs::rename(tmp_path, &log_file)?;
-    reset_log_id_cache_to_last(&log_file)
-}
-
-pub(crate) fn append_log_line(path: &Path, line: &[u8]) -> io::Result<()> {
-    #[cfg(test)]
-    observe_log_append_open(path);
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    file.write_all(line)?;
-    set_log_file_permissions(path)
+    commit_product_log_clear(config_dir, &tmp_path)
 }
 
 pub(crate) fn set_log_file_permissions(path: &Path) -> io::Result<()> {
@@ -325,10 +549,6 @@ pub(crate) fn startup_reload_lifecycle_log_kind(message: &str) -> Option<&'stati
     None
 }
 
-fn startup_reload_lifecycle_log_line(line: &str) -> bool {
-    parse_log_entry_line(line).is_some_and(|entry| startup_reload_lifecycle_log_entry(&entry))
-}
-
 fn startup_reload_lifecycle_log_entry(entry: &ProductLogEntry) -> bool {
     matches!(
         entry.fields.get("lifecycle").map(String::as_str),
@@ -368,7 +588,7 @@ pub(crate) fn log_entry_matches_filter(
 pub(crate) fn read_last_log_id(path: &Path) -> io::Result<u64> {
     let data = match read_tail_bytes(path, LOG_TAIL_ID_SCAN_BYTES) {
         Ok(data) => data,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(err) => return Err(err),
     };
     for line in data.split(|byte| *byte == b'\n').rev() {
@@ -382,26 +602,32 @@ pub(crate) fn read_last_log_id(path: &Path) -> io::Result<u64> {
             return Ok(entry.id);
         }
     }
-    Ok(0)
-}
-
-pub(crate) fn next_log_id(path: &Path) -> io::Result<u64> {
-    let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
-    let mut cache = lock
-        .lock()
-        .map_err(|_| io::Error::other("product log id cache lock poisoned"))?;
-    if let Some(cached) = cache.as_mut()
-        && cached.path == path
-    {
-        cached.id = cached.id.saturating_add(1);
-        return Ok(cached.id);
+    let Some(dir) = path.parent() else {
+        return Ok(0);
+    };
+    let mut last_id = 0;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(bounds) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(PRODUCT_LOG_SEGMENT_PREFIX))
+            .and_then(|name| name.strip_suffix(PRODUCT_LOG_SEGMENT_SUFFIX))
+        else {
+            continue;
+        };
+        if let Some((_, last)) = bounds.split_once('-')
+            && let Ok(id) = last.parse::<u64>()
+        {
+            last_id = last_id.max(id);
+        }
     }
-    let id = read_last_log_id(path)?.saturating_add(1);
-    *cache = Some(ProductLogIdCache {
-        path: path.to_path_buf(),
-        id,
-    });
-    Ok(id)
+    Ok(last_id)
 }
 
 pub(crate) fn cached_last_log_id(path: &Path) -> io::Result<u64> {
@@ -435,21 +661,48 @@ pub(crate) fn set_log_id_cache(path: &Path, id: u64) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn set_log_visible_first_id(path: &Path, id: u64) -> io::Result<()> {
+    let mut cache = LOG_VISIBLE_FIRST_ID_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| io::Error::other("product log visibility cache lock poisoned"))?;
+    cache.insert(path.to_path_buf(), id);
+    Ok(())
+}
+
+pub(crate) fn cached_log_visible_first_id(path: &Path) -> io::Result<Option<u64>> {
+    let cache = LOG_VISIBLE_FIRST_ID_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| io::Error::other("product log visibility cache lock poisoned"))?;
+    Ok(cache.get(path).copied())
+}
+
 pub(crate) fn reset_log_id_cache_to_last(path: &Path) -> io::Result<()> {
     set_log_id_cache(path, read_last_log_id(path)?)
 }
 
 pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
-    let log_file = product_log_file(config_dir);
-    let file = match fs::File::open(&log_file) {
-        Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
-        Err(err) => return Err(err),
-    };
+    let _guard = product_log_file_lock()?;
+    let first_visible_id = cached_log_visible_first_id(&product_log_file(config_dir))?.unwrap_or(0);
     let mut count = 0_i64;
-    for line in io::BufReader::new(file).lines().map_while(Result::ok) {
-        if parse_log_entry_line(&line).is_some() {
-            count = count.saturating_add(1);
+    for path in product_log_files(config_dir)? {
+        let file = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let mut reader = io::BufReader::new(file);
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? != 0 {
+            if std::str::from_utf8(&line)
+                .ok()
+                .and_then(parse_log_entry_line)
+                .is_some_and(|entry| entry.id >= first_visible_id)
+            {
+                count = count.saturating_add(1);
+            }
+            line.clear();
         }
     }
     Ok(count)
@@ -478,33 +731,10 @@ pub(crate) fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result
     if let Some(runtime) = product_log_runtime_for(config_dir) {
         return runtime.apply_limits(max_entries, max_bytes);
     }
-    let log_file = product_log_file(config_dir);
-    let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = lock
-        .lock()
-        .map_err(|_| io::Error::other("product log file lock poisoned"))?;
-    prune_log_file_with_settings(&log_file, max_entries, max_bytes)?;
-    reset_log_id_cache_to_last(&log_file)
+    apply_product_log_limits_without_runtime(config_dir, max_entries, max_bytes)
 }
 
-pub(crate) fn prune_log_file_if_needed(
-    path: &Path,
-    max_entries: i64,
-    max_bytes: i64,
-    last_id: u64,
-) -> io::Result<()> {
-    let max_bytes = normalize_log_max_bytes(max_bytes) as u64;
-    let size = match fs::metadata(path) {
-        Ok(metadata) => metadata.len(),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-    if size <= max_bytes && !last_id.is_multiple_of(LOG_PRUNE_INTERVAL) {
-        return Ok(());
-    }
-    prune_log_file_with_settings(path, max_entries, max_bytes as i64)
-}
-
+#[cfg(test)]
 pub(crate) fn prune_log_file_with_settings(
     path: &Path,
     max_entries: i64,
@@ -528,6 +758,7 @@ pub(crate) fn prune_log_file_with_settings(
     fs::rename(tmp_path, path)
 }
 
+#[cfg(test)]
 fn write_pruned_log_tail(path: &Path, data: &[u8], max_entries: usize) -> io::Result<()> {
     let mut ranges = Vec::new();
     let mut start = 0_usize;

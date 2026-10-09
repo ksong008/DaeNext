@@ -80,7 +80,6 @@ const MAX_LOG_QUERY_LIMIT: usize = 2_000;
 const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
 const MAX_LOG_FIELD_VALUE_LEN: usize = 1024;
 const LOG_TAIL_ID_SCAN_BYTES: u64 = 1024 * 1024;
-const LOG_PRUNE_INTERVAL: u64 = 256;
 const LOG_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const LOG_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const LOG_STREAM_RETRY_MS: u64 = 3_000;
