@@ -1,7 +1,7 @@
 use super::*;
 use std::time::Duration;
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 const DNS_UPSTREAM_REFRESH_TEST_INTERVAL: Duration = Duration::from_secs(60);
 
 pub fn parse_dns_fallback_resolver(config: &Config) -> Result<SocketAddr, String> {
@@ -17,7 +17,7 @@ pub fn parse_dns_fallback_resolver(config: &Config) -> Result<SocketAddr, String
         })
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub fn parse_dns_upstream(
     index: u8,
     tag: &str,

@@ -1,16 +1,16 @@
 use super::*;
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 use dae_resident_core::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
 use dae_resident_core::{ProxiedDoh3CleanupMetricObservation, ResidentOwnedTaskShutdownCompletion};
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug)]
 struct ProxiedDoh3CleanupProfile {
     drain_grace: std::time::Duration,
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 impl ProxiedDoh3CleanupProfile {
     const CURRENT: Self = Self {
         drain_grace: RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
@@ -18,75 +18,75 @@ impl ProxiedDoh3CleanupProfile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in super::super) struct ProxiedDoh3CleanupDeadline(time::Instant);
+pub struct ProxiedDoh3CleanupDeadline(time::Instant);
 
 impl ProxiedDoh3CleanupDeadline {
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
-    pub(in super::super) fn from_profile() -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_profile() -> Self {
         Self(time::Instant::now() + ProxiedDoh3CleanupProfile::CURRENT.drain_grace)
     }
 
-    pub(in super::super) const fn instant(self) -> time::Instant {
+    pub const fn instant(self) -> time::Instant {
         self.0
     }
 
-    pub(in super::super) const fn from_instant(deadline: time::Instant) -> Self {
+    pub const fn from_instant(deadline: time::Instant) -> Self {
         Self(deadline)
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
-    pub(in super::super) fn from_timeout(timeout: std::time::Duration) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_timeout(timeout: std::time::Duration) -> Self {
         Self(time::Instant::now() + timeout)
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in super::super) enum ProxiedDoh3EndpointCompletion {
+pub enum ProxiedDoh3EndpointCompletion {
     Idle,
     ForcedDrop,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in super::super) enum ProxiedDoh3DriverCompletion {
+pub enum ProxiedDoh3DriverCompletion {
     Finished,
     Aborted,
 }
 
 #[derive(Debug)]
-pub(in super::super) struct ProxiedDoh3CleanupOutcome {
-    pub(in super::super) deadline: ProxiedDoh3CleanupDeadline,
-    pub(in super::super) client_discarded: bool,
-    pub(in super::super) connection_closed: bool,
-    pub(in super::super) endpoint: Option<ProxiedDoh3EndpointCompletion>,
-    pub(in super::super) driver: Option<ProxiedDoh3DriverCompletion>,
-    pub(in super::super) bridge: Option<ResidentOwnedTaskShutdownCompletion>,
-    pub(in super::super) failures: Vec<String>,
+pub struct ProxiedDoh3CleanupOutcome {
+    pub deadline: ProxiedDoh3CleanupDeadline,
+    pub client_discarded: bool,
+    pub connection_closed: bool,
+    pub endpoint: Option<ProxiedDoh3EndpointCompletion>,
+    pub driver: Option<ProxiedDoh3DriverCompletion>,
+    pub bridge: Option<ResidentOwnedTaskShutdownCompletion>,
+    pub failures: Vec<String>,
 }
 
 impl ProxiedDoh3CleanupOutcome {
-    pub(in super::super) fn has_forced_completion(&self) -> bool {
+    pub fn has_forced_completion(&self) -> bool {
         self.endpoint == Some(ProxiedDoh3EndpointCompletion::ForcedDrop)
             || self.driver == Some(ProxiedDoh3DriverCompletion::Aborted)
             || self.bridge == Some(ResidentOwnedTaskShutdownCompletion::Aborted)
     }
 
-    pub(in super::super) fn endpoint_forced_drop(&self) -> bool {
+    pub fn endpoint_forced_drop(&self) -> bool {
         self.endpoint == Some(ProxiedDoh3EndpointCompletion::ForcedDrop)
     }
 
-    pub(in super::super) fn driver_aborted(&self) -> bool {
+    pub fn driver_aborted(&self) -> bool {
         self.driver == Some(ProxiedDoh3DriverCompletion::Aborted)
     }
 
-    pub(in super::super) fn bridge_aborted(&self) -> bool {
+    pub fn bridge_aborted(&self) -> bool {
         self.bridge == Some(ResidentOwnedTaskShutdownCompletion::Aborted)
     }
 
-    pub(in super::super) fn failed(&self) -> bool {
+    pub fn failed(&self) -> bool {
         !self.failures.is_empty()
     }
 
-    pub(in super::super) fn record_metrics(&self, metrics: &ResidentDataplaneMetrics) {
+    pub fn record_metrics(&self, metrics: &ResidentDataplaneMetrics) {
         metrics.record_proxied_doh3_cleanup(ProxiedDoh3CleanupMetricObservation::new(
             self.endpoint_forced_drop(),
             self.driver_aborted(),

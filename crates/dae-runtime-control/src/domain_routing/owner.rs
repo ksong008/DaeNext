@@ -98,7 +98,9 @@ impl DomainRoutingOwner {
         events: impl IntoIterator<Item = DomainRoutingDnsEvent<'event>>,
         apply: impl FnOnce(u32, &[DomainRoutingStateEntry], &[DomainRoutingIpKey]) -> io::Result<()>,
     ) -> io::Result<DomainRoutingOwnerApplyReport> {
-        let mut next = self.tracker.clone();
+        // Coalesce owner replacements before staging only the affected IPs.
+        // Neither the local tracker nor its map id changes until BPF succeeds.
+        let mut replacements = HashMap::new();
         for event in events {
             if event.owner_key.is_empty() {
                 return Err(io::Error::new(
@@ -106,47 +108,122 @@ impl DomainRoutingOwner {
                     "domain routing owner key is empty",
                 ));
             }
-            next.apply_owner_snapshot_owned(event.owner_key, event.into_snapshot());
+            replacements.insert(event.owner_key, event.into_snapshot());
         }
-
-        let map_id_changed = self.map_id != Some(map_id);
-        let plan = if map_id_changed {
-            DomainRoutingSyncPlan {
-                updates: next.entries(),
-                deletes: Vec::new(),
-                owner_count: next.owner_count(),
-                ip_count: next.ip_count(),
+        replacements.retain(|key, snapshot| match self.tracker.owners.get(*key) {
+            Some(old) => old != snapshot,
+            None => !snapshot.is_empty(),
+        });
+        let owner_snapshot_changed = !replacements.is_empty();
+        let mut affected = Vec::new();
+        for (key, snapshot) in &replacements {
+            if let Some(old) = self.tracker.owners.get(*key) {
+                affected.extend_from_slice(&old.ips);
             }
-        } else {
-            self.tracker.plan_transition(&next)
-        };
-        if plan.updates.is_empty() && plan.deletes.is_empty() {
-            self.map_id = Some(map_id);
-            self.tracker = next;
-            return Ok(DomainRoutingOwnerApplyReport {
-                map_id,
-                map_id_changed,
-                skipped: true,
-                entries_updated: 0,
-                entries_deleted: 0,
-                owner_count: self.tracker.owner_count(),
-                ip_count: self.tracker.ip_count(),
-            });
+            affected.extend_from_slice(&snapshot.ips);
         }
-
-        apply(map_id, &plan.updates, &plan.deletes)?;
-        let report = DomainRoutingOwnerApplyReport {
+        affected.sort_unstable();
+        affected.dedup();
+        let affected_keys = affected.len();
+        let mut staged = affected
+            .iter()
+            .map(|ip| (*ip, self.tracker.ips.get(ip).cloned().unwrap_or_default()))
+            .collect::<HashMap<_, _>>();
+        for (key, snapshot) in &replacements {
+            if let Some(old) = self.tracker.owners.get(*key) {
+                for ip in &old.ips {
+                    staged
+                        .get_mut(ip)
+                        .expect("old IP is staged")
+                        .owners
+                        .remove(*key);
+                }
+            }
+            if !snapshot.is_empty() {
+                for ip in &snapshot.ips {
+                    staged
+                        .get_mut(ip)
+                        .expect("new IP is staged")
+                        .owners
+                        .insert((*key).to_owned(), snapshot.bitmap);
+                }
+            }
+        }
+        let mut updates = Vec::new();
+        let mut deletes = Vec::new();
+        for ip in &affected {
+            let next = staged.get_mut(ip).expect("affected IP is staged");
+            next.merged = merge_owner_bitmaps(&next.owners);
+            match (self.tracker.ips.get(ip), next.owners.is_empty()) {
+                (Some(_), true) => deletes.push(*ip),
+                (None, false) => updates.push(DomainRoutingStateEntry {
+                    key: *ip,
+                    bitmap: next.merged,
+                }),
+                (Some(old), false) if old.merged != next.merged => {
+                    updates.push(DomainRoutingStateEntry {
+                        key: *ip,
+                        bitmap: next.merged,
+                    })
+                }
+                _ => {}
+            }
+        }
+        let map_id_changed = self.map_id != Some(map_id);
+        if map_id_changed {
+            // A new map needs a one-time replay, including untouched IPs.
+            updates = self
+                .tracker
+                .ips
+                .iter()
+                .filter(|(ip, _)| !staged.contains_key(*ip))
+                .map(|(ip, state)| DomainRoutingStateEntry {
+                    key: *ip,
+                    bitmap: state.merged,
+                })
+                .chain(
+                    staged
+                        .iter()
+                        .filter(|(_, state)| !state.owners.is_empty())
+                        .map(|(ip, state)| DomainRoutingStateEntry {
+                            key: *ip,
+                            bitmap: state.merged,
+                        }),
+                )
+                .collect();
+            updates.sort_by_key(|entry| entry.key);
+            deletes.clear();
+        }
+        let skipped = updates.is_empty() && deletes.is_empty();
+        if !skipped {
+            apply(map_id, &updates, &deletes)?;
+        }
+        for (key, snapshot) in replacements {
+            if snapshot.is_empty() {
+                self.tracker.owners.remove(key);
+            } else {
+                self.tracker.owners.insert(key.to_owned(), snapshot);
+            }
+        }
+        for (ip, state) in staged {
+            if state.owners.is_empty() {
+                self.tracker.ips.remove(&ip);
+            } else {
+                self.tracker.ips.insert(ip, state);
+            }
+        }
+        self.map_id = Some(map_id);
+        Ok(DomainRoutingOwnerApplyReport {
             map_id,
             map_id_changed,
-            skipped: false,
-            entries_updated: plan.updates.len(),
-            entries_deleted: plan.deletes.len(),
-            owner_count: next.owner_count(),
-            ip_count: next.ip_count(),
-        };
-        self.map_id = Some(map_id);
-        self.tracker = next;
-        Ok(report)
+            skipped,
+            owner_snapshot_changed,
+            affected_keys,
+            entries_updated: updates.len(),
+            entries_deleted: deletes.len(),
+            owner_count: self.tracker.owner_count(),
+            ip_count: self.tracker.ip_count(),
+        })
     }
 
     pub fn apply_dns_event_with(
@@ -175,60 +252,15 @@ impl DomainRoutingOwner {
         snapshot: DomainRoutingOwnerSnapshot,
         apply: impl FnOnce(u32, &[DomainRoutingStateEntry], &[DomainRoutingIpKey]) -> io::Result<()>,
     ) -> io::Result<DomainRoutingOwnerApplyReport> {
-        if owner_key.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "domain routing owner key is empty",
-            ));
-        }
-        let map_id_changed = self.map_id != Some(map_id);
-        if map_id_changed {
-            let mut next = self.tracker.clone();
-            next.apply_owner_update_ref(owner_key, &snapshot);
-            let entries = next.entries();
-            if !entries.is_empty() {
-                apply(map_id, &entries, &[])?;
-            }
-            self.map_id = Some(map_id);
-            self.tracker = next;
-            return Ok(DomainRoutingOwnerApplyReport {
-                map_id,
-                map_id_changed: true,
-                skipped: entries.is_empty(),
-                entries_updated: entries.len(),
-                entries_deleted: 0,
-                owner_count: self.tracker.owner_count(),
-                ip_count: self.tracker.ip_count(),
-            });
-        }
-
-        let plan = self.tracker.plan_owner_update(owner_key, &snapshot);
-        if plan.updates.is_empty() && plan.deletes.is_empty() {
-            self.tracker.apply_owner_snapshot_owned(owner_key, snapshot);
-            return Ok(DomainRoutingOwnerApplyReport {
-                map_id,
-                map_id_changed: false,
-                skipped: true,
-                entries_updated: 0,
-                entries_deleted: 0,
-                owner_count: self.tracker.owner_count(),
-                ip_count: self.tracker.ip_count(),
-            });
-        }
-        apply(map_id, &plan.updates, &plan.deletes)?;
-        let entries_updated = plan.updates.len();
-        let entries_deleted = plan.deletes.len();
-        self.tracker
-            .apply_owner_snapshot_incremental(owner_key, snapshot, &plan);
-        Ok(DomainRoutingOwnerApplyReport {
+        self.apply_dns_events_with(
             map_id,
-            map_id_changed: false,
-            skipped: false,
-            entries_updated,
-            entries_deleted,
-            owner_count: self.tracker.owner_count(),
-            ip_count: self.tracker.ip_count(),
-        })
+            [DomainRoutingDnsEvent {
+                owner_key,
+                bitmap: snapshot.bitmap,
+                ips: snapshot.ips,
+            }],
+            apply,
+        )
     }
 
     pub fn prepare_reload_map_by_id(

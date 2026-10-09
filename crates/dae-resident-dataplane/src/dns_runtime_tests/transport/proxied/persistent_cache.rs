@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::dns::transport::test_support::{
+use crate::dns_runtime_tests::transport::test_support::{
     DnsQuicTestProtocol, DnsQuicTestServer, Socks5UdpRelay, dns_proxy_binding, dns_test_response,
     socks5_dns_proxy,
 };

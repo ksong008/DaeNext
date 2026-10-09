@@ -17,7 +17,7 @@ use actions::{
     response_index_for_function,
 };
 use qtype::{grouped_params, parse_dns_qtype};
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub use upstream_parse::parse_dns_upstream;
 use upstream_parse::split_keyable_link;
 use upstream_parse::{parse_dns_fallback_resolver, parse_dns_upstream_with_refresh_interval};

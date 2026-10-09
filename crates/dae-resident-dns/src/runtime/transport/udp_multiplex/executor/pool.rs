@@ -43,7 +43,7 @@ impl ResidentDnsUdpActorPool {
             .map_err(|err| format!("join shared DNS UDP actor runtime shutdown: {err}"))
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn worker_count(&self) -> Option<usize> {
         self.runtime.lock().ok().and_then(|runtime| {
             runtime
@@ -66,7 +66,7 @@ impl Drop for ResidentDnsUdpActorPool {
     }
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -174,6 +174,13 @@ impl DomainRoutingTracker {
         owner_key: &str,
         snapshot: &DomainRoutingOwnerSnapshot,
     ) {
+        if self
+            .owners
+            .get(owner_key)
+            .is_some_and(|old| old == snapshot)
+        {
+            return;
+        }
         self.remove_owner(owner_key);
 
         if snapshot.is_empty() {
@@ -189,6 +196,9 @@ impl DomainRoutingTracker {
         owner_key: &str,
         snapshot: DomainRoutingOwnerSnapshot,
     ) {
+        if self.owners.get(owner_key) == Some(&snapshot) {
+            return;
+        }
         self.remove_owner(owner_key);
 
         if snapshot.is_empty() {
@@ -197,57 +207,6 @@ impl DomainRoutingTracker {
 
         self.apply_owner_ip_state(owner_key, &snapshot.ips, snapshot.bitmap);
         self.owners.insert(owner_key.to_owned(), snapshot);
-    }
-
-    pub(super) fn apply_owner_snapshot_incremental(
-        &mut self,
-        owner_key: &str,
-        snapshot: DomainRoutingOwnerSnapshot,
-        plan: &DomainRoutingSyncPlan,
-    ) {
-        let snapshot_empty = snapshot.is_empty();
-        let mut remove_empty_ips = Vec::new();
-
-        for key in &plan.deletes {
-            let Some(state) = self.ips.get_mut(key) else {
-                continue;
-            };
-            state.owners.remove(owner_key);
-            if state.owners.is_empty() {
-                remove_empty_ips.push(*key);
-            } else {
-                state.merged = merge_owner_bitmaps(&state.owners);
-            }
-        }
-
-        for entry in &plan.updates {
-            if !snapshot_empty && snapshot.ips.contains(&entry.key) {
-                let state = self.ips.entry(entry.key).or_default();
-                state.owners.insert(owner_key.to_owned(), snapshot.bitmap);
-                state.merged = entry.bitmap;
-                continue;
-            }
-
-            let Some(state) = self.ips.get_mut(&entry.key) else {
-                continue;
-            };
-            state.owners.remove(owner_key);
-            if state.owners.is_empty() {
-                remove_empty_ips.push(entry.key);
-            } else {
-                state.merged = entry.bitmap;
-            }
-        }
-
-        for key in remove_empty_ips {
-            self.ips.remove(&key);
-        }
-
-        if snapshot_empty {
-            self.owners.remove(owner_key);
-        } else {
-            self.owners.insert(owner_key.to_owned(), snapshot);
-        }
     }
 
     pub(super) fn remove_owner(&mut self, owner_key: &str) {

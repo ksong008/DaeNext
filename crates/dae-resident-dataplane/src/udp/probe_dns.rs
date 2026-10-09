@@ -524,3 +524,8 @@ pub fn skip_dns_name(packet: &[u8], offset: &mut usize) -> Result<(), String> {
         }
     }
 }
+
+#[cfg(all(test, feature = "dns-runtime-tests"))]
+mod test_support;
+#[cfg(all(test, feature = "dns-runtime-tests"))]
+pub use test_support::*;

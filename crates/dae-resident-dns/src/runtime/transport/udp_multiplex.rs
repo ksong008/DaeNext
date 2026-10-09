@@ -300,7 +300,7 @@ impl ResidentDnsUdpMultiplexHandle {
         ))
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn exchange_once(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
         self.exchange_once_until(payload, time::Instant::now() + self.attempt_timeout)
             .await

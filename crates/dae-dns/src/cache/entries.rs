@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -12,7 +13,10 @@ const DNS_CACHE_SMALL_BACKEND_MAX_ENTRIES: usize = 16;
 #[derive(Clone, Debug)]
 pub(super) enum DnsCacheEntries {
     Small(Vec<(DnsCacheKey, Arc<DnsCacheEntry>)>),
-    Map(HashMap<DnsCacheKey, Arc<DnsCacheEntry>>),
+    Map {
+        entries: HashMap<DnsCacheKey, Arc<DnsCacheEntry>>,
+        deadlines: BTreeSet<(i64, DnsCacheKey)>,
+    },
 }
 
 impl DnsCacheEntries {
@@ -20,21 +24,24 @@ impl DnsCacheEntries {
         if capacity <= DNS_CACHE_SMALL_BACKEND_MAX_ENTRIES {
             Self::Small(Vec::new())
         } else {
-            Self::Map(HashMap::new())
+            Self::Map {
+                entries: HashMap::new(),
+                deadlines: BTreeSet::new(),
+            }
         }
     }
 
     pub(super) fn len(&self) -> usize {
         match self {
             Self::Small(entries) => entries.len(),
-            Self::Map(entries) => entries.len(),
+            Self::Map { entries, .. } => entries.len(),
         }
     }
 
     pub(super) fn is_empty(&self) -> bool {
         match self {
             Self::Small(entries) => entries.is_empty(),
-            Self::Map(entries) => entries.is_empty(),
+            Self::Map { entries, .. } => entries.is_empty(),
         }
     }
 
@@ -43,7 +50,7 @@ impl DnsCacheEntries {
             Self::Small(entries) => entries
                 .iter()
                 .find_map(|(candidate, entry)| (candidate == key).then_some(entry.as_ref())),
-            Self::Map(entries) => entries.get(key).map(Arc::as_ref),
+            Self::Map { entries, .. } => entries.get(key).map(Arc::as_ref),
         }
     }
 
@@ -52,7 +59,7 @@ impl DnsCacheEntries {
             Self::Small(entries) => entries.iter().find_map(|(candidate, entry)| {
                 candidate.matches_view(key).then_some(entry.as_ref())
             }),
-            Self::Map(entries) => entries.get(&key).map(Arc::as_ref),
+            Self::Map { entries, .. } => entries.get(&key).map(Arc::as_ref),
         }
     }
 
@@ -69,7 +76,7 @@ impl DnsCacheEntries {
                 }
                 Ok(None)
             }
-            Self::Map(entries) => Ok(entries
+            Self::Map { entries, .. } => Ok(entries
                 .get(&DnsPacketQuestionCacheKey(question))
                 .map(Arc::as_ref)),
         }
@@ -78,7 +85,7 @@ impl DnsCacheEntries {
     pub(super) fn contains_key(&self, key: &DnsCacheKey) -> bool {
         match self {
             Self::Small(entries) => entries.iter().any(|(candidate, _)| candidate == key),
-            Self::Map(entries) => entries.contains_key(key),
+            Self::Map { entries, .. } => entries.contains_key(key),
         }
     }
 
@@ -89,7 +96,7 @@ impl DnsCacheEntries {
                     f(key, entry.as_ref());
                 }
             }
-            Self::Map(entries) => {
+            Self::Map { entries, .. } => {
                 for (key, entry) in entries {
                     f(key, entry.as_ref());
                 }
@@ -104,7 +111,7 @@ impl DnsCacheEntries {
                     f(key, entry);
                 }
             }
-            Self::Map(entries) => {
+            Self::Map { entries, .. } => {
                 for (key, entry) in entries {
                     f(key, entry);
                 }
@@ -123,7 +130,11 @@ impl DnsCacheEntries {
                 }
                 entries.push((key, Arc::new(entry)));
             }
-            Self::Map(entries) => {
+            Self::Map { entries, deadlines } => {
+                if let Some(old) = entries.get(&key) {
+                    deadlines.remove(&(old.cache_expires_at(), key.clone()));
+                }
+                deadlines.insert((entry.cache_expires_at(), key.clone()));
                 entries.insert(key, Arc::new(entry));
             }
         }
@@ -135,7 +146,11 @@ impl DnsCacheEntries {
                 let index = entries.iter().position(|(candidate, _)| candidate == key)?;
                 Some(entries.swap_remove(index).1)
             }
-            Self::Map(entries) => entries.remove(key),
+            Self::Map { entries, deadlines } => {
+                let (stored_key, entry) = entries.remove_entry(key)?;
+                deadlines.remove(&(entry.cache_expires_at(), stored_key));
+                Some(entry)
+            }
         }
     }
 
@@ -147,7 +162,11 @@ impl DnsCacheEntries {
                     .position(|(candidate, _)| candidate.matches_view(key))?;
                 Some(entries.swap_remove(index).1)
             }
-            Self::Map(entries) => entries.remove(&key),
+            Self::Map { entries, deadlines } => {
+                let (stored_key, entry) = entries.remove_entry(&key)?;
+                deadlines.remove(&(entry.cache_expires_at(), stored_key));
+                Some(entry)
+            }
         }
     }
 
@@ -175,7 +194,13 @@ impl DnsCacheEntries {
                 }
                 Ok(None)
             }
-            Self::Map(entries) => Ok(entries.remove_entry(&DnsPacketQuestionCacheKey(question))),
+            Self::Map { entries, deadlines } => {
+                let result = entries.remove_entry(&DnsPacketQuestionCacheKey(question));
+                if let Some((key, entry)) = &result {
+                    deadlines.remove(&(entry.cache_expires_at(), key.clone()));
+                }
+                Ok(result)
+            }
         }
     }
 
@@ -193,9 +218,15 @@ impl DnsCacheEntries {
                 }
                 before - entries.len()
             }
-            Self::Map(entries) => {
+            Self::Map { entries, deadlines } => {
                 let before = entries.len();
-                entries.retain(|_, entry| entry.cache_expires_at() > now_unix);
+                while deadlines
+                    .first()
+                    .is_some_and(|(deadline, _)| *deadline <= now_unix)
+                {
+                    let (_, key) = deadlines.pop_first().expect("deadline exists");
+                    entries.remove(&key);
+                }
                 before - entries.len()
             }
         }
@@ -204,12 +235,13 @@ impl DnsCacheEntries {
     pub(super) fn remove_expired_entries(
         &mut self,
         now_unix: i64,
+        limit: usize,
     ) -> Vec<(DnsCacheKey, Arc<DnsCacheEntry>)> {
         match self {
             Self::Small(entries) => {
                 let mut removed = Vec::new();
                 let mut index = 0;
-                while index < entries.len() {
+                while index < entries.len() && removed.len() < limit {
                     if entries[index].1.cache_expires_at() <= now_unix {
                         removed.push(entries.swap_remove(index));
                     } else {
@@ -218,9 +250,20 @@ impl DnsCacheEntries {
                 }
                 removed
             }
-            Self::Map(entries) => entries
-                .extract_if(|_, entry| entry.cache_expires_at() <= now_unix)
-                .collect(),
+            Self::Map { entries, deadlines } => {
+                let mut removed = Vec::new();
+                while removed.len() < limit
+                    && deadlines
+                        .first()
+                        .is_some_and(|(deadline, _)| *deadline <= now_unix)
+                {
+                    let (_, key) = deadlines.pop_first().expect("deadline exists");
+                    if let Some(entry) = entries.remove(&key) {
+                        removed.push((key, entry));
+                    }
+                }
+                removed
+            }
         }
     }
 
@@ -230,7 +273,7 @@ impl DnsCacheEntries {
                 .iter()
                 .map(|(_, entry)| entry.cache_expires_at())
                 .min(),
-            Self::Map(entries) => entries.values().map(|entry| entry.cache_expires_at()).min(),
+            Self::Map { deadlines, .. } => deadlines.first().map(|(deadline, _)| *deadline),
         }
     }
 
@@ -240,7 +283,7 @@ impl DnsCacheEntries {
                 .iter()
                 .filter(|(_, entry)| entry.cache_expires_at() > now_unix)
                 .count(),
-            Self::Map(entries) => entries
+            Self::Map { entries, .. } => entries
                 .values()
                 .filter(|entry| entry.cache_expires_at() > now_unix)
                 .count(),
@@ -253,10 +296,7 @@ impl DnsCacheEntries {
                 .iter()
                 .min_by_key(|(_, entry)| entry.cache_expires_at())
                 .map(|(key, _)| key.clone()),
-            Self::Map(entries) => entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.cache_expires_at())
-                .map(|(key, _)| key.clone()),
+            Self::Map { deadlines, .. } => deadlines.first().map(|(_, key)| key.clone()),
         }
     }
 }
@@ -288,5 +328,44 @@ impl Hash for DnsPacketQuestionCacheKey<'_> {
 impl Equivalent<DnsCacheKey> for DnsPacketQuestionCacheKey<'_> {
     fn equivalent(&self, key: &DnsCacheKey) -> bool {
         packet_question_matches_key(self.0, key).unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deadline_index_tracks_replace_remove_sweep_and_restore() {
+        let mut entries = DnsCacheEntries::new(4096);
+        let a = DnsCacheKey::new("a.example", 1, 1);
+        let b = DnsCacheKey::new("b.example", 1, 1);
+        for tick in 0..1000 {
+            entries.insert(a.clone(), DnsCacheEntry::new(tick + 1, tick + 2));
+            match &entries {
+                DnsCacheEntries::Map { entries, deadlines } => {
+                    assert_eq!(entries.len(), deadlines.len())
+                }
+                _ => unreachable!(),
+            }
+        }
+        entries.insert(b.clone(), DnsCacheEntry::new(50, 60));
+        assert_eq!(entries.next_expiry_unix(), Some(60));
+        let removed = entries.remove_expired_entries(1001, 1);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].0, b);
+        assert_eq!(entries.next_expiry_unix(), Some(1001));
+        entries.insert(removed[0].0.clone(), removed[0].1.as_ref().clone());
+        assert_eq!(entries.next_expiry_unix(), Some(60));
+        entries
+            .remove_view(DnsCacheKeyView {
+                qname: "B.EXAMPLE",
+                qtype: 1,
+                qclass: 1,
+            })
+            .unwrap();
+        assert_eq!(entries.next_expiry_unix(), Some(1001));
+        entries.remove(&a).unwrap();
+        assert!(entries.next_expiry_unix().is_none());
     }
 }

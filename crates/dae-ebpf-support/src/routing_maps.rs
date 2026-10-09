@@ -133,15 +133,14 @@ pub fn apply_domain_routing_map_by_id(
 ) -> io::Result<DomainRoutingMapApplyReport> {
     let map = ValidatedRuntimeMapHandle::open_by_id(map_id)?;
     let mut snapshots = Vec::with_capacity(updates.len().saturating_add(deletes.len()));
+    let mut seen =
+        std::collections::HashSet::with_capacity(updates.len().saturating_add(deletes.len()));
     for key in updates
         .iter()
         .map(|entry| entry.key)
         .chain(deletes.iter().copied())
     {
-        if snapshots
-            .iter()
-            .any(|(snapshot_key, _)| *snapshot_key == key)
-        {
+        if !seen.insert(key) {
             continue;
         }
         let mut old_value = [0_u8; size_of::<BpfDomainRouting>()];

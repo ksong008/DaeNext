@@ -13,7 +13,7 @@ use super::wire::{doh_request_target, restore_dns_response_id};
 use dae_resident_transport::inherit_quic_endpoint_observation;
 use serde_json::{Value, json};
 
-mod proxied;
+pub mod proxied;
 
 use self::proxied::forward_dns_h3_to_proxy_async;
 pub(super) use self::proxied::shutdown_cached_proxy_dns_h3;

@@ -314,19 +314,28 @@ impl ResidentDnsRuntimeCache {
     ) -> Result<bool, String> {
         out.clear();
         let now_unix = unix_now();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        lookup_scoped_response_into(
-            &mut state,
-            now_unix,
-            key,
-            request,
-            ignore_fixed_ttl,
-            udp_limit,
-            out,
-        )
+        // The hit linearizes while the entry is valid under the lock. Readers
+        // own only an Arc snapshot; packet restoration and UDP fitting do not
+        // serialize other cache users or mutate the stored response.
+        let entry = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+            lookup_scoped_response_snapshot(&mut state, now_unix, key, ignore_fixed_ttl)
+        };
+        let Some(entry) = entry else {
+            return Ok(false);
+        };
+        if entry.fill_packed_response_into(request.id(), out).is_none() {
+            return Ok(false);
+        }
+        if udp_limit {
+            let response = std::mem::take(out);
+            *out = crate::udp_response::fit_dns_response_to_udp_request(request.packet(), response)
+                .map_err(|error| format!("fit cached DNS response to request: {error}"))?;
+        }
+        Ok(true)
     }
 
     pub fn lookup_key_has_any_ip(
@@ -443,49 +452,23 @@ impl ResidentDnsRuntimeCache {
     }
 }
 
-fn lookup_scoped_response_into(
+fn lookup_scoped_response_snapshot(
     state: &mut ResidentDnsRuntimeCacheState,
     now_unix: i64,
     key: &ResidentDnsResponseCacheKey,
-    request: &DnsPacketView<'_>,
     ignore_fixed_ttl: bool,
-    udp_limit: bool,
-    out: &mut Vec<u8>,
-) -> Result<bool, String> {
-    let (lookup_deadline, cache_expires_at) = {
-        let Some(stored) = state.entries.get(key) else {
-            return Ok(false);
-        };
-        (
-            stored.entry.lookup_deadline(ignore_fixed_ttl),
-            stored.entry.cache_expires_at(),
-        )
-    };
-    if lookup_deadline > now_unix {
+) -> Option<Arc<DnsCacheEntry>> {
+    let stored = state.entries.get(key)?;
+    if stored.entry.lookup_deadline(ignore_fixed_ttl) > now_unix {
         state.stats.hit_total += 1;
-        let restored = state
-            .entries
-            .get(key)
-            .and_then(|stored| stored.entry.fill_packed_response_into(request.id(), out))
-            .is_some();
-        if !restored {
-            return Ok(false);
-        }
-        if udp_limit {
-            let response = std::mem::take(out);
-            let response =
-                crate::udp_response::fit_dns_response_to_udp_request(request.packet(), response)
-                    .map_err(|error| format!("fit cached DNS response to request: {error}"))?;
-            out.extend_from_slice(&response);
-        }
-        return Ok(true);
+        return Some(Arc::clone(&stored.entry));
     }
-    if cache_expires_at <= now_unix {
+    if stored.entry.cache_expires_at() <= now_unix {
         remove_cache_entry(state, key);
         state.stats.expired_removal_total += 1;
         state.stats.remove_callback_total += 1;
     }
-    Ok(false)
+    None
 }
 
 fn evict_entries(

@@ -540,3 +540,117 @@ pub(super) fn domain_routing_owner_reload_clear_applies_before_state_reset() {
     assert_eq!(owner.tracker().owner_count(), 0);
     assert_eq!(applied, vec![(77, vec![key])]);
 }
+
+#[test]
+fn partial_bitmap_delta_still_records_shared_ip_membership() {
+    let mut owner = DomainRoutingOwner::default();
+    owner
+        .apply_owner_snapshot_with(
+            1,
+            "a",
+            DomainRoutingOwnerSnapshot::new(&[1], &["192.0.2.1"]),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+    let report = owner
+        .apply_owner_snapshot_with(
+            1,
+            "b",
+            DomainRoutingOwnerSnapshot::new(&[1], &["192.0.2.1", "192.0.2.2"]),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(report.entries_updated, 1);
+    assert!(report.owner_snapshot_changed);
+    owner
+        .apply_owner_snapshot_with(
+            1,
+            "a",
+            DomainRoutingOwnerSnapshot::default(),
+            |_, updates, deletes| {
+                assert!(updates.is_empty());
+                assert!(deletes.is_empty());
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(owner.tracker().ip_count(), 2);
+    assert_eq!(owner.tracker().view("b remains").ips[0].owners, ["b"]);
+}
+
+#[test]
+fn failed_batch_leaves_owner_membership_and_map_id_unchanged() {
+    let mut owner = DomainRoutingOwner::default();
+    owner
+        .apply_owner_snapshot_with(
+            1,
+            "a",
+            DomainRoutingOwnerSnapshot::new(&[1], &["192.0.2.1"]),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+    let before = owner.clone();
+    let events = [
+        DomainRoutingDnsEvent::remove("a"),
+        DomainRoutingDnsEvent::from_keys("b", &[2], [parse_ip_key("192.0.2.1").unwrap()]),
+        DomainRoutingDnsEvent::from_keys("c", &[4], [parse_ip_key("192.0.2.3").unwrap()]),
+    ];
+    assert!(
+        owner
+            .apply_dns_events_with(1, events.clone(), |_, _, _| Err(std::io::Error::other(
+                "injected"
+            )))
+            .is_err()
+    );
+    assert_eq!(owner, before);
+    assert!(
+        owner
+            .apply_dns_events_with(2, events, |_, _, _| Err(std::io::Error::other(
+                "new map failure"
+            )))
+            .is_err()
+    );
+    assert_eq!(owner, before);
+}
+
+#[test]
+fn coalesced_batch_preserves_shared_owner_changes_without_bpf_writes() {
+    let mut owner = DomainRoutingOwner::default();
+    owner
+        .apply_owner_snapshot_with(
+            1,
+            "a",
+            DomainRoutingOwnerSnapshot::new(&[1], &["192.0.2.1"]),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+    let ip = parse_ip_key("192.0.2.1").unwrap();
+    let report = owner
+        .apply_dns_events_with(
+            1,
+            [
+                DomainRoutingDnsEvent::from_keys("b", &[2], [ip]),
+                DomainRoutingDnsEvent::from_keys("b", &[1], [ip]),
+            ],
+            |_, _, _| panic!("same bitmap does not write BPF"),
+        )
+        .unwrap();
+    assert!(report.skipped);
+    assert!(report.owner_snapshot_changed);
+    assert_eq!(report.affected_keys, 1);
+    let report = owner
+        .apply_dns_event_with(
+            1,
+            DomainRoutingDnsEvent::from_keys("b", &[1], [ip]),
+            |_, _, _| panic!("no-op"),
+        )
+        .unwrap();
+    assert!(!report.owner_snapshot_changed);
+    assert_eq!(report.affected_keys, 0);
+    owner
+        .apply_dns_event_with(1, DomainRoutingDnsEvent::remove("a"), |_, _, _| {
+            panic!("b still owns IP")
+        })
+        .unwrap();
+    assert_eq!(owner.tracker().ip_count(), 1);
+}

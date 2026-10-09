@@ -64,21 +64,4 @@ impl ProxiedDoh3Resources {
             .await
             .map(Some)
     }
-
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
-    pub fn from_parts(
-        bridge: ResidentProxyUdpBridge,
-        endpoint: ObservedQuicEndpoint,
-        connection: quinn::Connection,
-        client: h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>,
-        driver_task: tokio::task::JoinHandle<()>,
-    ) -> Self {
-        Self {
-            bridge: Some(Box::new(bridge)),
-            endpoint: Some(endpoint),
-            connection: Some(connection),
-            client: Some(client),
-            driver_task: Some(driver_task),
-        }
-    }
 }

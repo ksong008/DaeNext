@@ -5,10 +5,10 @@ use std::time::Instant;
 use serde_json::json;
 
 use super::*;
-use crate::dns::transport::test_support::{
+use crate::dns_runtime_tests::transport::test_support::{
     Socks5UdpRelay, dns_a_test_response, dns_proxy_binding, socks5_dns_proxy,
 };
-use crate::probe_resident_proxy_dns_udp_with_forwarder_async;
+use dae_resident_dns::probe_resident_proxy_dns_udp_with_forwarder_async;
 
 const PERIODIC_HEALTH_SAMPLE_ROUNDS: usize = 32;
 

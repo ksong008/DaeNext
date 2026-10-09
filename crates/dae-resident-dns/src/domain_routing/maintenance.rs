@@ -132,7 +132,7 @@ impl ResidentDnsDomainRouting {
             .state
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        self.sweep_expired_locked(unix_now(), &mut state)
+        self.sweep_expired_batch_locked(unix_now(), &mut state)
     }
 }
 

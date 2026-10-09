@@ -1,5 +1,75 @@
 use super::*;
 
+#[test]
+fn expired_batches_release_state_lock_between_transactions() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    static APPLIED_BATCHES: AtomicUsize = AtomicUsize::new(0);
+    fn slow_map_apply(
+        _: u32,
+        _: &[DomainRoutingStateEntry],
+        _: &[DomainRoutingIpKey],
+    ) -> io::Result<()> {
+        APPLIED_BATCHES.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(80));
+        Ok(())
+    }
+
+    APPLIED_BATCHES.store(0, Ordering::SeqCst);
+    let mut domain_routing = matching_domain_routing();
+    domain_routing.test_apply_map = Some(slow_map_apply);
+    {
+        let mut state = domain_routing.state.lock().unwrap();
+        state.cache = DnsCacheStore::new(1_024);
+        let now = unix_now();
+        for id in 0..512 {
+            let key = DnsCacheKey::new(format!("expired-{id}.example.test."), 1, 1);
+            let owner_key = key.to_string();
+            let ip = ip_to_key(format!("192.0.{}.{}", id / 256, id % 256).parse().unwrap());
+            state
+                .owner
+                .apply_dns_event_with(
+                    domain_routing.map_id,
+                    DomainRoutingDnsEvent::from_keys(&owner_key, &[1], [ip]),
+                    |_, _, _| Ok(()),
+                )
+                .unwrap();
+            let mut entry = DnsCacheEntry::new(now - 1, now - 1);
+            entry.route_owner_key = owner_key;
+            state
+                .cache
+                .insert_without_route_owner_key(now - 3_600, key, entry);
+        }
+        assert_eq!(state.cache.len(), 512);
+    }
+    let domain_routing = Arc::new(domain_routing);
+    let worker = {
+        let domain_routing = Arc::clone(&domain_routing);
+        std::thread::spawn(move || domain_routing.cache_entry_count().unwrap())
+    };
+    let started = Instant::now();
+    while APPLIED_BATCHES.load(Ordering::SeqCst) == 0 {
+        assert!(started.elapsed() < Duration::from_secs(2));
+        std::thread::yield_now();
+    }
+    let started = Instant::now();
+    let acquired_between_batches = loop {
+        if domain_routing.state.try_lock().is_ok() {
+            break true;
+        }
+        if started.elapsed() >= Duration::from_millis(200) {
+            break false;
+        }
+        std::thread::yield_now();
+    };
+    assert!(
+        acquired_between_batches,
+        "state lock held across all expiry batches"
+    );
+    assert_eq!(worker.join().unwrap(), 0);
+}
+
 fn generation(logical: u64) -> GenerationToken {
     generation_for(9, logical)
 }
