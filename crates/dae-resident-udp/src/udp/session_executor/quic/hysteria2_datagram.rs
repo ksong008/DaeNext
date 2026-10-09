@@ -9,7 +9,10 @@ enum Hysteria2UdpDatagramSendFailure {
 trait Hysteria2UdpDatagramSender {
     fn max_datagram_size(&self) -> Option<usize>;
 
-    fn send_datagram(&mut self, datagram: Bytes) -> Result<(), Hysteria2UdpDatagramSendFailure>;
+    fn send_datagram(
+        &mut self,
+        datagram: Bytes,
+    ) -> impl std::future::Future<Output = Result<(), Hysteria2UdpDatagramSendFailure>> + Send;
 }
 
 impl Hysteria2UdpDatagramSender for quinn::Connection {
@@ -17,11 +20,18 @@ impl Hysteria2UdpDatagramSender for quinn::Connection {
         quinn::Connection::max_datagram_size(self)
     }
 
-    fn send_datagram(&mut self, datagram: Bytes) -> Result<(), Hysteria2UdpDatagramSendFailure> {
-        quinn::Connection::send_datagram(self, datagram).map_err(|err| match err {
-            quinn::SendDatagramError::TooLarge => Hysteria2UdpDatagramSendFailure::TooLarge,
-            other => Hysteria2UdpDatagramSendFailure::Fatal(other.to_string()),
-        })
+    async fn send_datagram(
+        &mut self,
+        datagram: Bytes,
+    ) -> Result<(), Hysteria2UdpDatagramSendFailure> {
+        // Waiting preserves already queued packets instead of silently evicting them.
+        // The session actor bounds this await by its execution deadline and stop signal.
+        quinn::Connection::send_datagram_wait(self, datagram)
+            .await
+            .map_err(|err| match err {
+                quinn::SendDatagramError::TooLarge => Hysteria2UdpDatagramSendFailure::TooLarge,
+                other => Hysteria2UdpDatagramSendFailure::Fatal(other.to_string()),
+            })
     }
 }
 
@@ -33,7 +43,7 @@ pub(super) struct Hysteria2UdpSendReport {
     pub(super) final_max_wire_size: Option<usize>,
 }
 
-pub(super) fn send_hysteria2_udp_payload(
+pub(super) async fn send_hysteria2_udp_payload(
     connection: &quinn::Connection,
     session_id: u32,
     target: &str,
@@ -50,10 +60,11 @@ pub(super) fn send_hysteria2_udp_payload(
         packet_ids,
         resources,
     )
+    .await
 }
 
 #[cfg(test)]
-fn send_hysteria2_udp_message_with<S>(
+async fn send_hysteria2_udp_message_with<S>(
     sender: &mut S,
     message: &Hysteria2UdpMessage,
     packet_ids: &mut QuicUdpPacketIdAllocator,
@@ -70,9 +81,10 @@ where
         packet_ids,
         resources,
     )
+    .await
 }
 
-fn send_hysteria2_udp_payload_with<S>(
+async fn send_hysteria2_udp_payload_with<S>(
     sender: &mut S,
     session_id: u32,
     target: &str,
@@ -83,20 +95,28 @@ fn send_hysteria2_udp_payload_with<S>(
 where
     S: Hysteria2UdpDatagramSender,
 {
-    let whole = encode_hysteria2_udp_payload(session_id, 0, 0, 1, target, payload)
-        .map_err(|err| format!("encode complete Hysteria2 UDP datagram: {err}"))?;
-    match sender.send_datagram(Bytes::from(whole)) {
-        Ok(()) => {
-            return Ok(Hysteria2UdpSendReport {
-                whole_datagram_sent: true,
-                datagrams_sent: 1,
-                fragment_layouts: 0,
-                final_max_wire_size: sender.max_datagram_size(),
-            });
-        }
-        Err(Hysteria2UdpDatagramSendFailure::TooLarge) => {}
-        Err(Hysteria2UdpDatagramSendFailure::Fatal(err)) => {
-            return Err(format!("send complete Hysteria2 UDP datagram: {err}"));
+    let wire_len =
+        dae_outbound_quic::hysteria2::hysteria2_udp_payload_wire_len(target, payload.len())
+            .map_err(|err| format!("size complete Hysteria2 UDP datagram: {err}"))?;
+    let known_oversize = sender
+        .max_datagram_size()
+        .is_some_and(|limit| wire_len > limit);
+    if !known_oversize {
+        let whole = encode_hysteria2_udp_payload(session_id, 0, 0, 1, target, payload)
+            .map_err(|err| format!("encode complete Hysteria2 UDP datagram: {err}"))?;
+        match sender.send_datagram(Bytes::from(whole)).await {
+            Ok(()) => {
+                return Ok(Hysteria2UdpSendReport {
+                    whole_datagram_sent: true,
+                    datagrams_sent: 1,
+                    fragment_layouts: 0,
+                    final_max_wire_size: sender.max_datagram_size(),
+                });
+            }
+            Err(Hysteria2UdpDatagramSendFailure::TooLarge) => {}
+            Err(Hysteria2UdpDatagramSendFailure::Fatal(err)) => {
+                return Err(format!("send complete Hysteria2 UDP datagram: {err}"));
+            }
         }
     }
 
@@ -119,7 +139,7 @@ where
         for fragment in fragments {
             let encoded = encode_hysteria2_udp_message(&fragment)
                 .map_err(|err| format!("encode Hysteria2 UDP fragment: {err}"))?;
-            match sender.send_datagram(Bytes::from(encoded)) {
+            match sender.send_datagram(Bytes::from(encoded)).await {
                 Ok(()) => datagrams_sent = datagrams_sent.saturating_add(1),
                 Err(Hysteria2UdpDatagramSendFailure::Fatal(err)) => {
                     return Err(format!("send Hysteria2 UDP fragment: {err}"));
@@ -159,6 +179,18 @@ mod tests {
     use super::*;
     use dae_resident_core::ResidentRuntimeProfile;
 
+    #[tokio::test]
+    async fn saturated_send_waits_and_can_be_cancelled_without_eviction() {
+        super::super::datagram_tests::assert_send_backpressure(
+            |mut connection, bytes| async move {
+                Hysteria2UdpDatagramSender::send_datagram(&mut connection, bytes)
+                    .await
+                    .map_err(|error| format!("{error:?}"))
+            },
+        )
+        .await;
+    }
+
     struct SizeBoundedSender {
         max_wire_size: usize,
         attempts: Vec<Vec<u8>>,
@@ -184,7 +216,7 @@ mod tests {
             Some(self.max_wire_size)
         }
 
-        fn send_datagram(
+        async fn send_datagram(
             &mut self,
             datagram: Bytes,
         ) -> Result<(), Hysteria2UdpDatagramSendFailure> {
@@ -212,12 +244,13 @@ mod tests {
         QuicUdpPacketIdAllocator::new(resources())
     }
 
-    #[test]
-    fn whole_datagram_is_attempted_before_fragmentation() {
+    #[tokio::test]
+    async fn whole_datagram_is_attempted_before_fragmentation() {
         let message = Hysteria2UdpMessage::new(7, "192.0.2.1:53", b"dns-query").unwrap();
         let mut sender = SizeBoundedSender::new(1_250);
         let report =
             send_hysteria2_udp_message_with(&mut sender, &message, &mut packet_ids(), resources())
+                .await
                 .unwrap();
         assert!(report.whole_datagram_sent);
         assert_eq!(report.datagrams_sent, 1);
@@ -227,8 +260,8 @@ mod tests {
         assert_eq!(decoded.fragment_count(), 1);
     }
 
-    #[test]
-    fn payload_matrix_fragments_with_ipv4_and_ipv6_targets() {
+    #[tokio::test]
+    async fn payload_matrix_fragments_with_ipv4_and_ipv6_targets() {
         for target in ["192.0.2.1:53", "[2001:db8::1]:53"] {
             let payload_capacity = hysteria2_udp_payload_capacity(target).unwrap();
             for payload_len in [1_250, 1_400, 1_500, payload_capacity] {
@@ -241,8 +274,10 @@ mod tests {
                     &mut packet_ids(),
                     resources(),
                 )
+                .await
                 .unwrap();
                 assert!(!report.whole_datagram_sent);
+                assert!(sender.attempts.iter().all(|packet| packet.len() <= 1_200));
                 assert_eq!(report.fragment_layouts, 1);
                 let mut decoded = sender
                     .successful
@@ -268,8 +303,8 @@ mod tests {
         assert!(Hysteria2UdpMessage::new(1, "192.0.2.1:53", []).is_err());
     }
 
-    #[test]
-    fn reduced_pmtu_restarts_from_original_payload_with_new_packet_id() {
+    #[tokio::test]
+    async fn reduced_pmtu_restarts_from_original_payload_with_new_packet_id() {
         let target = "[2001:db8::2]:5353";
         let payload = vec![5; hysteria2_udp_payload_capacity(target).unwrap()];
         let message = Hysteria2UdpMessage::new(11, target, &payload).unwrap();
@@ -277,6 +312,7 @@ mod tests {
         sender.shrink_after_success = Some((1, 900));
         let report =
             send_hysteria2_udp_message_with(&mut sender, &message, &mut packet_ids(), resources())
+                .await
                 .unwrap();
         assert_eq!(report.fragment_layouts, 2);
         assert_eq!(report.final_max_wire_size, Some(900));
@@ -312,8 +348,8 @@ mod tests {
         assert_eq!(reassembled, payload);
     }
 
-    #[test]
-    fn repeated_too_large_without_lower_limit_fails_closed() {
+    #[tokio::test]
+    async fn repeated_too_large_without_lower_limit_fails_closed() {
         let target = "192.0.2.2:53";
         let message = Hysteria2UdpMessage::new(
             13,
@@ -325,6 +361,7 @@ mod tests {
         sender.forced_too_large_attempt = Some(3);
         let err =
             send_hysteria2_udp_message_with(&mut sender, &message, &mut packet_ids(), resources())
+                .await
                 .unwrap_err();
         assert!(err.contains("did not decrease"));
     }

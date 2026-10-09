@@ -233,6 +233,19 @@ pub fn encode_hysteria2_udp_message(
     )
 }
 
+/// Length of a complete, unfragmented datagram (packet_id=0, fragment_id=0,
+/// fragment_count=1), without allocating or copying its payload.
+pub fn hysteria2_udp_payload_wire_len(
+    target: &str,
+    payload_len: usize,
+) -> Result<usize, OutboundError> {
+    let capacity = hysteria2_udp_payload_capacity(target)?;
+    if payload_len == 0 || payload_len > capacity {
+        return Err(bad_wire("invalid Hysteria2 UDP payload length"));
+    }
+    Ok(HYSTERIA2_MAX_UDP_MESSAGE_LENGTH - capacity + payload_len)
+}
+
 pub fn encode_hysteria2_udp_payload(
     session_id: u32,
     packet_id: u16,
@@ -447,6 +460,31 @@ fn bad_wire(message: impl Into<String>) -> OutboundError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_udp_wire_len_matches_encoder_at_address_varint_boundary() {
+        for target in [
+            "192.0.2.1:53".to_owned(),
+            "[2001:db8::1]:53".to_owned(),
+            format!("{}:53", "a".repeat(60)), // 63-byte address: one-byte varint
+            format!("{}:53", "a".repeat(61)), // 64-byte address: two-byte varint
+            format!("{}:53", "a".repeat(HYSTERIA2_MAX_UDP_ADDRESS_LENGTH - 3)),
+        ] {
+            let capacity = hysteria2_udp_payload_capacity(&target).unwrap();
+            for size in [1, 64, 1_200, capacity] {
+                let payload = vec![7; size];
+                let encoded = encode_hysteria2_udp_payload(7, 0, 0, 1, &target, &payload).unwrap();
+                assert_eq!(
+                    hysteria2_udp_payload_wire_len(&target, size).unwrap(),
+                    encoded.len()
+                );
+            }
+            for size in [0, capacity + 1] {
+                assert!(hysteria2_udp_payload_wire_len(&target, size).is_err());
+                assert!(encode_hysteria2_udp_payload(7, 0, 0, 1, &target, &vec![0; size]).is_err());
+            }
+        }
+    }
 
     #[test]
     fn borrowed_udp_encoder_matches_owned_message_wire() {

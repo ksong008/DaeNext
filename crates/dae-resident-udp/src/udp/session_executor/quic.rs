@@ -105,7 +105,8 @@ impl Hysteria2QuicDatagramSession {
             payload,
             &mut self.packet_ids,
             self.resources,
-        )?;
+        )
+        .await?;
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
         }
@@ -341,7 +342,8 @@ impl TuicQuicPacketSession {
                     payload,
                     &mut self.packet_ids,
                     self.resources,
-                )?;
+                )
+                .await?;
             }
             TuicUdpRelayMode::Quic => {
                 send_tuic_udp_stream_payload(
@@ -1172,3 +1174,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod datagram_tests;

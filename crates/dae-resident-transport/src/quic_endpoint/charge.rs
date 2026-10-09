@@ -6,7 +6,7 @@ pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA: &str = "quinn-endpoint-charge";
 pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA_VERSION: u64 = 3;
 pub(super) const QUIC_ENDPOINT_CHARGE_MODEL: &str =
     "quinn-0.11-endpoint-and-underlay-safety-reserve";
-pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 4;
+pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 5;
 
 const QUINN_RECEIVE_DATAGRAM_LIMIT_BYTES: u64 = 64 * 1024;
 const QUINN_GRO_RECEIVE_SEGMENTS: usize = 64;
@@ -28,8 +28,14 @@ impl QuicEndpointSafetyChargeProfile {
         quic_transport_bytes: NonZeroU64::new(256 * 1024).unwrap(),
         http3_bytes: NonZeroU64::new(256 * 1024).unwrap(),
         tls_bytes: NonZeroU64::new(128 * 1024).unwrap(),
-        queue_bytes: NonZeroU64::new(128 * 1024).unwrap(),
-        underlay_socket_bytes: NonZeroU64::new(64 * 1024).unwrap(),
+        // Reserve for bounded QUIC receive and send queues, including HY2/TUIC bursts.
+        queue_bytes: NonZeroU64::new(
+            dae_outbound_quic::PROXY_DATAGRAM_RECEIVE_BUFFER_BYTES as u64 + 64 * 1024,
+        )
+        .unwrap(),
+        // Linux doubles each requested RCVBUF/SNDBUF for skb accounting.
+        underlay_socket_bytes: NonZeroU64::new(super::QUIC_UDP_SOCKET_BUFFER_BYTES as u64 * 4)
+            .unwrap(),
     };
 }
 

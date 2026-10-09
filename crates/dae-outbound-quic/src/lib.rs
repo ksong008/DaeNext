@@ -7,6 +7,12 @@ pub mod quic_h3;
 pub mod system_ca;
 pub mod tuic;
 
+// Shared by multiplexed HY2/TUIC connections. 64 KiB evicts received packets
+// during ordinary 100-session MTU-sized bursts before the owner can drain them.
+// Keep a bounded 256 KiB allowance per connection, allocated only as data arrives;
+// the separate 64 KiB send queue uses backpressure at the resident sender.
+pub const PROXY_DATAGRAM_RECEIVE_BUFFER_BYTES: usize = 256 * 1024;
+
 pub const XHTTP_H3_ALPN: &str = "h3";
 pub const XHTTP_H3_KEEPALIVE_SECS: u64 = 10;
 // QUIC's max_idle_timeout also applies after the handshake. Keep it above the
@@ -18,3 +24,6 @@ pub const XHTTP_H3_MAX_IDLE_TIMEOUT_SECS: u64 = 300;
 pub mod test_support;
 
 pub use congestion::{QuicCongestionController, QuicCongestionControllerError};
+
+#[cfg(test)]
+mod datagram_tests;
