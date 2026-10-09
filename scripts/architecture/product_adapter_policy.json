@@ -110,8 +110,8 @@
     "http_server.rs": 550,
     "latency": 1750,
     "latency.rs": 60,
-    "local_control.rs": 500,
-    "logs": 3100,
+    "local_control.rs": 501,
+    "logs": 3500,
     "logs.rs": 30,
     "nodes_subscriptions_groups": 1700,
     "nodes_subscriptions_groups.rs": 55,
@@ -132,5 +132,6 @@
     "service_metadata.rs": 400,
     "sse_runtime": 1400
   },
-  "total_production_line_limit": 19400
+  "total_production_line_limit": 20050,
+  "manual_review_2026_10_08": "logs owns bounded segmented host file I/O and recoverable visibility/clear transactions; local_control.rs was already 501 LOC at baseline 1fe97979. No new adapter roles or imports."
 }

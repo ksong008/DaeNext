@@ -2,7 +2,7 @@
   "version": 1,
   "packages": {
     "dae-product-control": {
-      "production": 7000,
+      "production": 7350,
       "tests": 530
     },
     "dae-product-core": {
@@ -14,7 +14,7 @@
       "tests": 0
     },
     "dae-product-geodata": {
-      "production": 3500,
+      "production": 3600,
       "tests": 0
     },
     "dae-product-http": {
@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 20105
+      "tests": 20700
     },
     "dae-outbound": {
       "production": 9255,
@@ -47,7 +47,7 @@
     },
     "dae-outbound-quic": {
       "production": 5898,
-      "tests": 473
+      "tests": 521
     },
     "dae-outbound-stream": {
       "production": 26000,
@@ -55,23 +55,23 @@
     },
     "dae-resident-dataplane": {
       "production": 33363,
-      "tests": 28013
+      "tests": 34900
     },
     "dae-resident-transport": {
       "production": 35875,
-      "tests": 5265
+      "tests": 5970
     },
     "dae-resident-tcp": {
       "production": 14295,
-      "tests": 808
+      "tests": 850
     },
     "dae-resident-udp": {
       "production": 12946,
-      "tests": 1650
+      "tests": 1751
     },
     "dae-resident-dns": {
       "production": 20904,
-      "tests": 6570
+      "tests": 2000
     }
   },
   "counting": "production means non-test-named Rust LOC, including inline tests, comments and blanks; overlapping subtrees are not summed",
@@ -79,12 +79,19 @@
   "rationale": "Freeze reviewed baseline with at most 5% growth; preserve stricter existing limits; never rebase automatically in CI.",
   "subtrees": {
     "crates/dae-daemon/src/daed_product": {
-      "production": 19400,
-      "tests": 14996
+      "production": 20050,
+      "tests": 15800
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,
       "tests": 3356
     }
+  },
+  "manual_review_2026_10_08": {
+    "baseline": "1fe97979",
+    "test_ownership": "Move DNS cross-layer fixtures into dataplane; reduce the vacated DNS test budget. Keep all test cases.",
+    "log_storage": "Bounded segmented host file I/O with recoverable visibility journal and clear transaction; fault injection tests included.",
+    "existing_drift": "Explicitly reconcile already-exceeded control/geodata, TCP/transport test, and daemon product test budgets against the baseline; no dependency or ownership rules relaxed.",
+    "growth": "Only listed boundaries changed; all remain within 5% of manually reviewed current LOC. CI never updates these limits."
   }
 }
