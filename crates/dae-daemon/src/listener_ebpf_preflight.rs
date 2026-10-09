@@ -134,13 +134,9 @@ pub fn listener_ebpf_preflight_report(root: &Path) -> Result<Value, String> {
 }
 
 fn run_loopback_listener_smoke() -> Result<Value, String> {
-    let tcp_listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|err| format!("failed to bind listener-ebpf-preflight tcp listener: {err}"))?;
+    let (tcp_listener, udp_socket) = bind_loopback_listener_pair(UdpSocket::bind)?;
     let tcp_addr = tcp_listener.local_addr().map_err(|err| {
         format!("failed to read listener-ebpf-preflight tcp listener address: {err}")
-    })?;
-    let udp_socket = UdpSocket::bind(("127.0.0.1", tcp_addr.port())).map_err(|err| {
-        format!("failed to bind listener-ebpf-preflight udp listener on tcp port: {err}")
     })?;
     let udp_addr = udp_socket.local_addr().map_err(|err| {
         format!("failed to read listener-ebpf-preflight udp listener address: {err}")
@@ -218,6 +214,72 @@ fn run_loopback_listener_smoke() -> Result<Value, String> {
         "udp_response_bytes": UDP_PONG.len(),
         "production_tproxy_port_used": false
     }))
+}
+
+fn bind_loopback_listener_pair(
+    mut bind_udp: impl FnMut(std::net::SocketAddr) -> std::io::Result<UdpSocket>,
+) -> Result<(TcpListener, UdpSocket), String> {
+    // TCP port allocation does not reserve that port in the UDP namespace.
+    // Retry a bounded number of fresh ephemeral ports while retaining both
+    // successful sockets; unrelated UDP traffic must not fail this preflight.
+    for attempt in 0..16 {
+        let tcp = TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|err| format!("failed to bind listener-ebpf-preflight tcp listener: {err}"))?;
+        let addr = tcp.local_addr().map_err(|err| {
+            format!("failed to read listener-ebpf-preflight tcp listener address: {err}")
+        })?;
+        match bind_udp(addr) {
+            Ok(udp) => return Ok((tcp, udp)),
+            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse && attempt < 15 => {}
+            Err(err) => {
+                return Err(format!(
+                    "failed to bind listener-ebpf-preflight udp listener on tcp port: {err}"
+                ));
+            }
+        }
+    }
+    unreachable!("the last bind attempt returns its error")
+}
+
+#[cfg(test)]
+mod port_pair_tests {
+    use super::*;
+
+    #[test]
+    fn loopback_pair_retries_a_udp_port_collision() {
+        let mut attempts = 0;
+        let (tcp, udp) = bind_loopback_listener_pair(|addr| {
+            attempts += 1;
+            if attempts == 1 {
+                let occupied = UdpSocket::bind(addr)?;
+                let result = UdpSocket::bind(addr);
+                drop(occupied);
+                return result;
+            }
+            UdpSocket::bind(addr)
+        })
+        .unwrap();
+        assert!(attempts >= 2);
+        assert_eq!(tcp.local_addr().unwrap(), udp.local_addr().unwrap());
+    }
+
+    #[test]
+    fn loopback_pair_retries_are_bounded_and_only_for_collisions() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::AddrInUse, 16),
+            (std::io::ErrorKind::PermissionDenied, 1),
+        ] {
+            let mut attempts = 0;
+            assert!(
+                bind_loopback_listener_pair(|_| {
+                    attempts += 1;
+                    Err(std::io::Error::from(kind))
+                })
+                .is_err()
+            );
+            assert_eq!(attempts, expected);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

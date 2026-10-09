@@ -71,6 +71,7 @@ fn replace_node_bindings(
         params![group_id],
     )
     .map_err(sqlite_io_error)?;
+    let mut bound_node_ids = std::collections::HashSet::new();
     for tag in &group.node_tags {
         let node_id = node_ids_by_tag.get(tag).ok_or_else(|| {
             invalid_dae_file(format!(
@@ -78,6 +79,10 @@ fn replace_node_bindings(
                 group.name
             ))
         })?;
+        // Distinct imported aliases can resolve to the same stable node identity.
+        if !bound_node_ids.insert(*node_id) {
+            continue;
+        }
         tx.execute(
             "INSERT INTO group_nodes(
                 group_id, node_id, binding_mode, source_subscription_id
