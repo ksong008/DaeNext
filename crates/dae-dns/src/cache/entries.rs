@@ -224,8 +224,13 @@ impl DnsCacheEntries {
                     .first()
                     .is_some_and(|(deadline, _)| *deadline <= now_unix)
                 {
-                    let (_, key) = deadlines.pop_first().expect("deadline exists");
-                    entries.remove(&key);
+                    let (deadline, key) = deadlines.pop_first().expect("deadline exists");
+                    if entries
+                        .get(&key)
+                        .is_some_and(|entry| entry.cache_expires_at() == deadline)
+                    {
+                        entries.remove(&key);
+                    }
                 }
                 before - entries.len()
             }
@@ -252,13 +257,19 @@ impl DnsCacheEntries {
             }
             Self::Map { entries, deadlines } => {
                 let mut removed = Vec::new();
-                while removed.len() < limit
+                let mut examined = 0;
+                while examined < limit
                     && deadlines
                         .first()
                         .is_some_and(|(deadline, _)| *deadline <= now_unix)
                 {
-                    let (_, key) = deadlines.pop_first().expect("deadline exists");
-                    if let Some(entry) = entries.remove(&key) {
+                    let (deadline, key) = deadlines.pop_first().expect("deadline exists");
+                    examined += 1;
+                    if entries
+                        .get(&key)
+                        .is_some_and(|entry| entry.cache_expires_at() == deadline)
+                        && let Some(entry) = entries.remove(&key)
+                    {
                         removed.push((key, entry));
                     }
                 }
@@ -290,13 +301,30 @@ impl DnsCacheEntries {
         }
     }
 
-    pub(super) fn oldest_key(&self) -> Option<DnsCacheKey> {
+    pub(super) fn oldest_key(&mut self) -> Option<DnsCacheKey> {
         match self {
             Self::Small(entries) => entries
                 .iter()
                 .min_by_key(|(_, entry)| entry.cache_expires_at())
                 .map(|(key, _)| key.clone()),
-            Self::Map { deadlines, .. } => deadlines.first().map(|(_, key)| key.clone()),
+            Self::Map { entries, deadlines } => {
+                // Normal mutations maintain both indexes. Recover defensively if
+                // an old/missing record is encountered, instead of repeatedly
+                // selecting a key whose removal cannot make progress.
+                if deadlines.len() != entries.len()
+                    || deadlines.first().is_some_and(|(deadline, key)| {
+                        entries
+                            .get(key)
+                            .is_none_or(|entry| entry.cache_expires_at() != *deadline)
+                    })
+                {
+                    *deadlines = entries
+                        .iter()
+                        .map(|(key, entry)| (entry.cache_expires_at(), key.clone()))
+                        .collect();
+                }
+                deadlines.first().map(|(_, key)| key.clone())
+            }
         }
     }
 }
@@ -334,6 +362,40 @@ impl Equivalent<DnsCacheKey> for DnsPacketQuestionCacheKey<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_victim_recovers_missing_stale_and_incomplete_deadlines() {
+        let mut index = DnsCacheEntries::new(4096);
+        let a = DnsCacheKey::new("a.example", 1, 1);
+        let b = DnsCacheKey::new("b.example", 1, 1);
+        index.insert(a.clone(), DnsCacheEntry::new(100, 100));
+        index.insert(b.clone(), DnsCacheEntry::new(200, 200));
+        if let DnsCacheEntries::Map { deadlines, .. } = &mut index {
+            deadlines.clear();
+            deadlines.insert((10, DnsCacheKey::new("missing.example", 1, 1)));
+            deadlines.insert((20, b.clone()));
+        }
+        assert_eq!(index.oldest_key(), Some(a.clone()));
+        index.remove(&a).unwrap();
+        assert_eq!(index.oldest_key(), Some(b.clone()));
+        if let DnsCacheEntries::Map { deadlines, .. } = &mut index {
+            deadlines.clear();
+        }
+        assert_eq!(index.oldest_key(), Some(b));
+    }
+
+    #[test]
+    fn expired_stale_index_does_not_remove_a_refreshed_entry() {
+        let mut index = DnsCacheEntries::new(4096);
+        let key = DnsCacheKey::new("a.example", 1, 1);
+        index.insert(key.clone(), DnsCacheEntry::new(200, 200));
+        if let DnsCacheEntries::Map { deadlines, .. } = &mut index {
+            deadlines.insert((10, key.clone()));
+        }
+        assert!(index.remove_expired_entries(20, 1).is_empty());
+        assert!(index.get(&key).is_some());
+        assert_eq!(index.next_expiry_unix(), Some(200));
+    }
 
     #[test]
     fn deadline_index_tracks_replace_remove_sweep_and_restore() {

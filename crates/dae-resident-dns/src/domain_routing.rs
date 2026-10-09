@@ -142,49 +142,36 @@ impl ResidentDnsDomainRouting {
         else {
             return Ok(());
         };
-        let capacity_eviction = state
-            .cache
-            .capacity_eviction_key_for_insert(&plan.key)
-            .map(|key| {
-                let entry = state.cache.remove_capacity_eviction(&key).ok_or_else(|| {
-                    "resident DNS domain routing capacity eviction disappeared".to_owned()
-                })?;
-                Ok::<_, String>((key, entry))
-            })
-            .transpose()?;
-        let apply_result = if let Some((_, evicted)) = capacity_eviction.as_ref() {
-            let mut events = Vec::with_capacity(2);
-            if !evicted.route_owner_key.is_empty() {
-                events.push(DomainRoutingDnsEvent::remove(&evicted.route_owner_key));
-            }
-            events.push(DomainRoutingDnsEvent::from_keys(
-                &plan.entry.route_owner_key,
-                &plan.entry.domain_bitmap,
-                plan.ips.iter().copied(),
-            ));
-            self.apply_events(&mut state.owner, events)
-        } else {
-            self.apply_event(
-                &mut state.owner,
-                DomainRoutingDnsEvent::from_keys(
-                    &plan.entry.route_owner_key,
-                    &plan.entry.domain_bitmap,
-                    plan.ips.iter().copied(),
-                ),
-            )
-        };
-        if let Err(err) = apply_result {
-            if let Some((key, entry)) = capacity_eviction {
-                state.cache.restore_capacity_eviction(key, entry);
-            }
-            return Err(format!("apply resident DNS domain routing response: {err}"));
-        }
-        state
-            .cache
-            .insert_without_route_owner_key(now_unix, plan.key, plan.entry);
+        self.commit_response_locked(&mut state, plan)?;
         drop(state);
         self.maintenance.notify_deadline_changed();
         Ok(())
+    }
+
+    fn commit_response_locked(
+        &self,
+        state: &mut ResidentDnsDomainRoutingState,
+        plan: ResidentDnsDomainRoutingUpdatePlan,
+    ) -> Result<bool, String> {
+        // Recheck after acquiring the state lock: building or waiting for a plan
+        // may have consumed its entire TTL. Expired owners must not be installed.
+        if plan.entry.cache_expires_at() <= unix_now() {
+            return Ok(false);
+        }
+        let ResidentDnsDomainRoutingState { cache, owner, .. } = state;
+        cache.insert_with_eviction(plan.key, plan.entry, |evicted, entry| {
+            let removes = evicted
+                .iter()
+                .filter(|(_, entry)| !entry.route_owner_key.is_empty())
+                .map(|(_, entry)| DomainRoutingDnsEvent::remove(&entry.route_owner_key));
+            let update = DomainRoutingDnsEvent::from_keys(
+                &entry.route_owner_key,
+                &entry.domain_bitmap,
+                plan.ips.iter().copied(),
+            );
+            self.apply_events(owner, removes.chain(std::iter::once(update)))
+                .map_err(|error| format!("apply resident DNS domain routing response: {error}"))
+        })
     }
 
     pub fn cache_entry_count(&self) -> Result<usize, String> {
@@ -194,7 +181,7 @@ impl ResidentDnsDomainRouting {
             .state
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        Ok(state.cache.len())
+        Ok(state.cache.cache_stats_entries(unix_now()))
     }
 
     pub fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<(), String> {

@@ -23,7 +23,7 @@ impl ResidentDnsDomainRouting {
     pub fn snapshot_for_reload(&self) -> Result<ResidentDnsDomainRoutingReloadSnapshot, String> {
         let now_unix = unix_now();
         self.sweep_expired_until(now_unix)?;
-        let mut state = self
+        let state = self
             .state
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
@@ -57,19 +57,11 @@ impl ResidentDnsDomainRouting {
                 report.skipped_unmatched_entries += 1;
                 continue;
             };
-            self.apply_event(
-                &mut state.owner,
-                DomainRoutingDnsEvent::from_keys(
-                    &plan.entry.route_owner_key,
-                    &plan.entry.domain_bitmap,
-                    plan.ips.iter().copied(),
-                ),
-            )
-            .map_err(|err| format!("restore resident DNS response domain routing owner: {err}"))?;
-            state
-                .cache
-                .insert_without_route_owner_key(now_unix, plan.key, plan.entry);
-            report.accepted_response_entries += 1;
+            if self.commit_response_locked(&mut state, plan)? {
+                report.accepted_response_entries += 1;
+            } else {
+                report.skipped_expired_entries += 1;
+            }
         }
         drop(state);
         self.maintenance.notify_deadline_changed();
