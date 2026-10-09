@@ -1,4 +1,6 @@
 use super::*;
+mod store;
+use self::store::*;
 mod init;
 pub(super) use self::init::*;
 mod resident_events;

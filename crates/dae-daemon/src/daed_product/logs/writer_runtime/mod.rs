@@ -17,6 +17,9 @@ mod worker;
 use self::worker::*;
 mod writer;
 use self::writer::*;
+mod fallback;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod tests;
 
@@ -28,15 +31,14 @@ pub(crate) fn append_product_log_without_runtime(
     fields: BTreeMap<String, String>,
     respect_runtime_log_level: bool,
 ) -> io::Result<()> {
-    let policy = ProductLogPolicy::load(state)?;
-    let mut writer = ProductLogWriter::open(config_dir.to_path_buf(), policy)?;
-    writer.append(ProductLogAppendRequest {
+    fallback::append_without_runtime(
+        config_dir,
+        state,
         level,
-        message: message.to_owned(),
+        message,
         fields,
         respect_runtime_log_level,
-    })?;
-    Ok(())
+    )
 }
 
 pub(crate) fn apply_product_log_limits_without_runtime(
@@ -44,6 +46,11 @@ pub(crate) fn apply_product_log_limits_without_runtime(
     max_entries: i64,
     max_bytes: i64,
 ) -> io::Result<()> {
+    let mut fallback = fallback::fallback_writers()?;
+    fallback.retain(|(path, _)| *path != product_log_file(config_dir));
+    if let Some(runtime) = product_log_runtime_for(config_dir) {
+        return runtime.apply_limits(max_entries, max_bytes);
+    }
     let mut writer = ProductLogWriter::open(
         config_dir.to_path_buf(),
         ProductLogPolicy {
@@ -72,6 +79,8 @@ impl ProductLogRuntime {
         config: ProductLogRuntimeConfig,
     ) -> io::Result<Arc<Self>> {
         let policy = ProductLogPolicy::load(state)?;
+        let mut fallback = fallback::fallback_writers()?;
+        fallback.retain(|(path, _)| *path != product_log_file(config_dir));
         let queue = Arc::new(ProductLogQueue::new(config.queue_capacity));
         let metrics = Arc::new(ProductLogRuntimeMetrics::default());
         metrics.configure(config);
