@@ -9,7 +9,9 @@ pub async fn probe_resident_proxy_dns_udp_with_forwarder_async(
     forwarder: Arc<dyn ResidentDnsProxyUdpForwarder>,
     lookup_host: &str,
 ) -> Result<(), String> {
-    let id = fastrand::u16(0..=u16::MAX);
+    let mut random = [0; 2];
+    dae_resident_core::fill_wire_random(&mut random).map_err(|error| error.to_string())?;
+    let id = u16::from_be_bytes(random);
     let query = build_dns_a_query(id, lookup_host)?;
     let response = forwarder
         .exchange(
