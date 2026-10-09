@@ -313,6 +313,59 @@ async fn exchange_tuic_udp(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tuic_complete_packet_executor_does_not_exhaust_fragment_leases() {
+    for mode in [TuicUdpRelayMode::Native, TuicUdpRelayMode::Quic] {
+        let server = TuicTestServer::start().await;
+        let generation = 81;
+        let proxy = tuic_proxy_with_mode(server.addr, generation, mode);
+        let stop = ResidentStopSignal::shared();
+        let (registry, owner_thread) =
+            start_tuic_owner_registry(generation, Arc::clone(&stop), 2 * 1024 * 1024).unwrap();
+        let target = TEST_UDP_TARGET.parse().unwrap();
+        let mut executor = udp::UdpSessionExecutor::new_with_transport_owner(
+            proxy.clone(),
+            target,
+            None,
+            Some(registry.clone()),
+            None,
+            None,
+        );
+        for index in 0_u32..2048 {
+            let payload = index.to_be_bytes();
+            let (_, mut response) = executor
+                .execute_proxy_packet(&proxy, target, &payload)
+                .await
+                .unwrap();
+            if !response.reply_forwarded {
+                response = executor
+                    .wait_response_with_timeout(
+                        Duration::from_secs(2),
+                        "TUIC sustained complete packet",
+                    )
+                    .await
+                    .unwrap()
+                    .1;
+            }
+            let expected = response.fixed_target_expectation(target);
+            assert_eq!(
+                response
+                    .take_fixed_target_payload(expected)
+                    .into_payload()
+                    .unwrap(),
+                payload
+            );
+        }
+        drop(executor);
+        assert!(
+            stop_tuic_owner_registry(stop, owner_thread).await
+                < RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE
+        );
+        assert_tuic_owner_resources_released(&registry, generation);
+        server.stop().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tuic_owner_quic_stream_mode_relays_packets_on_unidirectional_streams() {
     let server = TuicTestServer::start().await;
     let generation = 78;

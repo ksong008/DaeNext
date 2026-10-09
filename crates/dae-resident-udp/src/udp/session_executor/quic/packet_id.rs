@@ -7,7 +7,8 @@ const QUIC_UDP_PACKET_ID_BITMAP_WORD_BITS: usize = u64::BITS as usize;
 const QUIC_UDP_PACKET_ID_BITMAP_WORDS: usize =
     (u16::MAX as usize + 1) / QUIC_UDP_PACKET_ID_BITMAP_WORD_BITS;
 struct QuicUdpPacketIdLease {
-    packet_id: u16,
+    first: u16,
+    last: u16,
     expires_at: Instant,
 }
 
@@ -16,6 +17,7 @@ pub(super) struct QuicUdpPacketIdAllocator {
     next: u16,
     bitmap: Option<Box<[u64]>>,
     leases: VecDeque<QuicUdpPacketIdLease>,
+    leased_ids: usize,
 }
 
 impl QuicUdpPacketIdAllocator {
@@ -25,6 +27,7 @@ impl QuicUdpPacketIdAllocator {
             next: 1,
             bitmap: None,
             leases: VecDeque::new(),
+            leased_ids: 0,
         }
     }
 
@@ -34,11 +37,8 @@ impl QuicUdpPacketIdAllocator {
 
     fn allocate_at(&mut self, now: Instant) -> Result<u16, String> {
         self.expire_at(now);
-        if self.leases.len() >= self.resources.packet_id_leases() {
-            return Err(format!(
-                "QUIC UDP packet ID lease budget is full ({})",
-                self.resources.packet_id_leases()
-            ));
+        if self.leased_ids == usize::from(u16::MAX) {
+            return Err("QUIC UDP packet ID lease window is exhausted".to_owned());
         }
         for _ in 0..usize::from(u16::MAX) {
             let packet_id = self.next;
@@ -50,13 +50,35 @@ impl QuicUdpPacketIdAllocator {
             if self.is_leased(packet_id) {
                 continue;
             }
-            self.set_leased(packet_id, true);
-            self.leases.push_back(QuicUdpPacketIdLease {
-                packet_id,
-                expires_at: now
-                    .checked_add(self.resources.packet_id_lease_ttl())
-                    .unwrap_or(now),
+            // One record covers contiguous IDs in one bitmap word. Keeping
+            // the newest deadline never reuses an ID early, while avoiding
+            // one allocation/lease record per packet in a sustained burst.
+            let extend = self.leases.back().is_some_and(|lease| {
+                lease.last.checked_add(1) == Some(packet_id) && lease.first / 64 == packet_id / 64
             });
+            if !extend && self.leases.len() >= self.resources.packet_id_lease_ranges() {
+                return Err(format!(
+                    "QUIC UDP packet ID lease range budget is full ({})",
+                    self.resources.packet_id_lease_ranges()
+                ));
+            }
+            self.set_leased(packet_id, true);
+            self.leased_ids += 1;
+            let expires_at = now
+                .checked_add(self.resources.packet_id_lease_ttl())
+                .unwrap_or(now);
+            if extend {
+                if let Some(lease) = self.leases.back_mut() {
+                    lease.last = packet_id;
+                    lease.expires_at = expires_at;
+                }
+            } else {
+                self.leases.push_back(QuicUdpPacketIdLease {
+                    first: packet_id,
+                    last: packet_id,
+                    expires_at,
+                });
+            }
             return Ok(packet_id);
         }
         Err("QUIC UDP packet ID lease window is exhausted".to_owned())
@@ -69,7 +91,13 @@ impl QuicUdpPacketIdAllocator {
             .is_some_and(|lease| lease.expires_at <= now)
         {
             if let Some(lease) = self.leases.pop_front() {
-                self.set_leased(lease.packet_id, false);
+                self.leased_ids -= usize::from(lease.last - lease.first) + 1;
+                if let Some(bitmap) = self.bitmap.as_mut() {
+                    let first = usize::from(lease.first);
+                    let last = usize::from(lease.last);
+                    let mask = (u64::MAX << (first % 64)) & (u64::MAX >> (63 - last % 64));
+                    bitmap[first / 64] &= !mask;
+                }
             }
         }
     }
@@ -110,6 +138,7 @@ impl QuicUdpPacketIdAllocator {
         self.next = 1;
         self.bitmap = None;
         self.leases.clear();
+        self.leased_ids = 0;
     }
 }
 

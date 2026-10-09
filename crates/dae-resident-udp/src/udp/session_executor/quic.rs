@@ -35,6 +35,7 @@ pub(in crate::udp) struct Hysteria2QuicDatagramSession {
     resources: QuicUdpDatagramResourceProfile,
     fixed_target: UdpSessionFixedTarget,
     wire_target: String,
+    pub(super) execution_stage: &'static str,
 }
 
 impl Hysteria2QuicDatagramSession {
@@ -54,6 +55,7 @@ impl Hysteria2QuicDatagramSession {
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
             wire_target: String::new(),
+            execution_stage: "idle",
         }
     }
 
@@ -71,6 +73,7 @@ impl Hysteria2QuicDatagramSession {
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
             wire_target: String::new(),
+            execution_stage: "idle",
         }
     }
 
@@ -91,6 +94,7 @@ impl Hysteria2QuicDatagramSession {
         if self.wire_target.is_empty() {
             self.wire_target = original_dst.to_string();
         }
+        self.execution_stage = "owner-acquire";
         self.ensure_open().await?;
         let connection = self
             .udp_session
@@ -98,6 +102,7 @@ impl Hysteria2QuicDatagramSession {
             .ok_or_else(|| "Hysteria2 UDP session lease is not initialized".to_owned())?
             .connection()
             .clone();
+        self.execution_stage = "datagram-send-backpressure";
         send_hysteria2_udp_payload(
             &connection,
             self.session_id,
@@ -107,6 +112,7 @@ impl Hysteria2QuicDatagramSession {
             self.resources,
         )
         .await?;
+        self.execution_stage = "response-poll";
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
         }
@@ -258,6 +264,7 @@ pub(in crate::udp) struct TuicQuicPacketSession {
     fixed_target: UdpSessionFixedTarget,
     udp_relay_mode: TuicUdpRelayMode,
     wire_target: String,
+    pub(super) execution_stage: &'static str,
 }
 
 impl TuicQuicPacketSession {
@@ -280,6 +287,7 @@ impl TuicQuicPacketSession {
             fixed_target: UdpSessionFixedTarget::default(),
             udp_relay_mode,
             wire_target: String::new(),
+            execution_stage: "idle",
         }
     }
 
@@ -299,6 +307,7 @@ impl TuicQuicPacketSession {
             fixed_target: UdpSessionFixedTarget::default(),
             udp_relay_mode: TuicUdpRelayMode::Native,
             wire_target: String::new(),
+            execution_stage: "idle",
         }
     }
 
@@ -325,13 +334,18 @@ impl TuicQuicPacketSession {
                 RESIDENT_UDP_RESPONSE_TIMEOUT,
             )
         });
+        self.execution_stage = "owner-acquire";
         self.ensure_open(deadline).await?;
         let connection = self
             .udp_association
             .as_ref()
             .ok_or_else(|| "TUIC UDP association is not initialized".to_owned())?
             .connection();
-        let packet_id = self.packet_ids.allocate()?;
+        // PKT_ID identifies fragments, not request/response pairs. Complete
+        // datagrams and uni-stream packets need no reassembly lease; reserve 0
+        // for them, just as in HY2. Fragment retries allocate nonzero IDs below.
+        let packet_id = 0;
+        self.execution_stage = "udp-send-backpressure";
         match self.udp_relay_mode {
             TuicUdpRelayMode::Native => {
                 send_tuic_udp_payload(
@@ -357,6 +371,7 @@ impl TuicQuicPacketSession {
                 .await?;
             }
         }
+        self.execution_stage = "response-poll";
         if let Some(response) = self.poll_response().await? {
             return Ok(response);
         }

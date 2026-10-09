@@ -101,7 +101,13 @@ where
     let known_oversize = sender
         .max_datagram_size()
         .is_some_and(|limit| wire_len > limit);
-    if !known_oversize {
+    // Recheck only on the oversized path: a recovering PMTU may already
+    // permit the original packet. A send-time TooLarge still falls through.
+    if !known_oversize
+        || sender
+            .max_datagram_size()
+            .is_some_and(|limit| wire_len <= limit)
+    {
         let whole = encode_hysteria2_udp_payload(session_id, 0, 0, 1, target, payload)
             .map_err(|err| format!("encode complete Hysteria2 UDP datagram: {err}"))?;
         match sender.send_datagram(Bytes::from(whole)).await {
@@ -191,6 +197,46 @@ mod tests {
         .await;
     }
 
+    struct GrowingMtuSender {
+        reads: std::cell::Cell<usize>,
+        sent: Vec<Bytes>,
+    }
+    impl Hysteria2UdpDatagramSender for GrowingMtuSender {
+        fn max_datagram_size(&self) -> Option<usize> {
+            let read = self.reads.get();
+            self.reads.set(read + 1);
+            Some(if read == 0 { 100 } else { 1400 })
+        }
+        async fn send_datagram(
+            &mut self,
+            bytes: Bytes,
+        ) -> Result<(), Hysteria2UdpDatagramSendFailure> {
+            assert!(bytes.len() <= 1400);
+            self.sent.push(bytes);
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn recovered_mtu_sends_one_complete_datagram() {
+        let mut sender = GrowingMtuSender {
+            reads: std::cell::Cell::new(0),
+            sent: Vec::new(),
+        };
+        let payload = vec![7; 1000];
+        let message = Hysteria2UdpMessage::new(1, "192.0.2.1:53", &payload).unwrap();
+        let report =
+            send_hysteria2_udp_message_with(&mut sender, &message, &mut packet_ids(), resources())
+                .await
+                .unwrap();
+        assert_eq!(
+            decode_hysteria2_udp_message(&sender.sent[0])
+                .unwrap()
+                .payload(),
+            payload
+        );
+        assert!(report.whole_datagram_sent);
+        assert_eq!(sender.sent.len(), 1);
+    }
     struct SizeBoundedSender {
         max_wire_size: usize,
         attempts: Vec<Vec<u8>>,

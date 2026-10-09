@@ -165,8 +165,9 @@ async fn run_udp_session_actor(
                             Ok(exchange) => (exchange, false),
                             Err(_) => (
                                 Err(format!(
-                                    "UDP session executor timed out after {}ms",
-                                    RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
+                                    "UDP session executor timed out after {}ms (stage={})",
+                                    RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis(),
+                                    executor.execution_stage()
                                 )),
                                 true,
                             ),
