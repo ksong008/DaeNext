@@ -9,6 +9,7 @@ use crate::message::{
 };
 
 mod entries;
+mod transactions;
 
 use entries::DnsCacheEntries;
 
@@ -103,6 +104,9 @@ impl DnsCacheStore {
     }
 
     fn insert_entry(&mut self, now_unix: i64, key: DnsCacheKey, entry: DnsCacheEntry) {
+        if self.capacity == 0 {
+            return;
+        }
         if !self.entries.contains_key(&key) {
             self.evict_entries(now_unix);
         }
@@ -262,10 +266,10 @@ impl DnsCacheStore {
     }
 
     pub fn snapshot_live_entries_shared(
-        &mut self,
+        &self,
         now_unix: i64,
     ) -> Vec<(DnsCacheKey, Arc<DnsCacheEntry>)> {
-        let _ = self.sweep(now_unix);
+        // A snapshot must not delete entries whose external owners still exist.
         let mut entries = Vec::with_capacity(self.entries.len());
         self.entries.for_each_shared(|key, entry| {
             if entry.cache_expires_at() > now_unix {
@@ -298,7 +302,7 @@ impl DnsCacheStore {
             .map(|entry| Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()))
     }
 
-    pub fn capacity_eviction_key_for_insert(&self, key: &DnsCacheKey) -> Option<DnsCacheKey> {
+    pub fn capacity_eviction_key_for_insert(&mut self, key: &DnsCacheKey) -> Option<DnsCacheKey> {
         if self.entries.contains_key(key) || self.entries.len() < self.capacity {
             return None;
         }
@@ -358,8 +362,9 @@ impl DnsCacheStore {
             let Some(oldest_key) = self.entries.oldest_key() else {
                 break;
             };
-            self.entries.remove(&oldest_key);
-            self.stats.remove_callback_total += 1;
+            if self.entries.remove(&oldest_key).is_some() {
+                self.stats.remove_callback_total += 1;
+            }
         }
     }
 }

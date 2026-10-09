@@ -1,6 +1,93 @@
 use super::*;
 
 #[test]
+fn expired_response_cannot_install_a_routing_owner() {
+    let routing = matching_domain_routing();
+    routing
+        .record_accepted_response(&response_plan("zero.example.test", "192.0.2.1", unix_now()))
+        .unwrap();
+    let state = routing.state.lock().unwrap();
+    assert_eq!(state.cache.len(), 0);
+    assert_eq!(state.owner.tracker().owner_count(), 0);
+}
+
+#[test]
+fn insert_after_sweep_gap_keeps_expired_owner_reachable_by_maintenance() {
+    let routing = matching_domain_routing();
+    let mut state = routing.state.lock().unwrap();
+    state.cache = DnsCacheStore::new(4096);
+    // Replay a response committed between another request's sweep and lock.
+    let expired = response_plan("old.example.test", "192.0.2.1", unix_now() - 1);
+    let old = build_resident_dns_domain_routing_update_plan(
+        &routing.routing_matcher,
+        &mut state.domain_bitmap,
+        &expired,
+    )
+    .unwrap()
+    .unwrap();
+    routing
+        .apply_event(
+            &mut state.owner,
+            DomainRoutingDnsEvent::from_keys(
+                &old.entry.route_owner_key,
+                &old.entry.domain_bitmap,
+                old.ips,
+            ),
+        )
+        .unwrap();
+    state
+        .cache
+        .insert_without_route_owner_key(unix_now() - 10, old.key, old.entry);
+    let live = response_plan("new.example.test", "192.0.2.2", unix_now() + 300);
+    let plan = build_resident_dns_domain_routing_update_plan(
+        &routing.routing_matcher,
+        &mut state.domain_bitmap,
+        &live,
+    )
+    .unwrap()
+    .unwrap();
+    routing.commit_response_locked(&mut state, plan).unwrap();
+    assert_eq!(state.cache.len(), 2);
+    assert_eq!(
+        state.cache.snapshot_live_entries_shared(unix_now()).len(),
+        1
+    );
+    assert_eq!(
+        state.cache.len(),
+        2,
+        "snapshot must not orphan expired owners"
+    );
+    routing
+        .sweep_expired_batch_locked(unix_now(), &mut state)
+        .unwrap();
+    assert_eq!(state.cache.len(), 1);
+    assert_eq!(state.owner.tracker().owner_count(), 1);
+    assert_eq!(state.owner.tracker().ip_count(), 1);
+}
+
+#[test]
+fn restoring_into_smaller_cache_removes_evicted_owners() {
+    let old = matching_domain_routing();
+    old.state.lock().unwrap().cache = DnsCacheStore::new(32);
+    for id in 1..=20 {
+        old.record_accepted_response(&response_plan(
+            &format!("{id}.example.test"),
+            &format!("192.0.2.{id}"),
+            unix_now() + 300 + id,
+        ))
+        .unwrap();
+    }
+    let snapshot = old.snapshot_for_reload().unwrap();
+    let new = matching_domain_routing();
+    new.state.lock().unwrap().cache = DnsCacheStore::new(17);
+    new.restore_reload_snapshot(&snapshot).unwrap();
+    let state = new.state.lock().unwrap();
+    assert_eq!(state.cache.len(), 17);
+    assert_eq!(state.owner.tracker().owner_count(), 17);
+    assert_eq!(state.owner.tracker().ip_count(), 17);
+}
+
+#[test]
 fn expired_batches_release_state_lock_between_transactions() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
