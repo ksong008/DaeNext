@@ -20,7 +20,8 @@ pub async fn relay_tcp_over_shadowsocks_v2ray_plugin_tls_ws(
         .map_err(|err| format!("encode Shadowsocks v2ray-plugin target metadata: {err}"))?;
     first_plain.extend_from_slice(&initial_payload);
     let mut client_salt = vec![0_u8; salt_len];
-    fastrand::fill(&mut client_salt);
+    dae_resident_core::fill_wire_random(&mut client_salt)
+        .map_err(|error| format!("generate Shadowsocks wire randomness: {error}"))?;
     let mut upload_encoder = AeadStreamCodec::new(cipher, password, &client_salt)
         .map_err(|err| format!("create Shadowsocks v2ray-plugin upload encoder: {err}"))?;
     let mut encrypted_initial = client_salt.clone();
@@ -201,7 +202,8 @@ pub async fn relay_tcp_over_trojan_websocket_inner_shadowsocks_tls(
         trojan_packet::tcp_request_header(trojan_password, "tcp", target, &initial_payload)
             .map_err(|err| format!("build Trojan inner Shadowsocks TCP request: {err}"))?;
     let mut client_salt = vec![0_u8; spec.salt_len];
-    fastrand::fill(&mut client_salt);
+    dae_resident_core::fill_wire_random(&mut client_salt)
+        .map_err(|error| format!("generate Shadowsocks wire randomness: {error}"))?;
     let mut upload_encoder = AeadStreamCodec::new(inner_cipher, inner_password, &client_salt)
         .map_err(|err| format!("create Trojan inner Shadowsocks upload encoder: {err}"))?;
     let mut encrypted_initial = client_salt;

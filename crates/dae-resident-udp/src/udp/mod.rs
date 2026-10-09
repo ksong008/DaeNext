@@ -1,3 +1,5 @@
+#[cfg(test)]
+use dae_outbound_stream::shadowsocks::encode_udp_packet;
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
@@ -35,10 +37,7 @@ use dae_outbound_quic::{
     },
 };
 use dae_outbound_stream::{
-    shadowsocks::{
-        Ss2022UdpCodec, decode_udp_packet as decode_shadowsocks_udp_packet, encode_udp_packet,
-        ss2022_udp_unix_timestamp_now,
-    },
+    shadowsocks::{Ss2022UdpCodec, ss2022_udp_unix_timestamp_now},
     shared_transport::{
         GrpcMode, HttpUpgradeOptions, http_upgrade_request, validate_http_status,
         validate_websocket_handshake_response, websocket_client_binary_frame_with_random_mask,

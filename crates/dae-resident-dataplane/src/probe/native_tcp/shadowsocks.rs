@@ -54,7 +54,9 @@ pub(super) async fn open_shadowsocks_native_tcp_tunnel(
             obfs_port,
         } => {
             let mut client_iv = [0_u8; 16];
-            fastrand::fill(&mut client_iv);
+            dae_resident_core::fill_wire_random(&mut client_iv).map_err(|error| {
+                NativeTcpProbeError::Open(format!("generate ShadowsocksR IV: {error}"))
+            })?;
             let (request, mut encoder) = shadowsocksr_http_simple_origin_request(
                 cipher,
                 password,

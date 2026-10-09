@@ -1,52 +1,42 @@
 use super::*;
+use dae_outbound_core::socks5::Socks5Address;
+use dae_outbound_stream::shadowsocks::aead::AeadUdpCodec;
 
 const SHADOWSOCKS_2022_CLIENT_SESSION_IDENTITY_DOMAIN: &[u8] = b"shadowsocks-2022-client-session";
 
 const WIRE_RANDOM_POOL_REFILL_BYTES: usize = 512;
 
-/// Draws wire-visible randomness (UDP salts, session ids, nonces) from a
-/// bulk-refilled OS CSPRNG pool. Shadowsocks assumes these values are
-/// unpredictable (the official implementation draws them from a CSPRNG); a
-/// predictable process PRNG would weaken the AEAD salt and nonce
-/// guarantees. Refilling 512 bytes per OS call keeps the per-packet UDP
-/// path syscall-free (same pattern as the Salamander obfs salt pool).
-fn take_wire_random(pool: &mut Vec<u8>, pool_offset: &mut usize, out: &mut [u8]) {
-    if *pool_offset + out.len() > pool.len() {
-        pool.resize(WIRE_RANDOM_POOL_REFILL_BYTES, 0);
-        if getrandom::fill(pool).is_err() {
-            // Entropy source failure: degrade to the process PRNG for
-            // availability; see the same trade-off in xhttp
-            // `random_index`. Wire-visible randomness is then predictable
-            // until the entropy source recovers.
-            fastrand::fill(pool);
-        }
-        *pool_offset = 0;
+// SOCKS/SS carries IP bytes and a port, never an interface scope or flow label.
+// In particular, do not stringify scoped IPv6 into a bogus domain address.
+fn shadowsocks_udp_target(original_dst: SocketAddr) -> Socks5Address {
+    match original_dst {
+        SocketAddr::V4(address) => Socks5Address::Ipv4 {
+            addr: *address.ip(),
+            port: address.port(),
+        },
+        SocketAddr::V6(address) => Socks5Address::Ipv6 {
+            addr: *address.ip(),
+            port: address.port(),
+        },
     }
-    let end = *pool_offset + out.len();
-    out.copy_from_slice(&pool[*pool_offset..end]);
-    *pool_offset = end;
 }
 
 pub(in crate::udp) struct ShadowsocksAeadDatagramSession {
-    cipher: String,
-    password: String,
+    codec: Result<AeadUdpCodec, String>,
     salt_len: usize,
     relay: DatagramRelay,
     // See `Shadowsocks2022DatagramSession`: UDP salts are wire-visible and
     // feed the AEAD subkey derivation, so they must come from a CSPRNG.
-    random_pool: Vec<u8>,
-    random_pool_offset: usize,
+    random_pool: dae_resident_core::WireRandomPool<WIRE_RANDOM_POOL_REFILL_BYTES>,
 }
 
 impl ShadowsocksAeadDatagramSession {
     pub(super) fn new(cipher: String, password: String, salt_len: usize) -> Self {
         Self {
-            cipher,
-            password,
+            codec: AeadUdpCodec::new(&cipher, &password).map_err(|error| error.to_string()),
             salt_len,
             relay: DatagramRelay::default(),
-            random_pool: Vec::new(),
-            random_pool_offset: 0,
+            random_pool: dae_resident_core::WireRandomPool::default(),
         }
     }
 
@@ -56,20 +46,19 @@ impl ShadowsocksAeadDatagramSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        let mut salt = vec![0_u8; self.salt_len];
-        take_wire_random(
-            &mut self.random_pool,
-            &mut self.random_pool_offset,
-            &mut salt,
-        );
-        let request = encode_udp_packet(
-            &self.cipher,
-            &self.password,
-            &salt,
-            &original_dst.to_string(),
-            payload,
-        )
-        .map_err(|err| format!("encode Shadowsocks UDP packet: {err}"))?;
+        let codec = self.codec.as_ref().map_err(Clone::clone)?;
+        if codec.salt_len() != self.salt_len || self.salt_len > 32 {
+            return Err("invalid Shadowsocks UDP session salt length".to_owned());
+        }
+        let mut salt_buffer = [0_u8; 32];
+        let salt = &mut salt_buffer[..self.salt_len];
+        self.random_pool
+            .fill(salt)
+            .map_err(|error| format!("generate Shadowsocks UDP wire randomness: {error}"))?;
+        let target = shadowsocks_udp_target(original_dst);
+        let request = codec
+            .encode_packet(salt, &target, payload)
+            .map_err(|err| format!("encode Shadowsocks UDP packet: {err}"))?;
         self.relay.send(binding, &request, "Shadowsocks").await?;
         if let Some(response) = self.poll_response()? {
             return Ok(response);
@@ -78,19 +67,17 @@ impl ShadowsocksAeadDatagramSession {
     }
 
     pub(super) fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
-        let cipher = &self.cipher;
-        let password = &self.password;
+        let codec = self.codec.as_ref().map_err(Clone::clone)?;
         self.relay.poll_response_with("Shadowsocks", |response| {
-            decode_aead_response(cipher, password, response)
+            decode_aead_response(codec, response)
         })
     }
 
     pub(super) async fn wait_response(&mut self) -> Result<UdpExchangeResult, String> {
-        let cipher = &self.cipher;
-        let password = &self.password;
+        let codec = self.codec.as_ref().map_err(Clone::clone)?;
         self.relay
             .wait_response_with("Shadowsocks", |response| {
-                decode_aead_response(cipher, password, response)
+                decode_aead_response(codec, response)
             })
             .await
     }
@@ -112,7 +99,7 @@ impl ShadowsocksAeadDatagramSession {
 
     #[cfg(test)]
     fn decode_response(&self, response: &[u8]) -> Result<UdpExchangeResult, String> {
-        decode_aead_response(&self.cipher, &self.password, response)
+        decode_aead_response(self.codec.as_ref().map_err(Clone::clone)?, response)
     }
 
     pub(super) fn pending_response_result(&self) -> UdpExchangeResult {
@@ -131,9 +118,8 @@ pub(in crate::udp) struct Shadowsocks2022DatagramSession {
     runtime_metrics: Option<Arc<ResidentDataplaneMetrics>>,
     replay_metrics: Ss2022UdpReplayMetricsSnapshot,
     // CSPRNG pool for wire-visible salt/session-id/nonce material; see
-    // `take_wire_random`.
-    random_pool: Vec<u8>,
-    random_pool_offset: usize,
+    // `WireRandomPool`.
+    random_pool: dae_resident_core::WireRandomPool<WIRE_RANDOM_POOL_REFILL_BYTES>,
 }
 
 impl Shadowsocks2022DatagramSession {
@@ -146,8 +132,7 @@ impl Shadowsocks2022DatagramSession {
             relay: DatagramRelay::default(),
             runtime_metrics: None,
             replay_metrics: Ss2022UdpReplayMetricsSnapshot::default(),
-            random_pool: Vec::new(),
-            random_pool_offset: 0,
+            random_pool: dae_resident_core::WireRandomPool::default(),
         }
     }
 
@@ -170,11 +155,9 @@ impl Shadowsocks2022DatagramSession {
     ) -> Result<UdpExchangeResult, String> {
         if self.codec.is_none() {
             let mut session_id = [0_u8; 8];
-            take_wire_random(
-                &mut self.random_pool,
-                &mut self.random_pool_offset,
-                &mut session_id,
-            );
+            self.random_pool
+                .fill(&mut session_id)
+                .map_err(|error| format!("generate Shadowsocks UDP wire randomness: {error}"))?;
             self.codec = Some(
                 Ss2022UdpCodec::new(&self.cipher, &self.password, session_id)
                     .map_err(|err| format!("create Shadowsocks 2022 UDP codec: {err}"))?,
@@ -192,11 +175,9 @@ impl Shadowsocks2022DatagramSession {
         }
         let mut packet_nonce = [0_u8; 32];
         if self.packet_nonce_len > 0 {
-            take_wire_random(
-                &mut self.random_pool,
-                &mut self.random_pool_offset,
-                &mut packet_nonce[..self.packet_nonce_len],
-            );
+            self.random_pool
+                .fill(&mut packet_nonce[..self.packet_nonce_len])
+                .map_err(|error| format!("generate Shadowsocks UDP wire randomness: {error}"))?;
         }
         let request = codec
             .encode_client_packet(
@@ -292,11 +273,11 @@ impl Shadowsocks2022DatagramSession {
 }
 
 fn decode_aead_response(
-    cipher: &str,
-    password: &str,
+    codec: &AeadUdpCodec,
     response: &[u8],
 ) -> Result<UdpExchangeResult, String> {
-    let decoded = decode_shadowsocks_udp_packet(cipher, password, response)
+    let decoded = codec
+        .decode_packet(response)
         .map_err(|err| format!("decode Shadowsocks UDP packet: {err}"))?;
     let result = UdpExchangeResult::new(decoded.payload, "udp-datagram-aead")
         .with_session_executor("tokio-datagram-relay")
@@ -362,6 +343,40 @@ fn response_with_source_and_protocol_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aead_udp_numeric_target_preserves_address_family_and_omits_ipv6_scope() {
+        let codec = AeadUdpCodec::new("aes-128-gcm", "address-test").unwrap();
+        let salt = [7; 16];
+        for target in ["192.0.2.1:53", "[2001:db8::1]:53", "[::ffff:192.0.2.1]:53"] {
+            let address = target.parse().unwrap();
+            assert_eq!(
+                codec
+                    .encode_packet(&salt, &shadowsocks_udp_target(address), b"query")
+                    .unwrap(),
+                encode_udp_packet("aes-128-gcm", "address-test", &salt, target, b"query").unwrap()
+            );
+        }
+        let scoped = SocketAddr::V6(std::net::SocketAddrV6::new(
+            "fe80::1".parse().unwrap(),
+            53,
+            17,
+            3,
+        ));
+        let target = shadowsocks_udp_target(scoped);
+        assert!(matches!(target, Socks5Address::Ipv6 { .. }));
+        assert_eq!(
+            codec.encode_packet(&salt, &target, b"query").unwrap(),
+            encode_udp_packet(
+                "aes-128-gcm",
+                "address-test",
+                &salt,
+                "[fe80::1]:53",
+                b"query"
+            )
+            .unwrap()
+        );
+    }
 
     const SS2022_CIPHER: &str = "2022-blake3-aes-128-gcm";
     const SS2022_PASSWORD: &str = "AQIDBAUGBwgJCgsMDQ4PEA==:ERITFBUWFxgZGhscHR4fIA==";

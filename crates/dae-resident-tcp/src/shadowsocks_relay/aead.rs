@@ -19,7 +19,8 @@ pub async fn relay_tcp_over_shadowsocks_aead_async(
         .map_err(|err| format!("encode Shadowsocks target metadata: {err}"))?;
     first_plain.extend_from_slice(&initial_payload);
     let mut client_salt = vec![0_u8; salt_len];
-    fastrand::fill(&mut client_salt);
+    dae_resident_core::fill_wire_random(&mut client_salt)
+        .map_err(|error| format!("generate Shadowsocks wire randomness: {error}"))?;
     let mut encoder = AeadStreamCodec::new(cipher, password, &client_salt)
         .map_err(|err| format!("create Shadowsocks upload encoder: {err}"))?;
     let mut initial = client_salt.clone();

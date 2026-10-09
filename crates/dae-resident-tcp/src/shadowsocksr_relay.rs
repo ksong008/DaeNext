@@ -16,7 +16,8 @@ pub async fn handle_shadowsocksr_http_simple_proxy_tcp_connection_async(
 ) -> Result<Value, String> {
     let mut proxy = open_plain_proxy_tcp_stream_async(&selection).await?;
     let mut client_iv = [0_u8; 16];
-    fastrand::fill(&mut client_iv);
+    dae_resident_core::fill_wire_random(&mut client_iv)
+        .map_err(|error| format!("generate Shadowsocks wire randomness: {error}"))?;
     let initial_payload = sniff.take_payload();
     let initial_payload_len = initial_payload.len();
     let (request, mut encoder) = shadowsocksr_http_simple_origin_request(

@@ -165,7 +165,7 @@ async fn open_xhttp_stream_up_parts(
     initial_payload: Bytes,
 ) -> Result<XhttpStreamParts, String> {
     let proxy = binding.plan();
-    let session_id = new_xhttp_session_id_for(proxy.xhttp_settings());
+    let session_id = new_xhttp_session_id_for(proxy.xhttp_settings())?;
     let upload_endpoint = ResidentXhttpEndpointPlan::from_proxy(proxy);
     let download_endpoint = proxy
         .xhttp_download
