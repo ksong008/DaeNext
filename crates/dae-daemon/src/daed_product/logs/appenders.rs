@@ -248,28 +248,15 @@ pub(crate) fn append_log_fields_for_config_with_policy(
     if let Some(runtime) = product_log_runtime_for(config_dir) {
         return runtime.append(level, message, fields, respect_runtime_log_level);
     }
-    if respect_runtime_log_level {
-        let runtime_level = current_runtime_log_level(state)?;
-        if !log_level_enabled(&level, &runtime_level) {
-            return Ok(());
-        }
-    }
-    #[cfg(test)]
-    observe_log_settings_read(state);
     ensure_state_schema(state)?;
-    let conn = open_state_connection(state)?;
-    let (max_entries, max_bytes) = log_settings_tuple(&conn)?;
-    let log_file = product_log_file(config_dir);
-    ensure_log_dir(config_dir)?;
-    let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = lock
-        .lock()
-        .map_err(|_| io::Error::other("product log file lock poisoned"))?;
-    let id = next_log_id(&log_file)?;
-    let line = encode_log_entry_line(id, &level, message, fields)?;
-    append_log_line(&log_file, &line)?;
-    prune_log_file_if_needed(&log_file, max_entries, max_bytes, id)?;
-    Ok(())
+    append_product_log_without_runtime(
+        config_dir,
+        state,
+        level,
+        message,
+        fields,
+        respect_runtime_log_level,
+    )
 }
 
 pub(crate) fn append_startup_reclaim_decision_log_for_config(

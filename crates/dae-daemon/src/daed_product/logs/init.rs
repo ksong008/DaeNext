@@ -1,6 +1,8 @@
 use super::*;
 pub(crate) static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 pub(crate) static LOG_LAST_ID_CACHE: OnceLock<Mutex<Option<ProductLogIdCache>>> = OnceLock::new();
+pub(crate) static LOG_VISIBLE_FIRST_ID_CACHE: OnceLock<Mutex<HashMap<PathBuf, u64>>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug)]
 pub(crate) struct ProductLogIdCache {
