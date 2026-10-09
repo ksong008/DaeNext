@@ -57,7 +57,10 @@ pub struct DomainRoutingOwnerUpdate {
 pub struct DomainRoutingOwnerApplyReport {
     pub map_id: u32,
     pub map_id_changed: bool,
+    /// No BPF writes were required; owner membership may still have changed.
     pub skipped: bool,
+    pub owner_snapshot_changed: bool,
+    pub affected_keys: usize,
     pub entries_updated: usize,
     pub entries_deleted: usize,
     pub owner_count: usize,

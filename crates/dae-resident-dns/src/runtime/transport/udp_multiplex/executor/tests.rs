@@ -38,16 +38,19 @@ async fn shared_executor_runs_multiplex_exchange_on_worker_pool() {
         .unwrap();
     let target = upstream.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        let mut query = vec![0_u8; crate::dns::DNS_MAX_UDP_MESSAGE_SIZE];
+        let mut query = vec![0_u8; crate::runtime::DNS_MAX_UDP_MESSAGE_SIZE];
         let (read, peer) = upstream.recv_from(&mut query).await.unwrap();
         let response = dns_a_response_for_query(&query[..read], [192, 0, 2, 44]);
         upstream.send_to(&response, peer).await.unwrap();
     });
     let executor = ResidentDnsUdpActorExecutor::for_test_worker_count(2);
     let handle = executor.open_handle(target, 0).await.unwrap();
-    let query =
-        crate::dns::build_dns_query_packet(0x6262, "executor.example", crate::dns::DNS_QTYPE_A)
-            .unwrap();
+    let query = crate::runtime::build_dns_query_packet(
+        0x6262,
+        "executor.example",
+        crate::runtime::DNS_QTYPE_A,
+    )
+    .unwrap();
     let response = handle.exchange(&query).await.unwrap();
 
     assert_eq!(&response[..2], &0x6262_u16.to_be_bytes());
@@ -96,9 +99,12 @@ async fn shared_executor_shutdown_fails_pending_and_joins_actor_runtime() {
     let target = upstream.local_addr().unwrap();
     let executor = Arc::new(ResidentDnsUdpActorExecutor::for_test_worker_count(2));
     let handle = executor.open_handle(target, 0).await.unwrap();
-    let query =
-        crate::dns::build_dns_query_packet(0x7373, "shutdown.example", crate::dns::DNS_QTYPE_A)
-            .unwrap();
+    let query = crate::runtime::build_dns_query_packet(
+        0x7373,
+        "shutdown.example",
+        crate::runtime::DNS_QTYPE_A,
+    )
+    .unwrap();
     let exchange_handle = handle.clone();
     let exchange = tokio::spawn(async move { exchange_handle.exchange_once(&query).await });
     let mut received = vec![0_u8; 512];
@@ -165,10 +171,10 @@ async fn configured_pending_limit_bounds_one_actor_without_extra_workers() {
     let mut requests = Vec::new();
     for index in 0..3_u16 {
         let handle = handle.clone();
-        let query = crate::dns::build_dns_query_packet(
+        let query = crate::runtime::build_dns_query_packet(
             0x4000 + index,
             &format!("pending-{index}.example"),
-            crate::dns::DNS_QTYPE_A,
+            crate::runtime::DNS_QTYPE_A,
         )
         .unwrap();
         requests.push(tokio::spawn(
@@ -212,7 +218,7 @@ fn dns_a_response_for_query(query: &[u8], address: [u8; 4]) -> Vec<u8> {
     response.extend_from_slice(&0_u16.to_be_bytes());
     response.extend_from_slice(&query[12..view.answer_offset()]);
     response.extend_from_slice(&0xc00c_u16.to_be_bytes());
-    response.extend_from_slice(&crate::dns::DNS_QTYPE_A.to_be_bytes());
+    response.extend_from_slice(&crate::runtime::DNS_QTYPE_A.to_be_bytes());
     response.extend_from_slice(&1_u16.to_be_bytes());
     response.extend_from_slice(&60_u32.to_be_bytes());
     response.extend_from_slice(&4_u16.to_be_bytes());

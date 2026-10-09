@@ -22,11 +22,11 @@ impl ResidentDnsDomainRoutingReloadSnapshot {
 impl ResidentDnsDomainRouting {
     pub fn snapshot_for_reload(&self) -> Result<ResidentDnsDomainRoutingReloadSnapshot, String> {
         let now_unix = unix_now();
+        self.sweep_expired_until(now_unix)?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        self.sweep_expired_locked(now_unix, &mut state)?;
         let accepted_responses = state.cache.snapshot_live_entries_shared(now_unix);
         Ok(ResidentDnsDomainRoutingReloadSnapshot { accepted_responses })
     }
@@ -36,11 +36,11 @@ impl ResidentDnsDomainRouting {
         snapshot: &ResidentDnsDomainRoutingReloadSnapshot,
     ) -> Result<ResidentDnsDomainRoutingRestoreReport, String> {
         let now_unix = unix_now();
+        self.sweep_expired_until(now_unix)?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        self.sweep_expired_locked(now_unix, &mut state)?;
         let mut report = ResidentDnsDomainRoutingRestoreReport::default();
         for (key, entry) in &snapshot.accepted_responses {
             if entry.cache_expires_at() <= now_unix {

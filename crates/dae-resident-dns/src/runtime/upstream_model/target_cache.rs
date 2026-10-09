@@ -8,7 +8,7 @@ use super::target_refresh::ResidentDnsTargetRefreshHandle;
 
 const DNS_UPSTREAM_STALE_RETRY_DIVISOR: u32 = 10;
 const DNS_UPSTREAM_STALE_RETRY_MIN: Duration = Duration::from_secs(1);
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 const DNS_UPSTREAM_REFRESH_TEST_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,7 +53,7 @@ impl ResidentDnsResolvedTargetSnapshot {
         }
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn stale_literal(addr: SocketAddr) -> Self {
         Self {
             addrs: Arc::from([addr]),
@@ -66,7 +66,7 @@ impl ResidentDnsResolvedTargetSnapshot {
         self.addrs.to_vec()
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn as_slice(&self) -> &[SocketAddr] {
         &self.addrs
     }
@@ -276,7 +276,7 @@ impl ResidentDnsResolvedTargetCache {
         })
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn refresh_after_stale_failure<F, Fut>(
         &self,
         snapshot: &ResidentDnsResolvedTargetSnapshot,
@@ -406,7 +406,7 @@ impl ResidentDnsResolvedTargetCache {
         self.refresh_interval
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn seed(&self, addrs: Vec<SocketAddr>, valid_for: Duration) {
         let epoch = self.next_epoch.fetch_add(1, Ordering::AcqRel);
         *self
@@ -422,7 +422,7 @@ impl ResidentDnsResolvedTargetCache {
             });
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn seeded(addrs: Vec<SocketAddr>, valid_for: Duration) -> Self {
         Self {
             state: RwLock::new(Some(ResidentDnsResolvedTargetEntry {
@@ -441,20 +441,20 @@ impl ResidentDnsResolvedTargetCache {
         }
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn cached_addrs_for_test(&self) -> Option<Arc<[SocketAddr]>> {
         self.cached_entry().map(|entry| entry.addrs)
     }
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 impl Default for ResidentDnsResolvedTargetCache {
     fn default() -> Self {
         Self::new(DNS_UPSTREAM_REFRESH_TEST_INTERVAL)
     }
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;

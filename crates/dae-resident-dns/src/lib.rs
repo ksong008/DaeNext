@@ -4,6 +4,10 @@ mod error_response;
 mod geodata;
 mod proxy_probe;
 mod proxy_transport;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod runtime;
+#[cfg(not(feature = "test-support"))]
 mod runtime;
 mod udp_response;
 mod udp_runtime;

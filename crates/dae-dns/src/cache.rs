@@ -206,7 +206,17 @@ impl DnsCacheStore {
     }
 
     pub fn sweep_entries(&mut self, now_unix: i64) -> Vec<(DnsCacheKey, DnsCacheEntry)> {
-        let removed = self.entries.remove_expired_entries(now_unix);
+        self.sweep_entries_limited(now_unix, usize::MAX)
+    }
+
+    /// Remove at most `limit` expired entries; each returned entry may be restored
+    /// if its external routing transaction fails.
+    pub fn sweep_entries_limited(
+        &mut self,
+        now_unix: i64,
+        limit: usize,
+    ) -> Vec<(DnsCacheKey, DnsCacheEntry)> {
+        let removed = self.entries.remove_expired_entries(now_unix, limit);
         self.stats.expired_removal_total += removed.len() as u64;
         self.stats.remove_callback_total += removed.len() as u64;
         removed

@@ -191,7 +191,7 @@ async fn production_resource_graph_closes_endpoint_h3_driver_and_stalled_bridge(
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let (mut driver, client) = time::timeout(
         RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
-        h3::client::new(h3_connection),
+        ::h3::client::new(h3_connection),
     )
     .await
     .unwrap()
@@ -244,13 +244,13 @@ async fn production_resource_graph_closes_endpoint_h3_driver_and_stalled_bridge(
 
     let metrics = Arc::new(ResidentDataplaneMetrics::default());
     let target = ProductionResourceTarget {
-        resources: ProxiedDoh3Resources::from_parts(
-            bridge,
-            endpoint,
-            connection,
-            client,
-            driver_task,
-        ),
+        resources: ProxiedDoh3Resources {
+            bridge: Some(Box::new(bridge)),
+            endpoint: Some(endpoint),
+            connection: Some(connection),
+            client: Some(client),
+            driver_task: Some(driver_task),
+        },
         metrics: Arc::clone(&metrics),
     };
     let (_keep_open, cancelled) = tokio::sync::oneshot::channel();

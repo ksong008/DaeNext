@@ -9,7 +9,7 @@ repository.workspace = true
 default = []
 test-support = []
 test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send"]
-dns-runtime-tests = []
+dns-runtime-tests = ["dae-resident-core/test-support", "dae-resident-plan/test-support"]
 
 [dependencies]
 dae-config.workspace = true

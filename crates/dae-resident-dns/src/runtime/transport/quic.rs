@@ -15,7 +15,7 @@ use dae_resident_transport::{
 };
 use serde_json::{Value, json};
 
-mod proxy;
+pub mod proxy;
 
 use self::proxy::forward_dns_quic_to_proxy_async;
 pub(super) use self::proxy::shutdown_cached_proxy_dns_quic;

@@ -84,7 +84,7 @@ impl ResidentDnsUdpActorExecutor {
         }
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn open_handle(
         &self,
         target: std::net::SocketAddr,
@@ -347,7 +347,7 @@ impl ResidentDnsUdpActorExecutor {
         })
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_test_worker_count(worker_count: usize) -> Self {
         let mut runtime_config = ResidentDnsUdpRuntimeConfig::standalone();
         runtime_config.direct_shards = worker_count.max(1);
@@ -358,7 +358,7 @@ impl ResidentDnsUdpActorExecutor {
         )
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn pool_worker_count(&self) -> Option<usize> {
         self.pool
             .lock()
@@ -367,7 +367,7 @@ impl ResidentDnsUdpActorExecutor {
             .and_then(|pool| pool.worker_count())
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn pool_identity(&self) -> Option<usize> {
         self.pool
             .lock()

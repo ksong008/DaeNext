@@ -1,32 +1,32 @@
 use std::future::Future;
 
 use super::*;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use crate::dns::{
+#[cfg(any(test, feature = "test-support"))]
+use crate::runtime::{
     ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
 };
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 use dae_resident_core::ResidentOwnedTaskShutdownCompletion;
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 mod cleanup;
 mod model;
 mod tasks;
 
-pub(super) use self::model::{
+pub use self::model::{
     ProxiedDoh3CleanupDeadline, ProxiedDoh3CleanupOutcome, ProxiedDoh3DriverCompletion,
     ProxiedDoh3EndpointCompletion,
 };
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub const PROXIED_DOH3_CANCELLED: &str = "proxied DNS over HTTP/3 request cancelled";
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub struct ProxiedDoh3Cancellation {
     sender: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 impl ProxiedDoh3Cancellation {
     pub fn new(sender: tokio::sync::oneshot::Sender<()>) -> Self {
         Self {
@@ -39,7 +39,7 @@ impl ProxiedDoh3Cancellation {
     }
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for ProxiedDoh3Cancellation {
     fn drop(&mut self) {
         if let Some(sender) = self.sender.take() {
@@ -48,7 +48,7 @@ impl Drop for ProxiedDoh3Cancellation {
     }
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub trait ProxiedDoh3ExchangeTarget: Send {
     fn exchange(&mut self) -> impl Future<Output = Result<Vec<u8>, ProxyDnsRequestError>> + Send;
 
@@ -74,7 +74,7 @@ pub trait ProxiedDoh3ExchangeTarget: Send {
     fn observe_cleanup(&self, outcome: &ProxiedDoh3CleanupOutcome);
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn run_cancelable_proxied_doh3_exchange<T>(
     target: T,
 ) -> Result<Vec<u8>, ProxyDnsRequestError>
@@ -84,7 +84,7 @@ where
     run_cancelable_proxied_doh3_exchange_with_context(target, None).await
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 async fn run_cancelable_proxied_doh3_exchange_with_context<T>(
     target: T,
     context: Option<ProxyDnsRequestContext>,
@@ -108,7 +108,7 @@ where
     result
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn run_proxied_doh3_exchange_with_context<T>(
     target: T,
     context: ProxyDnsRequestContext,
@@ -119,7 +119,7 @@ where
     run_cancelable_proxied_doh3_exchange_with_context(target, Some(context)).await
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn run_owned_proxied_doh3_exchange<T>(
     mut target: T,
     mut cancelled: tokio::sync::oneshot::Receiver<()>,
@@ -132,7 +132,7 @@ where
         .0
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 async fn run_owned_proxied_doh3_exchange_with_context<T>(
     mut target: T,
     mut cancelled: tokio::sync::oneshot::Receiver<()>,
@@ -146,7 +146,7 @@ where
         .0
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 async fn run_owned_proxied_doh3_exchange_with_outcome<T>(
     target: &mut T,
     cancelled: &mut tokio::sync::oneshot::Receiver<()>,
@@ -173,7 +173,7 @@ where
     (result, cleanup)
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 async fn run_proxied_doh3_exchange_phase<T>(
     target: &mut T,
     context: Option<ProxyDnsRequestContext>,
@@ -208,7 +208,7 @@ pub async fn finish_or_abort_driver_task_until(
     tasks::finish_or_abort_driver_task_until(driver_task, deadline).await
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn run_owned_proxied_doh3_exchange_observed<T>(
     mut target: T,
     mut cancelled: tokio::sync::oneshot::Receiver<()>,

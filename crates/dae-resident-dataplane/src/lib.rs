@@ -233,3 +233,6 @@ mod matrix;
 mod remote_strategy_live_tests;
 use self::matrix::*;
 pub(crate) use self::runtime_owner::*;
+
+#[cfg(all(test, feature = "dns-runtime-tests"))]
+mod dns_runtime_tests;

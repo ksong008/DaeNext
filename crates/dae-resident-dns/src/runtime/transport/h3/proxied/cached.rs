@@ -336,7 +336,7 @@ fn closing_error() -> ProxyDnsRequestError {
 fn proxy_dns_h3_client_config(
     _forwarder: &ResidentDnsProxyH3Forwarder,
 ) -> Result<quinn::ClientConfig, ProxyDnsRequestError> {
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(config) = _forwarder.client_config_override.as_ref() {
         return Ok(config.clone());
     }

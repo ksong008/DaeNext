@@ -26,25 +26,6 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio::time;
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use super::geodata::GeodataResolver as ResidentGeodataStore;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use super::host_routing_plan::build_resident_userspace_routing_matcher_with_geodata;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use super::open_marked_quic_endpoint_for_remote;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use super::plan::{ResidentDnsProxyGroupSelector, SharedResidentProxyGroupMap};
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use super::plan::{ResidentProxyPlan, build_resident_dataplane_plan, share_resident_proxy_groups};
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use super::udp::ResidentProxyUdpBridge;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use super::{
-    ResidentTransportOwnerRegistries, resident_dns_proxy_tcp_transport,
-    resident_dns_proxy_udp_transport,
-};
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use crate::transport::quic_endpoint::ResidentDnsQuicEndpointPolicy;
 use dae_resident_core::{
     RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentDataplaneMetrics,
     ResidentDnsResourceProfile, SharedResidentStopSignal, apply_udp_socket_buffer_tuning,
@@ -123,16 +104,14 @@ impl ResidentDnsTlsStream {
 }
 
 mod reload;
-mod routing;
+pub mod routing;
 mod trace_summary;
-mod transport;
-mod upstream_model;
+pub mod transport;
+pub mod upstream_model;
 mod upstream_router;
 pub use self::reload::ResidentDnsReloadHandle;
 use self::reload::ResidentDnsReloadRestoreReport;
 pub use self::reload::ResidentDnsReloadSnapshot;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use self::routing::parse_dns_upstream;
 use self::routing::{
     build_request_matcher, build_response_matcher, parse_dns_upstreams,
     parse_request_default_action, parse_response_default_action, select_request_action,
@@ -142,8 +121,6 @@ pub use self::trace_summary::{ResidentDnsTraceSummary, ResidentDnsTransportTrace
 use self::trace_summary::{
     ResidentDnsTransportTraceInput, capture_dns_transport_trace_async, record_dns_transport_trace,
 };
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use self::transport::parse_doh_http_response;
 pub use self::transport::udp_multiplex::{
     DnsRequestIdAllocator, ResidentDnsUdpActorCompletion, ResidentDnsUdpActorExecutor,
     ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
@@ -151,8 +128,7 @@ pub use self::transport::udp_multiplex::{
 use self::transport::{
     ResidentDnsTcpMultiplexHandle, forward_dns_tcp_asis_async, forward_dns_to_upstream_async,
 };
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use self::upstream_model::test_resident_dns_forwarder_cache;
+
 pub use self::upstream_model::{
     ResidentDnsForwarderCache, ResidentDnsForwarderCacheState, ResidentDnsForwarderEntry,
     ResidentDnsForwarderEntryKind, ResidentDnsForwarderKey, ResidentDnsForwarderSelectionKey,
@@ -172,8 +148,6 @@ pub(crate) use crate::{
     DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsDomainRouting, build_dns_server_failure_response,
     fit_dns_response_to_udp_request,
 };
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-pub(crate) use crate::{ResidentDnsDomainRoutingMaintenanceHandle, ResidentDomainRoutingMapOwner};
 use crate::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
     ResidentDnsGeodata, ResidentDnsProxySelector, ResidentDnsProxyTcpTransport,
@@ -190,39 +164,39 @@ pub use dae_resident_transport::{
     write_dns_tcp_payload_async,
 };
 
-const DNS_QTYPE_A: u16 = 1;
-const DNS_QTYPE_AAAA: u16 = 28;
-const DNS_RESPONSE_READ_LIMIT: usize = DNS_MAX_UDP_MESSAGE_SIZE;
-const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
-const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
-const DNS_DOH_RESPONSE_READ_LIMIT: usize = 1024 * 1024;
-const DNS_TLS_DEFAULT_PORT: u16 = 853;
-const DNS_HTTPS_DEFAULT_PORT: u16 = 443;
-const DNS_DEFAULT_DOH_PATH: &str = "/dns-query";
-const DNS_DOH3_ALPN: &str = "h3";
-const DNS_DOQ_ALPN: &str = "doq";
-const DNS_FORWARDER_CACHE_MAX_ENTRIES: usize = 128;
-const DNS_STREAM_POOL_MAX_STREAMS: usize = 16;
-const DNS_STREAM_POOL_MAX_IDLE: usize = 8;
-const DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS: usize = 128;
-const DNS_TRACE_CACHE_UNRESOLVED: &str = "unresolved";
-const DNS_TRACE_CACHE_BYPASS: &str = "bypass";
-const DNS_TRACE_CACHE_HIT: &str = "hit";
-const DNS_TRACE_CACHE_LOCKED_HIT: &str = "locked-hit";
-const DNS_TRACE_CACHE_MISS: &str = "miss";
-const DNS_TRACE_ROUTING_UNRESOLVED: &str = "unresolved";
-const DNS_TRACE_ROUTING_ASIS: &str = "asis";
-const DNS_TRACE_ROUTING_UPSTREAM: &str = "upstream";
-const DNS_TRACE_ROUTING_CACHE: &str = "cache";
-const DNS_TRACE_ROUTING_ACCEPT: &str = "accept";
-const DNS_TRACE_ROUTING_REJECT: &str = "reject";
-const DNS_TRACE_REASON_REQUEST_REJECTED: &str = "dns.routing.request rejected query";
-const DNS_TRACE_REASON_CACHE_HIT: &str = "resident DNS cache hit";
-const DNS_TRACE_REASON_CACHE_LOCKED_HIT: &str = "resident DNS cache hit after inflight wait";
-const DNS_TRACE_REASON_ASIS_ACCEPTED: &str = "resident DNS asis response accepted";
-const DNS_TRACE_REASON_ASIS_REJECTED: &str = "resident DNS asis response rejected";
-const DNS_TRACE_REASON_UPSTREAM_ACCEPTED: &str = "resident DNS upstream response accepted";
-const DNS_TRACE_REASON_UPSTREAM_REJECTED: &str = "resident DNS upstream response rejected";
+pub const DNS_QTYPE_A: u16 = 1;
+pub const DNS_QTYPE_AAAA: u16 = 28;
+pub const DNS_RESPONSE_READ_LIMIT: usize = DNS_MAX_UDP_MESSAGE_SIZE;
+pub const DNS_RESPONSE_REROUTE_LIMIT: usize = 4;
+pub const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
+pub const DNS_DOH_RESPONSE_READ_LIMIT: usize = 1024 * 1024;
+pub const DNS_TLS_DEFAULT_PORT: u16 = 853;
+pub const DNS_HTTPS_DEFAULT_PORT: u16 = 443;
+pub const DNS_DEFAULT_DOH_PATH: &str = "/dns-query";
+pub const DNS_DOH3_ALPN: &str = "h3";
+pub const DNS_DOQ_ALPN: &str = "doq";
+pub const DNS_FORWARDER_CACHE_MAX_ENTRIES: usize = 128;
+pub const DNS_STREAM_POOL_MAX_STREAMS: usize = 16;
+pub const DNS_STREAM_POOL_MAX_IDLE: usize = 8;
+pub const DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS: usize = 128;
+pub const DNS_TRACE_CACHE_UNRESOLVED: &str = "unresolved";
+pub const DNS_TRACE_CACHE_BYPASS: &str = "bypass";
+pub const DNS_TRACE_CACHE_HIT: &str = "hit";
+pub const DNS_TRACE_CACHE_LOCKED_HIT: &str = "locked-hit";
+pub const DNS_TRACE_CACHE_MISS: &str = "miss";
+pub const DNS_TRACE_ROUTING_UNRESOLVED: &str = "unresolved";
+pub const DNS_TRACE_ROUTING_ASIS: &str = "asis";
+pub const DNS_TRACE_ROUTING_UPSTREAM: &str = "upstream";
+pub const DNS_TRACE_ROUTING_CACHE: &str = "cache";
+pub const DNS_TRACE_ROUTING_ACCEPT: &str = "accept";
+pub const DNS_TRACE_ROUTING_REJECT: &str = "reject";
+pub const DNS_TRACE_REASON_REQUEST_REJECTED: &str = "dns.routing.request rejected query";
+pub const DNS_TRACE_REASON_CACHE_HIT: &str = "resident DNS cache hit";
+pub const DNS_TRACE_REASON_CACHE_LOCKED_HIT: &str = "resident DNS cache hit after inflight wait";
+pub const DNS_TRACE_REASON_ASIS_ACCEPTED: &str = "resident DNS asis response accepted";
+pub const DNS_TRACE_REASON_ASIS_REJECTED: &str = "resident DNS asis response rejected";
+pub const DNS_TRACE_REASON_UPSTREAM_ACCEPTED: &str = "resident DNS upstream response accepted";
+pub const DNS_TRACE_REASON_UPSTREAM_REJECTED: &str = "resident DNS upstream response rejected";
 pub const DNS_TRANSPORT_ROUTE_DIRECT: &str = "direct";
 pub const DNS_TRANSPORT_ROUTE_PROXY: &str = "proxy";
 pub const DNS_TRANSPORT_TARGET_FAMILY_IPV4: &str = "ipv4";
@@ -246,20 +220,20 @@ async fn acquire_dns_permit<'a>(
 
 #[derive(Clone, Debug)]
 pub struct ResidentDnsPlan {
-    request_matcher: Option<RequestMatcher>,
-    request_actions: Vec<ResidentDnsRequestAction>,
-    request_default_action: ResidentDnsRequestAction,
-    response_matcher: Option<ResponseMatcher>,
-    response_actions: Vec<ResidentDnsResponseAction>,
-    response_default_action: ResidentDnsResponseAction,
-    domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
-    cache: Arc<ResidentDnsRuntimeCache>,
-    forwarders: Arc<ResidentDnsForwarderCache>,
-    fixed_domain_ttl: Arc<BTreeMap<String, i64>>,
-    ipversion_prefer: Option<u16>,
-    mark: u32,
-    upstream_router: Option<Arc<ResidentDnsUpstreamRouter>>,
-    target_refresh_owner: Option<Arc<ResidentDnsTargetRefreshOwner>>,
+    pub request_matcher: Option<RequestMatcher>,
+    pub request_actions: Vec<ResidentDnsRequestAction>,
+    pub request_default_action: ResidentDnsRequestAction,
+    pub response_matcher: Option<ResponseMatcher>,
+    pub response_actions: Vec<ResidentDnsResponseAction>,
+    pub response_default_action: ResidentDnsResponseAction,
+    pub domain_routing: Option<Arc<ResidentDnsDomainRouting>>,
+    pub cache: Arc<ResidentDnsRuntimeCache>,
+    pub forwarders: Arc<ResidentDnsForwarderCache>,
+    pub fixed_domain_ttl: Arc<BTreeMap<String, i64>>,
+    pub ipversion_prefer: Option<u16>,
+    pub mark: u32,
+    pub upstream_router: Option<Arc<ResidentDnsUpstreamRouter>>,
+    pub target_refresh_owner: Option<Arc<ResidentDnsTargetRefreshOwner>>,
 }
 
 #[derive(Clone)]
@@ -272,7 +246,7 @@ impl ResidentDnsResolver {
         Self { plan }
     }
 
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn asis(mark: u32) -> Self {
         Self::new(Arc::new(ResidentDnsPlan::asis(mark)))
     }
@@ -530,7 +504,7 @@ pub fn build_resident_dns_plan_with_refresh_interval(
     })
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[cfg(any(test, feature = "test-support"))]
 pub fn build_resident_dns_plan(
     config: &Config,
     geodata: &dyn ResidentDnsGeodata,
@@ -596,7 +570,7 @@ fn parse_i64_base0(raw: &str) -> Result<i64, String> {
     Ok(if negative { -parsed } else { parsed })
 }
 
-fn record_accepted_dns_response(
+pub fn record_accepted_dns_response(
     plan: &ResidentDnsPlan,
     cache_key: &ResidentDnsResponseCacheKey,
     response: &[u8],
@@ -653,14 +627,14 @@ fn fixed_domain_ttl_for_response(
         .copied())
 }
 
-fn unix_now() -> i64 {
+pub fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
         .unwrap_or(0)
 }
 
-fn dns_request_action_name(action: &ResidentDnsRequestAction) -> &'static str {
+pub fn dns_request_action_name(action: &ResidentDnsRequestAction) -> &'static str {
     match action {
         ResidentDnsRequestAction::AsIs => DNS_TRACE_ROUTING_ASIS,
         ResidentDnsRequestAction::Reject => DNS_TRACE_ROUTING_REJECT,
@@ -676,7 +650,7 @@ fn dns_response_action_name(action: &ResidentDnsResponseAction) -> &'static str 
     }
 }
 
-fn dns_response_rcode(response: &[u8]) -> Option<u16> {
+pub fn dns_response_rcode(response: &[u8]) -> Option<u16> {
     (response.len() >= 4).then(|| u16::from_be_bytes([response[2], response[3]]) & 0x000f)
 }
 
@@ -1001,7 +975,7 @@ async fn forward_dns_asis_async(
     }
 }
 
-fn dns_cache_key_for_request(request: &DnsPacketView<'_>) -> Result<DnsCacheKey, String> {
+pub fn dns_cache_key_for_request(request: &DnsPacketView<'_>) -> Result<DnsCacheKey, String> {
     let question = request
         .questions()
         .next()
@@ -1043,7 +1017,7 @@ fn dns_response_has_any_ip(response: &[u8]) -> Result<bool, String> {
     Ok(false)
 }
 
-fn build_dns_query_packet(id: u16, domain: &str, qtype: u16) -> Result<Vec<u8>, String> {
+pub fn build_dns_query_packet(id: u16, domain: &str, qtype: u16) -> Result<Vec<u8>, String> {
     let domain = domain.trim().trim_end_matches('.');
     if domain.is_empty() || domain.parse::<IpAddr>().is_ok() {
         return Err(format!("not a resolvable domain name: {domain:?}"));
@@ -1164,7 +1138,7 @@ async fn resolve_dns_response_routing_trace(
     ))
 }
 
-fn validate_dns_response_for_request(
+pub fn validate_dns_response_for_request(
     request: &DnsPacketView<'_>,
     response: &[u8],
     require_matching_id: bool,
@@ -1175,5 +1149,5 @@ fn validate_dns_response_for_request(
         .map_err(|err| format!("validate DNS response for request: {err:?}"))
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-mod tests;
+#[cfg(test)]
+mod cache_tests;

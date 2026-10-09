@@ -4,27 +4,13 @@ use super::*;
 
 const PROXIED_DOH3_CLOSE_REASON: &[u8] = b"proxied dns h3 owner cleanup";
 
-mod cached;
-mod lifecycle;
+pub mod cached;
+pub mod lifecycle;
 mod request;
-mod resources;
+pub mod resources;
 
 use self::cached::forward_cached_proxy_dns_h3;
 pub(in super::super) use self::cached::shutdown_cached_proxy_dns_h3;
-
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use self::lifecycle::{
-    PROXIED_DOH3_CANCELLED, ProxiedDoh3Cancellation, ProxiedDoh3CleanupDeadline,
-    ProxiedDoh3CleanupOutcome, ProxiedDoh3DriverCompletion, ProxiedDoh3EndpointCompletion,
-    ProxiedDoh3ExchangeTarget, run_owned_proxied_doh3_exchange,
-};
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use self::resources::ProxiedDoh3Resources;
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-use dae_resident_core::ResidentOwnedTaskShutdownCompletion;
-
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-mod tests;
 
 pub async fn forward_dns_h3_to_proxy_async(
     upstream: &ResidentDnsUpstream,

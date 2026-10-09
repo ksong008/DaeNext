@@ -232,26 +232,6 @@ impl ResidentDnsForwarderCache {
     }
 }
 
-#[cfg(all(test, feature = "dns-runtime-tests"))]
-pub fn test_resident_dns_forwarder_cache() -> ResidentDnsForwarderCache {
-    let udp_runtime = ResidentDnsUdpRuntimeConfig::standalone();
-    let metrics = Arc::new(ResidentDataplaneMetrics::default());
-    let udp_executor = Arc::new(ResidentDnsUdpActorExecutor::new(
-        udp_runtime.clone(),
-        Arc::clone(&metrics),
-    ));
-    let owners = ResidentTransportOwnerRegistries::default();
-    ResidentDnsForwarderCache::new_with_proxy_transports(
-        udp_runtime.clone(),
-        Arc::clone(&metrics),
-        tokio::runtime::Handle::try_current().ok(),
-        Arc::clone(&udp_executor),
-        resident_dns_proxy_tcp_transport(owners.clone()),
-        resident_dns_proxy_udp_transport(udp_runtime, metrics, udp_executor, owners),
-        Arc::new(ResidentDnsQuicEndpointPolicy),
-    )
-}
-
 impl std::fmt::Debug for ResidentDnsForwarderCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let entries = self
@@ -276,6 +256,7 @@ pub struct ResidentDnsForwarderCacheState {
     pub lru: BTreeSet<(u64, ResidentDnsForwarderKey)>,
     pub next_tick: u64,
     pub retired: Vec<ResidentDnsRetiredForwarder>,
+    pub retired_scan_pending: usize,
 }
 
 pub struct ResidentDnsRetiredForwarder {
@@ -554,7 +535,7 @@ pub enum ResidentDnsForwarderTransport {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ResidentDnsForwarderSelectionKey {
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     Unrouted,
     Direct,
     Proxy {
@@ -604,7 +585,7 @@ pub struct ResidentDnsProxyQuicForwarder {
     pub permits: Arc<Semaphore>,
     pub open_lock: Arc<AsyncMutex<()>>,
     pub closing: bool,
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub client_config_override: Option<quinn::ClientConfig>,
 }
 
@@ -626,7 +607,7 @@ pub struct ResidentDnsProxyH3Forwarder {
     pub permits: Arc<Semaphore>,
     pub open_lock: Arc<AsyncMutex<()>>,
     pub closing: bool,
-    #[cfg(all(test, feature = "dns-runtime-tests"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub client_config_override: Option<quinn::ClientConfig>,
 }
 

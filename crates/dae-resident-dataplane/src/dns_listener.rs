@@ -347,8 +347,11 @@ async fn run_resident_dns_udp_bind_listener_async(
         resources.bind_udp_inflight(),
     );
     let mut buf = vec![0_u8; DNS_BIND_READ_LIMIT];
+    let mut stop_listener = stop.listener();
     while !stop.load(Ordering::Relaxed) {
         tokio::select! {
+            biased;
+            _ = stop_listener.cancelled() => break,
             received = socket.recv_from(&mut buf) => {
                 let (read, peer) = match received {
                     Ok(received) => received,
@@ -431,7 +434,6 @@ async fn run_resident_dns_udp_bind_listener_async(
                     );
                 }
             }
-            _ = time::sleep(RESIDENT_IDLE_SLEEP) => {}
         }
     }
     let shutdown = dispatcher
