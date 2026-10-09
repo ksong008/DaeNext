@@ -748,6 +748,22 @@ pub fn vless_udp_length_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
 mod fixed_target_tests {
     use super::*;
 
+    #[test]
+    fn vision_response_parser_keeps_invalid_command_failed_on_executor_retry() {
+        let key = [0_u8; 16];
+        let mut wire = vec![VLESS_RESPONSE_VERSION, 0];
+        wire.extend_from_slice(&key);
+        wire.extend_from_slice(&[0xff, 0, 1, 0, 0]);
+        let mut session = VlessXudpStreamSession {
+            key: Some(key),
+            response_plaintext: wire,
+            ..Default::default()
+        };
+        let error = session.try_pop_response_payload().unwrap_err();
+        assert_eq!(session.try_pop_response_payload().unwrap_err(), error);
+        assert!(session.response_xudp_payload.is_empty());
+    }
+
     fn assert_response_is_bound(mut response: UdpExchangeResult, target: SocketAddr) {
         let expectation = response.fixed_target_expectation(target);
         assert_eq!(

@@ -4,6 +4,37 @@ mod tests {
     use super::super::*;
 
     #[test]
+    fn resident_vless_vision_invalid_command_remains_an_error_on_retry() {
+        for first_byte in [
+            VISION_COMMAND_CONTINUE,
+            VISION_COMMAND_END,
+            VISION_COMMAND_DIRECT,
+        ] {
+            let mut key = [0_u8; 16];
+            key[0] = first_byte;
+            for preceding_block in [false, true] {
+                let mut wire = Vec::from(key);
+                if preceding_block {
+                    wire.extend_from_slice(&[VISION_COMMAND_CONTINUE, 0, 2, 0, 1]);
+                    wire.extend_from_slice(b"ok\0");
+                }
+                let invalid_header = [0xff, 0, 1, 0, 0];
+                wire.extend_from_slice(&invalid_header);
+                // Include both a coalesced read and every possible split, including
+                // partial UUIDs, payloads and the invalid command header.
+                for split in 0..wire.len() {
+                    let mut unpadder = VisionUnpadder::new(key);
+                    assert!(unpadder.consume(&wire[..split]).is_ok());
+                    let error = unpadder.consume(&wire[split..]).unwrap_err();
+                    assert_eq!(unpadder.consume(&[]).unwrap_err(), error);
+                    assert_eq!(unpadder.consume(b"new input").unwrap_err(), error);
+                    assert!(unpadder.pending.starts_with(&invalid_header));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn resident_vless_vision_unpadder_removes_padding_blocks() {
         let key = [
             0x87, 0xe8, 0x7f, 0x74, 0x76, 0xef, 0x5c, 0x4a, 0x90, 0x46, 0x2e, 0x6b, 0x47, 0xef,
