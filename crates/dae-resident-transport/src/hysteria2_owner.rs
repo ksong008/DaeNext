@@ -569,6 +569,7 @@ struct Hysteria2UdpSessionManagerState {
     next_session_id: u32,
     sessions: HashMap<u32, Hysteria2UdpSessionQueue>,
     quarantine: HashMap<u32, Instant>,
+    next_quarantine_expiry: Option<Instant>,
 }
 
 struct Hysteria2UdpSessionQueue {
@@ -632,6 +633,7 @@ impl Hysteria2UdpSessionManager {
                 next_session_id: fastrand::u32(1..=u32::MAX),
                 sessions: HashMap::new(),
                 quarantine: HashMap::new(),
+                next_quarantine_expiry: None,
             }),
             metrics,
         })
@@ -779,8 +781,15 @@ impl Hysteria2UdpSessionManager {
     }
 
     fn expire_quarantine(&self, state: &mut Hysteria2UdpSessionManagerState, now: Instant) {
+        if state
+            .next_quarantine_expiry
+            .is_some_and(|expiry| expiry > now)
+        {
+            return;
+        }
         let before = state.quarantine.len();
         state.quarantine.retain(|_, expiration| *expiration > now);
+        state.next_quarantine_expiry = state.quarantine.values().copied().min();
         self.metrics
             .udp_session_quarantine_released(before.saturating_sub(state.quarantine.len()));
     }
@@ -788,7 +797,8 @@ impl Hysteria2UdpSessionManager {
     fn insert_quarantine(&self, state: &mut Hysteria2UdpSessionManagerState, session_id: u32) {
         let now = Instant::now();
         self.expire_quarantine(state, now);
-        if state.quarantine.len() >= self.quarantine_limit
+        if !state.quarantine.contains_key(&session_id)
+            && state.quarantine.len() >= self.quarantine_limit
             && let Some(oldest) = state
                 .quarantine
                 .iter()
@@ -799,8 +809,16 @@ impl Hysteria2UdpSessionManager {
             self.metrics.udp_session_quarantine_released(1);
         }
         let expiration = now.checked_add(self.quarantine_ttl).unwrap_or(now);
-        state.quarantine.insert(session_id, expiration);
-        self.metrics.udp_session_quarantined();
+        if state.quarantine.insert(session_id, expiration).is_none() {
+            self.metrics.udp_session_quarantined();
+        }
+        // An early deadline after replacement/eviction is harmless; a late one
+        // could keep an expired ID quarantined. Never move the gate forward here.
+        state.next_quarantine_expiry = Some(
+            state
+                .next_quarantine_expiry
+                .map_or(expiration, |old| old.min(expiration)),
+        );
     }
 
     fn unregister(&self, session_id: u32) {
@@ -861,6 +879,7 @@ impl Hysteria2UdpSessionManager {
             let quarantined = state.quarantine.len();
             state.sessions.clear();
             state.quarantine.clear();
+            state.next_quarantine_expiry = None;
             (removed, quarantined)
         };
         for _ in 0..removed {
@@ -2316,6 +2335,50 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .sessions
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn quarantine_deadline_preserves_replacement_expiry_and_metrics() {
+        let metrics = Arc::new(Hysteria2OwnerRegistryMetrics::default());
+        let manager = Hysteria2UdpSessionManager::new(
+            OwnerGeneration::new(7),
+            udp_test_resources(3, 1),
+            Arc::clone(&metrics),
+        );
+        let mut state = manager.state.lock().unwrap();
+        manager.insert_quarantine(&mut state, 1);
+        let first = state.next_quarantine_expiry.unwrap();
+        manager.insert_quarantine(&mut state, 1);
+        manager.insert_quarantine(&mut state, 2);
+        assert_eq!(state.quarantine.len(), 2);
+        assert_eq!(
+            metrics
+                .active_udp_session_quarantine
+                .load(Ordering::Relaxed),
+            2
+        );
+        manager.expire_quarantine(&mut state, first - std::time::Duration::from_nanos(1));
+        assert_eq!(state.quarantine.len(), 2);
+        let last = *state.quarantine.values().max().unwrap();
+        manager.expire_quarantine(&mut state, last);
+        assert!(state.quarantine.is_empty());
+        assert!(state.next_quarantine_expiry.is_none());
+        assert_eq!(
+            metrics
+                .active_udp_session_quarantine
+                .load(Ordering::Relaxed),
+            0
+        );
+        drop(state);
+        manager.close();
+        assert!(
+            manager
+                .state
+                .lock()
+                .unwrap()
+                .next_quarantine_expiry
+                .is_none()
         );
     }
 

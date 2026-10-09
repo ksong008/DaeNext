@@ -115,6 +115,7 @@ pub(super) struct Ss2022UdpReplayTable {
     active: HashMap<[u8; 8], ActiveReplayWindow>,
     quarantined: HashMap<[u8; 8], QuarantinedSession>,
     access_order: u64,
+    next_expiry: Option<u64>,
     metrics: Ss2022UdpReplayMetricsSnapshot,
 }
 
@@ -136,6 +137,7 @@ impl Ss2022UdpReplayTable {
             active: HashMap::new(),
             quarantined: HashMap::new(),
             access_order: 0,
+            next_expiry: None,
             metrics: Ss2022UdpReplayMetricsSnapshot::default(),
         }
     }
@@ -156,6 +158,8 @@ impl Ss2022UdpReplayTable {
             }
             window.last_valid_at = now;
             window.last_access_order = self.access_order;
+            let deadline = now.saturating_add(self.policy.retention_secs);
+            self.next_expiry = Some(self.next_expiry.map_or(deadline, |old| old.min(deadline)));
             return Ok(());
         }
 
@@ -210,11 +214,16 @@ impl Ss2022UdpReplayTable {
                 last_access_order: self.access_order,
             },
         );
+        let deadline = now.saturating_add(self.policy.retention_secs);
+        self.next_expiry = Some(self.next_expiry.map_or(deadline, |old| old.min(deadline)));
         self.refresh_current_metrics();
         Ok(())
     }
 
     pub(super) fn expire(&mut self, now: u64) {
+        if self.next_expiry.is_some_and(|deadline| deadline > now) {
+            return;
+        }
         let active_before = self.active.len();
         self.active.retain(|_, window| {
             now.saturating_sub(window.last_valid_at) < self.policy.retention_secs
@@ -230,6 +239,13 @@ impl Ss2022UdpReplayTable {
             self.active.shrink_to_fit();
             self.quarantined.shrink_to_fit();
         }
+        self.next_expiry = self
+            .active
+            .values()
+            .map(|window| window.last_valid_at)
+            .chain(self.quarantined.values().map(|session| session.retired_at))
+            .map(|last_seen| last_seen.saturating_add(self.policy.retention_secs))
+            .min();
         self.metrics.ttl_expirations = self.metrics.ttl_expirations.saturating_add(expired as u64);
         self.refresh_current_metrics();
     }
