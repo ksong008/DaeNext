@@ -23,6 +23,14 @@ pub enum UdpSessionExecutor {
 }
 
 impl UdpSessionExecutor {
+    pub(super) fn execution_stage(&self) -> &'static str {
+        match self {
+            Self::Hysteria2(session) => session.execution_stage,
+            Self::Tuic(session) => session.execution_stage,
+            _ => "protocol-exchange",
+        }
+    }
+
     pub fn set_runtime_metrics(&mut self, metrics: Arc<ResidentDataplaneMetrics>) {
         if let Self::Shadowsocks2022(session) = self {
             session.set_runtime_metrics(metrics);

@@ -64,9 +64,9 @@ const HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_PACKETS: usize = 256;
 const LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_BYTES: usize = 128 * 1024;
 const BALANCED_QUIC_UDP_FRAGMENT_PENDING_BYTES: usize = 512 * 1024;
 const HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_BYTES: usize = 2 * 1024 * 1024;
-const LOW_MEMORY_QUIC_UDP_PACKET_ID_LEASES: usize = 256;
-const BALANCED_QUIC_UDP_PACKET_ID_LEASES: usize = 1_024;
-const HIGH_PERFORMANCE_QUIC_UDP_PACKET_ID_LEASES: usize = 4_096;
+const LOW_MEMORY_QUIC_UDP_PACKET_ID_LEASE_RANGES: usize = 256;
+const BALANCED_QUIC_UDP_PACKET_ID_LEASE_RANGES: usize = 1_024;
+const HIGH_PERFORMANCE_QUIC_UDP_PACKET_ID_LEASE_RANGES: usize = 4_096;
 const LOW_MEMORY_QUIC_UDP_PMTU_RETRIES: usize = 2;
 const BALANCED_QUIC_UDP_PMTU_RETRIES: usize = 3;
 const HIGH_PERFORMANCE_QUIC_UDP_PMTU_RETRIES: usize = 4;
@@ -627,7 +627,7 @@ impl ResidentDnsResourceProfile {
 pub struct QuicUdpDatagramResourceProfile {
     pending_fragment_packets: usize,
     pending_fragment_bytes: usize,
-    packet_id_leases: usize,
+    packet_id_lease_ranges: usize,
     pmtu_retries: usize,
     fragment_ttl: Duration,
     packet_id_lease_ttl: Duration,
@@ -1466,31 +1466,35 @@ impl QuicUdpDatagramResourceProfile {
     }
 
     pub const fn from_runtime_profile(profile: ResidentRuntimeProfile) -> Self {
-        let (pending_fragment_packets, pending_fragment_bytes, packet_id_leases, pmtu_retries) =
-            match profile {
-                ResidentRuntimeProfile::LowMemory => (
-                    LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
-                    LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_BYTES,
-                    LOW_MEMORY_QUIC_UDP_PACKET_ID_LEASES,
-                    LOW_MEMORY_QUIC_UDP_PMTU_RETRIES,
-                ),
-                ResidentRuntimeProfile::Balanced => (
-                    BALANCED_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
-                    BALANCED_QUIC_UDP_FRAGMENT_PENDING_BYTES,
-                    BALANCED_QUIC_UDP_PACKET_ID_LEASES,
-                    BALANCED_QUIC_UDP_PMTU_RETRIES,
-                ),
-                ResidentRuntimeProfile::HighPerformance => (
-                    HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
-                    HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_BYTES,
-                    HIGH_PERFORMANCE_QUIC_UDP_PACKET_ID_LEASES,
-                    HIGH_PERFORMANCE_QUIC_UDP_PMTU_RETRIES,
-                ),
-            };
+        let (
+            pending_fragment_packets,
+            pending_fragment_bytes,
+            packet_id_lease_ranges,
+            pmtu_retries,
+        ) = match profile {
+            ResidentRuntimeProfile::LowMemory => (
+                LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
+                LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_BYTES,
+                LOW_MEMORY_QUIC_UDP_PACKET_ID_LEASE_RANGES,
+                LOW_MEMORY_QUIC_UDP_PMTU_RETRIES,
+            ),
+            ResidentRuntimeProfile::Balanced => (
+                BALANCED_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
+                BALANCED_QUIC_UDP_FRAGMENT_PENDING_BYTES,
+                BALANCED_QUIC_UDP_PACKET_ID_LEASE_RANGES,
+                BALANCED_QUIC_UDP_PMTU_RETRIES,
+            ),
+            ResidentRuntimeProfile::HighPerformance => (
+                HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
+                HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_BYTES,
+                HIGH_PERFORMANCE_QUIC_UDP_PACKET_ID_LEASE_RANGES,
+                HIGH_PERFORMANCE_QUIC_UDP_PMTU_RETRIES,
+            ),
+        };
         Self {
             pending_fragment_packets,
             pending_fragment_bytes,
-            packet_id_leases,
+            packet_id_lease_ranges,
             pmtu_retries,
             fragment_ttl: Duration::from_secs(QUIC_UDP_FRAGMENT_TTL_SECONDS),
             packet_id_lease_ttl: Duration::from_secs(QUIC_UDP_PACKET_ID_LEASE_TTL_SECONDS),
@@ -1506,8 +1510,9 @@ impl QuicUdpDatagramResourceProfile {
         self.pending_fragment_bytes
     }
 
-    pub const fn packet_id_leases(self) -> usize {
-        self.packet_id_leases
+    /// Maximum lease records, each covering up to 64 contiguous fragment IDs.
+    pub const fn packet_id_lease_ranges(self) -> usize {
+        self.packet_id_lease_ranges
     }
 
     pub const fn pmtu_retries(self) -> usize {
@@ -1825,7 +1830,7 @@ pub fn resident_runtime_profile_contract() -> Value {
                 "quicEndpointChargedBytesDefault": LOW_MEMORY_QUIC_ENDPOINT_CHARGED_BYTES,
                 "quicUdpFragmentPendingPackets": LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
                 "quicUdpFragmentPendingBytes": LOW_MEMORY_QUIC_UDP_FRAGMENT_PENDING_BYTES,
-                "quicUdpPacketIdLeases": LOW_MEMORY_QUIC_UDP_PACKET_ID_LEASES,
+                "quicUdpPacketIdLeaseRanges": LOW_MEMORY_QUIC_UDP_PACKET_ID_LEASE_RANGES,
                 "quicUdpPmtuRetries": LOW_MEMORY_QUIC_UDP_PMTU_RETRIES,
                 "hysteria2OwnerLimit": LOW_MEMORY_HYSTERIA2_OWNER_LIMIT,
                 "hysteria2OwnerCommandQueueDepth": LOW_MEMORY_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
@@ -1874,7 +1879,7 @@ pub fn resident_runtime_profile_contract() -> Value {
                 "quicEndpointChargedBytesDefault": BALANCED_QUIC_ENDPOINT_CHARGED_BYTES,
                 "quicUdpFragmentPendingPackets": BALANCED_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
                 "quicUdpFragmentPendingBytes": BALANCED_QUIC_UDP_FRAGMENT_PENDING_BYTES,
-                "quicUdpPacketIdLeases": BALANCED_QUIC_UDP_PACKET_ID_LEASES,
+                "quicUdpPacketIdLeaseRanges": BALANCED_QUIC_UDP_PACKET_ID_LEASE_RANGES,
                 "quicUdpPmtuRetries": BALANCED_QUIC_UDP_PMTU_RETRIES,
                 "hysteria2OwnerLimit": BALANCED_HYSTERIA2_OWNER_LIMIT,
                 "hysteria2OwnerCommandQueueDepth": BALANCED_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
@@ -1923,7 +1928,7 @@ pub fn resident_runtime_profile_contract() -> Value {
                 "quicEndpointChargedBytesDefault": HIGH_PERFORMANCE_QUIC_ENDPOINT_CHARGED_BYTES,
                 "quicUdpFragmentPendingPackets": HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_PACKETS,
                 "quicUdpFragmentPendingBytes": HIGH_PERFORMANCE_QUIC_UDP_FRAGMENT_PENDING_BYTES,
-                "quicUdpPacketIdLeases": HIGH_PERFORMANCE_QUIC_UDP_PACKET_ID_LEASES,
+                "quicUdpPacketIdLeaseRanges": HIGH_PERFORMANCE_QUIC_UDP_PACKET_ID_LEASE_RANGES,
                 "quicUdpPmtuRetries": HIGH_PERFORMANCE_QUIC_UDP_PMTU_RETRIES,
                 "hysteria2OwnerLimit": HIGH_PERFORMANCE_HYSTERIA2_OWNER_LIMIT,
                 "hysteria2OwnerCommandQueueDepth": HIGH_PERFORMANCE_HYSTERIA2_OWNER_COMMAND_QUEUE_DEPTH,
@@ -2173,8 +2178,10 @@ mod tests {
         assert!(
             balanced_quic_udp.pending_fragment_bytes() < high_quic_udp.pending_fragment_bytes()
         );
-        assert!(low_quic_udp.packet_id_leases() < balanced_quic_udp.packet_id_leases());
-        assert!(balanced_quic_udp.packet_id_leases() < high_quic_udp.packet_id_leases());
+        assert!(low_quic_udp.packet_id_lease_ranges() < balanced_quic_udp.packet_id_lease_ranges());
+        assert!(
+            balanced_quic_udp.packet_id_lease_ranges() < high_quic_udp.packet_id_lease_ranges()
+        );
         assert!(low_quic_udp.pmtu_retries() < balanced_quic_udp.pmtu_retries());
         assert!(balanced_quic_udp.pmtu_retries() < high_quic_udp.pmtu_retries());
         assert_eq!(low_quic_udp.fragment_ttl(), Duration::from_secs(10));
