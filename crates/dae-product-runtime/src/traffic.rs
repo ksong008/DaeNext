@@ -298,6 +298,7 @@ mod tests {
             request_total: 100,
             queue_depth: 4,
             inflight_work: 5,
+            udp_inflight_work: 0,
             active_tcp_connections: 3,
             active_udp_sessions: 2,
         };
@@ -328,6 +329,7 @@ mod tests {
             request_total: u64::MAX - 3,
             queue_depth: 4,
             inflight_work: 5,
+            udp_inflight_work: 0,
             active_tcp_connections: 7,
             active_udp_sessions: 8,
         };

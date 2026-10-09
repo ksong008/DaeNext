@@ -181,7 +181,7 @@ fn resident_tcp_probe_http_request_uses_configured_method_path_and_host() {
     .unwrap();
     assert!(request.starts_with("HEAD /generate_204 HTTP/1.1\r\n"));
     assert!(request.contains("Host: check.fixture.invalid\r\n"));
-    assert!(request.contains("Connection: keep-alive\r\n"));
+    assert!(request.contains("Connection: close\r\n"));
 }
 
 #[test]

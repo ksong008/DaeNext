@@ -30,6 +30,9 @@ crates/dae-resident-transport/src/tls_client/tls_fragment.rs	2	InternalInvariant
 crates/dae-resident-transport/src/transport_identity.rs	1	InternalInvariant	Static transport identity namespace is valid.
 crates/dae-resident-transport/src/tuic_owner.rs	3	InternalInvariant	Validated TUIC owner state retains limits and queued messages during one owner turn.
 crates/dae-resident-transport/src/websocket/duplex_control.rs	2	InternalInvariant	Queued WebSocket control frames retain their active frame state.
+crates/dae-resident-transport/src/xhttp/client_io.rs	4	InternalInvariant	Successful poll_ready installs Ready under the same exclusive borrow; peer errors return before ready_mut.
+crates/dae-resident-transport/src/xhttp/h1/pool.rs	3	InternalInvariant	Idle pool locks guard local push/pop/expiry only and can only be poisoned by an internal task panic.
+crates/dae-resident-transport/src/xhttp/response.rs	1	InternalInvariant	Successful poll_ready installs Ready under the same exclusive borrow; no state change or await occurs before ready_mut.
 crates/dae-resident-transport/src/xhttp/xmux/h2_manager.rs	2	InternalInvariant	An admitted H2 xmux lease owns its selected client and permit.
 crates/dae-resident-transport/src/xhttp/xmux/h3_manager.rs	2	InternalInvariant	An admitted H3 xmux lease owns its selected client and permit.
 crates/dae-resident-transport/src/xhttp/xmux/key.rs	1	InternalInvariant	Static xmux identity namespace is valid.

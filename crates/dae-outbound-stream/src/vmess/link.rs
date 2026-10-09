@@ -356,64 +356,6 @@ fn deserialize_allow_insecure<'de, D: serde::Deserializer<'de>>(
         .ok_or_else(|| serde::de::Error::custom("invalid certificate verification boolean"))
 }
 
-#[cfg(test)]
-mod tls_override_tests {
-    use super::*;
-
-    #[test]
-    fn vmess_json_preserves_unset_false_true_and_accepted_spellings() {
-        for (raw, expected) in [
-            ("null", None),
-            ("false", Some(false)),
-            ("0", Some(false)),
-            ("\"0\"", Some(false)),
-            ("\"false\"", Some(false)),
-            ("true", Some(true)),
-            ("1", Some(true)),
-            ("\"true\"", Some(true)),
-        ] {
-            let json = format!(
-                r#"{{"add":"example.com","port":"443","id":"fixture","tls":"tls","allowInsecure":{raw}}}"#
-            );
-            let parsed = parse_json(&json).unwrap();
-            assert_eq!(parsed.allow_insecure, expected);
-            let exported = parsed.export_url();
-            assert_eq!(
-                VMessLink::parse(&exported).unwrap().allow_insecure,
-                expected
-            );
-            if expected.is_none() {
-                assert!(
-                    !decode_base64(exported.strip_prefix("vmess://").unwrap())
-                        .unwrap()
-                        .contains("allowInsecure")
-                );
-            }
-        }
-        assert!(parse_json(r#"{"allowInsecure":"invalid"}"#).is_err());
-        assert!(parse_json(r#"{"allowInsecure":2}"#).is_err());
-    }
-
-    #[test]
-    fn vmess_legacy_query_preserves_explicit_certificate_policy() {
-        for (query, expected) in [
-            ("", None),
-            ("&insecure=0", Some(false)),
-            ("&allowInsecure=true", Some(true)),
-        ] {
-            let auth =
-                base64::engine::general_purpose::STANDARD.encode("auto:fixture@example.com:443");
-            let raw = format!("vmess://{auth}?tls=1{query}");
-            let link = VMessLink::parse(&raw).unwrap();
-            assert_eq!(link.allow_insecure, expected);
-            assert_eq!(
-                VMessLink::parse(&link.export_url()).unwrap().allow_insecure,
-                expected
-            );
-        }
-    }
-}
-
 fn decode_base64_with(
     input: &str,
     engine: &base64::engine::GeneralPurpose,
@@ -475,5 +417,63 @@ fn format_authority(host: &str, port: &str) -> String {
         format!("[{host}]:{port}")
     } else {
         format!("{host}:{port}")
+    }
+}
+
+#[cfg(test)]
+mod tls_override_tests {
+    use super::*;
+
+    #[test]
+    fn vmess_json_preserves_unset_false_true_and_accepted_spellings() {
+        for (raw, expected) in [
+            ("null", None),
+            ("false", Some(false)),
+            ("0", Some(false)),
+            ("\"0\"", Some(false)),
+            ("\"false\"", Some(false)),
+            ("true", Some(true)),
+            ("1", Some(true)),
+            ("\"true\"", Some(true)),
+        ] {
+            let json = format!(
+                r#"{{"add":"example.com","port":"443","id":"fixture","tls":"tls","allowInsecure":{raw}}}"#
+            );
+            let parsed = parse_json(&json).unwrap();
+            assert_eq!(parsed.allow_insecure, expected);
+            let exported = parsed.export_url();
+            assert_eq!(
+                VMessLink::parse(&exported).unwrap().allow_insecure,
+                expected
+            );
+            if expected.is_none() {
+                assert!(
+                    !decode_base64(exported.strip_prefix("vmess://").unwrap())
+                        .unwrap()
+                        .contains("allowInsecure")
+                );
+            }
+        }
+        assert!(parse_json(r#"{"allowInsecure":"invalid"}"#).is_err());
+        assert!(parse_json(r#"{"allowInsecure":2}"#).is_err());
+    }
+
+    #[test]
+    fn vmess_legacy_query_preserves_explicit_certificate_policy() {
+        for (query, expected) in [
+            ("", None),
+            ("&insecure=0", Some(false)),
+            ("&allowInsecure=true", Some(true)),
+        ] {
+            let auth =
+                base64::engine::general_purpose::STANDARD.encode("auto:fixture@example.com:443");
+            let raw = format!("vmess://{auth}?tls=1{query}");
+            let link = VMessLink::parse(&raw).unwrap();
+            assert_eq!(link.allow_insecure, expected);
+            assert_eq!(
+                VMessLink::parse(&link.export_url()).unwrap().allow_insecure,
+                expected
+            );
+        }
     }
 }
