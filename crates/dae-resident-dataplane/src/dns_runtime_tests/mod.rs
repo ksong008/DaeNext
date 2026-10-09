@@ -8,9 +8,6 @@ use crate::transport::quic_endpoint::{
     ResidentDnsQuicEndpointPolicy, open_marked_quic_endpoint_for_remote,
 };
 use crate::{resident_dns_proxy_tcp_transport, resident_dns_proxy_udp_transport};
-use bytes::Bytes;
-use dae_config::Config;
-use dae_datapath::{OUTBOUND_BLOCK, OUTBOUND_CONTROL_PLANE_ROUTING, OUTBOUND_DIRECT};
 use dae_dns::*;
 use dae_outbound_core::{L4Proto, NetworkType};
 use dae_resident_core::*;
@@ -21,17 +18,15 @@ use dae_resident_dns::runtime::*;
 use dae_resident_dns::*;
 use dae_resident_plan::*;
 use dae_resident_transport::{
-    ObservedQuicEndpoint, ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure,
-    ProxyDnsRequestStage, QuicEndpointCallerClass, QuicEndpointIdentityRole,
-    QuicEndpointOpenContext, QuicEndpointProtocol, ResidentTransportOwnerRegistries,
+    ProxyDnsRequestContext, ProxyDnsRequestError, ProxyDnsRequestFailure, ProxyDnsRequestStage,
+    QuicEndpointCallerClass, QuicEndpointIdentityRole, QuicEndpointOpenContext,
+    QuicEndpointProtocol, ResidentTransportOwnerRegistries,
 };
-use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{Mutex as AsyncMutex, Semaphore},
+    sync::Mutex as AsyncMutex,
     time,
 };
 

@@ -18,7 +18,7 @@ class ReleaseFeaturesTests(unittest.TestCase):
             for member in members:
                 (root / member / "src").mkdir(parents=True)
                 (root / member / "src/lib.rs").write_text("")
-            (root / "helper/Cargo.toml").write_text(f'[package]\nname="{name}"\nversion="1.0.0"\n[features]\ntest-support=[]\nbenchmark-support=[]\n')
+            (root / "helper/Cargo.toml").write_text(f'[package]\nname="{name}"\nversion="1.0.0"\n[features]\ntest-support=[]\nbenchmark-support=[]\ndns-runtime-tests=[]\n')
             (root / "product/Cargo.toml").write_text('[package]\nname="product"\nversion="1.0.0"\n' + dependencies + '\n' + root_features)
             if bench:
                 (root / "bench/Cargo.toml").write_text('[package]\nname="bench"\nversion="1.0.0"\n[dependencies]\nhelper={path="../helper", features=["benchmark-support"]}\n')
@@ -27,7 +27,7 @@ class ReleaseFeaturesTests(unittest.TestCase):
 
     def test_direct_alias_and_build_features(self):
         for kind in ("dependencies", "build-dependencies"):
-            for feature in ("test-support", "benchmark-support"):
+            for feature in ("test-support", "benchmark-support", "dns-runtime-tests"):
                 with self.subTest(kind=kind, feature=feature):
                     selected = self.fixture(f'[{kind}]\nhelper={{path="../helper",features=["{feature}"]}}')
                     self.assertTrue(gate.violations(selected))
