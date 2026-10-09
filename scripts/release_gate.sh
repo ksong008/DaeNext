@@ -39,10 +39,16 @@ run_step "production feature checker tests" python3 scripts/architecture/test_ch
 run_step "independent default product check" cargo check -p dae-daemon --bin daed "${cargo_profile_args[@]}"
 run_step "workspace check" cargo check --workspace --all-targets "${cargo_profile_args[@]}"
 run_step "workspace library tests" cargo test --workspace --lib "${cargo_profile_args[@]}" -- --test-threads=1
+# test-support exposes fixtures; dns-runtime-tests selects the actual suites.
+# Keep both graphs separate from the production feature check above.
+dns_test_args=(-p dae-resident-dataplane -p dae-resident-dns --lib --features dae-resident-dataplane/dns-runtime-tests,dae-resident-dns/dns-runtime-tests)
+run_step "DNS runtime test inventory" python3 scripts/check_dns_test_inventory.py --profile "$release_gate_profile"
+run_step "DNS runtime tests" cargo test "${dns_test_args[@]}" "${cargo_profile_args[@]}" -- --test-threads=1
 run_step "resident dataplane architecture tests" cargo test -p dae-resident-dataplane --test architecture_boundaries "${cargo_profile_args[@]}"
 run_step "resident transport architecture tests" cargo test -p dae-resident-transport --test architecture_boundaries "${cargo_profile_args[@]}"
 run_step "service contract tests" cargo test -p dae-daemon --test service_contract "${cargo_profile_args[@]}"
 run_step "workspace clippy" cargo clippy --workspace --all-targets "${cargo_profile_args[@]}" -- -D warnings
+run_step "DNS runtime clippy" cargo clippy "${dns_test_args[@]}" "${cargo_profile_args[@]}" --tests -- -D warnings
 run_step "resident production panic surface" scripts/check_resident_production_panics.sh
 
 if [[ "${DAENEXT_RELEASE_GATE_AUDIT:-0}" == "1" ]]; then

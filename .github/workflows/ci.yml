@@ -155,6 +155,7 @@ jobs:
         env:
           DAE_VERSION: ${{ steps.identity.outputs.dae_version }}
         run: |
+          python3 scripts/architecture/check_release_features.py --product-only --package dae-cli
           cargo build --locked --release -p dae-cli --bin dae
 
       - name: Smoke release binary

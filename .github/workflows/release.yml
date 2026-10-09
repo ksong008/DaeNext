@@ -205,7 +205,9 @@ jobs:
       - name: Build outline producer
         env:
           DAE_VERSION: ${{ steps.release.outputs.dae_version }}
-        run: cargo build --locked --release -p dae-cli --bin dae
+        run: |
+          python3 scripts/architecture/check_release_features.py --product-only --package dae-cli
+          cargo build --locked --release -p dae-cli --bin dae
 
       - name: Create shared artifacts
         shell: bash

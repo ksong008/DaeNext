@@ -1,5 +1,4 @@
 use dae_config::Config;
-use dae_dns::DnsCacheEntry;
 
 use super::*;
 use std::fs;

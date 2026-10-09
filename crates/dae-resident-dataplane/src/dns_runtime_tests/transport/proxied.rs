@@ -1,7 +1,7 @@
 use super::*;
 use dae_resident_core::ResidentOwnedTaskShutdownCompletion;
 use dae_resident_dns::runtime::transport::h3::proxied::{
-    self, cached::forward_cached_proxy_dns_h3, forward_dns_h3_to_proxy_async, lifecycle,
+    cached::forward_cached_proxy_dns_h3, forward_dns_h3_to_proxy_async, lifecycle,
 };
 use dae_resident_dns::runtime::transport::h3::proxied::{lifecycle::*, resources::*};
 
