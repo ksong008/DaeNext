@@ -11,7 +11,9 @@ pub struct DnsRequestIdAllocator {
     occupied: [u64; DNS_REQUEST_ID_BITMAP_WORDS],
     quarantined: [u64; DNS_REQUEST_ID_BITMAP_WORDS],
     quarantine_deadlines: VecDeque<(u16, time::Instant)>,
-    pub next_id: u16,
+    random: dae_resident_core::WireRandomPool<512>,
+    #[cfg(test)]
+    pub next_test_id: Option<u16>,
     in_use: usize,
     quarantine_duration: Duration,
 }
@@ -28,7 +30,9 @@ impl DnsRequestIdAllocator {
             occupied: [0_u64; DNS_REQUEST_ID_BITMAP_WORDS],
             quarantined: [0_u64; DNS_REQUEST_ID_BITMAP_WORDS],
             quarantine_deadlines: VecDeque::new(),
-            next_id: 0,
+            random: Default::default(),
+            #[cfg(test)]
+            next_test_id: None,
             in_use: 0,
             quarantine_duration,
         }
@@ -47,9 +51,24 @@ impl DnsRequestIdAllocator {
         if self.in_use.saturating_add(self.quarantine_deadlines.len()) >= DNS_UDP_REQUEST_ID_SPACE {
             return Err("DNS multiplex request id space is quarantined".to_owned());
         }
-        for _ in 0..DNS_UDP_REQUEST_ID_SPACE {
-            let candidate = self.next_id;
-            self.next_id = self.next_id.wrapping_add(1);
+        // Try independent cryptographic candidates first. At high occupancy a
+        // random start plus bounded scan guarantees progress without weakening
+        // the occupied/quarantined checks or permitting predictable fresh IDs.
+        let mut next = 0_u16;
+        for attempt in 0..DNS_UDP_REQUEST_ID_SPACE + 32 {
+            if attempt < 32 {
+                let mut bytes = [0; 2];
+                self.random
+                    .fill(&mut bytes)
+                    .map_err(|error| error.to_string())?;
+                next = u16::from_ne_bytes(bytes);
+                #[cfg(test)]
+                if let Some(forced) = self.next_test_id.take() {
+                    next = forced;
+                }
+            }
+            let candidate = next;
+            next = next.wrapping_add(1);
             if self.is_unavailable(candidate) {
                 continue;
             }

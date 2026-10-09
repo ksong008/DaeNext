@@ -26,7 +26,7 @@ fn udp_request_id_allocator_enforces_capacity_and_releases_ids() {
     allocator.release_at(first, now);
     assert!(!allocator.is_occupied(first));
     assert!(allocator.is_quarantined(first));
-    allocator.next_id = first;
+    allocator.next_test_id = Some(first);
     let second = allocator.allocate_at(1, now).unwrap();
     assert_ne!(second, first);
     allocator.release_at(second, now);
@@ -34,7 +34,7 @@ fn udp_request_id_allocator_enforces_capacity_and_releases_ids() {
     let after_quarantine = now + test_attempt_timeout();
     allocator.reap_quarantine(after_quarantine);
     assert!(!allocator.is_quarantined(first));
-    allocator.next_id = first;
+    allocator.next_test_id = Some(first);
     assert_eq!(allocator.allocate_at(1, after_quarantine).unwrap(), first);
 }
 
