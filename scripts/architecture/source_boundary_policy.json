@@ -86,17 +86,5 @@
       "production": 17646,
       "tests": 3356
     }
-  },
-  "manual_review_2026_10_08": {
-    "baseline": "1fe97979",
-    "test_ownership": "Move DNS cross-layer fixtures into dataplane; reduce the vacated DNS test budget. Keep all test cases.",
-    "log_storage": "Bounded segmented host file I/O with recoverable visibility journal and clear transaction; fault injection tests included.",
-    "existing_drift": "Explicitly reconcile already-exceeded control/geodata, TCP/transport test, and daemon product test budgets against the baseline; no dependency or ownership rules relaxed.",
-    "growth": "Only listed boundaries changed; all remain within 5% of manually reviewed current LOC. CI never updates these limits."
-  },
-  "manual_review_2026_10_09": {
-    "baseline": "e00ada0d",
-    "scope": "Per-store log serialization, bounded snapshots, clear copy recovery, explicit cache-owner eviction transactions, deadline guard and targeted recovery tests.",
-    "growth": "Targeted daemon/DNS recovery tests and QUIC UDP ID-range wraparound plus native/stream sustained-executor regressions; production UDP budget unchanged. Dependency, ownership and panic policies unchanged."
   }
 }

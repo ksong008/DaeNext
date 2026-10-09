@@ -132,10 +132,5 @@
     "service_metadata.rs": 400,
     "sse_runtime": 1400
   },
-  "total_production_line_limit": 20300,
-  "manual_review_2026_10_08": "logs owns bounded segmented host file I/O and recoverable visibility/clear transactions; local_control.rs was already 501 LOC at baseline 1fe97979. No new adapter roles or imports.",
-  "manual_review_2026_10_09": {
-    "baseline": "e00ada0d",
-    "scope": "Bounded per-store locks/read snapshots, incrementally published count and four-entry fallback writer cache; no business logic moved into adapters."
-  }
+  "total_production_line_limit": 20300
 }
