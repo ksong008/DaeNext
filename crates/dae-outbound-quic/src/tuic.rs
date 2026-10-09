@@ -24,8 +24,9 @@ pub use underlay::{TuicUnderlayAdmissionContract, admission_contract};
 pub use wire::{
     TUIC_AUTH_TOKEN_LEN, TUIC_AUTHENTICATE_FRAME_LEN, TUIC_AUTHENTICATE_TYPE, TUIC_CONNECT_TYPE,
     TUIC_DISSOCIATE_FRAME_LEN, TUIC_DISSOCIATE_TYPE, TUIC_HEARTBEAT_FRAME_LEN, TUIC_HEARTBEAT_TYPE,
-    TUIC_MAX_UDP_PAYLOAD_LENGTH, TUIC_MAX_UDP_STREAM_FRAME_LEN, TUIC_PACKET_TYPE, TUIC_VERSION5,
-    TuicUdpPacket, build_tuic_dissociate_frame, build_tuic_heartbeat_frame, decode_tuic_udp_packet,
-    decode_tuic_udp_stream_packet, encode_tuic_udp_packet, encode_tuic_udp_payload,
-    encode_tuic_udp_stream_packet, encode_tuic_udp_stream_payload, fragment_tuic_udp_packet,
+    TUIC_MAX_UDP_HEADER_LENGTH, TUIC_MAX_UDP_PAYLOAD_LENGTH, TUIC_MAX_UDP_STREAM_FRAME_LEN,
+    TUIC_PACKET_TYPE, TUIC_VERSION5, TuicUdpPacket, build_tuic_dissociate_frame,
+    build_tuic_heartbeat_frame, decode_tuic_udp_packet, decode_tuic_udp_stream_packet,
+    encode_tuic_udp_packet, encode_tuic_udp_payload, encode_tuic_udp_stream_packet,
+    encode_tuic_udp_stream_payload, fragment_tuic_udp_packet, tuic_udp_payload_wire_len,
 };

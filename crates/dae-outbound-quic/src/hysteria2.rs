@@ -57,5 +57,5 @@ pub use wire::{
     HYSTERIA2_FRAME_TYPE_TCP_REQUEST, HYSTERIA2_MAX_UDP_ADDRESS_LENGTH,
     HYSTERIA2_MAX_UDP_MESSAGE_LENGTH, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH, Hysteria2UdpMessage,
     decode_hysteria2_udp_message, encode_hysteria2_udp_message, encode_hysteria2_udp_payload,
-    fragment_hysteria2_udp_message, hysteria2_udp_payload_capacity,
+    fragment_hysteria2_udp_message, hysteria2_udp_payload_capacity, hysteria2_udp_payload_wire_len,
 };

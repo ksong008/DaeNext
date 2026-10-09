@@ -99,11 +99,16 @@ fn tuic_transport_config(
             .try_into()
             .map_err(|err| bad_tls(format!("TUIC idle timeout config: {err}")))?,
     ));
-    transport.datagram_receive_buffer_size(Some(64 * 1024));
+    transport.datagram_receive_buffer_size(Some(crate::PROXY_DATAGRAM_RECEIVE_BUFFER_BYTES));
     transport.datagram_send_buffer_size(64 * 1024);
     Ok(transport)
 }
 
 fn bad_tls(message: impl Into<String>) -> OutboundError {
     OutboundError::BadTuic(message.into())
+}
+
+#[tokio::test]
+async fn tuic_receive_queue_preserves_a_multiplexed_udp_burst() {
+    crate::datagram_tests::assert_receive_burst(tuic_transport_config(None).unwrap()).await;
 }

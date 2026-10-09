@@ -128,7 +128,7 @@ fn hysteria2_transport_config(
             .try_into()
             .map_err(|err| bad_tls(format!("Hysteria2 idle timeout config: {err}")))?,
     ));
-    transport.datagram_receive_buffer_size(Some(64 * 1024));
+    transport.datagram_receive_buffer_size(Some(crate::PROXY_DATAGRAM_RECEIVE_BUFFER_BYTES));
     transport.datagram_send_buffer_size(64 * 1024);
     let mtu_upper_bound = hysteria2_mtu_discovery_upper_bound(udp_packet_overhead)?;
     let mut mtu_discovery = quinn::MtuDiscoveryConfig::default();
@@ -161,3 +161,8 @@ fn bad_tls(message: impl Into<String>) -> OutboundError {
 #[cfg(test)]
 #[path = "tls/tests.rs"]
 mod tests;
+
+#[tokio::test]
+async fn hysteria2_receive_queue_preserves_a_multiplexed_udp_burst() {
+    crate::datagram_tests::assert_receive_burst(hysteria2_transport_config(0, None).unwrap()).await;
+}

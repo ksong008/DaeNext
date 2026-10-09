@@ -13,8 +13,10 @@ pub const TUIC_AUTHENTICATE_FRAME_LEN: usize = 2 + 16 + TUIC_AUTH_TOKEN_LEN;
 pub const TUIC_DISSOCIATE_FRAME_LEN: usize = 4;
 pub const TUIC_HEARTBEAT_FRAME_LEN: usize = 2;
 pub const TUIC_MAX_UDP_PAYLOAD_LENGTH: usize = u16::MAX as usize;
+/// Fixed packet fields plus the largest address (255-byte domain and port).
+pub const TUIC_MAX_UDP_HEADER_LENGTH: usize = 10 + 1 + 1 + u8::MAX as usize + 2;
 pub const TUIC_MAX_UDP_STREAM_FRAME_LEN: usize =
-    10 + 1 + 1 + u8::MAX as usize + 2 + TUIC_MAX_UDP_PAYLOAD_LENGTH;
+    TUIC_MAX_UDP_HEADER_LENGTH + TUIC_MAX_UDP_PAYLOAD_LENGTH;
 
 const ATYP_DOMAIN_NAME: u8 = 0;
 const ATYP_IPV4: u8 = 1;
@@ -128,6 +130,14 @@ pub fn encode_tuic_udp_packet(packet: &TuicUdpPacket) -> Result<Vec<u8>, Outboun
         packet.target.as_deref(),
         &packet.payload,
     )
+}
+
+/// Length of a complete datagram without encoding or copying its payload.
+/// Parsing the target address can still allocate.
+pub fn tuic_udp_payload_wire_len(target: &str, payload: &[u8]) -> Result<usize, OutboundError> {
+    validate_udp_packet_fields(1, 0, Some(target), payload)?;
+    let address = address_for_optional_target(Some(target))?;
+    Ok(10 + address.encoded_len() + payload.len())
 }
 
 pub fn encode_tuic_udp_payload(
@@ -571,6 +581,41 @@ fn bad_wire(message: impl Into<String>) -> OutboundError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_udp_wire_len_matches_encoder_and_header_bound() {
+        let max_domain = format!("{}:65535", "a".repeat(u8::MAX as usize));
+        for target in [
+            "192.0.2.1:53",
+            "[2001:db8::1]:53",
+            "[::ffff:192.0.2.1]:53",
+            &max_domain,
+        ] {
+            for size in [1, 63, 64, 1_200, TUIC_MAX_UDP_PAYLOAD_LENGTH] {
+                let payload = vec![7; size];
+                let encoded = encode_tuic_udp_payload(7, 11, 1, 0, Some(target), &payload).unwrap();
+                assert_eq!(
+                    tuic_udp_payload_wire_len(target, &payload).unwrap(),
+                    encoded.len()
+                );
+                assert!(encoded.len() - size <= TUIC_MAX_UDP_HEADER_LENGTH);
+                if target == max_domain {
+                    assert_eq!(encoded.len() - size, TUIC_MAX_UDP_HEADER_LENGTH);
+                }
+            }
+        }
+        for (target, payload) in [
+            ("192.0.2.1:53".to_owned(), vec![]),
+            (format!("{}:53", "a".repeat(256)), vec![1]),
+            (
+                "192.0.2.1:53".to_owned(),
+                vec![1; TUIC_MAX_UDP_PAYLOAD_LENGTH + 1],
+            ),
+        ] {
+            assert!(tuic_udp_payload_wire_len(&target, &payload).is_err());
+            assert!(encode_tuic_udp_payload(7, 11, 1, 0, Some(&target), &payload).is_err());
+        }
+    }
 
     #[test]
     fn borrowed_udp_encoders_match_owned_packet_wire() {

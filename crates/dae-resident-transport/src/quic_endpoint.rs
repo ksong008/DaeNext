@@ -301,6 +301,17 @@ pub async fn open_observed_quic_endpoint_waiting(
     .map_err(|_| QuicEndpointOpenError::Construction)
 }
 
+// Per-socket, bounded buffering for multiplexed QUIC bursts. Linux may clamp
+// this request to rmem_max/wmem_max; no global sysctls or privileged FORCE options.
+pub(crate) const QUIC_UDP_SOCKET_BUFFER_BYTES: usize = 256 * 1024;
+
+pub(crate) fn tune_quic_udp_socket(socket: &UdpSocket) {
+    dae_resident_core::apply_udp_socket_buffer_tuning(
+        socket.as_raw_fd(),
+        QUIC_UDP_SOCKET_BUFFER_BYTES,
+    );
+}
+
 fn configure_resident_quic_endpoint_policy() -> Result<(), String> {
     #[cfg(test)]
     let budget = OwnerResourceBudget::new(
@@ -344,6 +355,7 @@ fn finish_open_observed_quic_endpoint(
     reservation: dae_runtime_control::OwnerReservation,
 ) -> Result<ObservedQuicEndpoint, String> {
     let socket = UdpSocket::bind(bind).map_err(|error| format!("bind QUIC UDP socket: {error}"))?;
+    tune_quic_udp_socket(&socket);
     if mark != 0 {
         set_socket_mark(socket.as_raw_fd(), mark)
             .map_err(|error| format!("set QUIC UDP SO_MARK {mark}: {error}"))?;

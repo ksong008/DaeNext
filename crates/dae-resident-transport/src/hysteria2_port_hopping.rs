@@ -259,6 +259,7 @@ impl Hysteria2PortHoppingState {
                 return;
             }
         };
+        crate::quic_endpoint::tune_quic_udp_socket(&socket);
         if self.mark != 0 && set_socket_mark(socket.as_raw_fd(), self.mark).is_err() {
             self.metrics.transition_finished(started, false);
             return;

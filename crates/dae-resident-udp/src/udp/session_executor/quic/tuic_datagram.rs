@@ -9,7 +9,10 @@ enum TuicUdpDatagramSendFailure {
 trait TuicUdpDatagramSender {
     fn max_datagram_size(&self) -> Option<usize>;
 
-    fn send_datagram(&mut self, datagram: Bytes) -> Result<(), TuicUdpDatagramSendFailure>;
+    fn send_datagram(
+        &mut self,
+        datagram: Bytes,
+    ) -> impl std::future::Future<Output = Result<(), TuicUdpDatagramSendFailure>> + Send;
 }
 
 impl TuicUdpDatagramSender for quinn::Connection {
@@ -17,11 +20,15 @@ impl TuicUdpDatagramSender for quinn::Connection {
         quinn::Connection::max_datagram_size(self)
     }
 
-    fn send_datagram(&mut self, datagram: Bytes) -> Result<(), TuicUdpDatagramSendFailure> {
-        quinn::Connection::send_datagram(self, datagram).map_err(|err| match err {
-            quinn::SendDatagramError::TooLarge => TuicUdpDatagramSendFailure::TooLarge,
-            other => TuicUdpDatagramSendFailure::Fatal(other.to_string()),
-        })
+    async fn send_datagram(&mut self, datagram: Bytes) -> Result<(), TuicUdpDatagramSendFailure> {
+        // Waiting preserves already queued packets instead of silently evicting them.
+        // The session actor bounds this await by its execution deadline and stop signal.
+        quinn::Connection::send_datagram_wait(self, datagram)
+            .await
+            .map_err(|err| match err {
+                quinn::SendDatagramError::TooLarge => TuicUdpDatagramSendFailure::TooLarge,
+                other => TuicUdpDatagramSendFailure::Fatal(other.to_string()),
+            })
     }
 }
 
@@ -34,7 +41,7 @@ pub(super) struct TuicUdpSendReport {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn send_tuic_udp_payload(
+pub(super) async fn send_tuic_udp_payload(
     connection: &quinn::Connection,
     association_id: u16,
     packet_id: u16,
@@ -53,10 +60,11 @@ pub(super) fn send_tuic_udp_payload(
         packet_ids,
         resources,
     )
+    .await
 }
 
 #[cfg(test)]
-fn send_tuic_udp_packet_with<S>(
+async fn send_tuic_udp_packet_with<S>(
     sender: &mut S,
     packet: &TuicUdpPacket,
     packet_ids: &mut QuicUdpPacketIdAllocator,
@@ -77,10 +85,11 @@ where
         packet_ids,
         resources,
     )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
-fn send_tuic_udp_payload_with<S>(
+async fn send_tuic_udp_payload_with<S>(
     sender: &mut S,
     association_id: u16,
     packet_id: u16,
@@ -92,20 +101,37 @@ fn send_tuic_udp_payload_with<S>(
 where
     S: TuicUdpDatagramSender,
 {
-    let whole = encode_tuic_udp_payload(association_id, packet_id, 1, 0, Some(target), payload)
-        .map_err(|err| format!("encode complete TUIC UDP datagram: {err}"))?;
-    match sender.send_datagram(Bytes::from(whole)) {
-        Ok(()) => {
-            return Ok(TuicUdpSendReport {
-                whole_datagram_sent: true,
-                datagrams_sent: 1,
-                fragment_layouts: 0,
-                final_max_wire_size: sender.max_datagram_size(),
-            });
+    // A TUIC header is at most 269 bytes. Small packets need no extra
+    // address parse; near the MTU compute the exact wire size before copying.
+    let known_oversize = match sender.max_datagram_size() {
+        Some(limit)
+            if payload
+                .len()
+                .saturating_add(dae_outbound_quic::tuic::TUIC_MAX_UDP_HEADER_LENGTH)
+                > limit =>
+        {
+            dae_outbound_quic::tuic::tuic_udp_payload_wire_len(target, payload)
+                .map_err(|err| format!("size complete TUIC UDP datagram: {err}"))?
+                > limit
         }
-        Err(TuicUdpDatagramSendFailure::TooLarge) => {}
-        Err(TuicUdpDatagramSendFailure::Fatal(err)) => {
-            return Err(format!("send complete TUIC UDP datagram: {err}"));
+        _ => false,
+    };
+    if !known_oversize {
+        let whole = encode_tuic_udp_payload(association_id, packet_id, 1, 0, Some(target), payload)
+            .map_err(|err| format!("encode complete TUIC UDP datagram: {err}"))?;
+        match sender.send_datagram(Bytes::from(whole)).await {
+            Ok(()) => {
+                return Ok(TuicUdpSendReport {
+                    whole_datagram_sent: true,
+                    datagrams_sent: 1,
+                    fragment_layouts: 0,
+                    final_max_wire_size: sender.max_datagram_size(),
+                });
+            }
+            Err(TuicUdpDatagramSendFailure::TooLarge) => {}
+            Err(TuicUdpDatagramSendFailure::Fatal(err)) => {
+                return Err(format!("send complete TUIC UDP datagram: {err}"));
+            }
         }
     }
 
@@ -126,7 +152,7 @@ where
         for fragment in fragments {
             let encoded = encode_tuic_udp_packet(&fragment)
                 .map_err(|err| format!("encode TUIC UDP fragment: {err}"))?;
-            match sender.send_datagram(Bytes::from(encoded)) {
+            match sender.send_datagram(Bytes::from(encoded)).await {
                 Ok(()) => datagrams_sent = datagrams_sent.saturating_add(1),
                 Err(TuicUdpDatagramSendFailure::Fatal(err)) => {
                     return Err(format!("send TUIC UDP fragment: {err}"));
@@ -166,6 +192,18 @@ mod tests {
     use super::*;
     use dae_resident_core::ResidentRuntimeProfile;
 
+    #[tokio::test]
+    async fn saturated_send_waits_and_can_be_cancelled_without_eviction() {
+        super::super::datagram_tests::assert_send_backpressure(
+            |mut connection, bytes| async move {
+                TuicUdpDatagramSender::send_datagram(&mut connection, bytes)
+                    .await
+                    .map_err(|error| format!("{error:?}"))
+            },
+        )
+        .await;
+    }
+
     struct SizeBoundedSender {
         max_wire_size: usize,
         attempts: Vec<Vec<u8>>,
@@ -191,7 +229,10 @@ mod tests {
             Some(self.max_wire_size)
         }
 
-        fn send_datagram(&mut self, datagram: Bytes) -> Result<(), TuicUdpDatagramSendFailure> {
+        async fn send_datagram(
+            &mut self,
+            datagram: Bytes,
+        ) -> Result<(), TuicUdpDatagramSendFailure> {
             self.attempts.push(datagram.to_vec());
             if self.forced_too_large_attempt == Some(self.attempts.len())
                 || datagram.len() > self.max_wire_size
@@ -216,8 +257,8 @@ mod tests {
         QuicUdpPacketIdAllocator::new(resources())
     }
 
-    #[test]
-    fn payload_matrix_uses_canonical_fragment_shape() {
+    #[tokio::test]
+    async fn payload_matrix_uses_canonical_fragment_shape() {
         for target in ["192.0.2.1:53", "[2001:db8::1]:53"] {
             for payload_len in [1_400, 1_500, 4_096] {
                 let payload = vec![payload_len as u8; payload_len];
@@ -225,8 +266,10 @@ mod tests {
                 let mut sender = SizeBoundedSender::new(1_200);
                 let report =
                     send_tuic_udp_packet_with(&mut sender, &packet, &mut packet_ids(), resources())
+                        .await
                         .unwrap();
                 assert!(!report.whole_datagram_sent);
+                assert!(sender.attempts.iter().all(|packet| packet.len() <= 1_200));
                 assert_eq!(report.fragment_layouts, 1);
                 let decoded = sender
                     .successful
@@ -249,13 +292,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn lower_pmtu_restarts_with_a_new_packet_id() {
+    #[tokio::test]
+    async fn lower_pmtu_restarts_with_a_new_packet_id() {
         let packet = TuicUdpPacket::new(8, 1, "192.0.2.2:5353", vec![5; 4_096]).unwrap();
         let mut sender = SizeBoundedSender::new(1_250);
         sender.shrink_after_success = Some((1, 900));
         let report =
             send_tuic_udp_packet_with(&mut sender, &packet, &mut packet_ids(), resources())
+                .await
                 .unwrap();
         assert_eq!(report.fragment_layouts, 2);
         assert_eq!(report.final_max_wire_size, Some(900));
@@ -267,12 +311,13 @@ mod tests {
         assert_ne!(decoded[0].packet_id(), decoded.last().unwrap().packet_id());
     }
 
-    #[test]
-    fn repeated_too_large_without_a_lower_limit_fails_closed() {
+    #[tokio::test]
+    async fn repeated_too_large_without_a_lower_limit_fails_closed() {
         let packet = TuicUdpPacket::new(9, 1, "192.0.2.3:53", vec![3; 4_096]).unwrap();
         let mut sender = SizeBoundedSender::new(1_250);
         sender.forced_too_large_attempt = Some(3);
         let err = send_tuic_udp_packet_with(&mut sender, &packet, &mut packet_ids(), resources())
+            .await
             .unwrap_err();
         assert!(err.contains("did not decrease"));
     }
