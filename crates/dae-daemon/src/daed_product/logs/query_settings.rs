@@ -17,48 +17,31 @@ pub(crate) fn list_logs_value(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_ascii_lowercase);
-    // Keep enumeration and opening coherent with rotation, compaction and clear.
-    let _guard = product_log_file_lock()?;
-    let first_visible_id = cached_log_visible_first_id(&product_log_file(config_dir))?.unwrap_or(0);
-    let mut items = VecDeque::new();
-    let mut line = Vec::new();
-    let paths = product_log_files(config_dir)?;
-    #[cfg(test)]
-    observe_log_reader_enumeration();
-    for path in paths {
-        let file = match fs::File::open(path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        };
-        let mut reader = io::BufReader::new(file);
-        loop {
-            line.clear();
-            let read = reader.read_until(b'\n', &mut line)?;
-            if read == 0 {
-                break;
+    with_product_log_snapshot(config_dir, |snapshot| {
+        let mut items = VecDeque::new();
+        let mut line = Vec::new();
+        for file in snapshot.files {
+            let mut reader = io::BufReader::new(file);
+            while read_product_log_line(&mut reader, &mut line)? {
+                let Ok(text) = std::str::from_utf8(&line) else {
+                    continue;
+                };
+                let Some(entry) = parse_log_entry_line(text) else {
+                    continue;
+                };
+                if entry.id < snapshot.first_visible_id
+                    || !log_entry_matches_filter(&entry, level.as_deref(), query.as_deref())
+                {
+                    continue;
+                }
+                if items.len() == limit {
+                    items.pop_front();
+                }
+                items.push_back(log_entry_value(entry));
             }
-            if read > MAX_LOG_LINE_BYTES * 2 {
-                continue;
-            }
-            let Ok(text) = std::str::from_utf8(&line) else {
-                continue;
-            };
-            let Some(entry) = parse_log_entry_line(text) else {
-                continue;
-            };
-            if entry.id < first_visible_id
-                || !log_entry_matches_filter(&entry, level.as_deref(), query.as_deref())
-            {
-                continue;
-            }
-            if items.len() == limit {
-                items.pop_front();
-            }
-            items.push_back(log_entry_value(entry));
         }
-    }
-    Ok(json!({"items": items.into_iter().collect::<Vec<_>>()}))
+        Ok(json!({"items": items.into_iter().collect::<Vec<_>>()}))
+    })
 }
 
 pub(crate) fn log_settings_value(state: &Path) -> io::Result<Value> {

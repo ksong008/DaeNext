@@ -1,31 +1,5 @@
 use super::*;
 
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProductLogFileIdentity {
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-    #[cfg(not(unix))]
-    created: Option<SystemTime>,
-}
-
-impl ProductLogFileIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        Self {
-            #[cfg(unix)]
-            device: metadata.dev(),
-            #[cfg(unix)]
-            inode: metadata.ino(),
-            #[cfg(not(unix))]
-            created: metadata.created().ok(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ProductLogScanCursor {
     offset: u64,
@@ -39,7 +13,8 @@ impl ProductLogScanCursor {
     }
 
     pub(crate) fn at_end(config_dir: &Path) -> io::Result<Self> {
-        let _guard = product_log_file_lock()?;
+        let store = product_log_store(config_dir)?;
+        let _guard = store.lock()?;
         let path = product_log_file(config_dir);
         match fs::metadata(path) {
             Ok(metadata) => Ok(Self {
@@ -119,7 +94,8 @@ fn scan_log_entries_from_cursor_limited(
     mut on_entry: impl FnMut(ProductLogEntry) -> io::Result<()>,
 ) -> io::Result<ProductLogControlledScan> {
     // SSE limits each scan batch; no lock survives the return or a network write.
-    let _guard = product_log_file_lock()?;
+    let store = product_log_store(config_dir)?;
+    let _guard = store.lock()?;
     let log_file = product_log_file(config_dir);
     let segments = product_log_segments(config_dir)?;
     let mut files: Vec<_> = segments

@@ -2,30 +2,7 @@ use super::*;
 use std::collections::VecDeque;
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProductLogWriterFileIdentity {
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-    #[cfg(not(unix))]
-    created: Option<SystemTime>,
-}
-
-impl ProductLogWriterFileIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        Self {
-            #[cfg(unix)]
-            device: metadata.dev(),
-            #[cfg(unix)]
-            inode: metadata.ino(),
-            #[cfg(not(unix))]
-            created: metadata.created().ok(),
-        }
-    }
-}
+use std::os::unix::fs::PermissionsExt;
 
 pub(super) enum ProductLogAppendOutcome {
     Filtered,
@@ -40,6 +17,9 @@ const PRODUCT_LOG_VISIBILITY_BUDGET_BYTES: u64 = 2 * PRODUCT_LOG_VISIBILITY_JOUR
 thread_local! {
     pub(super) static LOG_APPEND_PARTIAL_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     pub(super) static LOG_VISIBILITY_PARTIAL_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static LOG_APPEND_TRUNCATE_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static LOG_ROTATE_AFTER_RENAME_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static LOG_ROTATE_AFTER_CREATE_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn write_product_log_line(file: &mut fs::File, line: &[u8]) -> io::Result<()> {
@@ -114,10 +94,11 @@ impl ProductLogWriterSegment {
 
 pub(super) struct ProductLogWriter {
     config_dir: PathBuf,
+    store: Arc<ProductLogStore>,
     path: PathBuf,
     policy: ProductLogPolicy,
     file: Option<fs::File>,
-    identity: Option<ProductLogWriterFileIdentity>,
+    identity: Option<ProductLogFileIdentity>,
     size_bytes: u64,
     entry_count: usize,
     last_id: u64,
@@ -131,8 +112,11 @@ pub(super) struct ProductLogWriter {
 impl ProductLogWriter {
     pub(super) fn open(config_dir: PathBuf, policy: ProductLogPolicy) -> io::Result<Self> {
         let path = product_log_file(&config_dir);
+        ensure_log_dir_mode_if_needed(&config_dir)?;
+        let store = product_log_store(&config_dir)?;
         let mut writer = Self {
             config_dir,
+            store: Arc::clone(&store),
             path,
             policy,
             file: None,
@@ -146,7 +130,7 @@ impl ProductLogWriter {
             visibility_journal_bytes: 0,
             segments: VecDeque::new(),
         };
-        let _guard = product_log_file_lock()?;
+        let _guard = store.lock()?;
         writer.reopen_locked()?;
         Ok(writer)
     }
@@ -160,7 +144,9 @@ impl ProductLogWriter {
         {
             return Ok(ProductLogAppendOutcome::Filtered);
         }
-        let _guard = product_log_file_lock()?;
+        let store = Arc::clone(&self.store);
+        let _guard = store.lock()?;
+        store.publish_count(None, 0, 0)?;
         self.ensure_current_file_locked()?;
         if self.size_bytes >= PRODUCT_LOG_SEGMENT_MAX_BYTES
             || self
@@ -181,7 +167,13 @@ impl ProductLogWriter {
             // Remove the partial record if possible and reopen without discarding
             // sealed history. Reopen also tolerates an incomplete tail when the
             // filesystem refuses the truncation.
-            let _ = file.set_len(self.size_bytes);
+            #[cfg(test)]
+            let truncate = !LOG_APPEND_TRUNCATE_FAILURE.replace(false);
+            #[cfg(not(test))]
+            let truncate = true;
+            if truncate {
+                let _ = file.set_len(self.size_bytes);
+            }
             self.file.take();
             return Err(error);
         }
@@ -211,21 +203,27 @@ impl ProductLogWriter {
     pub(super) fn clear(&mut self) -> io::Result<()> {
         self.file.take();
         clear_log_file_direct(&self.config_dir)?;
-        let _guard = product_log_file_lock()?;
+        let store = Arc::clone(&self.store);
+        let _guard = store.lock()?;
         self.reopen_locked()
     }
 
     pub(super) fn clear_preserving_lifecycle(&mut self) -> io::Result<bool> {
         self.file.take();
         clear_log_file_preserving_startup_reload_logs_direct(&self.config_dir)?;
-        let _guard = product_log_file_lock()?;
+        let store = Arc::clone(&self.store);
+        let _guard = store.lock()?;
         self.reopen_locked()?;
         self.prune_if_over_limit_locked()
     }
 
     pub(super) fn replace_policy(&mut self, policy: ProductLogPolicy) -> io::Result<bool> {
+        if self.policy == policy {
+            return Ok(false);
+        }
         self.policy = policy;
-        let _guard = product_log_file_lock()?;
+        let store = Arc::clone(&self.store);
+        let _guard = store.lock()?;
         self.ensure_current_file_locked()?;
         self.prune_if_over_limit_locked()
     }
@@ -233,7 +231,8 @@ impl ProductLogWriter {
     pub(super) fn apply_limits(&mut self, max_entries: i64, max_bytes: i64) -> io::Result<bool> {
         self.policy.max_entries = normalize_log_max_entries(max_entries);
         self.policy.max_bytes = normalize_log_max_bytes(max_bytes);
-        let _guard = product_log_file_lock()?;
+        let store = Arc::clone(&self.store);
+        let _guard = store.lock()?;
         self.ensure_current_file_locked()?;
         self.prune_if_over_limit_locked()
     }
@@ -250,12 +249,12 @@ impl ProductLogWriter {
             }
             Err(error) => return Err(error),
         };
-        let current_identity = ProductLogWriterFileIdentity::from_metadata(&metadata);
+        let current_identity = ProductLogFileIdentity::from_metadata(&metadata);
         if self.file.is_none()
             || self.identity != Some(current_identity)
             || self.size_bytes != metadata.len()
         {
-            if self.file.is_some() {
+            if self.file.is_some() || self.identity.is_some_and(|old| old != current_identity) {
                 remove_product_log_segments(&self.config_dir)?;
                 remove_product_log_visibility_file(&self.config_dir)?;
             }
@@ -307,7 +306,7 @@ impl ProductLogWriter {
             .find(|segment| segment.first_id != 0)
             .map(|segment| segment.first_id)
             .unwrap_or_else(|| last_id.saturating_add(1));
-        self.identity = Some(ProductLogWriterFileIdentity::from_metadata(&metadata));
+        self.identity = Some(ProductLogFileIdentity::from_metadata(&metadata));
         self.size_bytes = metadata.len();
         self.entry_count = entry_count;
         self.last_id = last_id;
@@ -332,6 +331,7 @@ impl ProductLogWriter {
     }
 
     fn prune_if_over_limit_locked(&mut self) -> io::Result<bool> {
+        self.store.publish_count(None, 0, 0)?;
         let max_entries = normalize_log_max_entries(self.policy.max_entries) as usize;
         let max_bytes = normalize_log_max_bytes(self.policy.max_bytes) as u64;
         let visible_byte_limit = max_bytes
@@ -357,6 +357,8 @@ impl ProductLogWriter {
         }
         self.persist_visibility_locked()?;
         set_log_visible_first_id(&self.path, self.first_visible_id)?;
+        self.store
+            .publish_count(self.identity, self.size_bytes, self.entry_count)?;
         Ok(pruned)
     }
 
@@ -422,14 +424,12 @@ impl ProductLogWriter {
                 }
                 self.visible_bytes = self.visible_bytes.saturating_sub(front.visible_bytes);
                 self.file.take();
-                fs::write(&self.path, [])?;
+                replace_log_file_with_empty(&self.path)?;
                 let file = fs::OpenOptions::new()
                     .read(true)
                     .append(true)
                     .open(&self.path)?;
-                self.identity = Some(ProductLogWriterFileIdentity::from_metadata(
-                    &file.metadata()?,
-                ));
+                self.identity = Some(ProductLogFileIdentity::from_metadata(&file.metadata()?));
                 self.size_bytes = 0;
                 front.size_bytes = 0;
                 front.visible_bytes = 0;
@@ -491,7 +491,7 @@ impl ProductLogWriter {
                 .append(true)
                 .open(&self.path)?;
             let metadata = file.metadata()?;
-            self.identity = Some(ProductLogWriterFileIdentity::from_metadata(&metadata));
+            self.identity = Some(ProductLogFileIdentity::from_metadata(&metadata));
             self.size_bytes = metadata.len();
             self.file = Some(file);
         }
@@ -504,7 +504,7 @@ impl ProductLogWriter {
         };
         if active.visible_entries == 0 {
             self.file.take();
-            fs::write(&self.path, [])?;
+            replace_log_file_with_empty(&self.path)?;
             return self.reopen_locked();
         }
         let archived = product_log_segment_path(&self.config_dir, active.first_id, active.last_id);
@@ -516,6 +516,13 @@ impl ProductLogWriter {
         }
         self.file.take();
         fs::rename(&self.path, &archived)?;
+        // The old inode is now archived. A failure while creating or preparing
+        // our replacement must not look like an external replacement on reopen.
+        self.identity = None;
+        #[cfg(test)]
+        if LOG_ROTATE_AFTER_RENAME_FAILURE.replace(false) {
+            return Err(io::Error::from_raw_os_error(libc::ENOSPC));
+        }
         if let Some(active) = self.segments.back_mut() {
             active.sealed_ids = Some((active.first_id, active.last_id));
         }
@@ -524,10 +531,12 @@ impl ProductLogWriter {
             .read(true)
             .append(true)
             .open(&self.path)?;
+        #[cfg(test)]
+        if LOG_ROTATE_AFTER_CREATE_FAILURE.replace(false) {
+            return Err(io::Error::from_raw_os_error(libc::ENOSPC));
+        }
+        self.identity = Some(ProductLogFileIdentity::from_metadata(&file.metadata()?));
         set_log_file_permissions(&self.path)?;
-        self.identity = Some(ProductLogWriterFileIdentity::from_metadata(
-            &file.metadata()?,
-        ));
         self.size_bytes = 0;
         self.segments.push_back(ProductLogWriterSegment {
             sealed_ids: None,

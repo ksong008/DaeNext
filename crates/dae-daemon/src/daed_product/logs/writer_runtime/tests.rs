@@ -1,6 +1,6 @@
 use super::*;
 
-fn writer_fixture(label: &str) -> (PathBuf, PathBuf) {
+pub(super) fn writer_fixture(label: &str) -> (PathBuf, PathBuf) {
     let dir = std::env::temp_dir().join(format!(
         "daed-product-log-writer-{label}-{}",
         fastrand::u64(..)

@@ -4,6 +4,7 @@ use std::borrow::Cow;
 #[cfg(test)]
 thread_local! {
     pub(super) static LOG_CLEAR_INTERRUPT_AFTER_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static LOG_CLEAR_INTERRUPT_DURING_COPY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -25,13 +26,6 @@ pub(crate) struct ProductLogEntry {
 
 pub(crate) fn product_log_file(config_dir: &Path) -> PathBuf {
     product_log_dir(config_dir).join(PRODUCT_LOG_FILE)
-}
-
-pub(crate) fn product_log_file_lock() -> io::Result<std::sync::MutexGuard<'static, ()>> {
-    LOG_FILE_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| io::Error::other("product log file lock poisoned"))
 }
 
 pub(crate) fn product_log_dir(config_dir: &Path) -> PathBuf {
@@ -60,11 +54,14 @@ pub(crate) fn product_log_visibility_file(config_dir: &Path) -> PathBuf {
 
 pub(super) fn read_log_visibility(config_dir: &Path) -> io::Result<(u64, u64)> {
     let path = product_log_visibility_file(config_dir);
-    let data = match fs::read(&path) {
-        Ok(data) => data,
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((0, 0)),
         Err(error) => return Err(error),
     };
+    let limit = PRODUCT_LOG_VISIBILITY_JOURNAL_MAX_BYTES + PRODUCT_LOG_VISIBILITY_RECORD_BYTES;
+    let mut data = Vec::with_capacity(limit as usize + 1);
+    file.take(limit + 1).read_to_end(&mut data)?;
     if data.len() as u64
         > PRODUCT_LOG_VISIBILITY_JOURNAL_MAX_BYTES + PRODUCT_LOG_VISIBILITY_RECORD_BYTES
     {
@@ -214,7 +211,8 @@ pub(crate) fn remove_product_log_temporary_files(config_dir: &Path) -> io::Resul
 }
 
 // A durable ready file owns the new snapshot until replacement and reclamation
-// are complete. Installation uses a hard link so retrying does not copy it.
+// are complete. Copying to a separate inode also works on filesystems without
+// hard links, and leaves the durable ready snapshot untouched during recovery.
 fn commit_product_log_clear(config_dir: &Path, temporary: &Path) -> io::Result<()> {
     fs::File::open(temporary)?.sync_all()?;
     let ready = product_log_file(config_dir).with_extension("jsonl.clear.ready");
@@ -237,7 +235,20 @@ pub(crate) fn recover_product_log_clear(config_dir: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    fs::hard_link(&ready, &install)?;
+    let mut input = fs::File::open(&ready)?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&install)?;
+    set_log_file_permissions(&install)?;
+    #[cfg(test)]
+    if LOG_CLEAR_INTERRUPT_DURING_COPY.replace(false) {
+        io::copy(&mut Read::by_ref(&mut input).take(7), &mut output)?;
+        return Err(io::Error::from_raw_os_error(libc::ENOSPC));
+    }
+    io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
+    drop(output);
     fs::rename(&install, &path)?;
     #[cfg(test)]
     interrupt_log_clear_after_rename()?;
@@ -261,10 +272,9 @@ pub(crate) fn clear_log_file(config_dir: &Path) -> io::Result<()> {
 pub(crate) fn clear_log_file_direct(config_dir: &Path) -> io::Result<()> {
     let log_file = product_log_file(config_dir);
     ensure_log_dir(config_dir)?;
-    let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = lock
-        .lock()
-        .map_err(|_| io::Error::other("product log file lock poisoned"))?;
+    let store = product_log_store(config_dir)?;
+    let _guard = store.lock()?;
+    store.publish_count(None, 0, 0)?;
     recover_product_log_clear(config_dir)?;
     let temporary = log_file.with_extension("jsonl.clear.tmp");
     fs::write(&temporary, [])?;
@@ -284,10 +294,9 @@ pub(crate) fn clear_log_file_preserving_startup_reload_logs_direct(
 ) -> io::Result<()> {
     let log_file = product_log_file(config_dir);
     ensure_log_dir(config_dir)?;
-    let lock = LOG_FILE_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = lock
-        .lock()
-        .map_err(|_| io::Error::other("product log file lock poisoned"))?;
+    let store = product_log_store(config_dir)?;
+    let _guard = store.lock()?;
+    store.publish_count(None, 0, 0)?;
     recover_product_log_clear(config_dir)?;
     let first_visible_id = read_log_visibility(config_dir)?.0;
     let tmp_path = log_file.with_extension("jsonl.clear.tmp");
@@ -683,29 +692,74 @@ pub(crate) fn reset_log_id_cache_to_last(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
-    let _guard = product_log_file_lock()?;
-    let first_visible_id = cached_log_visible_first_id(&product_log_file(config_dir))?.unwrap_or(0);
-    let mut count = 0_i64;
-    for path in product_log_files(config_dir)? {
-        let file = match fs::File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
-        };
-        let mut reader = io::BufReader::new(file);
-        let mut line = Vec::new();
-        while reader.read_until(b'\n', &mut line)? != 0 {
-            if std::str::from_utf8(&line)
-                .ok()
-                .and_then(parse_log_entry_line)
-                .is_some_and(|entry| entry.id >= first_visible_id)
-            {
-                count = count.saturating_add(1);
-            }
-            line.clear();
+    let store = product_log_store(config_dir)?;
+    {
+        let _guard = store.lock()?;
+        if let Ok(metadata) = fs::metadata(product_log_file(config_dir))
+            && let Some(count) = store.cached_count(&metadata)?
+        {
+            return Ok(count);
         }
     }
-    Ok(count)
+    with_product_log_snapshot(config_dir, |snapshot| {
+        let mut count = 0_i64;
+        let mut line = Vec::new();
+        for file in snapshot.files {
+            let mut reader = io::BufReader::new(file);
+            while read_product_log_line(&mut reader, &mut line)? {
+                if std::str::from_utf8(&line)
+                    .ok()
+                    .and_then(parse_log_entry_line)
+                    .is_some_and(|entry| entry.id >= snapshot.first_visible_id)
+                {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        Ok(count)
+    })
+}
+
+// Skip malformed oversized lines without first allocating their full length.
+pub(super) fn read_product_log_line(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+) -> io::Result<bool> {
+    line.clear();
+    let mut oversized = false;
+    let mut saw_data = false;
+    loop {
+        let data = reader.fill_buf()?;
+        if data.is_empty() {
+            if oversized {
+                line.clear();
+            }
+            return Ok(saw_data);
+        }
+        saw_data = true;
+        let consumed = data
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(data.len(), |at| at + 1);
+        let complete = data[consumed - 1] == b'\n';
+        if !oversized && line.len().saturating_add(consumed) <= MAX_LOG_LINE_BYTES * 2 {
+            line.extend_from_slice(&data[..consumed]);
+        } else {
+            oversized = true;
+            line.clear();
+        }
+        reader.consume(consumed);
+        if complete {
+            return Ok(true);
+        }
+    }
+}
+
+pub(super) fn replace_log_file_with_empty(path: &Path) -> io::Result<()> {
+    let tmp = path.with_extension("jsonl.compact.tmp");
+    fs::write(&tmp, [])?;
+    set_log_file_permissions(&tmp)?;
+    fs::rename(tmp, path)
 }
 
 pub(crate) fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
