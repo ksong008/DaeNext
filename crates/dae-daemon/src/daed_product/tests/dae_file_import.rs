@@ -106,6 +106,32 @@ fn full_dae_file_import_materializes_authoritative_resources() {
 }
 
 #[test]
+fn dae_file_aliases_of_one_node_share_one_group_binding() {
+    let fixture = FreshProductState::new("dae-file-import-aliases");
+    fixture.seed_selected_resources();
+    let user = fixture_user(&fixture);
+    let content = complete_dae_file(21000, 21000, "first");
+    for _ in 0..2 {
+        let outcome = import_dae_file(fixture.state(), &content, "fixture", &user).unwrap();
+        assert_eq!(outcome.node_ids.len(), 2);
+        assert_eq!(outcome.node_ids[0], outcome.node_ids[1]);
+        let count: i64 = fixture
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM group_nodes WHERE group_id = ?1",
+                params![outcome.group_ids[0]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let materialized = materialize_runtime(fixture.state(), None, true).unwrap();
+        let config =
+            build_runtime_config_from_content(materialized["content"].as_str().unwrap()).unwrap();
+        assert_eq!(config.node.len(), 1);
+    }
+}
+
+#[test]
 fn commit_time_identity_conflict_rolls_back_every_staged_resource() {
     let fixture = FreshProductState::new("dae-file-import-transaction");
     fixture.seed_selected_resources();
