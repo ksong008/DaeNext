@@ -227,6 +227,12 @@ pub(super) fn with_product_log_snapshot<T>(
         #[cfg(test)]
         observe_log_reader_enumeration();
         let result = scan(snapshot);
+        if let Err(error) = &result {
+            match error.kind() {
+                io::ErrorKind::Interrupted | io::ErrorKind::UnexpectedEof => (),
+                _ => return result,
+            }
+        }
         let stable = {
             let _guard = store.lock()?;
             content_version(&product_log_dir(config_dir))? == directory_version
@@ -245,14 +251,7 @@ pub(super) fn with_product_log_snapshot<T>(
                 && cached_log_visible_first_id(&product_log_file(config_dir))?.unwrap_or(0)
                     == visible
         };
-        if stable
-            && !result.as_ref().is_err_and(|error| {
-                matches!(
-                    error.kind(),
-                    io::ErrorKind::Interrupted | io::ErrorKind::UnexpectedEof
-                )
-            })
-        {
+        if stable && result.is_ok() {
             return result;
         }
         // Discard any partially parsed result and rebuild the directory inventory.
