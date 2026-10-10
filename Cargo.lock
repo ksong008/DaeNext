@@ -789,6 +789,7 @@ name = "dae-netutil"
 version = "3.1.0"
 dependencies = [
  "dae-golden",
+ "getrandom 0.3.4",
  "serde_json",
 ]
 
@@ -1034,7 +1035,7 @@ version = "3.1.0"
 dependencies = [
  "arc-swap",
  "dae-core-types",
- "getrandom 0.3.4",
+ "dae-netutil",
  "libc",
  "serde",
  "serde_json",

@@ -138,7 +138,7 @@ fn sample_half_open(minimum: u16, maximum: u16) -> u16 {
     let unbiased_limit = u64::MAX - (u64::MAX % span);
     loop {
         let mut bytes = [0_u8; 8];
-        if getrandom::fill(&mut bytes).is_err() {
+        if dae_netutil::wire_random::fill_wire_random_pooled(&mut bytes).is_err() {
             return minimum;
         }
         let sample = u64::from_ne_bytes(bytes);
