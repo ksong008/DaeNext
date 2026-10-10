@@ -15,6 +15,12 @@ pub(super) struct ProductLogRuntimeMetrics {
     runtime_detached_total: AtomicU64,
 }
 
+macro_rules! counters {
+    ($($method:ident => $field:ident,)*) => {$(
+        pub(super) fn $method(&self) { self.$field.fetch_add(1, Ordering::Relaxed); }
+    )*};
+}
+
 impl ProductLogRuntimeMetrics {
     pub(super) fn configure(&self, config: ProductLogRuntimeConfig) {
         self.queue_capacity
@@ -39,32 +45,14 @@ impl ProductLogRuntimeMetrics {
             });
     }
 
-    pub(super) fn completed(&self) {
-        self.completed_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn failed(&self) {
-        self.failed_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn appended(&self) {
-        self.appended_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn filtered(&self) {
-        self.filtered_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn pruned(&self) {
-        self.prune_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn runtime_joined(&self) {
-        self.runtime_joined_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn runtime_detached(&self) {
-        self.runtime_detached_total.fetch_add(1, Ordering::Relaxed);
+    counters! {
+        completed => completed_total,
+        failed => failed_total,
+        appended => appended_total,
+        filtered => filtered_total,
+        pruned => prune_total,
+        runtime_joined => runtime_joined_total,
+        runtime_detached => runtime_detached_total,
     }
 
     pub(super) fn snapshot(&self) -> Value {

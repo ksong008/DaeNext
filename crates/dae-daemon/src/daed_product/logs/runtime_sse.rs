@@ -13,18 +13,9 @@ pub(crate) fn runtime_log_level_for_config(config: &Config) -> String {
         .unwrap_or_else(|| DEFAULT_RUNTIME_LOG_LEVEL.to_owned())
 }
 
-#[cfg(test)]
-pub(crate) fn set_runtime_log_level_from_config(state: &Path, config: &Config) -> io::Result<()> {
-    let level = runtime_log_level_for_config(config);
-    set_metadata(state, "runtime_log_level", &level)
-}
-
 pub(crate) fn log_level_enabled(entry_level: &str, runtime_level: &str) -> bool {
-    let Some(entry_rank) = log_level_rank(entry_level) else {
-        return false;
-    };
-    let runtime_rank = log_level_rank(runtime_level).unwrap_or(4);
-    entry_rank <= runtime_rank
+    log_level_rank(entry_level)
+        .is_some_and(|rank| rank <= log_level_rank(runtime_level).unwrap_or(4))
 }
 
 pub(crate) fn log_level_rank(level: &str) -> Option<u8> {
@@ -98,3 +89,9 @@ pub(crate) fn sse_response_events(events: &[(&str, Value)], retry_ms: Option<u64
         .push(("X-Accel-Buffering".to_owned(), "no".to_owned()));
     response
 }
+
+#[cfg(test)]
+#[path = "runtime_sse_tests.rs"]
+mod test_helpers;
+#[cfg(test)]
+pub(crate) use test_helpers::*;

@@ -852,3 +852,24 @@ fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) {
     }
     assert!(predicate(), "condition did not become true before timeout");
 }
+
+#[cfg(test)]
+pub(crate) fn start_product_log_runtime_for_test(
+    config_dir: &Path,
+    state: &Path,
+) -> io::Result<Arc<ProductLogRuntime>> {
+    ProductLogRuntime::start_with_config(config_dir, state, ProductLogRuntimeConfig::for_test())
+}
+
+impl ProductLogRuntimeConfig {
+    #[cfg(test)]
+    pub(in super::super) fn for_test() -> Self {
+        Self {
+            queue_capacity: 8,
+            worker_stack_bytes: 512 * 1024,
+            submit_timeout: Duration::from_secs(1),
+            completion_timeout: Duration::from_secs(2),
+            shutdown_timeout: Duration::from_secs(1),
+        }
+    }
+}

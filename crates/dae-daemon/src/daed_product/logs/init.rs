@@ -1,13 +1,7 @@
 use super::*;
-pub(crate) static LOG_LAST_ID_CACHE: OnceLock<Mutex<Option<ProductLogIdCache>>> = OnceLock::new();
+pub(crate) static LOG_LAST_ID_CACHE: OnceLock<Mutex<Option<(PathBuf, u64)>>> = OnceLock::new();
 pub(crate) static LOG_VISIBLE_FIRST_ID_CACHE: OnceLock<Mutex<HashMap<PathBuf, u64>>> =
     OnceLock::new();
-
-#[derive(Clone, Debug)]
-pub(crate) struct ProductLogIdCache {
-    pub(super) path: PathBuf,
-    pub(super) id: u64,
-}
 
 pub(crate) fn initialize_log_store(config_dir: &Path, state: &Path) -> io::Result<()> {
     ensure_state_schema(state)?;
@@ -77,21 +71,6 @@ pub(crate) fn refresh_log_policy_and_reset_logs(
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) fn refresh_log_policy_and_reset_runtime_cycle_logs(
-    config_dir: &Path,
-    state: &Path,
-    runtime: Option<&ProductRuntimeManager>,
-) -> io::Result<()> {
-    refresh_resident_event_log_policy(config_dir, state)?;
-    clear_log_file_preserving_startup_reload_logs(config_dir)?;
-    apply_log_limits_without_runtime(config_dir, state)?;
-    if let Some(runtime) = runtime {
-        runtime.clear_resident_event_log()?;
-    }
-    Ok(())
-}
-
 pub(crate) fn refresh_log_policy_and_apply_log_limits(
     config_dir: &Path,
     state: &Path,
@@ -115,7 +94,7 @@ fn apply_log_limits_without_runtime(config_dir: &Path, state: &Path) -> io::Resu
 }
 
 #[cfg(test)]
-pub(crate) fn clear_resident_event_product_log_sink() {
-    set_resident_event_log_sink(None);
-    set_resident_event_log_policies(None, None);
-}
+#[path = "init_tests.rs"]
+mod test_helpers;
+#[cfg(test)]
+pub(crate) use test_helpers::*;

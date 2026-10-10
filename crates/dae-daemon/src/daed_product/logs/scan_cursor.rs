@@ -35,21 +35,6 @@ pub(crate) struct ProductLogScanState {
     pub(crate) reset: bool,
 }
 
-#[cfg(test)]
-pub(crate) fn scan_log_entries_from_cursor(
-    config_dir: &Path,
-    cursor: ProductLogScanCursor,
-    after_id: u64,
-    mut on_entry: impl FnMut(ProductLogEntry) -> io::Result<()>,
-) -> io::Result<ProductLogScanState> {
-    Ok(
-        scan_log_entries_from_cursor_limited(config_dir, cursor, after_id, None, |entry| {
-            on_entry(entry)
-        })?
-        .state,
-    )
-}
-
 pub(crate) struct ProductLogScanBatch {
     pub(crate) state: ProductLogScanState,
     pub(crate) entries: Vec<ProductLogEntry>,
@@ -93,16 +78,12 @@ fn scan_log_entries_from_cursor_limited(
     max_scanned_lines: Option<usize>,
     mut on_entry: impl FnMut(ProductLogEntry) -> io::Result<()>,
 ) -> io::Result<ProductLogControlledScan> {
-    // SSE limits each scan batch; no lock survives the return or a network write.
+    // Only enumerate/open and snapshot the committed length under the writer
+    // lock. JSON parsing and callbacks run after releasing it.
     let store = product_log_store(config_dir)?;
-    let _guard = store.lock()?;
+    let guard = store.lock()?;
     let log_file = product_log_file(config_dir);
-    let segments = product_log_segments(config_dir)?;
-    let mut files: Vec<_> = segments
-        .iter()
-        .map(|segment| segment.path.clone())
-        .collect();
-    files.push(log_file.clone());
+    let segments = product_log_segments_shared(config_dir)?;
     #[cfg(test)]
     observe_log_reader_enumeration();
     let first_visible_id = cached_log_visible_first_id(&log_file)?.unwrap_or(0);
@@ -115,12 +96,16 @@ fn scan_log_entries_from_cursor_limited(
             .position(|segment| segment.last_id > after_id)
             .unwrap_or(segments.len());
     } else if cursor.identity.is_some() {
-        let matches_cursor = fs::metadata(&files[file_index])
-            .ok()
-            .is_some_and(|metadata| {
-                cursor.identity == Some(ProductLogFileIdentity::from_metadata(&metadata))
-                    && cursor.offset <= metadata.len()
-            });
+        let matches_cursor = fs::metadata(
+            segments
+                .get(file_index)
+                .map_or(&log_file, |segment| &segment.path),
+        )
+        .ok()
+        .is_some_and(|metadata| {
+            cursor.identity == Some(ProductLogFileIdentity::from_metadata(&metadata))
+                && cursor.offset <= metadata.len()
+        });
         if !matches_cursor {
             reset = true;
             file_index = segments
@@ -133,8 +118,14 @@ fn scan_log_entries_from_cursor_limited(
     let mut max_seen_id = after_id;
     let mut scanned_lines = 0_usize;
     let mut line = Vec::new();
-    while file_index < files.len() {
-        let mut file = match fs::File::open(&files[file_index]) {
+    drop(guard);
+    while file_index <= segments.len() {
+        let guard = store.lock()?;
+        let mut file = match fs::File::open(
+            segments
+                .get(file_index)
+                .map_or(&log_file, |segment| &segment.path),
+        ) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 if file_index == segments.len() {
@@ -149,14 +140,32 @@ fn scan_log_entries_from_cursor_limited(
         };
         let metadata = file.metadata()?;
         let identity = ProductLogFileIdentity::from_metadata(&metadata);
+        // The path can be replaced after inventory/cursor validation and before
+        // open. Validate the opened FD before applying a saved byte offset.
+        let changed = segments.get(file_index).is_some_and(|segment| {
+            ProductLogContentVersion::from_metadata(&metadata) != segment.version
+        }) || (file_index == cursor.file_index
+            && cursor.identity.is_some_and(|previous| previous != identity))
+            || next_offset > metadata.len();
+        if changed {
+            next_offset = 0;
+            reset = true;
+        }
         if next_offset > 0 {
             file.seek(SeekFrom::Start(next_offset))?;
         }
-        let mut reader = io::BufReader::new(file);
+        let snapshot_bytes = metadata.len().saturating_sub(next_offset);
+        drop(guard);
+        let mut reader = io::BufReader::new(file.take(snapshot_bytes));
         loop {
             line.clear();
             let read = reader.read_until(b'\n', &mut line)?;
             if read == 0 {
+                break;
+            }
+            // Leave a partial active record at its original offset for the next
+            // watch/poll batch, even when its prefix is valid JSON.
+            if file_index == segments.len() && line.last() != Some(&b'\n') {
                 break;
             }
             scanned_lines = scanned_lines.saturating_add(1);
@@ -173,21 +182,11 @@ fn scan_log_entries_from_cursor_limited(
                 }
             }
             if max_scanned_lines.is_some_and(|limit| scanned_lines >= limit) {
-                return Ok(ProductLogControlledScan {
-                    state: ProductLogScanState {
-                        cursor: ProductLogScanCursor {
-                            offset: next_offset,
-                            identity: Some(identity),
-                            file_index,
-                        },
-                        max_seen_id,
-                        reset,
-                    },
-                    reached_eof: false,
-                });
+                break;
             }
         }
-        if file_index == segments.len() {
+        let limited = max_scanned_lines.is_some_and(|limit| scanned_lines >= limit);
+        if limited || file_index == segments.len() {
             return Ok(ProductLogControlledScan {
                 state: ProductLogScanState {
                     cursor: ProductLogScanCursor {
@@ -198,7 +197,7 @@ fn scan_log_entries_from_cursor_limited(
                     max_seen_id,
                     reset,
                 },
-                reached_eof: true,
+                reached_eof: !limited,
             });
         }
         file_index += 1;
@@ -213,3 +212,9 @@ fn scan_log_entries_from_cursor_limited(
         reached_eof: true,
     })
 }
+
+#[cfg(test)]
+#[path = "scan_cursor_tests.rs"]
+mod test_helpers;
+#[cfg(test)]
+pub(crate) use test_helpers::*;

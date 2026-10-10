@@ -31,15 +31,4 @@ impl ProductLogRuntimeConfig {
             shutdown_timeout: PRODUCT_LOG_SHUTDOWN_TIMEOUT,
         }
     }
-
-    #[cfg(test)]
-    pub(super) fn for_test() -> Self {
-        Self {
-            queue_capacity: 8,
-            worker_stack_bytes: PRODUCT_LOG_WRITER_STACK_BYTES,
-            submit_timeout: Duration::from_secs(1),
-            completion_timeout: Duration::from_secs(2),
-            shutdown_timeout: Duration::from_secs(1),
-        }
-    }
 }

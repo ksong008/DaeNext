@@ -5,9 +5,7 @@ static PRODUCT_LOG_RUNTIME_REGISTRY: OnceLock<
 > = OnceLock::new();
 
 pub(super) fn register_product_log_runtime(runtime: &Arc<ProductLogRuntime>) -> io::Result<()> {
-    let mut registry = registry()
-        .lock()
-        .map_err(|_| io::Error::other("product log runtime registry is unavailable"))?;
+    let mut registry = log_lock(registry())?;
     registry.retain(|_, runtime| runtime.strong_count() > 0);
     if registry
         .get(runtime.registry_key())
