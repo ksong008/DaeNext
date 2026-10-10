@@ -104,6 +104,16 @@ impl<T> Default for ResidentTlsConfigCache<T> {
 }
 
 impl<T> ResidentTlsConfigCache<T> {
+    pub(super) fn get_matching(
+        &mut self,
+        matches: impl Fn(&ResidentTlsClientConfigKey) -> bool,
+    ) -> Option<Arc<T>> {
+        let generation = self.touch_generation();
+        let (_, entry) = self.entries.iter_mut().find(|(key, _)| matches(key))?;
+        entry.generation = generation;
+        Some(Arc::clone(&entry.value))
+    }
+
     pub(super) fn get(&mut self, key: &ResidentTlsClientConfigKey) -> Option<Arc<T>> {
         let generation = self.touch_generation();
         let entry = self.entries.get_mut(key)?;

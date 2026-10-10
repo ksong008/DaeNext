@@ -47,7 +47,7 @@
     },
     "dae-outbound-quic": {
       "production": 5898,
-      "tests": 521
+      "tests": 563
     },
     "dae-outbound-stream": {
       "production": 26000,
