@@ -7,6 +7,7 @@ use dae_config::Config;
 use dae_ebpf_support::{RuntimeMapSnapshot, ValidatedRuntimeMapHandle};
 use serde_json::{Value, json};
 
+mod lpm_batch;
 mod maps;
 mod plan;
 mod types;
@@ -59,6 +60,8 @@ pub(super) struct ResidentRoutingApplyKey {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct ResidentRoutingApplyCache {
     applied: BTreeMap<ResidentRoutingApplyKey, u64>,
+    plan: Option<(Config, u64, std::sync::Arc<types::ResidentRoutingPlan>, u64)>,
+    published: BTreeMap<ResidentRoutingApplyKey, std::sync::Arc<types::ResidentRoutingPlan>>,
 }
 
 impl ResidentRoutingApplyCache {
@@ -179,14 +182,35 @@ fn update_resident_routing_map_fd(
         ROUTING_MAP_KEY_SIZE,
         ROUTING_MAP_VALUE_SIZE,
     )?;
-    let plan = build_routing_plan_with_geodata_resolver(config, geodata)?;
+    let (plan, apply_checksum) = match &apply_cache.plan {
+        Some((previous, identity, plan, checksum))
+            if previous == config && *identity == geodata.cache_identity() =>
+        {
+            (std::sync::Arc::clone(plan), *checksum)
+        }
+        _ => {
+            let plan =
+                std::sync::Arc::new(build_routing_plan_with_geodata_resolver(config, geodata)?);
+            let checksum = resident_routing_apply_checksum(&plan);
+            apply_cache.plan = Some((
+                config.clone(),
+                geodata.cache_identity(),
+                std::sync::Arc::clone(&plan),
+                checksum,
+            ));
+            (plan, checksum)
+        }
+    };
     let apply_key = ResidentRoutingApplyKey {
         routing_map_id: routing_info.id,
         lpm_array_map_id: lpm_array.map(|map| map.info().id),
     };
-    let apply_checksum = resident_routing_apply_checksum(&plan);
     let routing_update_skipped = apply_cache.is_current(apply_key, apply_checksum);
     if !routing_update_skipped {
+        let previous = apply_cache.published.remove(&apply_key);
+        // Failed partial writes must invalidate the old checksum. A retry or
+        // rollback then rebuilds the maps rather than trusting stale metadata.
+        apply_cache.applied.remove(&apply_key);
         if !plan.lpm_sets.is_empty() {
             let lpm_map = lpm_array.ok_or_else(|| {
                 "resident routing needs lpm_array_map but it was not found".to_owned()
@@ -197,16 +221,31 @@ fn update_resident_routing_map_fd(
                 LPM_ARRAY_KEY_SIZE,
                 LPM_ARRAY_VALUE_SIZE,
             )?;
-            update_lpm_array_map(lpm_map, &plan.lpm_sets)?;
+            update_lpm_array_map(
+                lpm_map,
+                &plan.lpm_sets,
+                previous.as_ref().map(|plan| plan.lpm_sets.as_slice()),
+            )?;
         }
 
         for (index, match_set) in plan.matches.iter().enumerate() {
+            if previous.as_ref().and_then(|plan| plan.matches.get(index)) == Some(match_set) {
+                continue;
+            }
             let key = (index as u32).to_ne_bytes();
             routing_map
                 .update_elem_bytes(&key, &match_set.bytes)
                 .map_err(|err| err.to_string())?;
         }
         apply_cache.record(apply_key, apply_checksum);
+        apply_cache
+            .published
+            .insert(apply_key, std::sync::Arc::clone(&plan));
+        while apply_cache.published.len() > 8 {
+            if let Some((key, _)) = apply_cache.published.pop_first() {
+                apply_cache.applied.remove(&key);
+            }
+        }
     }
     let connectivity_update = match connectivity {
         Some(map) => {

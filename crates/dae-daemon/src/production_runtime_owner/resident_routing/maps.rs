@@ -15,6 +15,7 @@ use dae_ebpf_support::{
 use dae_routing::IpPrefix;
 use serde_json::{Value, json};
 
+use super::lpm_batch::update_lpm_batch;
 use super::types::OutboundConnectivityEntry;
 use super::{
     BPF_F_NO_PREALLOC, BPF_MAP_CREATE, BPF_MAP_TYPE_LPM_TRIE, CONNECTIVITY_IP_VERSION_4,
@@ -27,8 +28,12 @@ use dae_resident_dataplane::facade::SharedResidentIpPrefixSet;
 pub(super) fn update_lpm_array_map(
     lpm_array_map: &ValidatedRuntimeMapHandle,
     lpm_sets: &[SharedResidentIpPrefixSet],
+    previous: Option<&[SharedResidentIpPrefixSet]>,
 ) -> Result<(), String> {
     for (index, prefixes) in lpm_sets.iter().enumerate() {
+        if previous.and_then(|sets| sets.get(index)) == Some(prefixes) {
+            continue;
+        }
         let inner = create_lpm_map(prefixes)?;
         let key = (index as u32).to_ne_bytes();
         let value = (inner.as_raw_fd() as u32).to_ne_bytes();
@@ -52,6 +57,13 @@ pub(super) fn update_outbound_connectivity_map(
     let mut desired = Vec::new();
     let mut written = Vec::new();
     let mut skipped = Vec::new();
+    let mut current = std::collections::HashMap::new();
+    connectivity_map
+        .visit_entries(|key, value| {
+            current.insert(key.to_vec(), value.to_vec());
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
     let alive = 1_u32.to_ne_bytes();
     for entry in entries {
         let key = [entry.outbound, entry.l4proto, entry.ipversion];
@@ -62,7 +74,10 @@ pub(super) fn update_outbound_connectivity_map(
             "alive": true,
         });
         desired.push(item.clone());
-        if connectivity_value_is_alive(connectivity_map, &key)? {
+        if current
+            .get(key.as_slice())
+            .is_some_and(|value| value.as_slice() == alive)
+        {
             skipped.push(item);
             continue;
         }
@@ -72,10 +87,7 @@ pub(super) fn update_outbound_connectivity_map(
         written.push(item);
     }
     let mut deleted = Vec::new();
-    for key in connectivity_map
-        .keys(super::OUTBOUND_CONNECTIVITY_KEY_SIZE)
-        .map_err(|err| err.to_string())?
-    {
+    for key in current.keys() {
         let [outbound, l4proto, ipversion] = key.as_slice() else {
             continue;
         };
@@ -107,18 +119,6 @@ pub(super) fn update_outbound_connectivity_map(
         "deleted_entries": deleted,
         "scope": "resident runtime seeds user-defined outbound connectivity because compatibility control-plane alive callbacks are not running in the Rust resident production daemon",
     }))
-}
-
-fn connectivity_value_is_alive(
-    connectivity_map: &ValidatedRuntimeMapHandle,
-    key: &[u8; 3],
-) -> Result<bool, String> {
-    let mut value = [0_u8; 4];
-    match connectivity_map.lookup_elem_bytes(key, &mut value) {
-        Ok(()) => Ok(u32::from_ne_bytes(value) == 1),
-        Err(err) if err.raw_os_error() == Some(libc::ENOENT) => Ok(false),
-        Err(err) => Err(err.to_string()),
-    }
 }
 
 pub(super) fn resident_user_outbound_ids(config: &Config) -> Vec<u8> {
@@ -169,15 +169,38 @@ fn create_lpm_map(prefixes: &[IpPrefix]) -> Result<ValidatedRuntimeMapHandle, St
     )
     .map_err(|err| format!("create resident LPM trie map failed: {err}"))?;
     let one = 1_u32.to_ne_bytes();
-    for prefix in prefixes {
-        let key = prefix_to_lpm_key(prefix);
-        map.update_elem_bytes(&key, &one)
-            .map_err(|err| format!("update resident LPM trie map failed: {err}"))?;
+    let mut batch_supported = true;
+    for chunk in prefixes.chunks(512) {
+        if batch_supported && chunk.len() > 1 {
+            match update_lpm_batch(&map, chunk) {
+                Ok(()) => continue,
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP)
+                    ) =>
+                {
+                    batch_supported = false;
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "batch update resident LPM trie map failed: {error}"
+                    ));
+                }
+            }
+        }
+        // Unsupported kernels retain the scalar path. Reapplying a partially
+        // completed batch is safe: this new inner map has not been published.
+        for prefix in chunk {
+            let key = prefix_to_lpm_key(prefix);
+            map.update_elem_bytes(&key, &one)
+                .map_err(|err| format!("update resident LPM trie map failed: {err}"))?;
+        }
     }
     Ok(map)
 }
 
-fn prefix_to_lpm_key(prefix: &IpPrefix) -> [u8; 20] {
+pub(super) fn prefix_to_lpm_key(prefix: &IpPrefix) -> [u8; 20] {
     let mut key = [0_u8; 20];
     let (bytes, bits) = match prefix.addr() {
         IpAddr::V4(addr) => (addr.to_ipv6_mapped().octets(), prefix.bits() as u32 + 96),
@@ -189,6 +212,30 @@ fn prefix_to_lpm_key(prefix: &IpPrefix) -> [u8; 20] {
         key[4 + index * 4..8 + index * 4].copy_from_slice(&word.to_ne_bytes());
     }
     key
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a kernel with CAP_BPF; run on the isolated validation host"]
+    fn native_lpm_batch_populates_all_prefixes_before_publication() {
+        let prefixes = (1..=1537)
+            .map(|i| {
+                format!("10.{}.{}.{}/32", (i >> 16) & 255, (i >> 8) & 255, i & 255)
+                    .parse::<IpPrefix>()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let map = create_lpm_map(&prefixes).unwrap();
+        for prefix in &prefixes {
+            let mut value = [0_u8; 4];
+            map.lookup_elem_bytes(&prefix_to_lpm_key(prefix), &mut value)
+                .unwrap();
+            assert_eq!(u32::from_ne_bytes(value), 1);
+        }
+    }
 }
 
 pub(super) fn ensure_map_contract(

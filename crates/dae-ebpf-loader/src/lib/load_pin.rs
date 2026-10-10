@@ -73,7 +73,7 @@ pub(super) fn run_load_pin(options: BpfLoaderLoadPinOptions) -> LoaderOutput {
                         .join(",")
                 ));
             }
-            let offsets = match dae_ebpf_support::resolve_pname_btf_offsets(&target_btf.report) {
+            let offsets = match target_btf.pname_offsets() {
                 Ok(offsets) => offsets,
                 Err(err) => {
                     return LoaderOutput::error(format!(
