@@ -78,6 +78,7 @@ async fn open_xhttp_h1_download_stream_with_client(
         &xhttp_session_path_suffix(session_id, None),
         None,
     );
+    let request = super::request::RequestBuffer::from(request);
     time::timeout(RESIDENT_CONNECT_TIMEOUT, client.write_all(&request))
         .await
         .map_err(|_| "xHTTP HTTP/1.1 download request timeout".to_owned())?
@@ -150,6 +151,7 @@ async fn send_on_connection<T>(
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let request = super::request::RequestBuffer::from(request);
     time::timeout(RESIDENT_CONNECT_TIMEOUT, client.write_all(&request))
         .await
         .map_err(|_| "xHTTP HTTP/1.1 packet-up request timeout".to_owned())?
@@ -158,6 +160,7 @@ where
         .await
         .map_err(|_| "flush xHTTP HTTP/1.1 packet-up request timeout".to_owned())?
         .map_err(|err| format!("flush xHTTP HTTP/1.1 packet-up request: {err}"))?;
+    drop(request);
     Ok(Box::pin(async move {
         let response = read_xhttp_h1_response_head(&mut client, "packet-up").await?;
         if !(200..300).contains(&response.status) {

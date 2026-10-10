@@ -79,7 +79,10 @@ struct XhttpSocketIdentity {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(in super::super) struct XhttpXmuxKey {
+pub(in super::super) struct XhttpXmuxKey(Arc<XhttpXmuxKeyFields>);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in super::super) struct XhttpXmuxKeyFields {
     role: XhttpCarrierRole,
     graph: Vec<XhttpGraphNodeIdentity>,
     runtime_generation: u64,
@@ -94,6 +97,13 @@ pub(in super::super) struct XhttpXmuxKey {
     request_route_identity: [u8; 32],
     xmux: ResidentXhttpXmuxPlan,
     socket: XhttpSocketIdentity,
+}
+
+impl std::ops::Deref for XhttpXmuxKey {
+    type Target = XhttpXmuxKeyFields;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl XhttpXmuxKey {
@@ -158,6 +168,34 @@ impl XhttpXmuxKey {
             XhttpCarrierProtocol::Http2 => None,
         };
         let system_ca = xhttp_system_ca_identity(endpoint)?;
+        type Memo = (
+            std::sync::Weak<ResidentProxyPlan>,
+            ResidentXhttpEndpointPlan,
+            XhttpXmuxKey,
+        );
+        static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<Memo>>> =
+            std::sync::OnceLock::new();
+        let memo = MEMO.get_or_init(std::sync::Mutex::default);
+        {
+            let mut cache = memo.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(index) = cache.iter().position(|(plan, old, key)| {
+                old == endpoint
+                    && key.role == role
+                    && key.runtime_generation == binding.runtime_generation().get()
+                    && &key.resolved_endpoint == resolved_endpoint
+                    && key.xmux == xmux
+                    && key.socket == socket
+                    && key.security.system_ca == system_ca
+                    && plan
+                        .upgrade()
+                        .is_some_and(|plan| Arc::ptr_eq(&plan, binding.shared_plan()))
+            }) && let Some(entry) = cache.remove(index)
+            {
+                let key = entry.2.clone();
+                cache.push_back(entry);
+                return Ok(key);
+            }
+        }
         let session_namespace = xhttp_session_namespace(
             role,
             carrier_protocol,
@@ -166,7 +204,7 @@ impl XhttpXmuxKey {
             quic_tls_provider,
             system_ca.as_ref(),
         );
-        Ok(Self {
+        let key = Self(Arc::new(XhttpXmuxKeyFields {
             role,
             graph: graph_identity(proxy),
             runtime_generation: binding.runtime_generation().get(),
@@ -181,7 +219,17 @@ impl XhttpXmuxKey {
             request_route_identity: request_route_identity(endpoint),
             xmux,
             socket,
-        })
+        }));
+        let mut cache = memo.lock().unwrap_or_else(|error| error.into_inner());
+        if cache.len() >= 64 {
+            cache.pop_front();
+        }
+        cache.push_back((
+            Arc::downgrade(binding.shared_plan()),
+            endpoint.clone(),
+            key.clone(),
+        ));
+        Ok(key)
     }
 
     pub fn runtime_generation(&self) -> u64 {
@@ -202,7 +250,7 @@ impl XhttpXmuxKey {
     ) -> Self {
         let resolved_endpoint =
             XhttpResolvedEndpointIdentity::from_candidates(&["192.0.2.10:443".parse().unwrap()]);
-        Self {
+        Self(Arc::new(XhttpXmuxKeyFields {
             role: XhttpCarrierRole::Primary,
             graph: vec![XhttpGraphNodeIdentity {
                 graph_id: format!("resident-graph:{nonce}"),
@@ -239,7 +287,7 @@ impl XhttpXmuxKey {
                 mark: 0,
                 mptcp: false,
             },
-        }
+        }))
     }
 }
 

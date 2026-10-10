@@ -3,6 +3,9 @@ use base64::{Engine as _, engine::general_purpose};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 mod browser;
+mod buffer;
+pub(super) use buffer::RequestBuffer;
+type HeaderList = Vec<(Arc<str>, Arc<str>)>;
 
 pub fn xhttp_h2_request(
     method: http::Method,
@@ -143,24 +146,33 @@ where
     W: AsyncWrite + Unpin,
 {
     if !payload.is_empty() {
-        let prefix = format!("{:x}\r\n", payload.len());
+        let mut prefix = [0_u8; 2 * std::mem::size_of::<usize>() + 2];
+        let mut start = prefix.len() - 2;
+        prefix[start..].copy_from_slice(b"\r\n");
+        let mut length = payload.len();
+        while length != 0 {
+            start -= 1;
+            prefix[start] = b"0123456789abcdef"[length & 15];
+            length >>= 4;
+        }
+        let suffix: &[u8] = if end_stream {
+            b"\r\n0\r\n\r\n"
+        } else {
+            b"\r\n"
+        };
+        let mut parts = [
+            std::io::IoSlice::new(&prefix[start..]),
+            std::io::IoSlice::new(payload),
+            std::io::IoSlice::new(suffix),
+        ];
         time::timeout(
             RESIDENT_CONNECT_TIMEOUT,
-            writer.write_all(prefix.as_bytes()),
+            write_chunk_parts(writer, &mut parts),
         )
         .await
-        .map_err(|_| format!("xHTTP HTTP/1.1 {context} chunk prefix timeout"))?
-        .map_err(|err| format!("write xHTTP HTTP/1.1 {context} chunk prefix: {err}"))?;
-        time::timeout(RESIDENT_CONNECT_TIMEOUT, writer.write_all(payload))
-            .await
-            .map_err(|_| format!("xHTTP HTTP/1.1 {context} chunk body timeout"))?
-            .map_err(|err| format!("write xHTTP HTTP/1.1 {context} chunk body: {err}"))?;
-        time::timeout(RESIDENT_CONNECT_TIMEOUT, writer.write_all(b"\r\n"))
-            .await
-            .map_err(|_| format!("xHTTP HTTP/1.1 {context} chunk suffix timeout"))?
-            .map_err(|err| format!("write xHTTP HTTP/1.1 {context} chunk suffix: {err}"))?;
-    }
-    if end_stream {
+        .map_err(|_| format!("xHTTP HTTP/1.1 {context} chunk timeout"))?
+        .map_err(|err| format!("write xHTTP HTTP/1.1 {context} chunk: {err}"))?;
+    } else if end_stream {
         time::timeout(RESIDENT_CONNECT_TIMEOUT, writer.write_all(b"0\r\n\r\n"))
             .await
             .map_err(|_| format!("xHTTP HTTP/1.1 {context} final chunk timeout"))?
@@ -170,6 +182,22 @@ where
         .await
         .map_err(|_| format!("flush xHTTP HTTP/1.1 {context} chunk timeout"))?
         .map_err(|err| format!("flush xHTTP HTTP/1.1 {context} chunk: {err}"))
+}
+
+async fn write_chunk_parts(
+    writer: &mut (impl AsyncWrite + Unpin),
+    parts: &mut [std::io::IoSlice<'_>],
+) -> std::io::Result<()> {
+    let mut pending = parts;
+    while !pending.is_empty() {
+        match writer.write_vectored(pending).await {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(written) => std::io::IoSlice::advance_slices(&mut pending, written),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -257,26 +285,35 @@ fn xhttp_encoded_payload_chunks(
     if payload.is_empty() || key.is_empty() {
         return Vec::new();
     }
-    let encoded = general_purpose::URL_SAFE_NO_PAD.encode(payload);
-    let mut remaining = encoded.as_str();
-    let mut chunks = Vec::new();
-    while !remaining.is_empty() {
-        let size = ResidentXhttpSettingsPlan::sample_range(settings.normalized_uplink_chunk_size())
-            .max(1) as usize;
-        let (chunk, rest) = remaining.split_at(size.min(remaining.len()));
-        chunks.push((
-            format!("{key}{separator}{}", chunks.len()),
-            chunk.to_owned(),
-        ));
-        remaining = rest;
-    }
-    chunks
+    thread_local! { static ENCODED: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) }; }
+    ENCODED.with(|buffer| {
+        let mut encoded = buffer.borrow_mut();
+        encoded.clear();
+        general_purpose::URL_SAFE_NO_PAD.encode_string(payload, &mut encoded);
+        let mut remaining = encoded.as_str();
+        let mut chunks = Vec::new();
+        while !remaining.is_empty() {
+            let size =
+                ResidentXhttpSettingsPlan::sample_range(settings.normalized_uplink_chunk_size())
+                    .max(1) as usize;
+            let (chunk, rest) = remaining.split_at(size.min(remaining.len()));
+            chunks.push((
+                format!("{key}{separator}{}", chunks.len()),
+                chunk.to_owned(),
+            ));
+            remaining = rest;
+        }
+        if encoded.capacity() > 128 * 1024 {
+            *encoded = String::new();
+        }
+        chunks
+    })
 }
 
 struct XhttpPreparedRequestParts {
     uri: String,
     path_and_query: String,
-    headers: Vec<(String, String)>,
+    headers: HeaderList,
 }
 
 fn xhttp_h2_request_with_parts(
@@ -297,7 +334,7 @@ fn xhttp_h2_request_with_parts(
     );
     let mut builder = http::Request::builder().method(method).uri(prepared.uri);
     for (name, value) in prepared.headers {
-        builder = builder.header(name.as_str(), value.as_str());
+        builder = builder.header(name.as_ref(), value.as_ref());
     }
     builder
         .body(())
@@ -322,7 +359,7 @@ fn xhttp_h3_request_with_parts(
     );
     let mut builder = http::Request::builder().method(method).uri(prepared.uri);
     for (name, value) in prepared.headers {
-        builder = builder.header(name.as_str(), value.as_str());
+        builder = builder.header(name.as_ref(), value.as_ref());
     }
     builder
         .body(())
@@ -369,7 +406,10 @@ fn xhttp_h1_request_head_string(
         extra_headers,
         extra_cookies,
     );
-    let mut request = format!(
+    use std::fmt::Write as _;
+    let mut request = buffer::take_head();
+    let _ = write!(
+        request,
         "{method} {} HTTP/1.1\r\nHost: {}\r\n",
         prepared.path_and_query,
         xhttp_authority(endpoint)
@@ -395,7 +435,7 @@ fn xhttp_h1_request_head_string(
         });
     }
     if let Some(content_length) = content_length {
-        request.push_str(&format!("Content-Length: {content_length}\r\n"));
+        let _ = write!(request, "Content-Length: {content_length}\r\n");
     }
     request
 }
@@ -434,12 +474,12 @@ fn xhttp_prepare_request_parts(
     }
 }
 
-fn xhttp_set_header(headers: &mut Vec<(String, String)>, name: String, value: String) {
+fn xhttp_set_header(headers: &mut HeaderList, name: String, value: String) {
     headers.retain(|(candidate, _)| !candidate.eq_ignore_ascii_case(&name));
-    headers.push((name, value));
+    headers.push((name.into(), value.into()));
 }
 
-fn xhttp_apply_cookie_header(headers: &mut Vec<(String, String)>, cookies: Vec<(String, String)>) {
+fn xhttp_apply_cookie_header(headers: &mut HeaderList, cookies: Vec<(String, String)>) {
     if cookies.is_empty() {
         return;
     }
@@ -453,18 +493,22 @@ fn xhttp_apply_cookie_header(headers: &mut Vec<(String, String)>, cookies: Vec<(
         .find(|(name, _)| name.eq_ignore_ascii_case(http::header::COOKIE.as_str()))
     {
         if !existing.is_empty() {
-            existing.push_str("; ");
+            let mut merged = existing.to_string();
+            merged.push_str("; ");
+            merged.push_str(&cookie_value);
+            *existing = merged.into();
+        } else {
+            *existing = cookie_value.into();
         }
-        existing.push_str(&cookie_value);
     } else {
-        headers.push((http::header::COOKIE.as_str().to_owned(), cookie_value));
+        headers.push((http::header::COOKIE.as_str().into(), cookie_value.into()));
     }
 }
 
 fn xhttp_apply_meta(
     settings: &ResidentXhttpSettingsPlan,
     meta: &XhttpRequestMeta,
-    headers: &mut Vec<(String, String)>,
+    headers: &mut HeaderList,
     cookies: &mut Vec<(String, String)>,
     query: &mut Vec<(String, String)>,
 ) {
@@ -512,7 +556,7 @@ fn xhttp_apply_meta(
 
 fn xhttp_apply_padding(
     endpoint: &impl ResidentXhttpEndpointView,
-    headers: &mut Vec<(String, String)>,
+    headers: &mut HeaderList,
     cookies: &mut Vec<(String, String)>,
     query: &mut Vec<(String, String)>,
 ) {
@@ -634,7 +678,7 @@ fn secure_random_ascii(table: &[u8], len: usize) -> Result<String, String> {
     let mut output = String::with_capacity(len);
     let mut random = [0_u8; 256];
     while output.len() < len {
-        dae_resident_core::fill_wire_random(&mut random)
+        dae_resident_core::fill_wire_random_pooled(&mut random)
             .map_err(|error| format!("generate XHTTP session ID: {error}"))?;
         for byte in random {
             if usize::from(byte) < limit {
@@ -796,7 +840,7 @@ pub fn new_xhttp_session_id_for(settings: &ResidentXhttpSettingsPlan) -> Result<
 
 fn new_xhttp_uuid_session_id() -> Result<String, String> {
     let mut bytes = [0_u8; 16];
-    dae_resident_core::fill_wire_random(&mut bytes)
+    dae_resident_core::fill_wire_random_pooled(&mut bytes)
         .map_err(|error| format!("generate XHTTP session ID: {error}"))?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -823,373 +867,5 @@ pub fn xhttp_h3_request(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn xhttp_browser_aliases_reach_each_request_encoder() {
-        for alias in [
-            None,
-            Some("chrome"),
-            Some("edge"),
-            Some("firefox"),
-            Some("safari"),
-            Some("curl"),
-            Some("golang"),
-            Some("Custom-UA/1"),
-            Some("Chrome"),
-            Some(""),
-        ] {
-            let mut settings = ResidentXhttpSettingsPlan::official_default();
-            if let Some(ua) = alias {
-                settings.headers.insert("uSeR-aGeNt".into(), ua.into());
-                settings
-                    .headers
-                    .insert("user-agent".into(), "shadowed-ua".into());
-            }
-            settings
-                .headers
-                .insert("Accept".into(), "application/test".into());
-            settings.headers.insert("priority".into(), "u=7".into());
-            settings
-                .headers
-                .insert("Accept-Language".into(), "custom-language".into());
-            let endpoint = test_xhttp_endpoint(settings);
-            let payload = Bytes::from_static(b"payload");
-            let raw = xhttp_h1_packet_up_request_bytes(&endpoint, "s", 0, payload.clone()).unwrap();
-            let end = raw.windows(4).position(|v| v == b"\r\n\r\n").unwrap();
-            assert_eq!(&raw[end + 4..], b"payload");
-            assert_eq!(
-                std::str::from_utf8(&raw[..end])
-                    .unwrap()
-                    .lines()
-                    .filter(|line| line.to_ascii_lowercase().starts_with("user-agent:"))
-                    .count(),
-                usize::from(alias != Some(""))
-            );
-            let h1 = std::str::from_utf8(&raw[..end])
-                .unwrap()
-                .lines()
-                .skip(1)
-                .map(|line| {
-                    let (key, value) = line.split_once(':').unwrap();
-                    (key.to_ascii_lowercase(), value.trim().to_owned())
-                })
-                .collect::<BTreeMap<_, _>>();
-            let (h2, body2) =
-                xhttp_h2_packet_up_request(&endpoint, "s", 0, payload.clone()).unwrap();
-            let (h3, body3) =
-                xhttp_h3_packet_up_request(&endpoint, "s", 0, payload.clone()).unwrap();
-            assert_eq!(body2, Some(payload.clone()));
-            assert_eq!(body3, Some(payload));
-            for headers in [h2.headers(), h3.headers()] {
-                assert_eq!(
-                    headers.get_all("user-agent").iter().count(),
-                    usize::from(alias != Some(""))
-                );
-            }
-            let maps = [
-                h1,
-                h2.headers()
-                    .iter()
-                    .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap().to_owned()))
-                    .collect(),
-                h3.headers()
-                    .iter()
-                    .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap().to_owned()))
-                    .collect(),
-            ];
-            for (version, headers) in maps.iter().enumerate() {
-                let ua = headers
-                    .get("user-agent")
-                    .map(String::as_str)
-                    .unwrap_or_default();
-                let browser = alias.unwrap_or("chrome");
-                assert_eq!(headers.contains_key("user-agent"), alias != Some(""));
-                match browser {
-                    "chrome" | "edge" => {
-                        assert!(ua.contains("Chrome/"));
-                        assert_eq!(ua.contains("Edg/"), browser == "edge");
-                        let major = ua
-                            .split("Chrome/")
-                            .nth(1)
-                            .unwrap()
-                            .split('.')
-                            .next()
-                            .unwrap();
-                        assert!(headers["sec-ch-ua"].contains(&format!("v=\"{major}\"")));
-                        assert_eq!(headers["sec-ch-ua-platform"], "\"Windows\"");
-                    }
-                    "firefox" => {
-                        assert!(ua.contains("Firefox/"));
-                        assert_eq!(headers["accept-language"], "en-US,en;q=0.5");
-                    }
-                    "safari" => assert!(
-                        ua.contains("Version/")
-                            && ua.contains("Safari/")
-                            && !ua.contains("Chrome/")
-                    ),
-                    "curl" => assert!(ua.starts_with("curl/8.")),
-                    "golang" => assert_eq!(
-                        ua,
-                        ["Go-http-client/1.1", "Go-http-client/2.0", "quic-go HTTP/3"][version]
-                    ),
-                    custom => assert_eq!(ua, custom),
-                }
-                let masqueraded = matches!(browser, "chrome" | "edge" | "firefox" | "safari");
-                assert_eq!(
-                    headers.get("sec-fetch-mode").map(String::as_str),
-                    masqueraded.then_some("cors")
-                );
-                assert_eq!(headers["accept"], "application/test");
-                assert_eq!(headers["priority"], "u=7");
-                assert!(!headers.contains_key("content-type"));
-                assert!(headers.contains_key("referer"));
-                if browser != "golang" {
-                    assert_eq!(headers.get("user-agent"), maps[0].get("user-agent"));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn xhttp_h1_packet_reuse_respects_explicit_connection_policy() {
-        let mut endpoint = test_xhttp_endpoint(ResidentXhttpSettingsPlan::official_default());
-        let request = String::from_utf8(
-            xhttp_h1_packet_up_request_bytes(&endpoint, "s", 0, Bytes::new()).unwrap(),
-        )
-        .unwrap();
-        assert!(request.contains("Connection: keep-alive\r\n"));
-        assert!(!request.contains("Connection: close"));
-        endpoint
-            .settings
-            .headers
-            .insert("connection".into(), "close".into());
-        let request = String::from_utf8(
-            xhttp_h1_packet_up_request_bytes(&endpoint, "s", 0, Bytes::new()).unwrap(),
-        )
-        .unwrap();
-        assert!(request.contains("connection: close\r\n"));
-        assert!(!request.contains("Connection: keep-alive"));
-    }
-
-    #[test]
-    fn xhttp_default_session_is_uuid_v4() {
-        for _ in 0..32 {
-            let id = new_xhttp_uuid_session_id().unwrap();
-            assert_eq!(id.len(), 36);
-            assert_eq!(&id[14..15], "4");
-            assert!(matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
-        }
-    }
-
-    #[test]
-    fn xhttp_payload_chunks_sample_each_boundary_and_reassemble() {
-        let mut settings = ResidentXhttpSettingsPlan::official_default();
-        settings.uplink_chunk_size = Some((64, 128));
-        let payload = Bytes::from(vec![42; 8192]);
-        let chunks = xhttp_encoded_payload_chunks("X-Data", '-', &settings, &payload);
-        assert!(
-            chunks
-                .iter()
-                .take(chunks.len() - 1)
-                .all(|(_, v)| (64..=128).contains(&v.len()))
-        );
-        assert!(chunks.windows(2).any(|c| c[0].1.len() != c[1].1.len()));
-        let encoded = chunks.iter().map(|(_, v)| v.as_str()).collect::<String>();
-        assert_eq!(
-            general_purpose::URL_SAFE_NO_PAD.decode(encoded).unwrap(),
-            payload
-        );
-        assert!(
-            random_ascii(b"abc", 4096)
-                .bytes()
-                .all(|b| b"abc".contains(&b))
-        );
-    }
-
-    #[test]
-    fn packet_up_content_type_is_consistent_across_http_versions() {
-        for configured in [None, Some("application/octet-stream")] {
-            let mut settings = ResidentXhttpSettingsPlan::official_default();
-            if let Some(value) = configured {
-                settings
-                    .headers
-                    .insert("Content-Type".to_owned(), value.to_owned());
-            }
-            let endpoint = test_xhttp_endpoint(settings);
-            let payload = Bytes::from_static(b"packet");
-            let h1 = String::from_utf8(
-                xhttp_h1_packet_up_request_bytes(&endpoint, "session", 0, payload.clone()).unwrap(),
-            )
-            .unwrap();
-            let (h2, h2_body) =
-                xhttp_h2_packet_up_request(&endpoint, "session", 0, payload.clone()).unwrap();
-            let (h3, h3_body) =
-                xhttp_h3_packet_up_request(&endpoint, "session", 0, payload.clone()).unwrap();
-            assert_eq!(
-                h1.to_ascii_lowercase().contains("content-type:"),
-                configured.is_some()
-            );
-            for request in [h2, h3] {
-                assert_eq!(
-                    request
-                        .headers()
-                        .get(http::header::CONTENT_TYPE)
-                        .map(|value| value.to_str().unwrap()),
-                    configured
-                );
-            }
-            assert_eq!(h2_body, Some(payload.clone()));
-            assert_eq!(h3_body, Some(payload));
-        }
-    }
-
-    #[test]
-    fn stream_upload_grpc_header_remains_optional() {
-        for no_grpc_header in [false, true] {
-            let mut settings = ResidentXhttpSettingsPlan::official_default();
-            settings.no_grpc_header = no_grpc_header;
-            let endpoint = test_xhttp_endpoint(settings);
-            let request = xhttp_h2_request(http::Method::POST, &endpoint, "", true).unwrap();
-            assert_eq!(
-                request
-                    .headers()
-                    .get(http::header::CONTENT_TYPE)
-                    .map(|value| value.to_str().unwrap()),
-                (!no_grpc_header).then_some("application/grpc")
-            );
-        }
-    }
-
-    #[test]
-    fn generated_metadata_replaces_existing_query_values() {
-        let mut settings = ResidentXhttpSettingsPlan::official_default();
-        settings.session_id_placement = ResidentXhttpMetaPlacement::Query;
-        settings.seq_placement = ResidentXhttpMetaPlacement::Query;
-        settings.x_padding_obfs_mode = true;
-        settings.x_padding_placement = ResidentXhttpPaddingPlacement::Query;
-        settings.x_padding_bytes = Some((4, 4));
-        let mut endpoint = test_xhttp_endpoint(settings);
-        endpoint.stream_path =
-            "/xhttp?token=a%20b&x_session=old&x%5Fsession=older&x_seq=99&x_padding=old".to_owned();
-        let (request, _) =
-            xhttp_h2_packet_up_request(&endpoint, "current", 7, Bytes::new()).unwrap();
-        let query = request.uri().query().unwrap();
-        assert!(query.starts_with("token=a%20b&"));
-        let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
-        for (key, expected) in [
-            ("x_session", "current"),
-            ("x_seq", "7"),
-            ("x_padding", "XXXX"),
-        ] {
-            let values = pairs
-                .iter()
-                .filter(|(name, _)| name == key)
-                .map(|(_, value)| value.as_ref())
-                .collect::<Vec<_>>();
-            assert_eq!(values, [expected]);
-        }
-        assert_eq!(
-            xhttp_join_query(
-                "same=old",
-                &[
-                    ("same".to_owned(), "padding".to_owned()),
-                    ("same".to_owned(), "session".to_owned())
-                ]
-            ),
-            "same=session"
-        );
-    }
-
-    #[test]
-    fn tokenish_padding_tracks_hpack_target_within_two_bytes() {
-        for target in [1, 2, 7, 32, 127, 900] {
-            let padding = xhttp_generate_padding(ResidentXhttpPaddingMethod::Tokenish, target);
-            assert!(!padding.is_empty());
-            assert!(hpack_huffman_len(padding.as_bytes()).abs_diff(target) <= 2);
-        }
-    }
-
-    fn test_xhttp_endpoint(settings: ResidentXhttpSettingsPlan) -> ResidentXhttpEndpointPlan {
-        ResidentXhttpEndpointPlan {
-            server_host: "server.invalid".to_owned(),
-            server_port: 443,
-            server_name: "server.invalid".to_owned(),
-            alpn: vec!["h2".to_owned()],
-            stream_host: "stream.invalid".to_owned(),
-            stream_path: "/x?ed=2048".to_owned(),
-            mode: ResidentXhttpMode::PacketUp,
-            settings,
-            xmux: None,
-            allow_insecure: false,
-            tls_fragment: None,
-            utls_fingerprint: None,
-            ech: None,
-            reality: None,
-        }
-    }
-
-    #[test]
-    fn xhttp_packet_up_request_applies_header_query_extended_settings() {
-        let mut settings = ResidentXhttpSettingsPlan::official_default();
-        settings
-            .headers
-            .insert("X-Test".to_owned(), "alpha".to_owned());
-        settings.x_padding_bytes = Some((4, 4));
-        settings.x_padding_obfs_mode = true;
-        settings.x_padding_key = "pad".to_owned();
-        settings.x_padding_placement = ResidentXhttpPaddingPlacement::Query;
-        settings.session_id_placement = ResidentXhttpMetaPlacement::Header;
-        settings.session_id_key = "X-Sid".to_owned();
-        settings.seq_placement = ResidentXhttpMetaPlacement::Query;
-        settings.seq_key = "seq".to_owned();
-        settings.uplink_data_placement = ResidentXhttpUplinkDataPlacement::Header;
-        settings.uplink_data_key = "X-Body".to_owned();
-        settings.uplink_chunk_size = Some((64, 64));
-        let endpoint = test_xhttp_endpoint(settings);
-
-        let (request, body) =
-            xhttp_h2_packet_up_request(&endpoint, "sid-1", 7, Bytes::from_static(b"hello"))
-                .unwrap();
-
-        assert!(body.is_none());
-        assert_eq!(
-            request.uri().path_and_query().unwrap().as_str(),
-            "/x?ed=2048&pad=XXXX&seq=7"
-        );
-        assert_eq!(request.headers()["X-Test"], "alpha");
-        assert_eq!(request.headers()["X-Sid"], "sid-1");
-        assert_eq!(request.headers()["X-Body-0"], "aGVsbG8");
-        assert!(!request.headers().contains_key(http::header::CONTENT_TYPE));
-    }
-
-    #[test]
-    fn xhttp_packet_up_request_applies_cookie_extended_settings() {
-        let mut settings = ResidentXhttpSettingsPlan::official_default();
-        settings.x_padding_bytes = Some((3, 3));
-        settings.x_padding_obfs_mode = true;
-        settings.x_padding_placement = ResidentXhttpPaddingPlacement::Cookie;
-        settings.session_id_placement = ResidentXhttpMetaPlacement::Cookie;
-        settings.session_id_key = "x_session".to_owned();
-        settings.seq_placement = ResidentXhttpMetaPlacement::Cookie;
-        settings.seq_key = "x_seq".to_owned();
-        settings.uplink_data_placement = ResidentXhttpUplinkDataPlacement::Cookie;
-        settings.uplink_data_key = "x_data".to_owned();
-        settings.uplink_chunk_size = Some((64, 64));
-        let endpoint = test_xhttp_endpoint(settings);
-
-        let bytes =
-            xhttp_h1_packet_up_request_bytes(&endpoint, "sid-2", 5, Bytes::from_static(b"hi"))
-                .unwrap();
-        let request = String::from_utf8(bytes).unwrap();
-
-        assert!(request.starts_with("POST /x?ed=2048 HTTP/1.1\r\n"));
-        assert!(
-            request.contains("cookie: x_data_0=aGk; x_padding=XXX; x_session=sid-2; x_seq=5\r\n")
-        );
-        assert!(!request.contains("Content-Type: application/grpc\r\n"));
-        assert!(!request.contains("Content-Length:"));
-    }
-}
+#[path = "request/tests.rs"]
+mod tests;

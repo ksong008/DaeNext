@@ -15,19 +15,61 @@ struct BrowserHeaders {
 
 static BROWSERS: OnceLock<BrowserHeaders> = OnceLock::new();
 
+type HeaderTemplate = (
+    std::collections::BTreeMap<String, String>,
+    ResidentXhttpHttpVersion,
+    HeaderList,
+);
+static TEMPLATES: OnceLock<std::sync::Mutex<std::collections::VecDeque<HeaderTemplate>>> =
+    OnceLock::new();
+
 pub(super) fn request_headers(
     settings: &ResidentXhttpSettingsPlan,
     version: ResidentXhttpHttpVersion,
-) -> Vec<(String, String)> {
+) -> HeaderList {
+    let cache = TEMPLATES.get_or_init(std::sync::Mutex::default);
+    {
+        let mut templates = cache.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(index) = templates
+            .iter()
+            .position(|(headers, v, _)| headers == &settings.headers && *v == version)
+            && let Some(template) = templates.remove(index)
+        {
+            let headers = template.2.clone();
+            templates.push_back(template);
+            return headers;
+        }
+    }
+    let headers = build_request_headers(settings, version);
+    if settings
+        .headers
+        .iter()
+        .map(|(k, v)| k.len() + v.len())
+        .sum::<usize>()
+        <= 32 * 1024
+    {
+        let mut templates = cache.lock().unwrap_or_else(|error| error.into_inner());
+        if templates.len() >= 64 {
+            templates.pop_front();
+        }
+        templates.push_back((settings.headers.clone(), version, headers.clone()));
+    }
+    headers
+}
+
+fn build_request_headers(
+    settings: &ResidentXhttpSettingsPlan,
+    version: ResidentXhttpHttpVersion,
+) -> HeaderList {
     let mut headers = settings
         .headers
         .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (Arc::<str>::from(k.as_str()), Arc::<str>::from(v.as_str())))
         .collect::<Vec<_>>();
     let alias = headers
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
-        .map(|(_, v)| v.as_str())
+        .map(|(_, v)| v.as_ref())
         .unwrap_or("chrome");
     if alias.is_empty() {
         // An explicitly empty UA suppresses the header in Go's encoders.
@@ -111,7 +153,7 @@ pub(super) fn request_headers(
     headers
 }
 
-fn set(headers: &mut Vec<(String, String)>, name: &str, value: &str) {
+fn set(headers: &mut HeaderList, name: &str, value: &str) {
     xhttp_set_header(headers, name.to_owned(), value.to_owned());
 }
 
