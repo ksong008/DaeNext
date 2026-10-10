@@ -6,10 +6,47 @@ pub fn resident_transport_binding_identity_digest(
     domain: &[u8],
     binding: &ResidentProxyBinding,
 ) -> [u8; 32] {
+    type Cached = (
+        std::sync::Weak<dae_resident_model::ResidentProxyPlan>,
+        Vec<u8>,
+        u32,
+        [u8; 32],
+    );
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<Cached>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(std::sync::Mutex::default);
+    {
+        let mut entries = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(index) = entries.iter().position(|(plan, prefix, mark, _)| {
+            prefix == domain
+                && *mark == binding.effective_socket_mark()
+                && plan
+                    .upgrade()
+                    .is_some_and(|plan| std::sync::Arc::ptr_eq(&plan, binding.shared_plan()))
+        }) && let Some(entry) = entries.remove(index)
+        {
+            let digest = entry.3;
+            entries.push_back(entry);
+            return digest;
+        }
+    }
     let mut digest = Sha256::new();
     digest.update(domain);
     update_binding_identity(&mut digest, binding);
-    digest.finalize().into()
+    let digest = digest.finalize().into();
+    if domain.len() <= 1024 {
+        let mut entries = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if entries.len() >= 128 {
+            entries.pop_front();
+        }
+        entries.push_back((
+            std::sync::Arc::downgrade(binding.shared_plan()),
+            domain.to_vec(),
+            binding.effective_socket_mark(),
+            digest,
+        ));
+    }
+    digest
 }
 
 fn update_identity_part(digest: &mut Sha256, field: &[u8], value: &[u8]) {
