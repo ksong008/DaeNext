@@ -385,7 +385,7 @@
     },
     "dae-resident-core": {
       "layer": "resident-shared",
-      "normal": ["dae-core-types"],
+      "normal": ["dae-core-types", "dae-netutil"],
       "build": [],
       "dev": []
     },

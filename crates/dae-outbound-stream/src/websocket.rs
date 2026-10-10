@@ -71,7 +71,7 @@ pub fn websocket_handshake_request(
 
 pub fn websocket_client_handshake_key() -> Result<String, OutboundError> {
     let mut nonce = [0_u8; 16];
-    getrandom::fill(&mut nonce).map_err(|err| {
+    dae_netutil::wire_random::fill_wire_random_pooled(&mut nonce).map_err(|err| {
         OutboundError::BadSharedTransport(format!("generate websocket client nonce: {err}"))
     })?;
     Ok(base64::engine::general_purpose::STANDARD.encode(nonce))
@@ -156,7 +156,7 @@ pub fn validate_websocket_handshake_response(
 
 pub fn websocket_client_mask_key() -> Result<[u8; 4], OutboundError> {
     let mut mask_key = [0_u8; 4];
-    getrandom::fill(&mut mask_key).map_err(|err| {
+    dae_netutil::wire_random::fill_wire_random_pooled(&mut mask_key).map_err(|err| {
         OutboundError::BadSharedTransport(format!("generate websocket frame mask: {err}"))
     })?;
     Ok(mask_key)

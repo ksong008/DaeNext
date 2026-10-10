@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+getrandom.workspace = true
+
 [dev-dependencies]
 dae-golden.workspace = true
 serde_json.workspace = true

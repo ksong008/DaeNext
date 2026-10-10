@@ -77,7 +77,7 @@ pub use stop_signal::{
 pub use task_set::{
     ResidentTaskSetShutdown, record_resident_task_completion, shutdown_resident_task_set,
 };
-pub use wire_random::{WireRandomPool, fill_wire_random};
+pub use wire_random::{WireRandomPool, fill_wire_random, fill_wire_random_pooled};
 
 pub trait ResidentHealthResuscitation: std::fmt::Debug + Send + Sync {
     fn trigger(&self, outbound: u8, network_type: dae_core_types::NetworkTypeId);

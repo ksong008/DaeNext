@@ -7,3 +7,5 @@ pub use magic_network::{
     parse_magic_network, write_magic_network_to_slice, write_magic_network_to_vec,
 };
 pub use route_aware::{RouteAwareTarget, RouteAwareTargetError, route_aware_dial_target};
+
+pub mod wire_random;
