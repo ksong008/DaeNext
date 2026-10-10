@@ -39,6 +39,7 @@ pub struct ResidentDnsDomainRouting {
     generation: GenerationToken,
     fence: Arc<ResidentDomainRoutingMapOwner>,
     routing_matcher: RoutingMatcher,
+    mutation: Mutex<()>,
     state: Mutex<ResidentDnsDomainRoutingState>,
     maintenance: maintenance::ResidentDnsDomainRoutingMaintenanceSignal,
     #[cfg(test)]
@@ -111,6 +112,7 @@ impl ResidentDnsDomainRouting {
             generation,
             fence,
             routing_matcher,
+            mutation: Mutex::new(()),
             state: Mutex::new(ResidentDnsDomainRoutingState {
                 owner: DomainRoutingOwner::default(),
                 cache: DnsCacheStore::new(
@@ -130,48 +132,65 @@ impl ResidentDnsDomainRouting {
     ) -> Result<(), String> {
         let now_unix = unix_now();
         self.sweep_expired_until(now_unix)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        let Some(plan) = build_resident_dns_domain_routing_update_plan(
-            &self.routing_matcher,
-            &mut state.domain_bitmap,
-            cache_plan,
-        )?
-        else {
-            return Ok(());
+        let plan = {
+            let mut state = self.lock_state()?;
+            build_resident_dns_domain_routing_update_plan(
+                &self.routing_matcher,
+                &mut state.domain_bitmap,
+                cache_plan,
+            )?
         };
-        self.commit_response_locked(&mut state, plan)?;
-        drop(state);
-        self.maintenance.notify_deadline_changed();
+        if let Some(plan) = plan {
+            self.commit_response(plan)?;
+            self.maintenance.notify_deadline_changed();
+        }
         Ok(())
     }
 
-    fn commit_response_locked(
+    fn lock_state(
         &self,
-        state: &mut ResidentDnsDomainRoutingState,
-        plan: ResidentDnsDomainRoutingUpdatePlan,
-    ) -> Result<bool, String> {
-        // Recheck after acquiring the state lock: building or waiting for a plan
-        // may have consumed its entire TTL. Expired owners must not be installed.
-        if plan.entry.cache_expires_at() <= unix_now() {
+    ) -> Result<std::sync::MutexGuard<'_, ResidentDnsDomainRoutingState>, String> {
+        self.state
+            .lock()
+            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())
+    }
+
+    fn lock_mutation(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+        self.mutation
+            .lock()
+            .map_err(|_| "resident DNS domain routing mutation lock poisoned".to_owned())
+    }
+
+    fn commit_response(&self, plan: ResidentDnsDomainRoutingUpdatePlan) -> Result<bool, String> {
+        // Serialize writers, but keep committed cache state available while BPF
+        // executes. The generation fence still surrounds every map transaction.
+        let _mutation = self.lock_mutation()?;
+        let mut state = self.lock_state()?;
+        if plan.entry.cache_expires_at() <= unix_now() || state.cache.capacity() == 0 {
             return Ok(false);
         }
-        let ResidentDnsDomainRoutingState { cache, owner, .. } = state;
-        cache.insert_with_eviction(plan.key, plan.entry, |evicted, entry| {
-            let removes = evicted
-                .iter()
-                .filter(|(_, entry)| !entry.route_owner_key.is_empty())
-                .map(|(_, entry)| DomainRoutingDnsEvent::remove(&entry.route_owner_key));
-            let update = DomainRoutingDnsEvent::from_keys(
-                &entry.route_owner_key,
-                &entry.domain_bitmap,
-                plan.ips.iter().copied(),
-            );
-            self.apply_events(owner, removes.chain(std::iter::once(update)))
-                .map_err(|error| format!("apply resident DNS domain routing response: {error}"))
-        })
+        let evicted = state
+            .cache
+            .capacity_eviction_key_for_insert(&plan.key)
+            .and_then(|key| state.cache.shared_entry(&key));
+        let mut owner = std::mem::take(&mut state.owner);
+        drop(state);
+        let removes = evicted
+            .iter()
+            .filter(|entry| !entry.route_owner_key.is_empty())
+            .map(|entry| DomainRoutingDnsEvent::remove(&entry.route_owner_key));
+        let update = DomainRoutingDnsEvent::from_keys(
+            &plan.entry.route_owner_key,
+            &plan.entry.domain_bitmap,
+            plan.ips,
+        );
+        let result = self.apply_events(&mut owner, removes.chain(std::iter::once(update)));
+        let mut state = self.lock_state()?;
+        state.owner = owner;
+        result.map_err(|error| format!("apply resident DNS domain routing response: {error}"))?;
+        state
+            .cache
+            .insert_with_eviction(plan.key, plan.entry, |_, _| Ok::<_, String>(()))
     }
 
     pub fn cache_entry_count(&self) -> Result<usize, String> {
@@ -185,31 +204,36 @@ impl ResidentDnsDomainRouting {
     }
 
     pub fn remove_request(&self, request: &DnsPacketView<'_>) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        let Some((removed_key, removed)) = state
-            .cache
-            .remove_packet_question_entry(
-                &request
-                    .questions()
-                    .next()
-                    .ok_or_else(|| "DNS request has no question".to_owned())?,
-            )
-            .map_err(|err| format!("remove resident DNS domain routing cache entry: {err}"))?
-        else {
+        let question = request
+            .questions()
+            .next()
+            .ok_or_else(|| "DNS request has no question".to_owned())?;
+        let key = DnsCacheKey::new(
+            question
+                .qname_to_canonical_string()
+                .map_err(|e| e.to_string())?,
+            question.qtype(),
+            question.qclass(),
+        );
+        let _mutation = self.lock_mutation()?;
+        let mut state = self.lock_state()?;
+        let Some(entry) = state.cache.shared_entry(&key) else {
             return Ok(());
         };
-        if !removed.route_owner_key.is_empty()
-            && let Err(err) = self.apply_event(
-                &mut state.owner,
-                DomainRoutingDnsEvent::remove(&removed.route_owner_key),
+        let mut owner = std::mem::take(&mut state.owner);
+        drop(state);
+        let result = if entry.route_owner_key.is_empty() {
+            Ok(())
+        } else {
+            self.apply_event(
+                &mut owner,
+                DomainRoutingDnsEvent::remove(&entry.route_owner_key),
             )
-        {
-            state.cache.restore_removed_entry(removed_key, removed);
-            return Err(format!("remove resident DNS domain routing owner: {err}"));
-        }
+        };
+        let mut state = self.lock_state()?;
+        state.owner = owner;
+        result.map_err(|e| format!("remove resident DNS domain routing owner: {e}"))?;
+        state.cache.remove(&key);
         drop(state);
         self.maintenance.notify_deadline_changed();
         Ok(())
@@ -217,47 +241,37 @@ impl ResidentDnsDomainRouting {
 
     fn sweep_expired_until(&self, now_unix: i64) -> Result<(), String> {
         loop {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-            if state
+            if self
+                .lock_state()?
                 .cache
                 .next_expiry_unix()
                 .is_none_or(|deadline| deadline > now_unix)
             {
                 return Ok(());
             }
-            self.sweep_expired_batch_locked(now_unix, &mut state)?;
-            let more_expired = state
-                .cache
-                .next_expiry_unix()
-                .is_some_and(|deadline| deadline <= now_unix);
-            drop(state);
-            if !more_expired {
-                return Ok(());
-            }
+            self.sweep_expired_batch(now_unix)?;
             std::thread::yield_now();
         }
     }
 
-    fn sweep_expired_batch_locked(
-        &self,
-        now_unix: i64,
-        state: &mut ResidentDnsDomainRoutingState,
-    ) -> Result<(), String> {
-        // Each caller releases the state lock after this bounded transaction.
-        let expired = state.cache.sweep_entries_limited(now_unix, 128);
+    fn sweep_expired_batch(&self, now_unix: i64) -> Result<(), String> {
+        let _mutation = self.lock_mutation()?;
+        let mut state = self.lock_state()?;
+        let expired = state.cache.expired_entries_shared(now_unix, 128);
+        if expired.is_empty() {
+            return Ok(());
+        }
+        let mut owner = std::mem::take(&mut state.owner);
+        drop(state);
         let events = expired
             .iter()
             .filter(|(_, entry)| !entry.route_owner_key.is_empty())
             .map(|(_, entry)| DomainRoutingDnsEvent::remove(&entry.route_owner_key));
-        if let Err(err) = self.apply_events(&mut state.owner, events) {
-            state.cache.restore_swept_entries(expired);
-            return Err(format!(
-                "remove expired resident DNS domain routing owner: {err}"
-            ));
-        }
+        let result = self.apply_events(&mut owner, events);
+        let mut state = self.lock_state()?;
+        state.owner = owner;
+        result.map_err(|err| format!("remove expired resident DNS domain routing owner: {err}"))?;
+        state.cache.sweep_entries_limited(now_unix, 128);
         Ok(())
     }
 
@@ -310,18 +324,18 @@ impl ResidentDnsDomainRouting {
     }
 
     pub fn activate_generation(&self) -> Result<(), String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
-        self.fence
-            .activate_with(
-                self.generation,
-                self.map_id,
-                &state.owner,
-                apply_domain_routing_state_entries_by_id,
-            )
-            .map_err(|error| format!("activate resident DNS domain routing generation: {error}"))
+        let _mutation = self.lock_mutation()?;
+        let mut state = self.lock_state()?;
+        let owner = std::mem::take(&mut state.owner);
+        drop(state);
+        let result = self.fence.activate_with(
+            self.generation,
+            self.map_id,
+            &owner,
+            apply_domain_routing_state_entries_by_id,
+        );
+        self.lock_state()?.owner = owner;
+        result.map_err(|error| format!("activate resident DNS domain routing generation: {error}"))
     }
 }
 
@@ -348,7 +362,7 @@ impl ResidentDomainRoutingMapOwner {
             &[DomainRoutingIpKey],
         ) -> io::Result<()>,
     ) -> io::Result<()> {
-        let stale_event = event.clone();
+        let mut event = Some(event);
         let mut apply = Some(apply);
         let applied = self.inner.with_active(generation, |state| {
             if state.map_id != Some(map_id) {
@@ -357,6 +371,9 @@ impl ResidentDomainRoutingMapOwner {
             let apply = apply
                 .take()
                 .ok_or_else(|| io::Error::other("domain routing map apply callback was reused"))?;
+            let event = event
+                .take()
+                .ok_or_else(|| io::Error::other("domain routing event was reused"))?;
             let sync_event = event.clone();
             let report = owner.apply_dns_event_with(map_id, event, apply)?;
             if report.owner_snapshot_changed {
@@ -367,7 +384,13 @@ impl ResidentDomainRoutingMapOwner {
             Ok(Some(report))
         })?;
         if applied.flatten().is_none() {
-            owner.apply_dns_event_with(map_id, stale_event, |_, _, _| Ok(()))?;
+            owner.apply_dns_event_with(
+                map_id,
+                event
+                    .take()
+                    .ok_or_else(|| io::Error::other("domain routing event was reused"))?,
+                |_, _, _| Ok(()),
+            )?;
         }
         Ok(())
     }
@@ -384,8 +407,7 @@ impl ResidentDomainRoutingMapOwner {
             &[DomainRoutingIpKey],
         ) -> io::Result<()>,
     ) -> io::Result<()> {
-        let events = events.into_iter().collect::<Vec<_>>();
-        let stale_events = events.clone();
+        let mut events = Some(events.into_iter().collect::<Vec<_>>());
         let mut apply = Some(apply);
         let applied = self.inner.with_active(generation, |state| {
             if state.map_id != Some(map_id) {
@@ -394,6 +416,9 @@ impl ResidentDomainRoutingMapOwner {
             let apply = apply
                 .take()
                 .ok_or_else(|| io::Error::other("domain routing map apply callback was reused"))?;
+            let events = events
+                .take()
+                .ok_or_else(|| io::Error::other("domain routing event was reused"))?;
             let sync_events = events.clone();
             let report = owner.apply_dns_events_with(map_id, events, apply)?;
             if report.owner_snapshot_changed {
@@ -406,7 +431,13 @@ impl ResidentDomainRoutingMapOwner {
             Ok(Some(()))
         })?;
         if applied.flatten().is_none() {
-            owner.apply_dns_events_with(map_id, stale_events, |_, _, _| Ok(()))?;
+            owner.apply_dns_events_with(
+                map_id,
+                events
+                    .take()
+                    .ok_or_else(|| io::Error::other("domain routing event was reused"))?,
+                |_, _, _| Ok(()),
+            )?;
         }
         Ok(())
     }

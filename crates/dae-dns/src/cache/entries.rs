@@ -54,6 +54,41 @@ impl DnsCacheEntries {
         }
     }
 
+    pub(super) fn shared(&self, key: &DnsCacheKey) -> Option<Arc<DnsCacheEntry>> {
+        match self {
+            Self::Small(entries) => entries
+                .iter()
+                .find(|(candidate, _)| candidate == key)
+                .map(|(_, entry)| Arc::clone(entry)),
+            Self::Map { entries, .. } => entries.get(key).map(Arc::clone),
+        }
+    }
+
+    pub(super) fn expired_shared(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> Vec<(DnsCacheKey, Arc<DnsCacheEntry>)> {
+        match self {
+            Self::Small(entries) => entries
+                .iter()
+                .filter(|(_, entry)| entry.cache_expires_at() <= now)
+                .take(limit)
+                .map(|(key, entry)| (key.clone(), Arc::clone(entry)))
+                .collect(),
+            Self::Map { entries, deadlines } => deadlines
+                .iter()
+                .take_while(|(deadline, _)| *deadline <= now)
+                .take(limit)
+                .filter_map(|(_, key)| {
+                    entries
+                        .get(key)
+                        .map(|entry| (key.clone(), Arc::clone(entry)))
+                })
+                .collect(),
+        }
+    }
+
     pub(super) fn get_view(&self, key: DnsCacheKeyView<'_>) -> Option<&DnsCacheEntry> {
         match self {
             Self::Small(entries) => entries.iter().find_map(|(candidate, entry)| {

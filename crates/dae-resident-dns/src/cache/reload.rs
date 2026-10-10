@@ -14,17 +14,20 @@ impl ResidentDnsRuntimeCacheSnapshot {
 impl ResidentDnsRuntimeCache {
     pub fn snapshot_for_reload(&self) -> Result<ResidentDnsRuntimeCacheSnapshot, String> {
         let now_unix = unix_now();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        remove_expired_entries(&mut state, now_unix);
-        let mut entries = state
-            .entries
-            .iter()
-            .filter(|(_, stored)| stored.entry.cache_expires_at() > now_unix)
-            .map(|(key, stored)| (key.clone(), stored.entry.clone()))
-            .collect::<Vec<_>>();
+        let mut entries = Vec::new();
+        for shard in &self.shards {
+            let mut state = shard
+                .lock()
+                .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+            remove_expired_entries(&mut state, now_unix);
+            entries.extend(
+                state
+                    .entries
+                    .iter()
+                    .filter(|(_, stored)| stored.entry.cache_expires_at() > now_unix)
+                    .map(|(key, stored)| (key.clone(), Arc::clone(&stored.entry))),
+            );
+        }
         entries.sort_by(|(left, _), (right, _)| left.cmp(right));
         Ok(ResidentDnsRuntimeCacheSnapshot { entries })
     }
@@ -37,18 +40,18 @@ impl ResidentDnsRuntimeCache {
             return Ok(0);
         }
         let now_unix = unix_now();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        remove_expired_entries(&mut state, now_unix);
         let mut restored = 0_usize;
         for (key, entry) in &snapshot.entries {
             if entry.cache_expires_at() <= now_unix {
                 continue;
             }
+            let mut state = self
+                .shard(&key.base)
+                .lock()
+                .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+            remove_expired_entries(&mut state, now_unix);
             if !state.entries.contains_key(key) {
-                evict_entries(&mut state, now_unix, self.cache_entry_limit);
+                evict_entries(&mut state, now_unix, self.shard_limit(&key.base));
             }
             insert_cache_entry(&mut state, key.clone(), Arc::clone(entry));
             restored += 1;
