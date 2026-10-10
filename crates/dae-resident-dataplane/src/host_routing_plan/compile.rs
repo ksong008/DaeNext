@@ -7,7 +7,6 @@ pub(super) fn compile_rule(
 ) -> Result<(), String> {
     let outbound = parse_outbound(&rule.outbound, groups)?;
     for (function_index, function) in rule.and_functions.iter().enumerate() {
-        let function = aliased_function(function);
         let grouped = grouped_params(&function.params);
         if grouped.is_empty() {
             return Err(format!("function {} has no params", function.name));
@@ -23,7 +22,7 @@ pub(super) fn compile_rule(
             } else {
                 logical_outbound(OutboundIndex::LOGICAL_OR)
             };
-            add_function_match_sets(plan, resolver, &function, &key, values, outbound)?;
+            add_function_match_sets(plan, resolver, function, key, values, outbound)?;
         }
     }
     Ok(())
@@ -34,7 +33,7 @@ pub(super) fn add_function_match_sets(
     resolver: &GeodataResolver,
     function: &Function,
     param_key: &str,
-    values: Vec<String>,
+    values: Vec<&str>,
     outbound: OutboundSpec,
 ) -> Result<(), String> {
     match function.name.as_str() {
@@ -45,7 +44,8 @@ pub(super) fn add_function_match_sets(
                 ));
             }
             let rule_index = plan.matches.len();
-            let values = resolver.shared_domain_set(param_key, values)?;
+            let values = resolver
+                .shared_domain_set(param_key, values.into_iter().map(str::to_owned).collect())?;
             plan.domain_sets
                 .push(ResidentDomainSet { rule_index, values });
             plan.matches.push(match_set(

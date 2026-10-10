@@ -1,8 +1,8 @@
 use super::*;
-pub(super) fn parse_l4_proto(values: &[String]) -> Result<u8, String> {
+pub(super) fn parse_l4_proto(values: &[impl AsRef<str>]) -> Result<u8, String> {
     let mut value = 0_u8;
     for item in values {
-        match item.as_str() {
+        match item.as_ref() {
             "tcp" => value |= L4_TCP,
             "udp" => value |= L4_UDP,
             other => return Err(format!("unsupported l4proto: {other}")),
@@ -14,10 +14,10 @@ pub(super) fn parse_l4_proto(values: &[String]) -> Result<u8, String> {
     Ok(value)
 }
 
-pub(super) fn parse_ip_version(values: &[String]) -> Result<u8, String> {
+pub(super) fn parse_ip_version(values: &[impl AsRef<str>]) -> Result<u8, String> {
     let mut value = 0_u8;
     for item in values {
-        match item.as_str() {
+        match item.as_ref() {
             "4" => value |= IP_VERSION_4,
             "6" => value |= IP_VERSION_6,
             other => return Err(format!("unsupported ipversion: {other}")),
@@ -50,10 +50,13 @@ pub(super) fn parse_port_range(value: &str) -> Result<(u16, u16), String> {
 
 pub(super) fn parse_ip_prefix_group(
     param_key: &str,
-    values: &[String],
+    values: &[impl AsRef<str>],
 ) -> Result<Vec<IpPrefix>, String> {
     match param_key {
-        "" => values.iter().map(|value| parse_ip_prefix(value)).collect(),
+        "" => values
+            .iter()
+            .map(|value| parse_ip_prefix(value.as_ref()))
+            .collect(),
         other => Err(format!("unsupported resident ip parameter key: {other}")),
     }
 }

@@ -9,17 +9,17 @@ pub(super) fn aliased_function(function: &Function) -> Function {
     function
 }
 
-pub(super) fn grouped_params(params: &[Param]) -> Vec<(String, Vec<String>)> {
-    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+pub(super) fn grouped_params(params: &[Param]) -> Vec<(&str, Vec<&str>)> {
+    let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     let mut order = Vec::new();
     for param in params {
-        if !groups.contains_key(&param.key) {
-            order.push(param.key.clone());
+        if !groups.contains_key(param.key.as_str()) {
+            order.push(param.key.as_str());
         }
         groups
-            .entry(param.key.clone())
+            .entry(param.key.as_str())
             .or_default()
-            .push(param.val.clone());
+            .push(param.val.as_str());
     }
     order
         .into_iter()
