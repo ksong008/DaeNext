@@ -10,7 +10,9 @@ use std::time::Duration;
 use dae_product_core::product_civil_from_days;
 use dae_product_core::product_iso8601_utc;
 use dae_product_core::{product_now_text, unix_now};
-use dae_product_persistence::{ensure_state_schema, open_state_connection, set_metadata};
+use dae_product_persistence::{
+    ensure_state_schema, open_state_connection, set_metadata, set_metadata_batch,
+};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
@@ -27,6 +29,7 @@ pub struct ScheduledSubscription {
 pub struct ScheduledSubscriptionScan {
     pub due: Vec<ScheduledSubscription>,
     pub invalid_cron: Vec<InvalidScheduledSubscriptionCron>,
+    pub next_deadline: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,8 +79,14 @@ pub fn due_scheduled_subscriptions(
         .map_err(scheduler_sqlite_io_error)?;
     let mut due = Vec::new();
     let mut invalid = Vec::new();
+    let mut next_deadline = None;
     for row in rows {
         let subscription = row.map_err(scheduler_sqlite_io_error)?;
+        if let Some(deadline) =
+            subscription_next_deadline(&subscription.cron_exp, &subscription.updated_at, now_unix)
+        {
+            next_deadline = min_deadline(next_deadline, deadline);
+        }
         match subscription_due_at(&subscription.cron_exp, &subscription.updated_at, now_unix) {
             Ok(true) => due.push(subscription),
             Ok(false) => {}
@@ -90,6 +99,7 @@ pub fn due_scheduled_subscriptions(
     Ok(ScheduledSubscriptionScan {
         due,
         invalid_cron: invalid,
+        next_deadline,
     })
 }
 
@@ -112,23 +122,26 @@ pub fn next_scheduled_subscription_deadline(
     let mut next_deadline = None;
     for row in rows {
         let (updated_at, cron_exp) = row.map_err(scheduler_sqlite_io_error)?;
-        let Ok(cron) = parse_cron_expression(&cron_exp) else {
-            continue;
-        };
-        let Some(last_unix) = parse_iso8601_utc(&updated_at) else {
-            next_deadline = min_deadline(next_deadline, now_unix.saturating_add(60));
-            continue;
-        };
-        if last_unix < now_unix && next_cron_moment_after(&cron, last_unix, now_unix).is_some() {
-            next_deadline = min_deadline(next_deadline, now_unix.saturating_add(60));
-            continue;
-        }
-        let horizon = now_unix.saturating_add(4 * 366 * 24 * 60 * 60);
-        if let Some(deadline) = next_cron_moment_after(&cron, now_unix, horizon) {
+        if let Some(deadline) = subscription_next_deadline(&cron_exp, &updated_at, now_unix) {
             next_deadline = min_deadline(next_deadline, deadline);
         }
     }
     Ok(next_deadline)
+}
+
+fn subscription_next_deadline(cron_exp: &str, updated_at: &str, now_unix: u64) -> Option<u64> {
+    let cron = parse_cron_expression(cron_exp).ok()?;
+    let Some(last) = parse_iso8601_utc(updated_at) else {
+        return Some(now_unix.saturating_add(60));
+    };
+    if last < now_unix && next_cron_moment_after(&cron, last, now_unix).is_some() {
+        return Some(now_unix.saturating_add(60));
+    }
+    next_cron_moment_after(
+        &cron,
+        now_unix,
+        now_unix.saturating_add(4 * 366 * 24 * 60 * 60),
+    )
 }
 
 fn min_deadline(current: Option<u64>, candidate: u64) -> Option<u64> {
@@ -309,7 +322,36 @@ fn next_field_value(values: &BTreeSet<u8>, current: u8) -> Option<u8> {
     values.iter().find(|value| **value > current).copied()
 }
 
-fn parse_cron_expression(raw: &str) -> Result<CronExpression, String> {
+fn parse_cron_expression(raw: &str) -> Result<Arc<CronExpression>, String> {
+    type CronCache = HashMap<String, (Result<Arc<CronExpression>, String>, u64)>;
+    static CACHE: OnceLock<Mutex<CronCache>> = OnceLock::new();
+    static TICK: AtomicU64 = AtomicU64::new(1);
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "subscription cron cache poisoned".to_owned())?;
+    let tick = TICK.fetch_add(1, Ordering::Relaxed);
+    if let Some((value, used)) = cache.get_mut(raw) {
+        *used = tick;
+        return value.clone();
+    }
+    let result = parse_cron_expression_uncached(raw).map(Arc::new);
+    if raw.len() <= 4096 {
+        if cache.len() >= 128 {
+            let oldest = cache
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| key.clone());
+            if let Some(key) = oldest {
+                cache.remove(&key);
+            }
+        }
+        cache.insert(raw.to_owned(), (result.clone(), tick));
+    }
+    result
+}
+
+fn parse_cron_expression_uncached(raw: &str) -> Result<CronExpression, String> {
     let fields = raw.split_whitespace().collect::<Vec<_>>();
     if fields.len() != 5 {
         return Err(format!(
@@ -658,12 +700,14 @@ fn run_subscription_scheduler<C: SubscriptionSchedulerCallbacks + 'static>(
     let mut invalid_cron = InvalidCronLogTracker::default();
     loop {
         let mut wake_during_refresh = false;
+        let mut scanned_wait = None;
         let refresh = refresh_due_subscriptions_with_control(
             callbacks.as_ref(),
             &state,
             &config_dir,
             unix_now(),
             &mut invalid_cron,
+            Some(&mut scanned_wait),
             || loop {
                 match stop.try_recv() {
                     Ok(SchedulerCommand::Wake) => wake_during_refresh = true,
@@ -688,7 +732,10 @@ fn run_subscription_scheduler<C: SubscriptionSchedulerCallbacks + 'static>(
         if wake_during_refresh {
             continue;
         }
-        let wait = match subscription_scheduler_wait(&state, unix_now()) {
+        let wait = match scanned_wait
+            .map(Ok)
+            .unwrap_or_else(|| subscription_scheduler_wait(&state, unix_now()))
+        {
             Ok(Some(wait)) => Some(wait),
             Ok(None) => None,
             Err(_) => Some(Duration::from_secs(60)),
@@ -743,6 +790,7 @@ pub fn refresh_due_subscriptions_with_callbacks<C: SubscriptionSchedulerCallback
         config_dir,
         now_unix,
         invalid_cron,
+        None,
         || false,
     )?
     .ok_or_else(|| io::Error::new(io::ErrorKind::Interrupted, "subscription refresh cancelled"))
@@ -754,6 +802,7 @@ fn refresh_due_subscriptions_with_control<C, F>(
     config_dir: &Path,
     now_unix: u64,
     invalid_cron: &mut InvalidCronLogTracker,
+    next_wait: Option<&mut Option<Option<Duration>>>,
     mut stop_requested: F,
 ) -> io::Result<Option<Value>>
 where
@@ -777,6 +826,14 @@ where
         );
     }
 
+    if scan.due.is_empty()
+        && let Some(wait) = next_wait
+    {
+        *wait = Some(
+            scan.next_deadline
+                .map(|deadline| Duration::from_secs(deadline.saturating_sub(now_unix).max(1))),
+        );
+    }
     let attempted = scan.due.len();
     let mut fetched = 0_usize;
     let mut fetch_errors = 0_usize;
@@ -831,16 +888,15 @@ where
     }
     let runtime_apply = callbacks.apply_runtime(state, config_dir, runtime_input_changes > 0);
     let checked_at = product_iso8601_utc(now_unix);
-    let _ = set_metadata(state, "subscription_scheduler_last_tick_at", &checked_at);
-    let _ = set_metadata(
+    let due_count = scan.due.len().to_string();
+    let invalid_count = scan.invalid_cron.len().to_string();
+    let _ = set_metadata_batch(
         state,
-        "subscription_scheduler_last_due_count",
-        &scan.due.len().to_string(),
-    );
-    let _ = set_metadata(
-        state,
-        "subscription_scheduler_last_invalid_count",
-        &scan.invalid_cron.len().to_string(),
+        &[
+            ("subscription_scheduler_last_tick_at", &checked_at),
+            ("subscription_scheduler_last_due_count", &due_count),
+            ("subscription_scheduler_last_invalid_count", &invalid_count),
+        ],
     );
     Ok(Some(json!({
         "checkedAt": checked_at,
@@ -1130,6 +1186,7 @@ mod tests {
             &directory,
             unix_utc(2026, 6, 17, 0, 2, 0),
             &mut invalid_cron,
+            None,
             || callbacks.refresh_calls.load(Ordering::Relaxed) >= 1,
         )
         .unwrap();

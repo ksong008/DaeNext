@@ -9,17 +9,24 @@ enum StateMigrationFault {
 }
 
 pub fn ensure_state_schema(path: &Path) -> io::Result<()> {
+    pool::with_initialized_connection(path, |_| Ok(()))
+}
+
+pub(super) fn open_initialized_state_connection(path: &Path) -> io::Result<Connection> {
     ensure_state_schema_with_fault(path, StateMigrationFault::None)
 }
 
-fn ensure_state_schema_with_fault(path: &Path, fault: StateMigrationFault) -> io::Result<()> {
+fn ensure_state_schema_with_fault(
+    path: &Path,
+    fault: StateMigrationFault,
+) -> io::Result<Connection> {
     if path.exists() {
         let read_only = open_state_connection_read_only(path)?;
         quick_check_state_connection(&read_only)?;
         let version = state_schema_version(&read_only)?;
         reject_newer_state_schema(version)?;
         if version == STATE_SCHEMA_VERSION {
-            validate_state_connection_read_only(&read_only)?;
+            validate_required_state_tables(&list_tables(&read_only)?)?;
             drop(read_only);
             if let Some(parent) = path.parent() {
                 set_private_state_dir_permissions(parent)?;
@@ -28,7 +35,7 @@ fn ensure_state_schema_with_fault(path: &Path, fault: StateMigrationFault) -> io
             let conn = open_state_connection_read_write_unchecked(path)?;
             conn.pragma_update(None, "journal_mode", "WAL")
                 .map_err(sqlite_io_error)?;
-            return Ok(());
+            return Ok(conn);
         }
     }
 
@@ -62,12 +69,12 @@ fn ensure_state_schema_with_fault(path: &Path, fault: StateMigrationFault) -> io
         set_private_state_dir_permissions(parent)?;
     }
     set_private_db_permissions(path)?;
-    Ok(())
+    Ok(conn)
 }
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn ensure_state_schema_with_precommit_failure(path: &Path) -> io::Result<()> {
-    ensure_state_schema_with_fault(path, StateMigrationFault::BeforeCommit)
+    ensure_state_schema_with_fault(path, StateMigrationFault::BeforeCommit).map(drop)
 }
 
 pub fn migrate_wing_db(from_wing_db: &Path, to: &Path, force: bool) -> io::Result<Value> {

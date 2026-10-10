@@ -79,16 +79,17 @@ pub mod identity {
 /// Curated persistence contracts consumed by the daemon host adapter.
 pub mod persistence {
     pub use dae_product_persistence::{
-        FaultCheckpoints, NoopFaultCheckpoints, ProductUserRecord, RunningRuntimeState,
-        RuntimeDesiredStateRevision, RuntimeSectionState, STATE_DB_BUSY_TIMEOUT,
-        STATE_SCHEMA_VERSION, apply_state_schema, bump_runtime_external_input_version,
-        bump_runtime_geodata_input_version_with_connection, count_table, create_synced_file,
-        current_runtime_external_input_version, current_runtime_geodata_input_version,
-        ensure_state_schema, get_metadata, group_ids_text, group_version_sum,
-        inspect_state_connection_read_only, load_user_by_username, migrate_wing_db,
-        open_state_connection, open_state_connection_read_only, query_json_storage,
-        remove_json_storage, running_runtime_state, runtime_desired_state_revision_from_connection,
-        save_json_storage, selected_id, selected_section_state, set_json_storage, set_metadata,
+        FaultCheckpoints, NoopFaultCheckpoints, ProductUserRecord, ReverseFileLineReader,
+        RunningRuntimeState, RuntimeDesiredStateRevision, RuntimeSectionState,
+        STATE_DB_BUSY_TIMEOUT, STATE_SCHEMA_VERSION, apply_state_schema,
+        bump_runtime_external_input_version, bump_runtime_geodata_input_version_with_connection,
+        count_table, create_synced_file, current_runtime_external_input_version,
+        current_runtime_geodata_input_version, ensure_state_schema, get_metadata, group_ids_text,
+        group_version_sum, inspect_state_connection_read_only, load_user_by_username,
+        migrate_wing_db, open_state_connection, open_state_connection_read_only,
+        query_json_storage, remove_json_storage, running_runtime_state,
+        runtime_desired_state_revision_from_connection, save_json_storage, selected_id,
+        selected_section_state, set_json_storage, set_metadata, set_metadata_batch,
         sha256_file_hex, sqlite_io_error, state_check_report, state_schema_version, sync_directory,
         user_resource, validate_state_connection_read_only,
     };

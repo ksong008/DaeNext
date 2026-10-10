@@ -23,7 +23,7 @@
     },
     "dae-product-persistence": {
       "production": 2364,
-      "tests": 0
+      "tests": 311
     },
     "dae-product-runtime": {
       "production": 6800,
