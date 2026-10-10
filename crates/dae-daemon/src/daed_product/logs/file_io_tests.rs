@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "snapshot_response_tests.rs"]
+mod snapshot_response_tests;
+
 #[cfg(test)]
 thread_local! {
     pub(crate) static LOG_CLEAR_INTERRUPT_AFTER_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

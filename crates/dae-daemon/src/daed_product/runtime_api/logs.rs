@@ -30,8 +30,26 @@ pub(in crate::daed_product) fn api_logs(app: &AppState, request: &HttpRequest) -
         limit,
     ) {
         Ok(value) => HttpResponse::json(200, value),
-        Err(err) => HttpResponse::json(500, json!({"error": err.to_string()})),
+        Err(err) => log_query_error_response(err),
     }
+}
+
+pub(in crate::daed_product) fn log_query_error_response(err: io::Error) -> HttpResponse {
+    if err.kind() != io::ErrorKind::WouldBlock {
+        return HttpResponse::json(500, json!({"error": err.to_string()}));
+    }
+    let mut response = HttpResponse::json(
+        503,
+        json!({
+            "error": err.to_string(),
+            "errorCode": "log_snapshot_unstable",
+            "retryable": true,
+        }),
+    );
+    response
+        .extra_headers
+        .push(("Retry-After".to_owned(), "1".to_owned()));
+    response
 }
 
 pub(in crate::daed_product) fn log_level_filter_from_request(
