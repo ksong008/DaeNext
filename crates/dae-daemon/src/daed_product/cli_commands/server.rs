@@ -265,9 +265,14 @@ pub(crate) fn record_startup_runtime_restore_failure(config_dir: &Path, state: &
         "error",
         &format!("[Startup] runtime restore waiting for host readiness: {err}"),
     );
-    let _ = set_metadata(state, "runtime_transition_phase", "waiting-for-host");
-    let _ = set_metadata(state, "runtime_running", "false");
-    let _ = set_metadata(state, "runtime_last_apply_error", err);
+    let _ = dae_product_control::persistence::set_metadata_batch(
+        state,
+        &[
+            ("runtime_transition_phase", "waiting-for-host"),
+            ("runtime_running", "false"),
+            ("runtime_last_apply_error", err),
+        ],
+    );
 }
 
 pub(crate) fn restore_runtime_from_state(

@@ -56,20 +56,7 @@ pub fn inspect_state_connection_read_only(
 
     let tables = list_tables(conn)?;
     if schema_current {
-        let missing = STATE_REQUIRED_TABLES
-            .iter()
-            .copied()
-            .filter(|required| !tables.iter().any(|table| table == required))
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "state schema is incomplete; missing required tables: {}",
-                    missing.join(", ")
-                ),
-            ));
-        }
+        validate_required_state_tables(&tables)?;
     }
     let user_count = if tables.iter().any(|table| table == "users") {
         Some(
@@ -86,6 +73,24 @@ pub fn inspect_state_connection_read_only(
         tables,
         user_count,
     })
+}
+
+pub(super) fn validate_required_state_tables(tables: &[String]) -> io::Result<()> {
+    let missing = STATE_REQUIRED_TABLES
+        .iter()
+        .copied()
+        .filter(|required| !tables.iter().any(|table| table == required))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "state schema is incomplete; missing required tables: {}",
+                missing.join(", ")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 pub fn quick_check_state_connection(conn: &Connection) -> io::Result<()> {

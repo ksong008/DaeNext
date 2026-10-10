@@ -20,6 +20,7 @@ mod input_versions;
 mod integrity;
 mod metadata;
 mod migration;
+mod pool;
 mod schema;
 mod selected_resources;
 
@@ -55,7 +56,9 @@ fn set_private_db_permissions(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o640))?;
+        if fs::metadata(path)?.permissions().mode() & 0o7777 != 0o640 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))?;
+        }
     }
     #[cfg(not(unix))]
     let _ = path;
