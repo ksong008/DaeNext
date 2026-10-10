@@ -1,4 +1,36 @@
 use super::*;
+
+#[test]
+fn large_unordered_owner_snapshot_preserves_delta_membership() {
+    let mut tracker = DomainRoutingTracker::default();
+    let mut old = DomainRoutingOwnerSnapshot {
+        bitmap: bitmap([1]),
+        ips: Vec::new(),
+    };
+    let mut next = DomainRoutingOwnerSnapshot {
+        bitmap: bitmap([2]),
+        ips: Vec::new(),
+    };
+    for i in 1..=64 {
+        old.ips.push(parse_ip_key(&format!("192.0.2.{i}")).unwrap());
+    }
+    next.ips.extend(old.ips[32..].iter().rev().copied());
+    next.ips.push(next.ips[0]);
+    tracker.sync_owner("owner-a", old);
+    tracker.sync_owner(
+        "owner-b",
+        DomainRoutingOwnerSnapshot::new(&[4], &["192.0.2.1"]),
+    );
+    let plan = tracker.plan_owner_update("owner-a", &next);
+    let mut expected = next.clone();
+    expected.ips.sort_unstable();
+    expected.ips.dedup();
+    assert_eq!(plan, tracker.plan_owner_update("owner-a", &expected));
+    assert_eq!(plan.deletes.len(), 31);
+    assert_eq!(plan.updates.len(), 33);
+    tracker.sync_owner("owner-a", next);
+    assert_eq!(tracker.ip_count(), 33);
+}
 #[test]
 pub(super) fn domain_routing_owner_tracker_matches_golden_fixture() {
     let fixture = load("control/domain_routing_tracker/basic.json");

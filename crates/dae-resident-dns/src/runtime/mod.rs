@@ -983,7 +983,12 @@ pub fn dns_cache_key_for_request(request: &DnsPacketView<'_>) -> Result<DnsCache
     let qname = question
         .qname_to_canonical_string()
         .map_err(|err| format!("read DNS request qname for cache key: {err}"))?;
-    Ok(DnsCacheKey::new(qname, question.qtype(), question.qclass()))
+    // The packet reader already returned a canonical name; retain its allocation.
+    Ok(DnsCacheKey {
+        qname,
+        qtype: question.qtype(),
+        qclass: question.qclass(),
+    })
 }
 
 fn dns_response_cache_key_for_request_action(
@@ -995,12 +1000,12 @@ fn dns_response_cache_key_for_request_action(
     let scope = match action {
         ResidentDnsRequestAction::AsIs => ResidentDnsResponseCacheScope::AsIs { original_dst },
         ResidentDnsRequestAction::Reject => ResidentDnsResponseCacheScope::Reject,
-        ResidentDnsRequestAction::Upstream(upstream) => ResidentDnsResponseCacheScope::upstream(
-            upstream.index,
-            upstream.scheme.as_str(),
-            &upstream.target.authority,
-            &upstream.path,
-        ),
+        ResidentDnsRequestAction::Upstream(upstream) => ResidentDnsResponseCacheScope::Upstream {
+            index: upstream.index,
+            scheme: upstream.scheme.as_str(),
+            authority: Arc::clone(&upstream.target.authority),
+            path: Arc::clone(&upstream.path),
+        },
     };
     Ok(ResidentDnsResponseCacheKey::new(base, scope))
 }

@@ -46,7 +46,9 @@ fn insert_after_sweep_gap_keeps_expired_owner_reachable_by_maintenance() {
     )
     .unwrap()
     .unwrap();
-    routing.commit_response_locked(&mut state, plan).unwrap();
+    drop(state);
+    routing.commit_response(plan).unwrap();
+    let state = routing.state.lock().unwrap();
     assert_eq!(state.cache.len(), 2);
     assert_eq!(
         state.cache.snapshot_live_entries_shared(unix_now()).len(),
@@ -57,9 +59,9 @@ fn insert_after_sweep_gap_keeps_expired_owner_reachable_by_maintenance() {
         2,
         "snapshot must not orphan expired owners"
     );
-    routing
-        .sweep_expired_batch_locked(unix_now(), &mut state)
-        .unwrap();
+    drop(state);
+    routing.sweep_expired_batch(unix_now()).unwrap();
+    let state = routing.state.lock().unwrap();
     assert_eq!(state.cache.len(), 1);
     assert_eq!(state.owner.tracker().owner_count(), 1);
     assert_eq!(state.owner.tracker().ip_count(), 1);
@@ -574,4 +576,41 @@ fn same_logical_id_from_another_physical_runtime_cannot_write() {
         .unwrap()
         .unwrap();
     assert!(entries.is_empty());
+}
+
+#[test]
+fn bpf_commit_keeps_committed_cache_readable_and_releases_state_lock() {
+    static ROUTING: std::sync::OnceLock<Arc<ResidentDnsDomainRouting>> = std::sync::OnceLock::new();
+    fn check_state(
+        _: u32,
+        _: &[DomainRoutingStateEntry],
+        _: &[DomainRoutingIpKey],
+    ) -> io::Result<()> {
+        let state = ROUTING
+            .get()
+            .unwrap()
+            .state
+            .try_lock()
+            .expect("BPF holds DNS state lock");
+        assert_eq!(
+            state.cache.len(),
+            0,
+            "uncommitted cache entry was published"
+        );
+        Ok(())
+    }
+    let mut routing = matching_domain_routing();
+    routing.test_apply_map = Some(check_state);
+    let routing = Arc::new(routing);
+    assert!(ROUTING.set(Arc::clone(&routing)).is_ok());
+    routing
+        .record_accepted_response(&response_plan(
+            "outside.example.test",
+            "192.0.2.1",
+            unix_now() + 300,
+        ))
+        .unwrap();
+    let state = routing.state.lock().unwrap();
+    assert_eq!(state.cache.len(), 1);
+    assert_eq!(state.owner.tracker().owner_count(), 1);
 }

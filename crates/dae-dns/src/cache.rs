@@ -284,6 +284,10 @@ impl DnsCacheStore {
         self.entries.live_count(now_unix)
     }
 
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -300,6 +304,18 @@ impl DnsCacheStore {
         self.entries
             .remove(key)
             .map(|entry| Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()))
+    }
+
+    pub fn shared_entry(&self, key: &DnsCacheKey) -> Option<Arc<DnsCacheEntry>> {
+        self.entries.shared(key)
+    }
+
+    pub fn expired_entries_shared(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> Vec<(DnsCacheKey, Arc<DnsCacheEntry>)> {
+        self.entries.expired_shared(now, limit)
     }
 
     pub fn capacity_eviction_key_for_insert(&mut self, key: &DnsCacheKey) -> Option<DnsCacheKey> {

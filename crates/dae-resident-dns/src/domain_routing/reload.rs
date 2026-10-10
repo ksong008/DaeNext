@@ -37,10 +37,7 @@ impl ResidentDnsDomainRouting {
     ) -> Result<ResidentDnsDomainRoutingRestoreReport, String> {
         let now_unix = unix_now();
         self.sweep_expired_until(now_unix)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
+        let mut domain_bitmap = Vec::new();
         let mut report = ResidentDnsDomainRoutingRestoreReport::default();
         for (key, entry) in &snapshot.accepted_responses {
             if entry.cache_expires_at() <= now_unix {
@@ -49,7 +46,7 @@ impl ResidentDnsDomainRouting {
             }
             let Some(plan) = build_resident_dns_domain_routing_update_plan_from_entry(
                 &self.routing_matcher,
-                &mut state.domain_bitmap,
+                &mut domain_bitmap,
                 key,
                 entry,
             )?
@@ -57,13 +54,13 @@ impl ResidentDnsDomainRouting {
                 report.skipped_unmatched_entries += 1;
                 continue;
             };
-            if self.commit_response_locked(&mut state, plan)? {
+            if self.commit_response(plan)? {
                 report.accepted_response_entries += 1;
             } else {
                 report.skipped_expired_entries += 1;
             }
         }
-        drop(state);
+
         self.maintenance.notify_deadline_changed();
         Ok(report)
     }

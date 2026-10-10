@@ -37,8 +37,19 @@ impl DomainRoutingTracker {
 
         let mut updates = Vec::new();
         let mut deletes = Vec::new();
+        // DNS normally supplies only a few addresses. Large public snapshots
+        // may be unordered, so sort once instead of scanning them for every IP.
+        let sorted_ips = (snapshot.ips.len() > 16).then(|| {
+            let mut ips = snapshot.ips.clone();
+            ips.sort_unstable();
+            ips
+        });
         for ip in affected {
-            let (bitmap, present) = self.desired_bitmap_for_key(&ip, owner_key, snapshot);
+            let contains = sorted_ips.as_ref().map_or_else(
+                || snapshot.ips.contains(&ip),
+                |ips| ips.binary_search(&ip).is_ok(),
+            );
+            let (bitmap, present) = self.desired_bitmap_for_key(&ip, owner_key, snapshot, contains);
             let current = self.ips.get(&ip);
             match (present, current) {
                 (false, Some(_)) => deletes.push(ip),
@@ -150,6 +161,7 @@ impl DomainRoutingTracker {
         key: &DomainRoutingIpKey,
         owner_key: &str,
         snapshot: &DomainRoutingOwnerSnapshot,
+        contains: bool,
     ) -> ([u32; 32], bool) {
         let mut bitmap = [0; 32];
         let mut present = false;
@@ -162,7 +174,7 @@ impl DomainRoutingTracker {
                 present = true;
             }
         }
-        if !snapshot.is_empty() && snapshot.ips.contains(key) {
+        if !snapshot.is_empty() && contains {
             or_bitmap(&mut bitmap, &snapshot.bitmap);
             present = true;
         }

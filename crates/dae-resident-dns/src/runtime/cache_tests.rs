@@ -122,18 +122,18 @@ fn resident_dns_response_cache_is_scoped_by_upstream_identity() {
         &request,
         ResidentDnsResponseCacheScope::Upstream {
             index: 1,
-            scheme: ResidentDnsUpstreamScheme::TcpUdp.as_str().to_owned(),
-            authority: "resolver-a.fixture.invalid:53".to_owned(),
-            path: String::new(),
+            scheme: ResidentDnsUpstreamScheme::TcpUdp.as_str(),
+            authority: "resolver-a.fixture.invalid:53".into(),
+            path: "".into(),
         },
     );
     let second = test_scoped_cache_key(
         &request,
         ResidentDnsResponseCacheScope::Upstream {
             index: 2,
-            scheme: ResidentDnsUpstreamScheme::TcpUdp.as_str().to_owned(),
-            authority: "resolver-b.fixture.invalid:53".to_owned(),
-            path: String::new(),
+            scheme: ResidentDnsUpstreamScheme::TcpUdp.as_str(),
+            authority: "resolver-b.fixture.invalid:53".into(),
+            path: "".into(),
         },
     );
     cache

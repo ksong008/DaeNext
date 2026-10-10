@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, hash_map::RandomState};
+use std::hash::BuildHasher;
 use std::net::SocketAddr;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicI64, AtomicUsize, Ordering},
 };
 
 use dae_resident_core::ResidentDnsResourceProfile;
@@ -23,7 +24,9 @@ const DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES: usize = 4 * 1024;
 
 #[derive(Debug)]
 pub struct ResidentDnsRuntimeCache {
-    state: Mutex<ResidentDnsRuntimeCacheState>,
+    shards: Vec<Mutex<ResidentDnsRuntimeCacheState>>,
+    shard_hasher: RandomState,
+    next_sweep: AtomicI64,
     inflight: Mutex<BTreeMap<ResidentDnsResponseCacheKey, Arc<ResidentDnsFlightState>>>,
     cache_entry_limit: usize,
     flight_entry_limit: usize,
@@ -35,7 +38,9 @@ impl Default for ResidentDnsRuntimeCache {
     fn default() -> Self {
         let resources = ResidentDnsResourceProfile::selected();
         Self {
-            state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
+            shards: Self::new_shards(resources.dns_cache_entry_limit()),
+            shard_hasher: RandomState::new(),
+            next_sweep: AtomicI64::new(0),
             inflight: Mutex::new(BTreeMap::new()),
             cache_entry_limit: resources.dns_cache_entry_limit(),
             flight_entry_limit: resources.flight_entry_limit(),
@@ -75,9 +80,9 @@ pub enum ResidentDnsResponseCacheScope {
     },
     Upstream {
         index: u8,
-        scheme: String,
-        authority: String,
-        path: String,
+        scheme: &'static str,
+        authority: Arc<str>,
+        path: Arc<str>,
     },
 }
 
@@ -102,12 +107,12 @@ impl ResidentDnsResponseCacheKey {
 }
 
 impl ResidentDnsResponseCacheScope {
-    pub fn upstream(index: u8, scheme: &str, authority: &str, path: &str) -> Self {
+    pub fn upstream(index: u8, scheme: &'static str, authority: &str, path: &str) -> Self {
         Self::Upstream {
             index,
-            scheme: scheme.to_owned(),
-            authority: authority.to_owned(),
-            path: path.to_owned(),
+            scheme,
+            authority: authority.into(),
+            path: path.into(),
         }
     }
 }
@@ -198,11 +203,31 @@ pub struct ResidentDnsFlightPermit<'a> {
 }
 
 impl ResidentDnsRuntimeCache {
+    fn new_shards(limit: usize) -> Vec<Mutex<ResidentDnsRuntimeCacheState>> {
+        let count = if limit < 64 { 1 } else { 16 };
+        (0..count).map(|_| Mutex::default()).collect()
+    }
+
+    fn shard_index(&self, key: &DnsCacheKey) -> usize {
+        (self.shard_hasher.hash_one(key) as usize) % self.shards.len()
+    }
+
+    fn shard(&self, key: &DnsCacheKey) -> &Mutex<ResidentDnsRuntimeCacheState> {
+        &self.shards[self.shard_index(key)]
+    }
+
+    fn shard_limit(&self, key: &DnsCacheKey) -> usize {
+        self.cache_entry_limit / self.shards.len()
+            + usize::from(self.shard_index(key) < self.cache_entry_limit % self.shards.len())
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_cache_entry_limit(cache_entry_limit: usize) -> Self {
         let resources = ResidentDnsResourceProfile::selected();
         Self {
-            state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
+            shards: Self::new_shards(cache_entry_limit.max(1)),
+            shard_hasher: RandomState::new(),
+            next_sweep: AtomicI64::new(0),
             inflight: Mutex::new(BTreeMap::new()),
             cache_entry_limit: cache_entry_limit.max(1),
             flight_entry_limit: resources.flight_entry_limit(),
@@ -231,7 +256,9 @@ impl ResidentDnsRuntimeCache {
     ) -> Self {
         let resources = ResidentDnsResourceProfile::selected();
         Self {
-            state: Mutex::new(ResidentDnsRuntimeCacheState::default()),
+            shards: Self::new_shards(resources.dns_cache_entry_limit()),
+            shard_hasher: RandomState::new(),
+            next_sweep: AtomicI64::new(0),
             inflight: Mutex::new(BTreeMap::new()),
             cache_entry_limit: resources.dns_cache_entry_limit(),
             flight_entry_limit: flight_entry_limit.max(1),
@@ -319,7 +346,7 @@ impl ResidentDnsRuntimeCache {
         // serialize other cache users or mutate the stored response.
         let entry = {
             let mut state = self
-                .state
+                .shard(&key.base)
                 .lock()
                 .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
             lookup_scoped_response_snapshot(&mut state, now_unix, key, ignore_fixed_ttl)
@@ -345,7 +372,7 @@ impl ResidentDnsRuntimeCache {
     ) -> Result<bool, String> {
         let now_unix = unix_now();
         let mut state = self
-            .state
+            .shard(key)
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
         sweep_expired_if_due(&mut state, now_unix);
@@ -368,13 +395,28 @@ impl ResidentDnsRuntimeCache {
         if entry.packed_response.len() > DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES {
             return Ok(());
         }
+        if self
+            .next_sweep
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                (next <= now_unix)
+                    .then_some(now_unix.saturating_add(DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS))
+            })
+            .is_ok()
+        {
+            for shard in &self.shards {
+                let mut state = shard
+                    .lock()
+                    .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+                sweep_expired_if_due(&mut state, now_unix);
+            }
+        }
         let mut state = self
-            .state
+            .shard(&key.base)
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
         sweep_expired_if_due(&mut state, now_unix);
         if !state.entries.contains_key(&key) {
-            evict_entries(&mut state, now_unix, self.cache_entry_limit);
+            evict_entries(&mut state, now_unix, self.shard_limit(&key.base));
         }
         entry.route_owner_key = key.base.to_string();
         insert_cache_entry(&mut state, key, entry);
@@ -383,7 +425,7 @@ impl ResidentDnsRuntimeCache {
 
     pub fn remove_base_key(&self, key: &DnsCacheKey) -> Result<Vec<DnsCacheEntry>, String> {
         let mut state = self
-            .state
+            .shard(key)
             .lock()
             .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
         let first_scoped_key = ResidentDnsResponseCacheKey::first_for_base(key);
@@ -419,36 +461,44 @@ impl ResidentDnsRuntimeCache {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn entry_len(&self) -> usize {
-        self.state
-            .lock()
+        self.shards
+            .iter()
+            .filter_map(|shard| shard.lock().ok())
             .map(|state| state.entries.len())
-            .unwrap_or(0)
+            .sum()
     }
 
     pub fn entry_count(&self) -> Result<usize, String> {
         let now_unix = unix_now();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-        sweep_expired_if_due(&mut state, now_unix);
-        Ok(state.entries.len())
+        let mut count = 0;
+        for shard in &self.shards {
+            let mut state = shard
+                .lock()
+                .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+            sweep_expired_if_due(&mut state, now_unix);
+            count += state.entries.len();
+        }
+        Ok(count)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn deadline_len(&self) -> usize {
-        self.state
-            .lock()
+        self.shards
+            .iter()
+            .filter_map(|shard| shard.lock().ok())
             .map(|state| state.deadlines.len())
-            .unwrap_or(0)
+            .sum()
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn stats(&self) -> dae_dns::DnsCacheStats {
-        self.state
-            .lock()
-            .map(|state| state.stats.clone())
-            .unwrap_or_default()
+        let mut stats = DnsCacheStats::default();
+        for state in self.shards.iter().filter_map(|shard| shard.lock().ok()) {
+            stats.hit_total += state.stats.hit_total;
+            stats.expired_removal_total += state.stats.expired_removal_total;
+            stats.remove_callback_total += state.stats.remove_callback_total;
+        }
+        stats
     }
 }
 
