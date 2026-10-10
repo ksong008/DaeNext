@@ -223,9 +223,10 @@ impl UdpBatchReceiver {
             unsafe {
                 self.slots[index].payload.set_len(read);
             }
-            let (mut payload, lease) = payload_pool.take(UDP_RECV_MAX_DATAGRAM_CAPACITY);
-            std::mem::swap(&mut payload, &mut self.slots[index].payload);
-            payload.truncate(read);
+            // Keep full-size receive slots so large datagrams are never truncated,
+            // but only retain a compact allocation while the packet is queued.
+            let (mut payload, lease) = payload_pool.take(read.max(UDP_RECV_DEFAULT_CAPACITY));
+            payload.extend_from_slice(&self.slots[index].payload);
             packets.push(UdpOriginalDstPacket {
                 payload: UdpPayload::from_pool(payload, lease),
                 peer,
@@ -368,6 +369,31 @@ fn socket_addr_to_storage(addr: SocketAddr) -> (libc::sockaddr_storage, libc::so
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_receive_retains_compact_payloads_and_preserves_large_datagrams() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let pool = UdpPayloadPool::new(8, 1);
+        let mut batch = UdpBatchReceiver::new(8);
+        let mut packets = Vec::new();
+        for size in [0, 192, 1400, 3000, 60_000, 192] {
+            let payload = (0..size).map(|i| i as u8).collect::<Vec<_>>();
+            sender
+                .send_to(&payload, receiver.local_addr().unwrap())
+                .unwrap();
+            let outcome = batch.try_recv(&receiver, &pool, 8, &mut packets).unwrap();
+            assert_eq!(outcome.truncated, 0);
+            assert_eq!(packets.len(), 1);
+            let packet = packets.pop().unwrap();
+            assert_eq!(packet.payload.as_slice(), payload.as_slice());
+            assert_eq!(
+                packet.payload.retained_capacity(),
+                size.max(UDP_RECV_DEFAULT_CAPACITY)
+            );
+        }
+    }
 
     #[test]
     fn sendmmsg_sends_ipv4_datagrams_without_waiting_for_a_batch() {

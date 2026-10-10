@@ -98,16 +98,14 @@ where
     let wire_len =
         dae_outbound_quic::hysteria2::hysteria2_udp_payload_wire_len(target, payload.len())
             .map_err(|err| format!("size complete Hysteria2 UDP datagram: {err}"))?;
-    let known_oversize = sender
-        .max_datagram_size()
-        .is_some_and(|limit| wire_len > limit);
+    let mut initial_max_wire_size = sender.max_datagram_size();
+    let known_oversize = initial_max_wire_size.is_some_and(|limit| wire_len > limit);
+    if known_oversize {
+        initial_max_wire_size = sender.max_datagram_size();
+    }
     // Recheck only on the oversized path: a recovering PMTU may already
     // permit the original packet. A send-time TooLarge still falls through.
-    if !known_oversize
-        || sender
-            .max_datagram_size()
-            .is_some_and(|limit| wire_len <= limit)
-    {
+    if !known_oversize || initial_max_wire_size.is_some_and(|limit| wire_len <= limit) {
         let whole = encode_hysteria2_udp_payload(session_id, 0, 0, 1, target, payload)
             .map_err(|err| format!("encode complete Hysteria2 UDP datagram: {err}"))?;
         match sender.send_datagram(Bytes::from(whole)).await {
@@ -116,7 +114,7 @@ where
                     whole_datagram_sent: true,
                     datagrams_sent: 1,
                     fragment_layouts: 0,
-                    final_max_wire_size: sender.max_datagram_size(),
+                    final_max_wire_size: initial_max_wire_size,
                 });
             }
             Err(Hysteria2UdpDatagramSendFailure::TooLarge) => {}

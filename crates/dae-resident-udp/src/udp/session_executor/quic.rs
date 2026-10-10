@@ -30,6 +30,7 @@ pub(in crate::udp) struct Hysteria2QuicDatagramSession {
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     udp_session: Option<Hysteria2UdpSessionLease>,
     session_id: u32,
+    response_identity: ProtocolIdentityCache<4>,
     fragments: QuicUdpFragmentBuffer,
     packet_ids: QuicUdpPacketIdAllocator,
     resources: QuicUdpDatagramResourceProfile,
@@ -50,6 +51,7 @@ impl Hysteria2QuicDatagramSession {
             owner_deadline: None,
             udp_session: None,
             session_id: 0,
+            response_identity: ProtocolIdentityCache::default(),
             fragments: QuicUdpFragmentBuffer::new(resources, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH),
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
             resources,
@@ -68,6 +70,7 @@ impl Hysteria2QuicDatagramSession {
             owner_deadline: None,
             udp_session: None,
             session_id: 0,
+            response_identity: ProtocolIdentityCache::default(),
             fragments: QuicUdpFragmentBuffer::new(resources, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH),
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
             resources,
@@ -153,11 +156,6 @@ impl Hysteria2QuicDatagramSession {
         &mut self,
         parsed: Hysteria2UdpMessage,
     ) -> Result<Option<UdpExchangeResult>, String> {
-        let observed_identity = UdpResponseIdentityToken::from_protocol_identity(
-            HYSTERIA2_SESSION_IDENTITY_DOMAIN,
-            &parsed.session_id().to_be_bytes(),
-        )
-        .ok_or_else(|| "Hysteria2 response identity is empty".to_owned())?;
         let response = |payload| {
             UdpExchangeResult::new(payload, "quic-udp-datagram")
                 .with_quic_underlay("quinn-h3")
@@ -170,6 +168,13 @@ impl Hysteria2QuicDatagramSession {
                     .with_rejected_response_identity(UdpResponseDropReason::CrossSessionIdentity),
             ));
         }
+        let observed_identity = self
+            .response_identity
+            .token(
+                HYSTERIA2_SESSION_IDENTITY_DOMAIN,
+                parsed.session_id().to_be_bytes(),
+            )
+            .ok_or_else(|| "Hysteria2 response identity is empty".to_owned())?;
         let source = match parsed.target().parse::<SocketAddr>() {
             Ok(source) => source,
             Err(_) => {
@@ -257,6 +262,7 @@ pub(in crate::udp) struct TuicQuicPacketSession {
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     udp_association: Option<TuicUdpAssociationLease>,
     assoc_id: u16,
+    response_identity: ProtocolIdentityCache<2>,
     fragments: QuicUdpFragmentBuffer,
     fragment_sources: std::collections::BTreeMap<u16, SocketAddr>,
     packet_ids: QuicUdpPacketIdAllocator,
@@ -280,6 +286,7 @@ impl TuicQuicPacketSession {
             owner_deadline: None,
             udp_association: None,
             assoc_id: 0,
+            response_identity: ProtocolIdentityCache::default(),
             fragments: QuicUdpFragmentBuffer::new(resources, u16::MAX as usize),
             fragment_sources: std::collections::BTreeMap::new(),
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
@@ -300,6 +307,7 @@ impl TuicQuicPacketSession {
             owner_deadline: None,
             udp_association: None,
             assoc_id: 0,
+            response_identity: ProtocolIdentityCache::default(),
             fragments: QuicUdpFragmentBuffer::new(resources, u16::MAX as usize),
             fragment_sources: std::collections::BTreeMap::new(),
             packet_ids: QuicUdpPacketIdAllocator::new(resources),
@@ -417,11 +425,6 @@ impl TuicQuicPacketSession {
         &mut self,
         parsed: TuicUdpPacket,
     ) -> Result<Option<UdpExchangeResult>, String> {
-        let observed_identity = UdpResponseIdentityToken::from_protocol_identity(
-            TUIC_ASSOCIATION_IDENTITY_DOMAIN,
-            &parsed.association_id().to_be_bytes(),
-        )
-        .ok_or_else(|| "TUIC response identity is empty".to_owned())?;
         let execution_label = self.execution_label();
         let session_executor = self.session_executor_label();
         let base_response = |payload| {
@@ -436,6 +439,13 @@ impl TuicQuicPacketSession {
                     .with_rejected_response_identity(UdpResponseDropReason::CrossSessionIdentity),
             ));
         }
+        let observed_identity = self
+            .response_identity
+            .token(
+                TUIC_ASSOCIATION_IDENTITY_DOMAIN,
+                parsed.association_id().to_be_bytes(),
+            )
+            .ok_or_else(|| "TUIC response identity is empty".to_owned())?;
         let source = match parsed.target() {
             Some(target) => match target.parse::<SocketAddr>() {
                 Ok(source) => Some(source),

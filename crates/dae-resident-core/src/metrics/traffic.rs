@@ -14,6 +14,20 @@ pub struct ResidentTrafficCounters {
 }
 
 impl ResidentDataplaneMetrics {
+    fn udp_work_word(&self, stage: ResidentUdpWorkStage) -> (&AtomicU64, u32) {
+        match stage {
+            ResidentUdpWorkStage::Dispatch => (&self.udp_dispatch_session_current, 0),
+            ResidentUdpWorkStage::Session => (&self.udp_dispatch_session_current, 32),
+            ResidentUdpWorkStage::Reply => (&self.udp_reply_processing_current, 0),
+            ResidentUdpWorkStage::Processing => (&self.udp_reply_processing_current, 32),
+        }
+    }
+
+    pub(super) fn udp_work_count(&self, stage: ResidentUdpWorkStage) -> u64 {
+        let (word, shift) = self.udp_work_word(stage);
+        (word.load(Ordering::Relaxed) >> shift) & u64::from(u32::MAX)
+    }
+
     pub fn traffic_counters(&self) -> ResidentTrafficCounters {
         ResidentTrafficCounters {
             upload_total: self.upload_total.load(Ordering::Relaxed),
@@ -31,16 +45,16 @@ impl ResidentDataplaneMetrics {
                 .load(Ordering::Relaxed)
                 .saturating_add(self.proxy_dns_udp_queued_current.load(Ordering::Relaxed))
                 .saturating_add(self.proxy_dns_udp_pending_current.load(Ordering::Relaxed))
-                .saturating_add(self.udp_dispatch_queued_current.load(Ordering::Relaxed))
-                .saturating_add(self.udp_session_queued_current.load(Ordering::Relaxed))
-                .saturating_add(self.udp_reply_queued_current.load(Ordering::Relaxed)),
+                .saturating_add(self.udp_work_count(ResidentUdpWorkStage::Dispatch))
+                .saturating_add(self.udp_work_count(ResidentUdpWorkStage::Session))
+                .saturating_add(self.udp_work_count(ResidentUdpWorkStage::Reply)),
             inflight_work: self
                 .tcp_admission_active
                 .load(Ordering::Relaxed)
                 .saturating_add(self.dns_fast_path_active.load(Ordering::Relaxed))
                 .saturating_add(self.health_rounds_active.load(Ordering::Relaxed))
-                .saturating_add(self.udp_processing_current.load(Ordering::Relaxed)),
-            udp_inflight_work: self.udp_processing_current.load(Ordering::Relaxed),
+                .saturating_add(self.udp_work_count(ResidentUdpWorkStage::Processing)),
+            udp_inflight_work: self.udp_work_count(ResidentUdpWorkStage::Processing),
             active_tcp_connections: self.active_tcp_connections.load(Ordering::Relaxed),
             active_udp_sessions: self.active_udp_sessions.load(Ordering::Relaxed),
         }
@@ -65,40 +79,77 @@ pub struct ResidentUdpWorkGuard {
 impl ResidentUdpWorkGuard {
     pub fn new(metrics: Arc<ResidentDataplaneMetrics>, stage: ResidentUdpWorkStage) -> Self {
         let guard = Self { metrics, stage };
-        guard.counter().fetch_add(1, Ordering::Relaxed);
+        let (word, shift) = guard.metrics.udp_work_word(stage);
+        word.fetch_add(1_u64 << shift, Ordering::Relaxed);
         guard
     }
 
     pub fn transition(&mut self, stage: ResidentUdpWorkStage) {
-        if self.stage != stage {
-            let previous = self.stage;
-            self.stage = stage;
-            self.counter().fetch_add(1, Ordering::Relaxed);
-            self.stage = previous;
-            self.counter().fetch_sub(1, Ordering::Relaxed);
-            self.stage = stage;
+        if self.stage == stage {
+            return;
         }
-    }
-
-    fn counter(&self) -> &AtomicU64 {
-        match self.stage {
-            ResidentUdpWorkStage::Dispatch => &self.metrics.udp_dispatch_queued_current,
-            ResidentUdpWorkStage::Session => &self.metrics.udp_session_queued_current,
-            ResidentUdpWorkStage::Reply => &self.metrics.udp_reply_queued_current,
-            ResidentUdpWorkStage::Processing => &self.metrics.udp_processing_current,
+        let (previous, old_shift) = self.metrics.udp_work_word(self.stage);
+        let (next, new_shift) = self.metrics.udp_work_word(stage);
+        if std::ptr::eq(previous, next) {
+            // Move between lanes in one RMW, preserving a sampled queue total.
+            next.fetch_add(
+                (1_u64 << new_shift).wrapping_sub(1_u64 << old_shift),
+                Ordering::Relaxed,
+            );
+        } else {
+            next.fetch_add(1_u64 << new_shift, Ordering::Relaxed);
+            previous.fetch_sub(1_u64 << old_shift, Ordering::Relaxed);
         }
+        self.stage = stage;
     }
 }
 
 impl Drop for ResidentUdpWorkGuard {
     fn drop(&mut self) {
-        self.counter().fetch_sub(1, Ordering::Relaxed);
+        let (word, shift) = self.metrics.udp_work_word(self.stage);
+        word.fetch_sub(1_u64 << shift, Ordering::Relaxed);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_work_gauges_survive_concurrent_forward_reverse_and_cross_word_moves() {
+        let metrics = Arc::new(ResidentDataplaneMetrics::default());
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let metrics = Arc::clone(&metrics);
+                scope.spawn(move || {
+                    for _ in 0..10000 {
+                        let mut guard = ResidentUdpWorkGuard::new(
+                            Arc::clone(&metrics),
+                            ResidentUdpWorkStage::Session,
+                        );
+                        for stage in [
+                            ResidentUdpWorkStage::Dispatch,
+                            ResidentUdpWorkStage::Session,
+                            ResidentUdpWorkStage::Processing,
+                            ResidentUdpWorkStage::Reply,
+                            ResidentUdpWorkStage::Processing,
+                            ResidentUdpWorkStage::Dispatch,
+                        ] {
+                            guard.transition(stage);
+                        }
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            metrics.udp_dispatch_session_current.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            metrics.udp_reply_processing_current.load(Ordering::Relaxed),
+            0
+        );
+    }
 
     #[tokio::test]
     async fn udp_work_gauges_follow_failed_enqueue_and_cancelled_processing() {

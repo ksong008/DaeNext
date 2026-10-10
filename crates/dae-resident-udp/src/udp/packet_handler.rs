@@ -4,17 +4,6 @@
 use super::*;
 use serde_json::Value;
 
-#[derive(Clone, Copy)]
-enum UdpExchangeSessionScope {
-    ManagedSession,
-}
-
-impl UdpExchangeSessionScope {
-    const fn include_packet_session(self) -> bool {
-        matches!(self, Self::ManagedSession)
-    }
-}
-
 pub fn resident_dns_udp_exchange_result(
     original_dst: SocketAddr,
     response: Vec<u8>,
@@ -37,9 +26,9 @@ pub(super) async fn record_udp_exchange_result(
     packet: UdpOriginalDstPacket,
     original_dst: SocketAddr,
     dscp: u8,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
+    event_file: &std::path::Path,
+    event_lock: &Mutex<()>,
+    metrics: &ResidentDataplaneMetrics,
     udp_reply: &UdpReplyHandle,
     packet_session: &Value,
     exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
@@ -59,7 +48,6 @@ pub(super) async fn record_udp_exchange_result(
         packet_session,
         exchange,
         last_activity,
-        UdpExchangeSessionScope::ManagedSession,
     )
     .await;
 }
@@ -68,9 +56,9 @@ pub(super) async fn record_udp_session_response_result(
     proxy: &ResidentProxyPlan,
     peer: SocketAddr,
     original_dst: SocketAddr,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
+    event_file: &std::path::Path,
+    event_lock: &Mutex<()>,
+    metrics: &ResidentDataplaneMetrics,
     udp_reply: &UdpReplyHandle,
     packet_session: &Value,
     exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
@@ -90,7 +78,6 @@ pub(super) async fn record_udp_session_response_result(
         packet_session,
         exchange,
         last_activity,
-        UdpExchangeSessionScope::ManagedSession,
     )
     .await;
 }
@@ -102,14 +89,13 @@ async fn record_udp_session_exchange_result(
     request_len: usize,
     count_upload: bool,
     dscp: Option<u8>,
-    event_file: PathBuf,
-    event_lock: Arc<Mutex<()>>,
-    metrics: Arc<ResidentDataplaneMetrics>,
+    event_file: &std::path::Path,
+    event_lock: &Mutex<()>,
+    metrics: &ResidentDataplaneMetrics,
     udp_reply: &UdpReplyHandle,
     packet_session: &Value,
     exchange: Result<(ResidentEventKind, UdpExchangeResult), String>,
     last_activity: &mut time::Instant,
-    session_scope: UdpExchangeSessionScope,
 ) {
     if count_upload {
         metrics.add_upload(request_len);
@@ -144,8 +130,8 @@ async fn record_udp_session_exchange_result(
                 if let Err(err) = udp_reply.try_send_detached(original_dst, peer, payload, true) {
                     if err.should_log() {
                         append_event_with_metadata(
-                            &event_file,
-                            &event_lock,
+                            event_file,
+                            event_lock,
                             ResidentEventMetadata::new(ResidentEventKind::UdpReplyFailed),
                             || json!({"event": ResidentEventKind::UdpReplyFailed.name(), "peer": resident_socket_addr_display(peer), "original_dst": resident_socket_addr_display(original_dst), "error": err.to_string()}),
                         );
@@ -154,8 +140,8 @@ async fn record_udp_session_exchange_result(
                 }
             }
             append_event_with_metadata(
-                &event_file,
-                &event_lock,
+                event_file,
+                event_lock,
                 ResidentEventMetadata::new(event_kind).with_route_log_context(),
                 || {
                     let handler = resident_udp_proxy_handler_name(proxy);
@@ -168,7 +154,6 @@ async fn record_udp_session_exchange_result(
                         handler,
                         network,
                         true,
-                        session_scope,
                         packet_session,
                     );
                     if let Some(map) = event_json.as_object_mut() {
@@ -207,8 +192,8 @@ async fn record_udp_session_exchange_result(
             )
         }
         Err(err) => append_event_with_metadata(
-            &event_file,
-            &event_lock,
+            event_file,
+            event_lock,
             ResidentEventMetadata::new(ResidentEventKind::UdpExchangeFailed),
             || {
                 let handler = resident_udp_proxy_handler_name(proxy);
@@ -221,7 +206,6 @@ async fn record_udp_session_exchange_result(
                     handler,
                     network,
                     false,
-                    session_scope,
                     packet_session,
                 );
                 if let Some(map) = event_json.as_object_mut() {
@@ -248,7 +232,6 @@ fn udp_exchange_base_event(
     handler: &'static str,
     network: &'static str,
     include_sniffed: bool,
-    session_scope: UdpExchangeSessionScope,
     packet_session: &Value,
 ) -> Value {
     let mut map = serde_json::Map::with_capacity(18);
@@ -293,9 +276,7 @@ fn udp_exchange_base_event(
     );
     map.insert("handler".to_owned(), Value::String(handler.to_owned()));
     map.insert("graphId".to_owned(), Value::String(proxy.graph_id.clone()));
-    if session_scope.include_packet_session() {
-        map.insert("packetSession".to_owned(), packet_session.clone());
-    }
+    map.insert("packetSession".to_owned(), packet_session.clone());
     Value::Object(map)
 }
 

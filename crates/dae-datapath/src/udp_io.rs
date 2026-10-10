@@ -163,8 +163,16 @@ impl UdpPayloadPool {
         state.last_used = Some(Instant::now());
         drop(state);
         buffer.clear();
-        if buffer.capacity() < min_capacity {
-            buffer.reserve(min_capacity - buffer.capacity());
+        if buffer.capacity()
+            > min_capacity
+                .max(UDP_RECV_DEFAULT_CAPACITY)
+                .next_power_of_two()
+        {
+            // A previous large datagram must not inflate a small packet's lease.
+            buffer = Vec::with_capacity(min_capacity);
+        } else if buffer.capacity() < min_capacity {
+            // reserve is relative to len (zero after clear), not capacity.
+            buffer.reserve_exact(min_capacity);
         }
         (
             buffer,
@@ -257,6 +265,10 @@ impl UdpPayload {
 
     pub fn as_slice(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub fn retained_capacity(&self) -> usize {
+        self.bytes.capacity()
     }
 
     pub fn attach_retained_owner<T: Send + 'static>(&mut self, owner: T) -> Result<(), T> {
@@ -521,6 +533,43 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+
+    #[test]
+    fn recycled_payload_buffer_grows_to_the_requested_capacity() {
+        let pool = UdpPayloadPool::new(8, 1);
+        let (buffer, lease) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+        lease.recycle(buffer);
+        // reserve(request - capacity) after clear would leave this too small.
+        let (buffer, lease) = pool.take(3000);
+        assert!(buffer.capacity() >= 3000);
+        lease.recycle(buffer);
+        let (buffer, _) = pool.take(UDP_RECV_DEFAULT_CAPACITY);
+        assert_eq!(buffer.capacity(), UDP_RECV_DEFAULT_CAPACITY);
+    }
+
+    #[test]
+    fn scalar_receive_reuses_small_buffer_for_a_larger_datagram() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let pool = UdpPayloadPool::new(8, 1);
+        for size in [192, 3000, 60_000, 0, 1400] {
+            let payload = (0..size).map(|i| i as u8).collect::<Vec<_>>();
+            sender
+                .send_to(&payload, receiver.local_addr().unwrap())
+                .unwrap();
+            let packet = try_recv_udp_with_original_dst_from_pool(
+                &receiver,
+                UDP_RECV_DEFAULT_CAPACITY,
+                &pool,
+            )
+            .unwrap();
+            assert_eq!(packet.payload.as_slice(), payload.as_slice());
+            assert_eq!(
+                packet.payload.retained_capacity(),
+                size.max(UDP_RECV_DEFAULT_CAPACITY)
+            );
+        }
+    }
 
     #[test]
     fn udp_receive_preserves_datagrams_larger_than_the_default_capacity() {

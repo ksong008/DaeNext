@@ -23,6 +23,7 @@ pub struct UdpDirectSessionKey {
     peer: SocketAddr,
     original_destination: SocketAddr,
     mark: u32,
+    hash: u64,
 }
 
 impl UdpDirectSessionKey {
@@ -31,6 +32,7 @@ impl UdpDirectSessionKey {
             peer,
             original_destination,
             mark,
+            hash: super::session_key::stable_udp_session_hash(&(peer, original_destination, mark)),
         }
     }
 
@@ -95,9 +97,7 @@ impl Eq for UdpDirectSessionKey {}
 
 impl Hash for UdpDirectSessionKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.peer.hash(state);
-        self.original_destination.hash(state);
-        self.mark.hash(state);
+        self.hash.hash(state);
     }
 }
 
