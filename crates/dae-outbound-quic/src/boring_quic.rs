@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 use crate::system_ca::{SystemCaIdentity, SystemCaSnapshot, system_ca_snapshot};
 use dae_outbound_core::OutboundError;
 
+mod config_cache;
+
 pub const BORING_QUIC_PROVIDER_EVIDENCE: &str = "quinn-boringssl";
 pub const BORING_QUIC_GENERATION_SESSION_CACHE_ENTRIES: usize = 256;
 pub type BoringQuicSessionCache = Arc<dyn quinn_boring::SessionCache>;
@@ -142,10 +144,12 @@ pub fn build_boring_quic_client_config_with_session_cache(
     transport: Arc<quinn::TransportConfig>,
     session_cache: Option<BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let crypto = build_boring_quic_client_crypto_with_session_cache(policy, session_cache, None)?;
-    let mut config = quinn::ClientConfig::new(Arc::new(crypto));
-    config.transport_config(transport);
-    Ok(config)
+    build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
+        policy,
+        transport,
+        session_cache,
+        None,
+    )
 }
 
 pub fn build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
@@ -154,11 +158,7 @@ pub fn build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot
     session_cache: Option<BoringQuicSessionCache>,
     system_ca: Option<Arc<SystemCaSnapshot>>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let crypto =
-        build_boring_quic_client_crypto_with_session_cache(policy, session_cache, system_ca)?;
-    let mut config = quinn::ClientConfig::new(Arc::new(crypto));
-    config.transport_config(transport);
-    Ok(config)
+    config_cache::client_config(policy, transport, session_cache, system_ca)
 }
 
 #[doc(hidden)]

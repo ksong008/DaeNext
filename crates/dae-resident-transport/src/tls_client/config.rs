@@ -6,6 +6,21 @@ pub(super) fn boring_vless_connector(
 ) -> Result<Arc<ResidentBoringTlsContextEntry>, String> {
     require_tcp_tls_session_policy(policy)?;
     let system_ca = proxy_system_ca_snapshot(proxy)?;
+    if let Some(connector) = cached_connector_matching(|key| {
+        key.protocol_namespace == proxy.protocol
+            && key.server_name == proxy.server_name
+            && key.flow == proxy.flow
+            && key.alpn == proxy.alpn
+            && key.matches_security(
+                proxy.allow_insecure,
+                system_ca.as_deref(),
+                proxy.utls_fingerprint.as_ref(),
+                proxy.ech.as_ref(),
+                proxy.reality.as_ref(),
+            )
+    })? {
+        return Ok(connector);
+    }
     let key = ResidentTlsClientConfigKey::from_proxy(proxy, system_ca.as_deref());
     let alpn = boring_alpn_wire(proxy, policy)?;
     boring_connector_cached(
@@ -78,6 +93,21 @@ pub(super) fn boring_xhttp_endpoint_connector(
     endpoint: &ResidentXhttpEndpointPlan,
 ) -> Result<Arc<ResidentBoringTlsContextEntry>, String> {
     let system_ca = xhttp_endpoint_system_ca_snapshot(endpoint)?;
+    if let Some(connector) = cached_connector_matching(|key| {
+        key.protocol_namespace == "xhttp-endpoint"
+            && key.server_name == endpoint.server_name
+            && key.flow.is_empty()
+            && key.alpn == endpoint.alpn
+            && key.matches_security(
+                endpoint.allow_insecure,
+                system_ca.as_deref(),
+                endpoint.utls_fingerprint.as_ref(),
+                endpoint.ech.as_ref(),
+                endpoint.reality.as_ref(),
+            )
+    })? {
+        return Ok(connector);
+    }
     let key = ResidentTlsClientConfigKey::from_xhttp_endpoint(endpoint, system_ca.as_deref());
     let cache =
         BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
@@ -157,6 +187,46 @@ pub(super) fn configure_boring_certificate_verification(
 }
 
 impl ResidentTlsClientConfigKey {
+    fn matches_security(
+        &self,
+        insecure: bool,
+        ca: Option<&SystemCaSnapshot>,
+        fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+        ech: Option<&dae_resident_model::ResidentEchPlan>,
+        reality: Option<&ResidentRealityUnderlayPlan>,
+    ) -> bool {
+        self.allow_insecure == insecure
+            && self.system_ca.as_ref() == ca.map(|ca| ca.identity())
+            && self.ech == ech.map(|ech| *ech.config_list_sha256())
+            && self.utls_fingerprint.is_some() == fingerprint.is_some()
+            && self
+                .utls_fingerprint
+                .as_ref()
+                .zip(fingerprint)
+                .is_none_or(|(key, plan)| {
+                    key.source == plan.source
+                        && key.requested == plan.requested
+                        && key.name == plan.name
+                        && key.canonical == plan.canonical
+                        && key.family == plan.family
+                        && key.client == plan.client
+                        && key.randomized == plan.randomized
+                        && key.alpn_policy == plan.alpn_policy
+                        && key.default_alpn == plan.default_alpn
+                })
+            && self.reality.is_some() == reality.is_some()
+            && self
+                .reality
+                .as_ref()
+                .zip(reality)
+                .is_none_or(|(key, plan)| {
+                    key.public_key == plan.public_key
+                        && key.short_id == plan.short_id
+                        && key.mldsa65_verify
+                            == plan.mldsa65_verify.as_ref().map(|key| *key.sha256())
+                })
+    }
+
     pub(super) fn from_proxy(
         proxy: &ResidentProxyPlan,
         system_ca: Option<&SystemCaSnapshot>,
@@ -202,6 +272,16 @@ impl ResidentTlsClientConfigKey {
                 .map(ResidentRealityConfigKey::from_plan),
         }
     }
+}
+
+fn cached_connector_matching(
+    matches: impl Fn(&ResidentTlsClientConfigKey) -> bool,
+) -> Result<Option<Arc<ResidentBoringTlsContextEntry>>, String> {
+    BORING_CONNECTOR_CACHE
+        .get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()))
+        .lock()
+        .map_err(|_| "BoringSSL connector cache lock poisoned".to_owned())
+        .map(|mut cache| cache.get_matching(matches))
 }
 
 impl ResidentTlsFingerprintConfigKey {
