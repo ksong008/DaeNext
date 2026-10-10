@@ -20,9 +20,29 @@ pub(crate) fn list_logs_value(
     with_product_log_snapshot(config_dir, |snapshot| {
         let mut items = VecDeque::new();
         let mut line = Vec::new();
-        for file in snapshot.files {
-            let mut reader = io::BufReader::new(file);
-            while read_product_log_line(&mut reader, &mut line)? {
+        'files: for file in snapshot.files.rev() {
+            let sealed = file.sealed_version();
+            let mut input = Some(file.open()?);
+            if let Some(entries) =
+                super::parsed_cache::sealed_entries(&snapshot.store, &mut input, sealed)?
+            {
+                for entry in entries.iter() {
+                    if entry.id >= snapshot.first_visible_id
+                        && log_entry_matches_filter(entry, level.as_deref(), query.as_deref())
+                    {
+                        items.push_front(log_entry_value(entry.clone()));
+                        if items.len() == limit {
+                            break 'files;
+                        }
+                    }
+                }
+                continue;
+            }
+            let mut reader = super::reverse_reader::ReverseFileLineReader::new(
+                input.take().expect("opened snapshot file"),
+                MAX_LOG_LINE_BYTES * 2,
+            );
+            while reader.read_line(&mut line)? {
                 let Ok(text) = std::str::from_utf8(&line) else {
                     continue;
                 };
@@ -34,10 +54,18 @@ pub(crate) fn list_logs_value(
                 {
                     continue;
                 }
+                items.push_front(log_entry_value(entry));
                 if items.len() == limit {
-                    items.pop_front();
+                    break;
                 }
-                items.push_back(log_entry_value(entry));
+            }
+            if let Some(version) = sealed
+                && ProductLogContentVersion::from_metadata(&reader.metadata()?) != version
+            {
+                return Err(super::store::snapshot_changed());
+            }
+            if items.len() == limit {
+                break;
             }
         }
         Ok(json!({"items": items.into_iter().collect::<Vec<_>>()}))

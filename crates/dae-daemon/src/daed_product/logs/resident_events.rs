@@ -79,13 +79,6 @@ pub(crate) fn resident_event_product_log_level(event_name: &str, event: &Value) 
         {
             return "info";
         }
-        "tcp_connection_finished"
-        | "tcp_connection_blocked"
-        | "udp_packet_finished"
-        | "udp_dns_packet_finished"
-        | "dns_bind_query_finished"
-        | "udp_session_started"
-        | "udp_session_stopped" => return "debug",
         _ => {}
     }
     if event_name.contains("failed") || event_name.contains("error") {
@@ -97,20 +90,15 @@ pub(crate) fn resident_event_product_log_level(event_name: &str, event: &Value) 
 pub(crate) fn resident_event_product_log_level_from_metadata(
     metadata: ResidentEventMetadata,
 ) -> &'static str {
-    let event_name = metadata.name();
-    if resident_event_trace_product_log(event_name) {
-        return "trace";
-    }
-    match event_name {
+    match metadata.name() {
+        "tcp_route_chosen" | "udp_route_chosen" | "dns_path_chosen" | "routing_native_match" => {
+            "trace"
+        }
         "tcp_connection_finished" | "tcp_connection_blocked"
             if metadata.has_route_log_context() =>
         {
             "info"
         }
-        "tcp_connection_finished"
-        | "tcp_connection_blocked"
-        | "udp_packet_finished"
-        | "udp_dns_packet_finished" => "debug",
         _ => "debug",
     }
 }
@@ -142,10 +130,8 @@ pub(crate) fn resident_event_is_flow_diagnostic(event_name: &str) -> bool {
 }
 
 pub(crate) fn resident_event_product_log_message(event_name: &str, event: &Value) -> String {
-    if resident_event_is_flow_diagnostic(event_name)
-        && let Some(message) = resident_flow_event_product_log_message(event_name, event)
-    {
-        return message;
+    if resident_event_is_flow_diagnostic(event_name) {
+        return resident_flow_event_product_log_message(event_name, event);
     }
     format!("resident dataplane {}", event_name.replace('_', " "))
 }
@@ -171,12 +157,9 @@ pub(crate) fn resident_event_product_log_fields(
     fields
 }
 
-pub(crate) fn resident_flow_event_product_log_message(
-    event_name: &str,
-    event: &Value,
-) -> Option<String> {
-    let peer = resident_event_socket_field_value(event, "peer")
-        .unwrap_or_else(|| "unknown-peer".to_owned());
+pub(crate) fn resident_flow_event_product_log_message(event_name: &str, event: &Value) -> String {
+    let peer =
+        resident_event_field_value(event, "peer").unwrap_or_else(|| "unknown-peer".to_owned());
     let target = resident_event_first_socket_field_value(
         event,
         &[
@@ -195,7 +178,7 @@ pub(crate) fn resident_flow_event_product_log_message(
     } else {
         ""
     };
-    Some(format!("{peer} <-> {target}{suffix}"))
+    format!("{peer} <-> {target}{suffix}")
 }
 
 pub(crate) fn append_resident_flow_event_product_log_fields(
@@ -203,38 +186,33 @@ pub(crate) fn append_resident_flow_event_product_log_fields(
     event: &Value,
 ) {
     append_resident_flow_network_field(fields, event);
-    append_resident_event_first_field_if_present(
-        fields,
-        event,
-        "outbound",
-        &["outbound", "proxy_group", "outbound_kind"],
-    );
-    append_resident_event_first_field_if_present(
-        fields,
-        event,
-        "policy",
-        &["policy", "group_policy"],
-    );
-    append_resident_event_first_field_if_present(
-        fields,
-        event,
-        "dialer",
-        &["dialer", "node_tag", "outbound_kind"],
-    );
-    append_resident_event_first_field_if_present(
-        fields,
-        event,
-        "sniffed",
-        &["sniffed", "sniffed_domain"],
-    );
-    append_resident_event_first_socket_field_if_present(
-        fields,
-        event,
-        "ip",
-        &["ip", "original_dst", "direct_target"],
-    );
+    for (output, inputs) in [
+        (
+            "outbound",
+            &["outbound", "proxy_group", "outbound_kind"][..],
+        ),
+        ("policy", &["policy", "group_policy"][..]),
+        ("dialer", &["dialer", "node_tag", "outbound_kind"][..]),
+        ("sniffed", &["sniffed", "sniffed_domain"][..]),
+    ] {
+        if let Some(value) = inputs
+            .iter()
+            .find_map(|key| resident_event_field_value(event, key))
+        {
+            fields.insert(output.to_owned(), value);
+        }
+    }
+    if let Some(value) =
+        resident_event_first_socket_field_value(event, &["ip", "original_dst", "direct_target"])
+    {
+        fields.insert("ip".to_owned(), value);
+    }
     for key in ["pid", "dscp", "pname", "mac", "error", "reason"] {
-        append_resident_event_field_if_present(fields, event, key);
+        if let Some(value) =
+            resident_event_field_value(event, key).filter(|value| !value.is_empty())
+        {
+            fields.insert(key.to_owned(), value);
+        }
     }
     append_resident_execution_descriptor_fields(fields, event);
 }
@@ -293,50 +271,6 @@ pub(crate) fn append_resident_flow_network_field(
     }
 }
 
-pub(crate) fn append_resident_event_first_field_if_present(
-    fields: &mut BTreeMap<String, String>,
-    event: &Value,
-    output_key: &str,
-    input_keys: &[&str],
-) {
-    let Some(value) = input_keys
-        .iter()
-        .find_map(|key| resident_event_field_value(event, key))
-    else {
-        return;
-    };
-    fields.insert(output_key.to_owned(), value);
-}
-
-pub(crate) fn append_resident_event_first_socket_field_if_present(
-    fields: &mut BTreeMap<String, String>,
-    event: &Value,
-    output_key: &str,
-    input_keys: &[&str],
-) {
-    let Some(value) = resident_event_first_socket_field_value(event, input_keys) else {
-        return;
-    };
-    fields.insert(output_key.to_owned(), value);
-}
-
-pub(crate) fn append_resident_event_field_if_present(
-    fields: &mut BTreeMap<String, String>,
-    event: &Value,
-    key: &str,
-) {
-    let Some(value) = event.get(key) else {
-        return;
-    };
-    if value.is_null() {
-        return;
-    }
-    let value = product_log_field_value(value);
-    if !value.is_empty() {
-        fields.insert(key.to_owned(), value);
-    }
-}
-
 pub(crate) fn resident_event_field_value(event: &Value, key: &str) -> Option<String> {
     let value = event.get(key)?;
     (!value.is_null()).then(|| product_log_field_value(value))
@@ -347,11 +281,7 @@ pub(crate) fn resident_event_first_socket_field_value(
     keys: &[&str],
 ) -> Option<String> {
     keys.iter()
-        .find_map(|key| resident_event_socket_field_value(event, key))
-}
-
-pub(crate) fn resident_event_socket_field_value(event: &Value, key: &str) -> Option<String> {
-    resident_event_field_value(event, key).map(|value| resident_socket_field_display(&value))
+        .find_map(|key| resident_event_field_value(event, key))
 }
 
 pub(crate) fn resident_event_first_socket_addr(event: &Value, keys: &[&str]) -> Option<SocketAddr> {

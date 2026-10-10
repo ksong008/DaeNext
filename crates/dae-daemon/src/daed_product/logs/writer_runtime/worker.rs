@@ -85,25 +85,51 @@ fn run_product_log_worker(
     updates: tokio::sync::watch::Sender<u64>,
 ) {
     while let Some(command) = queue.receive() {
+        if matches!(command.action, ProductLogAction::Append(_)) {
+            let batch = queue.take_append_batch(command);
+            let mut requests = Vec::with_capacity(batch.len());
+            let mut completions = Vec::with_capacity(batch.len());
+            for command in batch {
+                metrics.dequeued();
+                let ProductLogAction::Append(request) = command.action else {
+                    unreachable!();
+                };
+                requests.push(request);
+                completions.push(command.completion);
+            }
+            let mut notify = false;
+            for (result, completion) in writer.append_batch(requests).into_iter().zip(completions) {
+                let result = match result {
+                    Ok(ProductLogAppendOutcome::Filtered) => {
+                        metrics.filtered();
+                        Ok(())
+                    }
+                    Ok(ProductLogAppendOutcome::Appended { pruned }) => {
+                        metrics.appended();
+                        if pruned {
+                            metrics.pruned();
+                        }
+                        notify = true;
+                        Ok(())
+                    }
+                    Err(error) => {
+                        metrics.failed();
+                        Err(error)
+                    }
+                };
+                metrics.completed();
+                let _ = completion.send(result);
+            }
+            if notify {
+                updates.send_modify(|generation| *generation = generation.saturating_add(1));
+            }
+            continue;
+        }
         metrics.dequeued();
         let ProductLogCommand { action, completion } = command;
         let mut notify = false;
         let result = match action {
-            ProductLogAction::Append(request) => match writer.append(request) {
-                Ok(ProductLogAppendOutcome::Filtered) => {
-                    metrics.filtered();
-                    Ok(())
-                }
-                Ok(ProductLogAppendOutcome::Appended { pruned }) => {
-                    metrics.appended();
-                    if pruned {
-                        metrics.pruned();
-                    }
-                    notify = true;
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            },
+            ProductLogAction::Append(_) => unreachable!("append handled by batch branch"),
             ProductLogAction::Clear => writer.clear().inspect(|_| notify = true),
             ProductLogAction::ClearPreservingLifecycle => {
                 writer.clear_preserving_lifecycle().map(|pruned| {

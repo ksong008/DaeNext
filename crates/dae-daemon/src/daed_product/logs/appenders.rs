@@ -123,17 +123,13 @@ pub(crate) fn append_startup_runtime_evidence_logs_for_config(
             "The loading process takes about 120MB free memory, which will be released after loading. Insufficient memory will cause loading failure.",
         )?;
         let mut fields = BTreeMap::new();
-        insert_json_log_field(&mut fields, "object_source", loader.get("objectSource"));
-        insert_json_log_field(
-            &mut fields,
-            "default_object_source",
-            loader.get("defaultObjectSource"),
-        );
-        insert_json_log_field(
-            &mut fields,
-            "kernel_ebpf_program_rewrite",
-            loader.get("kernelEbpfProgramRewrite"),
-        );
+        for (key, input) in [
+            ("object_source", "objectSource"),
+            ("default_object_source", "defaultObjectSource"),
+            ("kernel_ebpf_program_rewrite", "kernelEbpfProgramRewrite"),
+        ] {
+            insert_json_log_field(&mut fields, key, loader.get(input));
+        }
         append_lifecycle_log_fields_for_config(
             config_dir,
             state,

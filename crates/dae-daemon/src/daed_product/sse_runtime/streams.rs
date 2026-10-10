@@ -110,10 +110,13 @@ pub(super) async fn stream_log_events_async(
         ProductLogScanCursor::at_end(&app.config_dir)?
     };
     let mut last_heartbeat = Instant::now();
-    let mut interval = tokio::time::interval(LOG_STREAM_POLL_INTERVAL);
+    // Watch gives immediate delivery; polling is only a slow reconciliation
+    // path for external filesystem changes or a stopped writer runtime.
+    let mut interval = tokio::time::interval(LOG_STREAM_POLL_INTERVAL * 10);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut log_updates = product_log_update_receiver(&app.config_dir);
     loop {
+        let mut reconcile = false;
         if let Some(updates) = log_updates.as_mut() {
             enum LogStreamWake {
                 Stop,
@@ -137,7 +140,8 @@ pub(super) async fn stream_log_events_async(
                 LogStreamWake::Stop => return Ok(()),
                 LogStreamWake::Peer(result) => return result,
                 LogStreamWake::Update(Err(_)) => log_updates = None,
-                LogStreamWake::Update(Ok(())) | LogStreamWake::Poll => {}
+                LogStreamWake::Update(Ok(())) => {}
+                LogStreamWake::Poll => reconcile = true,
             }
         } else {
             tokio::select! {
@@ -147,8 +151,14 @@ pub(super) async fn stream_log_events_async(
                     }
                 }
                 peer = wait_sse_peer_closed(stream) => return peer,
-                _ = interval.tick() => {}
+                _ = interval.tick() => reconcile = true,
             }
+        }
+        if reconcile && let Err(error) = reset_log_id_cache_to_last(&log_file) {
+            if is_transient_log_stream_error(&error) {
+                continue;
+            }
+            return Err(error);
         }
         let current_last_id = match cached_last_log_id(&log_file) {
             Ok(id) => id,

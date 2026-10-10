@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::VecDeque;
+mod batch;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -14,31 +15,16 @@ const PRODUCT_LOG_SEGMENT_MAX_ENTRIES: usize = 512;
 const PRODUCT_LOG_VISIBILITY_BUDGET_BYTES: u64 = 2 * PRODUCT_LOG_VISIBILITY_JOURNAL_MAX_BYTES;
 
 #[cfg(test)]
-thread_local! {
-    pub(super) static LOG_APPEND_PARTIAL_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    pub(super) static LOG_VISIBILITY_PARTIAL_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    pub(super) static LOG_APPEND_TRUNCATE_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    pub(super) static LOG_ROTATE_AFTER_RENAME_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    pub(super) static LOG_ROTATE_AFTER_CREATE_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
+#[path = "writer_tests.rs"]
+mod test_helpers;
+#[cfg(test)]
+pub(super) use test_helpers::*;
+#[cfg(not(test))]
 fn write_product_log_line(file: &mut fs::File, line: &[u8]) -> io::Result<()> {
-    #[cfg(test)]
-    if LOG_APPEND_PARTIAL_FAILURE.with(|fail| fail.replace(false)) {
-        file.write_all(&line[..line.len() / 2])?;
-        return Err(io::Error::from_raw_os_error(libc::ENOSPC));
-    }
     file.write_all(line)
 }
-
-fn write_log_visibility_record(file: &mut fs::File, record: &[u8]) -> io::Result<()> {
-    #[cfg(test)]
-    if LOG_VISIBILITY_PARTIAL_FAILURE.with(|fail| fail.replace(false)) {
-        file.write_all(&record[..record.len() / 2])?;
-        return Err(io::Error::from_raw_os_error(libc::ENOSPC));
-    }
-    file.write_all(record)
-}
+#[cfg(not(test))]
+use write_product_log_line as write_log_visibility_record;
 
 struct ProductLogWriterSegment {
     // Filename bounds stay fixed after trimming or compacting a sealed segment.
@@ -111,6 +97,7 @@ pub(super) struct ProductLogWriter {
 
 impl ProductLogWriter {
     pub(super) fn open(config_dir: PathBuf, policy: ProductLogPolicy) -> io::Result<Self> {
+        let _ = super::super::snapshot_cleanup::cleanup_abandoned_snapshots(&config_dir);
         let path = product_log_file(&config_dir);
         ensure_log_dir_mode_if_needed(&config_dir)?;
         let store = product_log_store(&config_dir)?;
@@ -158,45 +145,7 @@ impl ProductLogWriter {
         }
         let id = self.last_id.saturating_add(1);
         let line = encode_log_entry_line(id, &request.level, &request.message, request.fields)?;
-        let file = self
-            .file
-            .as_mut()
-            .ok_or_else(|| io::Error::other("product log file is unavailable"))?;
-        if let Err(error) = write_product_log_line(file, &line) {
-            // A short write belongs to this writer, not an external replacement.
-            // Remove the partial record if possible and reopen without discarding
-            // sealed history. Reopen also tolerates an incomplete tail when the
-            // filesystem refuses the truncation.
-            #[cfg(test)]
-            let truncate = !LOG_APPEND_TRUNCATE_FAILURE.replace(false);
-            #[cfg(not(test))]
-            let truncate = true;
-            if truncate {
-                let _ = file.set_len(self.size_bytes);
-            }
-            self.file.take();
-            return Err(error);
-        }
-        let was_empty = self.entry_count == 0;
-        self.last_id = id;
-        self.size_bytes = self.size_bytes.saturating_add(line.len() as u64);
-        self.entry_count = self.entry_count.saturating_add(1);
-        self.visible_bytes = self.visible_bytes.saturating_add(line.len() as u64);
-        if let Some(active) = self.segments.back_mut() {
-            if active.visible_entries == 0 {
-                active.first_id = id;
-                if was_empty {
-                    self.first_visible_id = id;
-                }
-            }
-            active.visible_entries = active.visible_entries.saturating_add(1);
-            active.size_bytes = self.size_bytes;
-            active.visible_bytes = active.visible_bytes.saturating_add(line.len() as u64);
-            active.last_id = id;
-        }
-        set_log_id_cache(&self.path, id)?;
-        let pruned = self.prune_if_over_limit_locked()?;
-        set_log_visible_first_id(&self.path, self.first_visible_id)?;
+        let pruned = self.commit_append(&line, 1)?;
         Ok(ProductLogAppendOutcome::Appended { pruned })
     }
 
@@ -418,6 +367,7 @@ impl ProductLogWriter {
             if front.visible_entries == 0 {
                 if front.sealed_ids.is_some() {
                     self.visible_bytes = self.visible_bytes.saturating_sub(front.visible_bytes);
+                    self.store.invalidate_segments()?;
                     fs::remove_file(front.path(&self.path))?;
                     self.segments.pop_front();
                     continue;
@@ -460,6 +410,7 @@ impl ProductLogWriter {
                 self.first_visible_id = entry.id.saturating_add(1);
             }
             if front.visible_entries == 0 && front.sealed_ids.is_some() {
+                self.store.invalidate_segments()?;
                 fs::remove_file(path)?;
                 self.segments.pop_front();
             }
@@ -482,6 +433,7 @@ impl ProductLogWriter {
         if front.sealed_ids.is_none() {
             self.file.take();
         }
+        self.store.invalidate_segments()?;
         fs::rename(&tmp_path, &path)?;
         front.size_bytes = front.visible_bytes;
         front.head_offset = 0;
@@ -515,6 +467,7 @@ impl ProductLogWriter {
             ));
         }
         self.file.take();
+        self.store.invalidate_segments()?;
         fs::rename(&self.path, &archived)?;
         // The old inode is now archived. A failure while creating or preparing
         // our replacement must not look like an external replacement on reopen.

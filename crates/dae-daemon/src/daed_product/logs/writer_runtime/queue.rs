@@ -30,10 +30,7 @@ impl ProductLogQueue {
         let deadline = Instant::now()
             .checked_add(timeout)
             .unwrap_or_else(Instant::now);
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| io::Error::other("product log queue is unavailable"))?;
+        let mut state = log_lock(&self.state)?;
         while state.commands.len() >= self.capacity && !state.closed {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -79,6 +76,23 @@ impl ProductLogQueue {
         }
     }
 
+    pub(super) fn take_append_batch(&self, first: ProductLogCommand) -> Vec<ProductLogCommand> {
+        let mut batch = vec![first];
+        let Ok(mut state) = self.state.lock() else {
+            return batch;
+        };
+        while batch.len() < 32
+            && state
+                .commands
+                .front()
+                .is_some_and(|command| matches!(command.action, ProductLogAction::Append(_)))
+        {
+            batch.push(state.commands.pop_front().expect("queue front"));
+        }
+        self.not_full.notify_all();
+        batch
+    }
+
     pub(super) fn close(&self) {
         let Ok(mut state) = self.state.lock() else {
             return;
@@ -90,52 +104,5 @@ impl ProductLogQueue {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn queue_capacity_and_close_are_bounded() {
-        let queue = ProductLogQueue::new(1);
-        queue
-            .submit(test_command(), Duration::from_millis(10))
-            .unwrap();
-        let started = Instant::now();
-        let error = queue
-            .submit(test_command(), Duration::from_millis(20))
-            .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(1));
-        assert!(queue.receive().is_some());
-        queue.close();
-        assert!(queue.receive().is_none());
-        assert_eq!(
-            queue
-                .submit(test_command(), Duration::from_millis(10))
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::BrokenPipe
-        );
-    }
-
-    #[test]
-    fn zero_timeout_submission_never_waits_for_capacity() {
-        let queue = ProductLogQueue::new(1);
-        queue
-            .submit(test_command(), Duration::ZERO)
-            .expect("first detached command must fit");
-        let started = Instant::now();
-        let error = queue
-            .submit(test_command(), Duration::ZERO)
-            .expect_err("full detached queue must reject");
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(started.elapsed() < Duration::from_millis(10));
-    }
-
-    fn test_command() -> ProductLogCommand {
-        let (completion, _) = mpsc::sync_channel(1);
-        ProductLogCommand {
-            action: ProductLogAction::Clear,
-            completion,
-        }
-    }
-}
+#[path = "queue_tests.rs"]
+mod tests;

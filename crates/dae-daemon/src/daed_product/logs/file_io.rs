@@ -1,21 +1,7 @@
 use super::*;
 use std::borrow::Cow;
 
-#[cfg(test)]
-thread_local! {
-    pub(super) static LOG_CLEAR_INTERRUPT_AFTER_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    pub(super) static LOG_CLEAR_INTERRUPT_DURING_COPY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-fn interrupt_log_clear_after_rename() -> io::Result<()> {
-    if LOG_CLEAR_INTERRUPT_AFTER_RENAME.replace(false) {
-        return Err(io::Error::other("injected interrupted log clear"));
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ProductLogEntry {
     pub(super) id: u64,
     pub(super) ts: String,
@@ -29,16 +15,14 @@ pub(crate) fn product_log_file(config_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn product_log_dir(config_dir: &Path) -> PathBuf {
-    match std::env::var_os(PRODUCT_LOG_DIR_ENV).filter(|value| !value.is_empty()) {
-        Some(value) => {
-            let path = PathBuf::from(value);
-            if path.is_absolute() {
-                path
-            } else {
-                config_dir.join(path)
-            }
-        }
-        None => config_dir.join(PRODUCT_LOG_DIR),
+    let path = std::env::var_os(PRODUCT_LOG_DIR_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(PRODUCT_LOG_DIR));
+    if path.is_absolute() {
+        path
+    } else {
+        config_dir.join(path)
     }
 }
 
@@ -105,10 +89,12 @@ pub(crate) fn remove_product_log_visibility_file(config_dir: &Path) -> io::Resul
     Ok(())
 }
 
+#[derive(Clone)]
 pub(crate) struct ProductLogSegmentFile {
     pub(crate) path: PathBuf,
     pub(crate) first_id: u64,
     pub(crate) last_id: u64,
+    pub(super) version: ProductLogContentVersion,
 }
 
 pub(crate) fn product_log_segment_path(config_dir: &Path, first_id: u64, last_id: u64) -> PathBuf {
@@ -118,10 +104,28 @@ pub(crate) fn product_log_segment_path(config_dir: &Path, first_id: u64, last_id
 }
 
 pub(crate) fn product_log_segments(config_dir: &Path) -> io::Result<Vec<ProductLogSegmentFile>> {
+    Ok(product_log_segments_shared(config_dir)?.to_vec())
+}
+
+pub(crate) fn product_log_segments_shared(
+    config_dir: &Path,
+) -> io::Result<Arc<[ProductLogSegmentFile]>> {
     let dir = product_log_dir(config_dir);
+    let store = product_log_store(config_dir)?;
+    let metadata = match fs::metadata(&dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Arc::from([])),
+        Err(error) => return Err(error),
+    };
+    let version = ProductLogContentVersion::from_metadata(&metadata);
+    if let Some((cached_version, segments)) = log_lock(&store.segment_cache)?.as_ref()
+        && *cached_version == version
+    {
+        return Ok(Arc::clone(segments));
+    }
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Arc::from([])),
         Err(error) => return Err(error),
     };
     let mut segments = Vec::new();
@@ -148,9 +152,12 @@ pub(crate) fn product_log_segments(config_dir: &Path) -> io::Result<Vec<ProductL
             path: entry.path(),
             first_id,
             last_id,
+            version: ProductLogContentVersion::from_metadata(&entry.metadata()?),
         });
     }
     segments.sort_unstable_by_key(|segment| (segment.first_id, segment.last_id));
+    let segments: Arc<[ProductLogSegmentFile]> = segments.into();
+    *log_lock(&store.segment_cache)? = Some((version, segments.clone()));
     Ok(segments)
 }
 
@@ -163,20 +170,10 @@ pub(crate) fn product_log_files(config_dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(crate) static LOG_READER_AFTER_ENUMERATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-pub(crate) fn observe_log_reader_enumeration() {
-    if let Some(callback) = LOG_READER_AFTER_ENUMERATION.with(|slot| slot.borrow_mut().take()) {
-        callback();
-    }
-}
-
 pub(crate) fn remove_product_log_segments(config_dir: &Path) -> io::Result<()> {
-    for segment in product_log_segments(config_dir)? {
+    let segments = product_log_segments(config_dir)?;
+    product_log_store(config_dir)?.invalidate_segments()?;
+    for segment in segments {
         match fs::remove_file(segment.path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -270,16 +267,7 @@ pub(crate) fn clear_log_file(config_dir: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn clear_log_file_direct(config_dir: &Path) -> io::Result<()> {
-    let log_file = product_log_file(config_dir);
-    ensure_log_dir(config_dir)?;
-    let store = product_log_store(config_dir)?;
-    let _guard = store.lock()?;
-    store.publish_count(None, 0, 0)?;
-    recover_product_log_clear(config_dir)?;
-    let temporary = log_file.with_extension("jsonl.clear.tmp");
-    fs::write(&temporary, [])?;
-    set_log_file_permissions(&temporary)?;
-    commit_product_log_clear(config_dir, &temporary)
+    clear_log_file_filtered(config_dir, false)
 }
 
 pub(crate) fn clear_log_file_preserving_startup_reload_logs(config_dir: &Path) -> io::Result<()> {
@@ -292,6 +280,10 @@ pub(crate) fn clear_log_file_preserving_startup_reload_logs(config_dir: &Path) -
 pub(crate) fn clear_log_file_preserving_startup_reload_logs_direct(
     config_dir: &Path,
 ) -> io::Result<()> {
+    clear_log_file_filtered(config_dir, true)
+}
+
+fn clear_log_file_filtered(config_dir: &Path, preserve: bool) -> io::Result<()> {
     let log_file = product_log_file(config_dir);
     ensure_log_dir(config_dir)?;
     let store = product_log_store(config_dir)?;
@@ -303,34 +295,31 @@ pub(crate) fn clear_log_file_preserving_startup_reload_logs_direct(
     {
         let output = fs::File::create(&tmp_path)?;
         let mut writer = BufWriter::new(output);
-        for path in product_log_files(config_dir)? {
-            match fs::File::open(path) {
-                Ok(input) => {
-                    let mut reader = io::BufReader::new(input);
-                    let mut line = Vec::new();
-                    loop {
-                        line.clear();
-                        let read = reader.read_until(b'\n', &mut line)?;
-                        if read == 0 {
-                            break;
-                        }
-                        if std::str::from_utf8(&line)
-                            .ok()
-                            .and_then(parse_log_entry_line)
-                            .is_some_and(|entry| {
-                                entry.id >= first_visible_id
-                                    && startup_reload_lifecycle_log_entry(&entry)
-                            })
-                        {
-                            writer.write_all(&line)?;
-                            if !line.ends_with(b"\n") {
-                                writer.write_all(b"\n")?;
-                            }
+        if preserve {
+            for path in product_log_files(config_dir)? {
+                let input = match fs::File::open(path) {
+                    Ok(input) => input,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
+                };
+                let mut reader = io::BufReader::new(input);
+                let mut line = Vec::new();
+                while reader.read_until(b'\n', &mut line)? != 0 {
+                    if std::str::from_utf8(&line)
+                        .ok()
+                        .and_then(parse_log_entry_line)
+                        .is_some_and(|entry| {
+                            entry.id >= first_visible_id
+                                && startup_reload_lifecycle_log_entry(&entry)
+                        })
+                    {
+                        writer.write_all(&line)?;
+                        if !line.ends_with(b"\n") {
+                            writer.write_all(b"\n")?;
                         }
                     }
+                    line.clear();
                 }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err),
             }
         }
         writer.flush()?;
@@ -383,22 +372,25 @@ pub(crate) fn encode_log_entry_json_line(
     message: &str,
     fields: &BTreeMap<String, String>,
 ) -> io::Result<Vec<u8>> {
-    let mut object = Map::new();
-    object.insert("id".to_owned(), json!(id));
-    object.insert("ts".to_owned(), json!(product_log_timestamp_text()));
-    object.insert("level".to_owned(), json!(level));
-    object.insert("message".to_owned(), json!(message));
-    if !fields.is_empty() {
-        object.insert("fields".to_owned(), json!(fields));
+    #[derive(serde::Serialize)]
+    struct Record<'a> {
+        id: u64,
+        ts: String,
+        level: &'a str,
+        message: &'a str,
+        #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+        fields: &'a BTreeMap<String, String>,
     }
-    let mut data = serde_json::to_vec(&Value::Object(object))
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let mut data = serde_json::to_vec(&Record {
+        id,
+        ts: local_product_log_timestamp_text(unix_now()).unwrap_or_else(now_text),
+        level,
+        message,
+        fields,
+    })
+    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     data.push(b'\n');
     Ok(data)
-}
-
-fn product_log_timestamp_text() -> String {
-    local_product_log_timestamp_text(unix_now()).unwrap_or_else(now_text)
 }
 
 #[cfg(target_family = "unix")]
@@ -462,23 +454,17 @@ pub(crate) fn trim_log_string(value: &str, max_len: usize) -> String {
     if max_len == 0 || value.len() <= max_len {
         return value.to_owned();
     }
-    let mut boundary = 0;
-    for (idx, _) in value.char_indices() {
-        if idx > max_len {
-            break;
-        }
-        boundary = idx;
-    }
-    if boundary == 0 {
-        return "...".to_owned();
+    let mut boundary = max_len;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
     }
     format!("{}...", &value[..boundary])
 }
 
 pub(crate) fn parse_log_entry_line(line: &str) -> Option<ProductLogEntry> {
     let raw = serde_json::from_str::<ProductLogEntryRaw<'_>>(line).ok()?;
-    let id = raw.id.into_u64()?;
-    let level = normalize_log_level_name(raw.level)?;
+    let id = raw.id;
+    let level = normalize_log_level_name(&raw.level)?;
     let fields = raw
         .fields
         .into_iter()
@@ -486,53 +472,37 @@ pub(crate) fn parse_log_entry_line(line: &str) -> Option<ProductLogEntry> {
         .collect();
     Some(ProductLogEntry {
         id,
-        ts: raw.ts.to_owned(),
+        ts: raw.ts.into_owned(),
         level,
-        message: raw.message.to_owned(),
+        message: raw.message.into_owned(),
         fields,
     })
 }
 
 #[derive(serde::Deserialize)]
 struct ProductLogEntryRaw<'a> {
-    id: ProductLogIdRaw,
+    id: u64,
     #[serde(borrow)]
-    ts: &'a str,
+    ts: Cow<'a, str>,
     #[serde(borrow)]
-    level: &'a str,
+    level: Cow<'a, str>,
     #[serde(borrow)]
-    message: &'a str,
+    message: Cow<'a, str>,
     #[serde(default, borrow)]
     fields: BTreeMap<Cow<'a, str>, ProductLogFieldRaw<'a>>,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
-enum ProductLogIdRaw {
-    Unsigned(u64),
-    Signed(i64),
-}
-
-impl ProductLogIdRaw {
-    fn into_u64(self) -> Option<u64> {
-        match self {
-            Self::Unsigned(value) => Some(value),
-            Self::Signed(value) => u64::try_from(value).ok(),
-        }
-    }
-}
-
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
 enum ProductLogFieldRaw<'a> {
-    String(#[serde(borrow)] &'a str),
+    String(#[serde(borrow)] Cow<'a, str>),
     Other(Value),
 }
 
 impl ProductLogFieldRaw<'_> {
     fn into_owned(self) -> String {
         match self {
-            Self::String(value) => value.to_owned(),
+            Self::String(value) => value.into_owned(),
             Self::Other(value) => value.to_string(),
         }
     }
@@ -566,13 +536,8 @@ fn startup_reload_lifecycle_log_entry(entry: &ProductLogEntry) -> bool {
 }
 
 pub(crate) fn log_entry_value(entry: ProductLogEntry) -> Value {
-    let mut object = Map::new();
-    object.insert("id".to_owned(), json!(entry.id));
-    object.insert("ts".to_owned(), json!(entry.ts));
-    object.insert("level".to_owned(), json!(entry.level));
-    object.insert("message".to_owned(), json!(entry.message));
-    object.insert("fields".to_owned(), json!(entry.fields));
-    Value::Object(object)
+    json!({"id": entry.id, "ts": entry.ts, "level": entry.level,
+        "message": entry.message, "fields": entry.fields})
 }
 
 pub(crate) fn log_entry_matches_filter(
@@ -640,55 +605,39 @@ pub(crate) fn read_last_log_id(path: &Path) -> io::Result<u64> {
 }
 
 pub(crate) fn cached_last_log_id(path: &Path) -> io::Result<u64> {
-    let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = log_lock(LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None)))?;
+    if let Some(cached) = cache.as_ref()
+        && cached.0 == path
     {
-        let cache = lock
-            .lock()
-            .map_err(|_| io::Error::other("product log id cache lock poisoned"))?;
-        if let Some(cached) = cache.as_ref()
-            && cached.path == path
-        {
-            return Ok(cached.id);
-        }
+        return Ok(cached.1);
     }
-    reset_log_id_cache_to_last(path)?;
-    let cache = lock
-        .lock()
-        .map_err(|_| io::Error::other("product log id cache lock poisoned"))?;
-    Ok(cache.as_ref().map(|cached| cached.id).unwrap_or(0))
+    let id = read_last_log_id(path)?;
+    *cache = Some((path.to_path_buf(), id));
+    Ok(id)
 }
 
 pub(crate) fn set_log_id_cache(path: &Path, id: u64) -> io::Result<()> {
-    let lock = LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None));
-    let mut cache = lock
-        .lock()
-        .map_err(|_| io::Error::other("product log id cache lock poisoned"))?;
-    *cache = Some(ProductLogIdCache {
-        path: path.to_path_buf(),
-        id,
-    });
+    *log_lock(LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None)))? = Some((path.to_path_buf(), id));
     Ok(())
 }
 
+fn visible_id_cache() -> io::Result<std::sync::MutexGuard<'static, HashMap<PathBuf, u64>>> {
+    log_lock(LOG_VISIBLE_FIRST_ID_CACHE.get_or_init(|| Mutex::new(HashMap::new())))
+}
+
 pub(crate) fn set_log_visible_first_id(path: &Path, id: u64) -> io::Result<()> {
-    let mut cache = LOG_VISIBLE_FIRST_ID_CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .map_err(|_| io::Error::other("product log visibility cache lock poisoned"))?;
-    cache.insert(path.to_path_buf(), id);
+    visible_id_cache()?.insert(path.to_path_buf(), id);
     Ok(())
 }
 
 pub(crate) fn cached_log_visible_first_id(path: &Path) -> io::Result<Option<u64>> {
-    let cache = LOG_VISIBLE_FIRST_ID_CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .map_err(|_| io::Error::other("product log visibility cache lock poisoned"))?;
-    Ok(cache.get(path).copied())
+    Ok(visible_id_cache()?.get(path).copied())
 }
 
 pub(crate) fn reset_log_id_cache_to_last(path: &Path) -> io::Result<()> {
-    set_log_id_cache(path, read_last_log_id(path)?)
+    let mut cache = log_lock(LOG_LAST_ID_CACHE.get_or_init(|| Mutex::new(None)))?;
+    *cache = Some((path.to_path_buf(), read_last_log_id(path)?));
+    Ok(())
 }
 
 pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
@@ -705,7 +654,8 @@ pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
         let mut count = 0_i64;
         let mut line = Vec::new();
         for file in snapshot.files {
-            let mut reader = io::BufReader::new(file);
+            let sealed = file.sealed_version();
+            let mut reader = io::BufReader::new(file.open()?);
             while read_product_log_line(&mut reader, &mut line)? {
                 if std::str::from_utf8(&line)
                     .ok()
@@ -714,6 +664,13 @@ pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
                 {
                     count = count.saturating_add(1);
                 }
+            }
+            if sealed.is_some_and(|version| {
+                reader.get_ref().get_ref().metadata().is_ok_and(|metadata| {
+                    ProductLogContentVersion::from_metadata(&metadata) != version
+                })
+            }) {
+                return Err(snapshot_changed());
             }
         }
         Ok(count)
@@ -789,50 +746,7 @@ pub(crate) fn prune_log_file(config_dir: &Path, conn: &Connection) -> io::Result
 }
 
 #[cfg(test)]
-pub(crate) fn prune_log_file_with_settings(
-    path: &Path,
-    max_entries: i64,
-    max_bytes: i64,
-) -> io::Result<()> {
-    let max_entries = normalize_log_max_entries(max_entries) as usize;
-    let max_bytes = normalize_log_max_bytes(max_bytes) as u64;
-    let data = match read_tail_bytes(path, max_bytes) {
-        Ok(data) => data,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-    if data.is_empty() {
-        return Ok(());
-    }
-    #[cfg(test)]
-    observe_log_prune_rewrite(path);
-    let tmp_path = path.with_extension("jsonl.tmp");
-    write_pruned_log_tail(&tmp_path, &data, max_entries)?;
-    set_log_file_permissions(&tmp_path)?;
-    fs::rename(tmp_path, path)
-}
-
+#[path = "file_io_tests.rs"]
+mod test_helpers;
 #[cfg(test)]
-fn write_pruned_log_tail(path: &Path, data: &[u8], max_entries: usize) -> io::Result<()> {
-    let mut ranges = Vec::new();
-    let mut start = 0_usize;
-    while start < data.len() {
-        let end = data[start..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|offset| start + offset)
-            .unwrap_or(data.len());
-        if end > start {
-            ranges.push((start, end));
-        }
-        start = end.saturating_add(1);
-    }
-    let keep_from = ranges.len().saturating_sub(max_entries);
-    let file = fs::File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    for (start, end) in ranges.into_iter().skip(keep_from) {
-        writer.write_all(&data[start..end])?;
-        writer.write_all(b"\n")?;
-    }
-    writer.flush()
-}
+pub(crate) use test_helpers::*;

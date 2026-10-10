@@ -22,6 +22,8 @@ mod fallback;
 mod recovery_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::start_product_log_runtime_for_test;
 
 pub(crate) fn append_product_log_without_runtime(
     config_dir: &Path,
@@ -230,14 +232,6 @@ pub(crate) fn start_product_log_runtime(
         state,
         ProductLogRuntimeConfig::from_environment(),
     )
-}
-
-#[cfg(test)]
-pub(crate) fn start_product_log_runtime_for_test(
-    config_dir: &Path,
-    state: &Path,
-) -> io::Result<Arc<ProductLogRuntime>> {
-    ProductLogRuntime::start_with_config(config_dir, state, ProductLogRuntimeConfig::for_test())
 }
 
 pub(crate) fn product_log_runtime_snapshot(config_dir: &Path) -> Value {
