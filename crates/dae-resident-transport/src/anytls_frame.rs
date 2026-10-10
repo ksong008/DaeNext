@@ -1,4 +1,4 @@
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use dae_outbound_stream::anytls::{AnyTlsFrame, contract as anytls_contract};
 use dae_resident_core::RESIDENT_TCP_IDLE_TIMEOUT;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -10,6 +10,8 @@ const ANYTLS_FRAME_READ_CHUNK_SIZE: usize = 32 * 1024;
 pub struct AnyTlsFrameReader {
     #[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
     buffered: BytesMut,
+    #[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
+    read_chunk_size: usize,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -17,7 +19,9 @@ impl Default for AnyTlsFrameReader {
     fn default() -> Self {
         Self {
             #[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
-            buffered: BytesMut::with_capacity(ANYTLS_FRAME_READ_CHUNK_SIZE),
+            buffered: BytesMut::with_capacity(2048),
+            #[cfg(not(feature = "test-anytls-legacy-frame-reader"))]
+            read_chunk_size: 2048,
         }
     }
 }
@@ -52,14 +56,22 @@ impl AnyTlsFrameReader {
                 let len = u16::from_be_bytes([self.buffered[5], self.buffered[6]]) as usize;
                 let frame_len = anytls_contract::HEADER_OVERHEAD_SIZE + len;
                 if self.buffered.len() >= frame_len {
-                    let frame = self.buffered.split_to(frame_len);
-                    data.clear();
-                    data.reserve(len);
-                    data.extend_from_slice(&frame[anytls_contract::HEADER_OVERHEAD_SIZE..]);
-                    return Ok((
+                    let compact = self.buffered.capacity() > len.max(2048).next_power_of_two();
+                    let mut frame = self.buffered.split_to(frame_len);
+                    let result = (
                         frame[0],
                         u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]),
-                    ));
+                    );
+                    frame.advance(anytls_contract::HEADER_OVERHEAD_SIZE);
+                    if compact {
+                        // Do not pin a large physical receive slab for a tiny
+                        // logical stream frame queued behind backpressure.
+                        data.clear();
+                        data.extend_from_slice(&frame);
+                    } else {
+                        *data = frame;
+                    }
+                    return Ok(result);
                 }
             }
 
@@ -67,7 +79,7 @@ impl AnyTlsFrameReader {
                 let len = u16::from_be_bytes([self.buffered[5], self.buffered[6]]) as usize;
                 (anytls_contract::HEADER_OVERHEAD_SIZE + len) - self.buffered.len()
             } else {
-                ANYTLS_FRAME_READ_CHUNK_SIZE
+                self.read_chunk_size
             };
             let read_limit = needed.clamp(1, ANYTLS_FRAME_READ_CHUNK_SIZE);
             self.buffered.reserve(read_limit);
@@ -81,6 +93,9 @@ impl AnyTlsFrameReader {
             .map_err(|err| format!("read AnyTLS frame: {err}"))?;
             if read == 0 {
                 return Err("read AnyTLS frame: early eof".to_owned());
+            }
+            if read == read_limit {
+                self.read_chunk_size = (self.read_chunk_size * 2).min(ANYTLS_FRAME_READ_CHUNK_SIZE);
             }
         }
     }

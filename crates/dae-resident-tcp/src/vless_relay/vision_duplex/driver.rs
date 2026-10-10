@@ -271,7 +271,7 @@ impl VisionDuplexDriver {
         if !response_prefix.is_empty() {
             let stripped = driver.response_stripper.consume(&response_prefix)?;
             driver.stats.response_header_stripped = driver.response_stripper.done;
-            let payload = driver.unpadder.consume(&stripped)?;
+            let payload = driver.unpadder.consume_shared(stripped)?.into_owned();
             driver.outer_read_handoff_pending = driver.consume_unpadded_overlay_payload(payload)?;
         }
         Ok(driver)
@@ -567,7 +567,7 @@ impl VisionDuplexDriver {
                             let stripped =
                                 self.response_stripper.consume(&self.proxy_buffer[..read])?;
                             self.stats.response_header_stripped = self.response_stripper.done;
-                            let payload = self.unpadder.consume(&stripped)?;
+                            let payload = self.unpadder.consume_shared(stripped)?.into_owned();
                             if self.consume_unpadded_overlay_payload(payload)? {
                                 client.request_vision_outer_record_handoff();
                             }

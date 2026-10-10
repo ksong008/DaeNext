@@ -64,7 +64,7 @@ where
         response_header_len,
         response_chunk_len,
         payload_len: payload.len(),
-        echoed_payload: echoed.payload,
+        echoed_payload: echoed.payload.to_vec(),
         new_frame_validated: true,
         data_frame_validated: true,
         end_frame_sent: true,

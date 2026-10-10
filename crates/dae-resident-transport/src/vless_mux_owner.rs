@@ -555,7 +555,7 @@ enum VlessMuxPhysicalCommand {
 }
 
 enum VlessMuxLogicalEvent {
-    Payload(Vec<u8>),
+    Payload(Bytes),
     RemoteEnd,
 }
 

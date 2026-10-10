@@ -291,12 +291,19 @@ pub async fn relay_raw_tcp_streams_with_buffer_size(
     let mut stop_listener = stop.listener();
     let idle_deadline = resident_relay_idle_deadline(RESIDENT_TCP_IDLE_TIMEOUT);
     tokio::pin!(idle_deadline);
+    let buffer_timer = time::sleep(RESIDENT_TCP_IDLE_TIMEOUT);
+    tokio::pin!(buffer_timer);
+    let mut armed_buffer_deadline = None;
+    let mut last_activity = time::Instant::now();
     let mut progress_without_yield = 0_usize;
 
     loop {
         // Reclaim each drained direction before polling I/O so a busy opposite
         // direction cannot starve the idle side's timer branch.
         let now = time::Instant::now();
+        if now >= last_activity + RESIDENT_TCP_IDLE_TIMEOUT {
+            return Err("resident direct TCP relay idle timeout".to_owned());
+        }
         driver.upload.reclaim_if_idle(now);
         driver.download.reclaim_if_idle(now);
         let buffer_deadline = [
@@ -306,8 +313,12 @@ pub async fn relay_raw_tcp_streams_with_buffer_size(
         .into_iter()
         .flatten()
         .min();
-        let buffer_timer = time::sleep_until(buffer_deadline.unwrap_or_else(time::Instant::now));
-        tokio::pin!(buffer_timer);
+        if buffer_deadline != armed_buffer_deadline {
+            if let Some(deadline) = buffer_deadline {
+                buffer_timer.as_mut().reset(deadline);
+            }
+            armed_buffer_deadline = buffer_deadline;
+        }
         let complete = tokio::select! {
             biased;
             _ = stop_listener.cancelled() => return Ok(driver.stats),
@@ -321,13 +332,17 @@ pub async fn relay_raw_tcp_streams_with_buffer_size(
                 continue;
             }
             _ = &mut idle_deadline => {
+                if time::Instant::now() < last_activity + RESIDENT_TCP_IDLE_TIMEOUT {
+                    idle_deadline.as_mut().reset(last_activity + RESIDENT_TCP_IDLE_TIMEOUT);
+                    continue;
+                }
                 return Err("resident direct TCP relay idle timeout".to_owned());
             }
         };
         if complete {
             return Ok(driver.stats);
         }
-        reset_resident_relay_idle_deadline(idle_deadline.as_mut(), RESIDENT_TCP_IDLE_TIMEOUT);
+        last_activity = time::Instant::now();
         progress_without_yield += 1;
         if progress_without_yield >= RAW_TCP_RELAY_COOPERATIVE_BUDGET {
             progress_without_yield = 0;

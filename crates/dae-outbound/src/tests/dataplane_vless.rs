@@ -100,7 +100,7 @@ fn case_vless_mux_dataplane_echoes_payload() {
         shared_transport::mux::SESSION_STATUS_KEEP
     );
     assert_eq!(data_frame.option, shared_transport::mux::OPTION_DATA);
-    assert_eq!(data_frame.payload, payload);
+    assert_eq!(data_frame.payload.as_ref(), payload);
     assert_eq!(end_frame.id, mux_id);
     assert_eq!(end_frame.status, shared_transport::mux::SESSION_STATUS_END);
 }

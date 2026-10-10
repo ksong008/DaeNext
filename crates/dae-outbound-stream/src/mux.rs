@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use bytes::{Bytes, BytesMut};
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpStream};
 use std::time::Duration;
@@ -30,13 +30,13 @@ pub struct MuxFrame {
     pub id: [u8; 2],
     pub status: u8,
     pub option: u8,
-    pub metadata: Vec<u8>,
-    pub payload: Vec<u8>,
+    pub metadata: Bytes,
+    pub payload: Bytes,
 }
 
 #[derive(Debug, Default)]
 pub struct MuxFrameDecoder {
-    pending: VecDeque<u8>,
+    pending: BytesMut,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,10 +144,11 @@ fn mux_end_frame_with_option(id: [u8; 2], option: u8) -> Vec<u8> {
 
 impl MuxFrameDecoder {
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<MuxFrame>, OutboundError> {
-        self.pending.extend(bytes.iter().copied());
+        self.pending.extend_from_slice(bytes);
         let mut frames = Vec::new();
         while let Some((frame_end, frame)) = self.next_frame()? {
-            self.pending.drain(..frame_end);
+            // next_frame splits the completed frame out of the shared buffer.
+            let _ = frame_end;
             frames.push(frame);
         }
         if self.pending.len() > MUX_MAX_FRAME_BYTES {
@@ -159,7 +160,7 @@ impl MuxFrameDecoder {
     }
 
     fn next_frame(&mut self) -> Result<Option<(usize, MuxFrame)>, OutboundError> {
-        let pending = self.pending.make_contiguous();
+        let pending = &self.pending;
         if pending.len() < 2 {
             return Ok(None);
         }
@@ -176,7 +177,7 @@ impl MuxFrameDecoder {
         let metadata = &pending[2..metadata_end];
         let id = [metadata[0], metadata[1]];
         let (status, option) = validate_mux_metadata(metadata)?;
-        let (frame_end, payload) = if option & OPTION_DATA != 0 {
+        let (frame_end, payload_start) = if option & OPTION_DATA != 0 {
             if pending.len() < metadata_end + 2 {
                 return Ok(None);
             }
@@ -186,17 +187,20 @@ impl MuxFrameDecoder {
             if pending.len() < frame_end {
                 return Ok(None);
             }
-            (frame_end, pending[metadata_end + 2..frame_end].to_vec())
+            (frame_end, metadata_end + 2)
         } else {
-            (metadata_end, Vec::new())
+            (metadata_end, metadata_end)
         };
+        let wire = self.pending.split_to(frame_end).freeze();
+        let payload = wire.slice(payload_start..frame_end);
+        let metadata = wire.slice(2..metadata_end);
         Ok(Some((
             frame_end,
             MuxFrame {
                 id,
                 status,
                 option,
-                metadata: metadata.to_vec(),
+                metadata,
                 payload,
             },
         )))
@@ -241,8 +245,8 @@ pub fn read_mux_frame(stream: &mut impl Read) -> Result<MuxFrame, OutboundError>
             id,
             status,
             option,
-            metadata,
-            payload,
+            metadata: metadata.into(),
+            payload: payload.into(),
         });
     }
 }
@@ -294,7 +298,7 @@ pub fn mux_frame_exchange(
         transport: "mux-frame",
         id_hex: hex_encode(&options.id),
         payload_len: payload.len(),
-        echoed_payload: echoed.payload,
+        echoed_payload: echoed.payload.to_vec(),
         multiplexing_harness: true,
         full_mux_runtime_stack: false,
     })
@@ -357,7 +361,7 @@ mod tests {
         assert_eq!(frames.len(), 3);
         assert_eq!(frames[0].status, SESSION_STATUS_NEW);
         assert_eq!(frames[1].status, SESSION_STATUS_KEEP);
-        assert_eq!(frames[1].payload, b"payload");
+        assert_eq!(frames[1].payload.as_ref(), b"payload");
         assert_eq!(frames[2].status, SESSION_STATUS_END);
     }
 
@@ -399,6 +403,6 @@ mod tests {
         let mut wire = std::io::Cursor::new(keepalive);
         let frame = read_mux_frame(&mut wire).unwrap();
         assert_eq!(frame.status, SESSION_STATUS_KEEP);
-        assert_eq!(frame.payload, b"next");
+        assert_eq!(frame.payload.as_ref(), b"next");
     }
 }

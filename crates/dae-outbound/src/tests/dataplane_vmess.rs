@@ -345,7 +345,7 @@ fn case_vmess_aead_mux_dataplane_echoes_payload() {
         accepted.data_frame.option,
         shared_transport::mux::OPTION_DATA
     );
-    assert_eq!(accepted.data_frame.payload, payload);
+    assert_eq!(accepted.data_frame.payload.as_ref(), payload);
     assert_eq!(accepted.end_frame.id, mux_id);
     assert_eq!(
         accepted.end_frame.status,
