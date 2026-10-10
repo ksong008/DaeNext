@@ -200,47 +200,47 @@ async fn dispatch_proxy_packet(
     let dscp = managed.dscp;
     let mut route_event = None;
     for attempt in 0..2 {
-        let lookup_key = key.clone();
-        let (existed, result) = match sessions.entry(lookup_key) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                let result = entry.get().session.sender.try_send(managed);
-                (true, result)
+        let (existed, result) = if let Some(entry) = sessions.get(&key) {
+            (true, entry.session.sender.try_send(managed))
+        } else {
+            let Some(session) = create_proxy_session(&key, context, cleanup_tx, next_actor_id)
+            else {
+                append_proxy_route_event(
+                    context,
+                    route_event.take().or_else(|| {
+                        build_proxy_route_event(
+                            peer,
+                            original_dst,
+                            &route,
+                            &managed.proxy,
+                            &key,
+                            sniffed_domain.as_deref().unwrap_or_default(),
+                            dscp,
+                        )
+                    }),
+                    false,
+                    UDP_ROUTE_REASON_LIMIT,
+                );
+                return;
+            };
+            if route_event.is_none() {
+                route_event = build_proxy_route_event(
+                    peer,
+                    original_dst,
+                    &route,
+                    &managed.proxy,
+                    &key,
+                    sniffed_domain.as_deref().unwrap_or_default(),
+                    dscp,
+                );
             }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let Some(session) = create_proxy_session(&key, context, cleanup_tx, next_actor_id)
-                else {
-                    append_proxy_route_event(
-                        context,
-                        route_event.take().or_else(|| {
-                            build_proxy_route_event(
-                                peer,
-                                original_dst,
-                                &route,
-                                &managed.proxy,
-                                &key,
-                                sniffed_domain.as_deref().unwrap_or_default(),
-                                dscp,
-                            )
-                        }),
-                        false,
-                        UDP_ROUTE_REASON_LIMIT,
-                    );
-                    return;
-                };
-                if route_event.is_none() {
-                    route_event = build_proxy_route_event(
-                        peer,
-                        original_dst,
-                        &route,
-                        &managed.proxy,
-                        &key,
-                        sniffed_domain.as_deref().unwrap_or_default(),
-                        dscp,
-                    );
-                }
-                let result = entry.insert(session).session.sender.try_send(managed);
-                (false, result)
-            }
+            let result = sessions
+                .entry(key.clone())
+                .or_insert(session)
+                .session
+                .sender
+                .try_send(managed);
+            (false, result)
         };
         match classify_session_send(result) {
             UdpSessionSend::Queued => {

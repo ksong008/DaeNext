@@ -13,6 +13,37 @@ pub(in crate::udp) mod tests {
 
     const XTLS_RPRX_VISION: &str = "xtls-rprx-vision";
 
+    #[test]
+    fn udp_payload_admission_charges_capacity_including_empty_packets() {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let pool = UdpPayloadPool::new(8, 1);
+        let admission = ResidentUdpPayloadAdmission::new(1, 4096);
+        let mut retained = Vec::new();
+        for size in [0, 192, 1400] {
+            sender
+                .send_to(&vec![7; size], socket.local_addr().unwrap())
+                .unwrap();
+            let mut packet = dae_datapath::udp_io::try_recv_udp_with_original_dst_from_pool(
+                &socket, 2048, &pool,
+            )
+            .unwrap();
+            let result = admit_udp_payload(&mut packet.payload, &admission);
+            if size == 1400 {
+                assert_eq!(
+                    result.unwrap_err().requested,
+                    packet.payload.retained_capacity()
+                );
+            } else {
+                result.unwrap();
+                retained.push(packet);
+            }
+        }
+        assert_eq!(admission.current(), 4096);
+        drop(retained);
+        assert_eq!(admission.current(), 0);
+    }
+
     fn udp_test_binding(proxy: &ResidentProxyPlan) -> ResidentProxyBinding {
         let mut proxy = proxy.clone();
         proxy.materialize_execution();

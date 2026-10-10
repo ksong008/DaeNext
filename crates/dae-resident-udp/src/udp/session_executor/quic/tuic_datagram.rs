@@ -103,7 +103,8 @@ where
 {
     // A TUIC header is at most 269 bytes. Small packets need no extra
     // address parse; near the MTU compute the exact wire size before copying.
-    let known_oversize = match sender.max_datagram_size() {
+    let mut initial_max_wire_size = sender.max_datagram_size();
+    let known_oversize = match initial_max_wire_size {
         Some(limit)
             if payload
                 .len()
@@ -116,10 +117,13 @@ where
         }
         _ => false,
     };
+    if known_oversize {
+        initial_max_wire_size = sender.max_datagram_size();
+    }
     // Recheck only on the oversized path: a recovering PMTU may already
     // permit the original packet. A send-time TooLarge still falls through.
     if !known_oversize
-        || sender.max_datagram_size().is_some_and(|limit| {
+        || initial_max_wire_size.is_some_and(|limit| {
             dae_outbound_quic::tuic::tuic_udp_payload_wire_len(target, payload)
                 .is_ok_and(|len| len <= limit)
         })
@@ -132,7 +136,7 @@ where
                     whole_datagram_sent: true,
                     datagrams_sent: 1,
                     fragment_layouts: 0,
-                    final_max_wire_size: sender.max_datagram_size(),
+                    final_max_wire_size: initial_max_wire_size,
                 });
             }
             Err(TuicUdpDatagramSendFailure::TooLarge) => {}

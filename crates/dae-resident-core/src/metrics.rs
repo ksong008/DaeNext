@@ -46,10 +46,9 @@ pub struct ResidentDataplaneMetrics {
     udp_generation_pin_unavailable: AtomicU64,
     udp_ingress_packets: AtomicU64,
     udp_response_packets: AtomicU64,
-    udp_dispatch_queued_current: AtomicU64,
-    udp_session_queued_current: AtomicU64,
-    udp_reply_queued_current: AtomicU64,
-    udp_processing_current: AtomicU64,
+    // Two 32-bit lanes per word. Profile-bounded queues cannot approach 2^32.
+    udp_dispatch_session_current: AtomicU64,
+    udp_reply_processing_current: AtomicU64,
     udp_ingress_drain_batches: AtomicU64,
     udp_ingress_drain_budget_hits: AtomicU64,
     udp_ingress_syscalls: AtomicU64,
@@ -830,13 +829,12 @@ impl ResidentDataplaneMetrics {
         });
         snapshot["udpResponsePackets"] = json!(self.udp_response_packets.load(Ordering::Relaxed));
         snapshot["udpDispatchQueuedCurrent"] =
-            json!(self.udp_dispatch_queued_current.load(Ordering::Relaxed));
+            json!(self.udp_work_count(ResidentUdpWorkStage::Dispatch));
         snapshot["udpSessionQueuedCurrent"] =
-            json!(self.udp_session_queued_current.load(Ordering::Relaxed));
-        snapshot["udpReplyQueuedCurrent"] =
-            json!(self.udp_reply_queued_current.load(Ordering::Relaxed));
+            json!(self.udp_work_count(ResidentUdpWorkStage::Session));
+        snapshot["udpReplyQueuedCurrent"] = json!(self.udp_work_count(ResidentUdpWorkStage::Reply));
         snapshot["udpProcessingCurrent"] =
-            json!(self.udp_processing_current.load(Ordering::Relaxed));
+            json!(self.udp_work_count(ResidentUdpWorkStage::Processing));
         snapshot["udpIngressSyscalls"] = json!(self.udp_ingress_syscalls.load(Ordering::Relaxed));
         snapshot["udpIngressDatagrams"] = json!(self.udp_ingress_datagrams.load(Ordering::Relaxed));
         snapshot["udpIngressBatches"] =

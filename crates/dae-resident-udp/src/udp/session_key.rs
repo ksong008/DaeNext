@@ -13,6 +13,10 @@ fn stable_udp_shard_state() -> &'static RandomState {
     STATE.get_or_init(RandomState::new)
 }
 
+pub(super) fn stable_udp_session_hash(key: &impl Hash) -> u64 {
+    stable_udp_shard_state().hash_one(key)
+}
+
 pub fn stable_udp_shard_index<T>(key: &T, shard_count: usize) -> usize
 where
     T: Hash + ?Sized,

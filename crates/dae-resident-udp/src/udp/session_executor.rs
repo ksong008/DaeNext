@@ -1,5 +1,8 @@
 use super::*;
 
+mod identity_cache;
+use identity_cache::ProtocolIdentityCache;
+
 #[cfg(test)]
 use crate::plan::{ResidentUdpExecutionAgreement, ResidentUdpExecutionDisposition};
 

@@ -92,6 +92,9 @@ async fn run_udp_session_actor(
     let mut last_activity = time::Instant::now();
     let idle_timer = time::sleep(idle_timeout);
     tokio::pin!(idle_timer);
+    let response_buffer_timer = time::sleep(idle_timeout);
+    tokio::pin!(response_buffer_timer);
+    let mut armed_response_buffer_deadline = None;
     let mut stop_listener = context.actor_stop.listener();
     'session: loop {
         // Invalid/partial responses must not starve the deadline through the
@@ -100,13 +103,15 @@ async fn run_udp_session_actor(
             stop_reason = "idle-timeout".to_owned();
             break;
         }
-        idle_timer.as_mut().reset(last_activity + idle_timeout);
         let response_buffer_deadline = executor.as_ref().and_then(|executor| {
             executor.response_buffer_reclaim_deadline(context.response_buffer_idle_timeout)
         });
-        let response_buffer_timer =
-            time::sleep_until(response_buffer_deadline.unwrap_or_else(time::Instant::now));
-        tokio::pin!(response_buffer_timer);
+        if response_buffer_deadline != armed_response_buffer_deadline {
+            if let Some(deadline) = response_buffer_deadline {
+                response_buffer_timer.as_mut().reset(deadline);
+            }
+            armed_response_buffer_deadline = response_buffer_deadline;
+        }
         tokio::select! {
             biased;
             _ = stop_listener.cancelled() => {
@@ -196,9 +201,9 @@ async fn run_udp_session_actor(
                         managed.packet,
                         managed.original_dst,
                         managed.dscp,
-                        context.event_file.clone(),
-                        Arc::clone(&context.event_lock),
-                        Arc::clone(&context.metrics),
+                        &context.event_file,
+                        &context.event_lock,
+                        &context.metrics,
                         &context.udp_reply,
                         &packet_session,
                         exchange,
@@ -254,6 +259,7 @@ async fn run_udp_session_actor(
             }
             _ = &mut idle_timer => {
                 if time::Instant::now() < last_activity + idle_timeout {
+                    idle_timer.as_mut().reset(last_activity + idle_timeout);
                     continue;
                 }
                 stop_reason = "idle-timeout".to_owned();
