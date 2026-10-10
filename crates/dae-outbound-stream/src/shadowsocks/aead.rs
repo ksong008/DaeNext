@@ -39,8 +39,7 @@ fn checked_chunk_len(payload_len: usize) -> Result<usize, OutboundError> {
     Ok(payload_len)
 }
 const SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES: usize = 4;
-const SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET: usize =
-    SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * (2 + TAG_LEN * 2);
+const SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET: usize = 2 + TAG_LEN;
 pub const SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE: usize =
     SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE;
 pub const SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE: usize =
@@ -304,7 +303,7 @@ where
 }
 
 pub struct AeadStreamFrameReader {
-    wire: Box<[u8]>,
+    wire: Vec<u8>,
     start: usize,
     end: usize,
     pending_payload_len: Option<usize>,
@@ -322,7 +321,7 @@ impl Default for AeadStreamFrameReader {
 impl AeadStreamFrameReader {
     pub fn new() -> Self {
         Self {
-            wire: vec![0_u8; SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE].into_boxed_slice(),
+            wire: vec![0_u8; SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE],
             start: 0,
             end: 0,
             pending_payload_len: None,
@@ -447,10 +446,20 @@ impl AeadStreamFrameReader {
         self.end - self.start
     }
 
+    fn grow_full_buffer(&mut self) {
+        if self.end == self.wire.len()
+            && self.wire.len() < SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE
+        {
+            self.wire
+                .resize(SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE, 0);
+        }
+    }
+
     async fn fill<S>(&mut self, stream: &mut S) -> Result<(), OutboundError>
     where
         S: AsyncRead + Unpin,
     {
+        self.grow_full_buffer();
         if self.end == self.wire.len() && self.start != 0 {
             self.wire.copy_within(self.start..self.end, 0);
             self.end -= self.start;
@@ -479,6 +488,7 @@ impl AeadStreamFrameReader {
     where
         S: AsyncRead + Unpin,
     {
+        self.grow_full_buffer();
         if self.end == self.wire.len() {
             return Ok(false);
         }
@@ -654,7 +664,13 @@ impl AeadStreamCodec {
         let payload_capacity = buffer
             .len()
             .saturating_sub(SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET)
-            .min(SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * MAX_CHUNK_LEN);
+            .min(
+                if buffer.len() < SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE {
+                    MAX_CHUNK_LEN
+                } else {
+                    SHADOWSOCKS_AEAD_TCP_BATCH_FRAMES * MAX_CHUNK_LEN
+                },
+            );
         &mut buffer[SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET
             ..SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET + payload_capacity]
     }
@@ -676,19 +692,22 @@ impl AeadStreamCodec {
             )));
         }
 
-        let mut plain_offset = 0;
-        let mut wire_offset = 0;
-        while plain_offset < payload_len {
+        let frames = payload_len.div_ceil(MAX_CHUNK_LEN);
+        let wire_len = payload_len + frames * (2 + TAG_LEN * 2);
+        if wire_len > buffer.len() {
+            return Err(OutboundError::BadShadowsocks(
+                "batch wire length exceeds in-place buffer capacity".to_owned(),
+            ));
+        }
+        for index in (1..frames).rev() {
+            let plain_offset = index * MAX_CHUNK_LEN;
             let chunk_len = (payload_len - plain_offset).min(MAX_CHUNK_LEN);
             let source_start = SHADOWSOCKS_AEAD_TCP_BATCH_PLAINTEXT_OFFSET + plain_offset;
-            let payload_start = wire_offset + 2 + TAG_LEN;
+            let payload_start = plain_offset + index * (2 + TAG_LEN * 2) + 2 + TAG_LEN;
             buffer.copy_within(source_start..source_start + chunk_len, payload_start);
-            plain_offset += chunk_len;
-            wire_offset += 2 + TAG_LEN + chunk_len + TAG_LEN;
         }
-
-        plain_offset = 0;
-        wire_offset = 0;
+        let mut plain_offset = 0;
+        let mut wire_offset = 0;
         while plain_offset < payload_len {
             let chunk_len = (payload_len - plain_offset).min(MAX_CHUNK_LEN);
             let chunk_wire_len = 2 + TAG_LEN + chunk_len + TAG_LEN;
@@ -1239,6 +1258,10 @@ mod in_place_tests {
         assert_eq!(read, expected.len());
         assert_eq!(reader.plaintext(), expected);
         reader.consume_plaintext();
-        assert_eq!(source.reads, 1);
+        assert_eq!(source.reads, 2);
+        assert_eq!(
+            reader.wire.len(),
+            SHADOWSOCKS_AEAD_TCP_WIRE_READ_BUFFER_SIZE
+        );
     }
 }

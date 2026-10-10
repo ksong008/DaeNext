@@ -78,9 +78,9 @@ impl BodyCodec {
         let padding_start = out.len();
         out.resize(padding_start + padding_len, 0);
         if padding_len != 0 {
-            getrandom::fill(&mut out[padding_start..]).map_err(|err| {
-                OutboundError::BadVmess(format!("generate VMess body padding: {err}"))
-            })?;
+            dae_netutil::wire_random::fill_wire_random_pooled(&mut out[padding_start..]).map_err(
+                |err| OutboundError::BadVmess(format!("generate VMess body padding: {err}")),
+            )?;
         }
         Ok(out)
     }

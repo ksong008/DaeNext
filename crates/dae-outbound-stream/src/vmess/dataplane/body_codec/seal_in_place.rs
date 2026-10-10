@@ -50,9 +50,12 @@ impl BodyCodec {
         buffer[..2].copy_from_slice(&self.size.encode_size(size as u16));
         let padding_start = payload_offset + encoded_len;
         if padding_len != 0 {
-            getrandom::fill(&mut buffer[padding_start..padding_start + padding_len]).map_err(
-                |err| OutboundError::BadVmess(format!("generate VMess body padding: {err}")),
-            )?;
+            dae_netutil::wire_random::fill_wire_random_pooled(
+                &mut buffer[padding_start..padding_start + padding_len],
+            )
+            .map_err(|err| {
+                OutboundError::BadVmess(format!("generate VMess body padding: {err}"))
+            })?;
         }
         Ok(2 + size)
     }
@@ -102,9 +105,10 @@ impl BodyCodec {
         let padding_start = buffer.len();
         buffer.resize(padding_start + padding_len, 0);
         if padding_len != 0 {
-            getrandom::fill(&mut buffer[padding_start..]).map_err(|err| {
-                OutboundError::BadVmess(format!("generate VMess body padding: {err}"))
-            })?;
+            dae_netutil::wire_random::fill_wire_random_pooled(&mut buffer[padding_start..])
+                .map_err(|err| {
+                    OutboundError::BadVmess(format!("generate VMess body padding: {err}"))
+                })?;
         }
         buffer[prefix_len..prefix_len + 2].copy_from_slice(&self.size.encode_size(size as u16));
         Ok(2 + size)

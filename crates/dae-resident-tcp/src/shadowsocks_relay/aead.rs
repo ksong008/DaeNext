@@ -41,7 +41,8 @@ pub async fn relay_tcp_over_shadowsocks_aead_async(
     }
     drop((first_plain, initial, initial_payload, client_salt));
 
-    let inbound_buf = Box::new([0_u8; SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE]);
+    let inbound_buf =
+        vec![0_u8; dae_outbound_stream::shadowsocks::aead::SHADOWSOCKS_AEAD_TCP_UPLOAD_BUFFER_SIZE];
     let (progress, activity) = resident_duplex_progress();
     if stats.client_to_direct != 0 {
         progress.record_upload(stats.client_to_direct);
@@ -55,6 +56,7 @@ pub async fn relay_tcp_over_shadowsocks_aead_async(
         let mut proxy_write = proxy_write;
         let mut inbound_buf = inbound_buf;
         loop {
+            let payload_capacity = encoder.batch_payload_buffer(inbound_buf.as_mut()).len();
             let read = match inbound_read
                 .read(encoder.batch_payload_buffer(inbound_buf.as_mut()))
                 .await
@@ -83,6 +85,11 @@ pub async fn relay_tcp_over_shadowsocks_aead_async(
             }
             upload_progress.record_upload(read);
             metrics.add_upload(read);
+            if read == payload_capacity
+                && inbound_buf.len() < SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE
+            {
+                inbound_buf.resize(SHADOWSOCKS_AEAD_TCP_BATCH_UPLOAD_BUFFER_SIZE, 0);
+            }
         }
     };
     let download_progress = progress.clone();

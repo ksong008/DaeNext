@@ -214,7 +214,7 @@ async fn serve_vless_mux_test_connection(
                     payloads
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .push((sid, frame.payload.clone()));
+                        .push((sid, frame.payload.to_vec()));
                     let Ok(response) = mux_data_frame(frame.id, &frame.payload) else {
                         return;
                     };

@@ -320,7 +320,7 @@ pub(super) struct VMessAeadMaterial {
 impl VMessAeadMaterial {
     pub(super) fn random() -> Result<Self, OutboundError> {
         let mut random = [0_u8; 45];
-        getrandom::fill(&mut random).map_err(|err| {
+        dae_netutil::wire_random::fill_wire_random_pooled(&mut random).map_err(|err| {
             OutboundError::BadVmess(format!("generate VMess session keys: {err}"))
         })?;
         Ok(Self {

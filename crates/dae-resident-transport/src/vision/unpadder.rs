@@ -30,6 +30,16 @@ impl VisionUnpadder {
         }
     }
 
+    pub fn consume_shared<'a>(
+        &mut self,
+        input: std::borrow::Cow<'a, [u8]>,
+    ) -> Result<std::borrow::Cow<'a, [u8]>, String> {
+        if matches!(self.state, VisionUnpadState::Raw) {
+            return Ok(input);
+        }
+        self.consume(&input).map(std::borrow::Cow::Owned)
+    }
+
     pub fn consume(&mut self, input: &[u8]) -> Result<Vec<u8>, String> {
         if matches!(self.state, VisionUnpadState::Raw) {
             return Ok(input.to_vec());

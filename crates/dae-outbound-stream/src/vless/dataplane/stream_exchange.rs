@@ -109,7 +109,7 @@ where
         command: VMessNetwork::Mux.byte(),
         mux_id_hex: hex_encode(&mux_id),
         payload_len: payload.len(),
-        echoed_payload: echoed.payload,
+        echoed_payload: echoed.payload.to_vec(),
         new_frame_validated: true,
         data_frame_validated: true,
         end_frame_sent: true,

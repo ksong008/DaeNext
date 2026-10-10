@@ -58,7 +58,14 @@ impl Output {
 }
 
 pub(super) fn derive_key_bytes(context: &[u8], key_material: &[u8]) -> [u8; OUT_LEN] {
-    let context_key = hash_raw_derive_key_context(context);
+    // Only the public protocol constant is shared. Binary session contexts
+    // remain per-handshake and must never become a global secret cache.
+    static VLESS_CONTEXT: std::sync::OnceLock<[u8; OUT_LEN]> = std::sync::OnceLock::new();
+    let context_key = if context == b"VLESS" {
+        *VLESS_CONTEXT.get_or_init(|| hash_raw_derive_key_context(b"VLESS"))
+    } else {
+        hash_raw_derive_key_context(context)
+    };
     let mut hasher = blake3::Hasher::new_from_context_key(&context_key);
     hasher.update(key_material);
     *hasher.finalize().as_bytes()
