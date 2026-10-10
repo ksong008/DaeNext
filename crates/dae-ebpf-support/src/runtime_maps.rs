@@ -1,4 +1,5 @@
 use std::io;
+mod batch;
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -29,6 +30,35 @@ pub struct RuntimeMapInfo {
     pub value_size: u32,
     pub max_entries: u32,
     pub flags: u32,
+}
+
+/// Lazily validate a fixed, owned FD once, including test fixtures that never
+/// call the kernel lookup. The FD cannot be recycled while metadata is cached.
+#[derive(Debug)]
+pub struct RuntimeMapLookupHandle {
+    fd: OwnedFd,
+    info: std::sync::OnceLock<RuntimeMapInfo>,
+}
+impl RuntimeMapLookupHandle {
+    pub fn new(fd: OwnedFd) -> Self {
+        Self {
+            fd,
+            info: std::sync::OnceLock::new(),
+        }
+    }
+    pub fn lookup_elem_bytes(&self, key: &[u8], value: &mut [u8]) -> io::Result<()> {
+        if self.info.get().is_none() {
+            let _ = self.info.set(map_info(self.fd.as_raw_fd())?);
+        }
+        let info = self.info.get().expect("validated map metadata");
+        lookup_map_elem_bytes_with_sizes(
+            self.fd.as_raw_fd(),
+            key,
+            value,
+            info.key_size,
+            info.value_size,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -87,6 +117,42 @@ impl ValidatedRuntimeMapHandle {
             self.info.key_size,
             self.info.value_size,
         )
+    }
+
+    /// Enumerate key/value pairs in bounded batches, retaining scalar support
+    /// for old kernels and map kinds without LOOKUP_BATCH.
+    pub fn visit_entries(
+        &self,
+        mut visit: impl FnMut(&[u8], &[u8]) -> io::Result<()>,
+    ) -> io::Result<u64> {
+        if !matches!(self.info.map_type, 1 | 2 | 9 | 11) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "map kind has no scalar inline value layout",
+            ));
+        }
+        if let Some(count) = batch::visit(self, &mut visit)? {
+            return Ok(count);
+        }
+        let mut value = vec![0; self.info.value_size as usize];
+        let mut count = 0;
+        visit_map_keys_by_fd_with_limits(
+            self.as_raw_fd(),
+            self.info.key_size,
+            u64::from(self.info.max_entries),
+            |key| {
+                match self.lookup_elem_bytes(key, &mut value) {
+                    Ok(()) => {
+                        visit(key, &value)?;
+                        count += 1;
+                    }
+                    Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {}
+                    Err(error) => return Err(error),
+                }
+                Ok(())
+            },
+        )?;
+        Ok(count)
     }
 
     pub fn keys(&self, key_size: u32) -> io::Result<Vec<Vec<u8>>> {
@@ -486,13 +552,24 @@ fn lookup_map_elem_bytes_with_sizes(
 }
 
 pub fn count_map_entries_by_id(id: u32) -> io::Result<u64> {
-    let fd = open_map_fd(id)?;
-    count_map_entries_by_fd(fd.as_raw_fd())
+    let map = ValidatedRuntimeMapHandle::open_by_id(id)?;
+    if let Some(count) = batch::visit(&map, &mut |_, _| Ok(()))? {
+        return Ok(count);
+    }
+    // Counting other map kinds must not read a per-CPU value into a scalar buffer.
+    visit_map_keys_by_fd_with_limits(
+        map.as_raw_fd(),
+        map.info.key_size,
+        u64::from(map.info.max_entries),
+        |_| Ok(()),
+    )
 }
 
 pub fn count_map_entries_by_fd(map_fd: RawFd) -> io::Result<u64> {
     let info = map_info(map_fd)?;
-    count_map_entries_by_fd_with_key_size(map_fd, info.key_size)
+    visit_map_keys_by_fd_with_limits(map_fd, info.key_size, u64::from(info.max_entries), |_| {
+        Ok(())
+    })
 }
 
 pub fn map_capacity_by_id(id: u32) -> io::Result<RuntimeMapCapacity> {
@@ -502,7 +579,12 @@ pub fn map_capacity_by_id(id: u32) -> io::Result<RuntimeMapCapacity> {
 
 pub fn map_capacity_by_fd(map_fd: RawFd) -> io::Result<RuntimeMapCapacity> {
     let info = map_info(map_fd)?;
-    let entries = count_map_entries_by_fd_with_key_size(map_fd, info.key_size)?;
+    let entries = visit_map_keys_by_fd_with_limits(
+        map_fd,
+        info.key_size,
+        u64::from(info.max_entries),
+        |_| Ok(()),
+    )?;
     Ok(RuntimeMapCapacity::new(info, entries, true))
 }
 
@@ -519,13 +601,6 @@ pub fn map_capacity_fast_by_fd(map_fd: RawFd) -> io::Result<RuntimeMapCapacity> 
         u64::from(info.max_entries)
     };
     Ok(RuntimeMapCapacity::new(info, entries, false))
-}
-
-fn count_map_entries_by_fd_with_key_size(map_fd: RawFd, key_size: u32) -> io::Result<u64> {
-    let max_keys = map_info(map_fd)
-        .map(|info| u64::from(info.max_entries))
-        .unwrap_or(u64::MAX);
-    visit_map_keys_by_fd(map_fd, key_size, max_keys, |_| Ok(()))
 }
 
 pub fn visit_map_keys_by_fd(
@@ -610,10 +685,14 @@ fn visit_map_keys_by_fd_with_limits(
 
 pub fn map_keys_by_fd(map_fd: RawFd, key_size: u32) -> io::Result<Vec<Vec<u8>>> {
     let mut keys = Vec::new();
-    let max_keys = map_info(map_fd)
-        .map(|info| u64::from(info.max_entries))
-        .unwrap_or(u64::MAX);
-    visit_map_keys_by_fd(map_fd, key_size, max_keys, |key| {
+    let info = map_info(map_fd)?;
+    if info.key_size != key_size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "map key size mismatch",
+        ));
+    }
+    visit_map_keys_by_fd_with_limits(map_fd, key_size, u64::from(info.max_entries), |key| {
         keys.push(key.to_vec());
         Ok(())
     })?;

@@ -2,7 +2,7 @@
 
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::slice;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,7 +12,7 @@ use dae_datapath::{
     choose_dial_target, outbound_is_reserved,
 };
 use dae_ebpf_support::{
-    BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
+    BpfIpBytes, BpfRoutingResult, BpfTuplesKey, RuntimeMapLookupHandle, open_map_fd,
 };
 use dae_resident_core::ResidentHealthResuscitation;
 use dae_resident_plan::{ResidentProxyBinding, effective_so_mark_from_dae};
@@ -35,7 +35,7 @@ pub const TCP_SNIFF_BUFFER_LIMIT: usize = 64 * 1024;
 pub struct ResidentTcpRouter {
     proxies: SharedResidentTcpProxySelector,
     pub routing_tuple_map_id: u32,
-    routing_tuple_map_fd: OwnedFd,
+    routing_tuple_map_fd: RuntimeMapLookupHandle,
     pub routing_matcher: RoutingMatcher,
     dns: SharedResidentTcpDnsResolver,
     dial_mode: TcpDialMode,
@@ -115,7 +115,7 @@ impl ResidentTcpRouter {
         Ok(Self {
             proxies,
             routing_tuple_map_id,
-            routing_tuple_map_fd,
+            routing_tuple_map_fd: RuntimeMapLookupHandle::new(routing_tuple_map_fd),
             routing_matcher,
             dns,
             dial_mode,
@@ -360,17 +360,14 @@ impl ResidentTcpRouter {
             padding: [0; 3],
         };
         let mut result = BpfRoutingResult::default();
-        lookup_map_elem_bytes(
-            self.routing_tuple_map_fd.as_raw_fd(),
-            bytes_of(&key),
-            bytes_of_mut(&mut result),
-        )
-        .map_err(|err| {
-            format!(
-                "lookup routing_tuples_map id {} for {} -> {} tcp: {err}",
-                self.routing_tuple_map_id, peer, original_dst
-            )
-        })?;
+        self.routing_tuple_map_fd
+            .lookup_elem_bytes(bytes_of(&key), bytes_of_mut(&mut result))
+            .map_err(|err| {
+                format!(
+                    "lookup routing_tuples_map id {} for {} -> {} tcp: {err}",
+                    self.routing_tuple_map_id, peer, original_dst
+                )
+            })?;
         Ok(result)
     }
 }

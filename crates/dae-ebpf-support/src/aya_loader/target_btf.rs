@@ -47,6 +47,15 @@ impl AyaTargetBtfReport {
 pub struct AyaTargetBtfSelection {
     pub btf: Option<aya::Btf>,
     pub report: AyaTargetBtfReport,
+    pname_offsets: Option<Result<AyaPnameBtfOffsets, String>>,
+}
+
+impl AyaTargetBtfSelection {
+    pub fn pname_offsets(&self) -> Result<AyaPnameBtfOffsets, String> {
+        self.pname_offsets
+            .clone()
+            .unwrap_or_else(|| Err("target BTF path is not selected".to_owned()))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,20 +77,30 @@ pub fn discover_aya_target_btf(required: bool) -> AyaTargetBtfSelection {
     if !required {
         return AyaTargetBtfSelection {
             btf: None,
+            pname_offsets: None,
             report: AyaTargetBtfReport::none(required, candidate_paths),
         };
     }
     let Some((source, path)) = candidates.into_iter().find(|(_, path)| path.is_file()) else {
         return AyaTargetBtfSelection {
             btf: None,
+            pname_offsets: None,
             report: AyaTargetBtfReport::none(required, candidate_paths),
         };
     };
 
     let canonical_path = fs::canonicalize(&path).ok();
-    match aya::Btf::parse_file(&path, aya::Endianness::default()) {
-        Ok(btf) => AyaTargetBtfSelection {
+    let parsed = fs::read(&path)
+        .map_err(|err| format!("{err:?}"))
+        .and_then(|data| {
+            aya::Btf::parse(&data, aya::Endianness::default())
+                .map(|btf| (btf, resolve_pname_btf_offsets_from_bytes(&data)))
+                .map_err(|err| format!("{err:?}"))
+        });
+    match parsed {
+        Ok((btf, offsets)) => AyaTargetBtfSelection {
             btf: Some(btf),
+            pname_offsets: Some(offsets),
             report: AyaTargetBtfReport {
                 required,
                 source,
@@ -94,13 +113,14 @@ pub fn discover_aya_target_btf(required: bool) -> AyaTargetBtfSelection {
         },
         Err(err) => AyaTargetBtfSelection {
             btf: None,
+            pname_offsets: None,
             report: AyaTargetBtfReport {
                 required,
                 source,
                 path: Some(path),
                 canonical_path,
                 parse_ok: false,
-                parse_error: Some(format!("{err:?}")),
+                parse_error: Some(err),
                 candidate_paths,
             },
         },
@@ -120,7 +140,11 @@ pub fn resolve_pname_btf_offsets(
 pub fn resolve_pname_btf_offsets_from_path(path: &Path) -> Result<AyaPnameBtfOffsets, String> {
     let data =
         fs::read(path).map_err(|err| format!("read target BTF {}: {err}", path.display()))?;
-    let view = RawBtfView::parse(&data)?;
+    resolve_pname_btf_offsets_from_bytes(&data)
+}
+
+fn resolve_pname_btf_offsets_from_bytes(data: &[u8]) -> Result<AyaPnameBtfOffsets, String> {
+    let view = RawBtfView::parse(data)?;
     let task_struct_mm_offset = view
         .struct_member_byte_offset("task_struct", "mm")?
         .ok_or_else(|| "target BTF missing task_struct.mm".to_owned())?;
@@ -182,26 +206,15 @@ enum RawBtfEndian {
 struct RawBtfTypeHeader {
     name_off: u32,
     info: u32,
-    size_or_type: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RawBtfMember {
-    name_off: u32,
-    type_id: u32,
-    offset: u32,
-}
-
-struct RawBtfComposite<'a> {
-    type_id: u32,
-    kind: u32,
-    name: &'a str,
-    members: Vec<RawBtfMember>,
 }
 
 struct RawBtfView<'a> {
+    data: &'a [u8],
     strings: &'a [u8],
-    composites: Vec<RawBtfComposite<'a>>,
+    endian: RawBtfEndian,
+    offsets: Vec<usize>,
+    task: Option<usize>,
+    mm: Option<usize>,
 }
 
 impl<'a> RawBtfView<'a> {
@@ -236,62 +249,46 @@ impl<'a> RawBtfView<'a> {
         }
 
         let strings = &data[str_start..str_end];
-        let mut composites = Vec::new();
+        let mut offsets = Vec::new();
+        let mut task = None;
+        let mut mm = None;
         let mut cursor = type_start;
-        let mut type_id = 1u32;
         while cursor < type_end {
+            let offset = cursor;
             let header = RawBtfTypeHeader {
                 name_off: read_u32(data, cursor, endian)?,
                 info: read_u32(data, cursor + 4, endian)?,
-                size_or_type: read_u32(data, cursor + 8, endian)?,
             };
+            offsets.push(offset);
             cursor += 12;
             let kind = (header.info >> 24) & 0x1f;
-            let kind_flag = (header.info >> 31) != 0;
             let vlen = (header.info & 0xffff) as usize;
-            match kind {
-                4 | 5 => {
-                    let name = string_at(strings, header.name_off)?;
-                    let mut members = Vec::with_capacity(vlen);
-                    for _ in 0..vlen {
-                        let name_off = read_u32(data, cursor, endian)?;
-                        let member_type_id = read_u32(data, cursor + 4, endian)?;
-                        let raw_offset = read_u32(data, cursor + 8, endian)?;
-                        cursor += 12;
-                        let bit_offset = if kind_flag {
-                            raw_offset & 0x00ff_ffff
-                        } else {
-                            raw_offset
-                        };
-                        members.push(RawBtfMember {
-                            name_off,
-                            type_id: member_type_id,
-                            offset: bit_offset,
-                        });
-                    }
-                    composites.push(RawBtfComposite {
-                        type_id,
-                        kind,
-                        name,
-                        members,
-                    });
-                }
-                _ => {
-                    cursor = cursor
-                        .checked_add(extra_type_info_len(kind, vlen)?)
-                        .ok_or_else(|| "target BTF type cursor overflow".to_owned())?;
+            if kind == 4 {
+                match string_at(strings, header.name_off)? {
+                    "task_struct" if task.is_none() => task = Some(offset),
+                    "mm_struct" if mm.is_none() => mm = Some(offset),
+                    _ => {}
                 }
             }
+            let extra = if matches!(kind, 4 | 5) {
+                vlen * 12
+            } else {
+                extra_type_info_len(kind, vlen)?
+            };
+            cursor = cursor
+                .checked_add(extra)
+                .ok_or_else(|| "target BTF type cursor overflow".to_owned())?;
             if cursor > type_end {
                 return Err("target BTF type record exceeds type section".to_owned());
             }
-            type_id = type_id
-                .checked_add(1)
-                .ok_or_else(|| "target BTF type id overflow".to_owned())?;
         }
         Ok(Self {
+            data,
             strings,
-            composites,
+            endian,
+            offsets,
+            task,
+            mm,
         })
     }
 
@@ -300,58 +297,60 @@ impl<'a> RawBtfView<'a> {
         struct_name: &str,
         member_name: &str,
     ) -> Result<Option<u32>, String> {
-        let Some(record) = self
-            .composites
-            .iter()
-            .find(|record| record.kind == 4 && record.name == struct_name)
-        else {
+        let offset = match struct_name {
+            "task_struct" => self.task,
+            "mm_struct" => self.mm,
+            _ => None,
+        };
+        let Some(offset) = offset else {
             return Ok(None);
         };
-        self.member_byte_offset_in_composite(record, member_name, 0, 0)
+        self.member_byte_offset(offset, member_name, 0, 0)
     }
 
-    fn member_byte_offset_in_composite(
+    fn member_byte_offset(
         &self,
-        record: &RawBtfComposite<'_>,
+        offset: usize,
         member_name: &str,
-        base_bit_offset: u32,
+        base: u32,
         depth: u8,
     ) -> Result<Option<u32>, String> {
         if depth > 8 {
-            return Err(format!(
-                "target BTF anonymous member nesting is too deep while resolving {}.{member_name}",
-                record.name
-            ));
+            return Err("target BTF anonymous member nesting is too deep".to_owned());
         }
-        for member in &record.members {
-            let name = string_at(self.strings, member.name_off)?;
-            let bit_offset = base_bit_offset
-                .checked_add(member.offset)
+        let info = read_u32(self.data, offset + 4, self.endian)?;
+        let kind = (info >> 24) & 0x1f;
+        if !matches!(kind, 4 | 5) {
+            return Ok(None);
+        }
+        for index in 0..(info & 0xffff) as usize {
+            let cursor = offset + 12 + index * 12;
+            let name = string_at(self.strings, read_u32(self.data, cursor, self.endian)?)?;
+            let type_id = read_u32(self.data, cursor + 4, self.endian)?;
+            let raw = read_u32(self.data, cursor + 8, self.endian)?;
+            let bits = if info >> 31 != 0 {
+                raw & 0x00ff_ffff
+            } else {
+                raw
+            };
+            let bits = base
+                .checked_add(bits)
                 .ok_or_else(|| "target BTF member offset overflow".to_owned())?;
             if name == member_name {
-                if bit_offset % 8 != 0 {
+                if bits % 8 != 0 {
                     return Err(format!(
-                        "target BTF member {}.{member_name} is not byte-aligned",
-                        record.name
+                        "target BTF member {member_name} is not byte-aligned"
                     ));
                 }
-                return Ok(Some(bit_offset / 8));
+                return Ok(Some(bits / 8));
             }
-
-            if !is_anonymous_member_name(name) {
-                continue;
-            }
-            let Some(nested) = self
-                .composites
-                .iter()
-                .find(|nested| nested.type_id == member.type_id)
-            else {
-                continue;
-            };
-            if let Some(offset) =
-                self.member_byte_offset_in_composite(nested, member_name, bit_offset, depth + 1)?
+            if is_anonymous_member_name(name)
+                && type_id > 0
+                && let Some(&nested) = self.offsets.get(type_id as usize - 1)
+                && let Some(found) =
+                    self.member_byte_offset(nested, member_name, bits, depth + 1)?
             {
-                return Ok(Some(offset));
+                return Ok(Some(found));
             }
         }
         Ok(None)

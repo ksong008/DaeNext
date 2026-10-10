@@ -245,7 +245,8 @@ fn try_load_pname_core_object(
             target_btf_unavailable_reason(&target_btf.report)
         ));
     }
-    let offsets = dae_ebpf_support::resolve_pname_btf_offsets(&target_btf.report)
+    let offsets = target_btf
+        .pname_offsets()
         .map_err(|err| format!("pname core target BTF offset resolution failed: {err}"))?;
     let mut param = input.param;
     param.has_bpf_get_current_task = 1;

@@ -1,6 +1,6 @@
 use std::mem::size_of;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::slice;
 
 use dae_core_types::OutboundIndex;
@@ -10,7 +10,7 @@ use dae_datapath::{
 };
 use dae_dns::DNS_DEFAULT_PORT;
 use dae_ebpf_support::{
-    BpfIpBytes, BpfRoutingResult, BpfTuplesKey, lookup_map_elem_bytes, open_map_fd,
+    BpfIpBytes, BpfRoutingResult, BpfTuplesKey, RuntimeMapLookupHandle, open_map_fd,
 };
 use dae_outbound_core::NetworkType;
 use dae_routing::{Query, RoutingMatcher};
@@ -27,7 +27,7 @@ pub(super) struct ResidentUdpRouter {
     proxy_groups: SharedResidentProxyGroupMap,
     default_outbound: u8,
     routing_tuple_map_id: u32,
-    routing_tuple_map_fd: Option<OwnedFd>,
+    routing_tuple_map_fd: Option<RuntimeMapLookupHandle>,
     routing_matcher: RoutingMatcher,
     dial_mode: TcpDialMode,
     so_mark_from_dae: u32,
@@ -108,7 +108,7 @@ impl ResidentUdpRouter {
             proxy_groups,
             default_outbound,
             routing_tuple_map_id,
-            routing_tuple_map_fd,
+            routing_tuple_map_fd: routing_tuple_map_fd.map(RuntimeMapLookupHandle::new),
             routing_matcher,
             dial_mode,
             so_mark_from_dae: effective_so_mark_from_dae(so_mark_from_dae),
@@ -313,14 +313,13 @@ impl ResidentUdpRouter {
             padding: [0; 3],
         };
         let mut result = BpfRoutingResult::default();
-        lookup_map_elem_bytes(fd.as_raw_fd(), bytes_of(&key), bytes_of_mut(&mut result)).map_err(
-            |err| {
+        fd.lookup_elem_bytes(bytes_of(&key), bytes_of_mut(&mut result))
+            .map_err(|err| {
                 format!(
                     "lookup routing_tuples_map id {} for {} -> {} udp: {err}",
                     self.routing_tuple_map_id, peer, original_dst
                 )
-            },
-        )?;
+            })?;
         Ok(result)
     }
 }
