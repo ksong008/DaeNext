@@ -1172,9 +1172,9 @@ async fn resident_dns_request_reject_removes_scoped_cached_responses() {
         &request,
         ResidentDnsResponseCacheScope::Upstream {
             index: 0,
-            scheme: ResidentDnsUpstreamScheme::Udp.as_str().to_owned(),
-            authority: "127.0.0.1:53".to_owned(),
-            path: String::new(),
+            scheme: ResidentDnsUpstreamScheme::Udp.as_str(),
+            authority: "127.0.0.1:53".into(),
+            path: "".into(),
         },
     );
     plan.cache

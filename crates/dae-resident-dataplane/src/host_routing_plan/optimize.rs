@@ -15,13 +15,13 @@ pub(super) fn optimize_routing_rules(
     }
 
     let mut merged: Vec<RoutingRule> = Vec::new();
-    for rule in rules {
+    for mut rule in rules {
         if let Some(last) = merged.last_mut()
             && can_merge_singleton_rule(last, &rule)
         {
             last.and_functions[0]
                 .params
-                .extend(rule.and_functions[0].params.clone());
+                .append(&mut rule.and_functions[0].params);
             continue;
         }
         merged.push(rule);
@@ -125,20 +125,22 @@ pub(super) fn sort_function_params(function: &mut Function) {
             left_version
                 .cmp(&right_version)
                 .then_with(|| left.val.cmp(&right.val))
+                .then_with(|| left.key.cmp(&right.key))
         });
     } else {
         function.params.sort_by(|left, right| {
             left.key
                 .cmp(&right.key)
                 .then_with(|| left.val.cmp(&right.val))
+                .then_with(|| left.key.cmp(&right.key))
         });
     }
 }
 
 pub(super) fn deduplicate_function_params(function: &mut Function) {
-    let mut seen = BTreeMap::<(String, String), ()>::new();
-    function.params.retain(|param| {
-        seen.insert((param.key.clone(), param.val.clone()), ())
-            .is_none()
-    });
+    // Params were sorted immediately before this pass. Compare borrowed values
+    // instead of allocating a second String pair for every prefix.
+    function
+        .params
+        .dedup_by(|a, b| a.key == b.key && a.val == b.val);
 }

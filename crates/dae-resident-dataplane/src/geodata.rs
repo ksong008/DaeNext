@@ -66,6 +66,7 @@ pub struct GeodataLookup {
 
 #[derive(Debug)]
 pub struct GeodataResolver {
+    identity: u64,
     asset_dirs: Vec<PathBuf>,
     asset_cache: Mutex<BTreeMap<String, CachedGeodataAsset>>,
     decoded_entry_cache: Mutex<BTreeMap<DecodedEntryCacheKey, CachedDecodedEntry>>,
@@ -549,8 +550,10 @@ fn split_geosite_code_attr(code: &str) -> (String, Option<String>) {
 
 impl GeodataResolver {
     pub fn new(asset_dirs: impl IntoIterator<Item = impl Into<PathBuf>>) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         let dirs = dae_geodata::paths::geodata_asset_dirs(PRODUCT_BINARY_NAME, asset_dirs);
         Self {
+            identity: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             asset_dirs: dirs,
             asset_cache: Mutex::new(BTreeMap::new()),
             decoded_entry_cache: Mutex::new(BTreeMap::new()),
@@ -558,6 +561,10 @@ impl GeodataResolver {
             shared_prefix_sets: Mutex::new(BTreeMap::new()),
             cache_tick: AtomicU64::new(1),
         }
+    }
+
+    pub fn cache_identity(&self) -> u64 {
+        self.identity
     }
 
     /// Monotonic LRU tick shared by all resolver caches. Never returns 0 so a
@@ -881,8 +888,16 @@ fn shared_string_set_key(kind: &'static str, key: &str, values: &[String]) -> Sh
 fn shared_prefix_set_key(prefixes: &[IpPrefix]) -> SharedSetCacheKey {
     let mut hash = Sha256::new();
     for prefix in prefixes {
-        hash.update(prefix.addr().to_string().as_bytes());
-        hash.update([0]);
+        match prefix.addr() {
+            std::net::IpAddr::V4(addr) => {
+                hash.update([4]);
+                hash.update(addr.octets());
+            }
+            std::net::IpAddr::V6(addr) => {
+                hash.update([6]);
+                hash.update(addr.octets());
+            }
+        }
         hash.update([prefix.bits()]);
     }
     SharedSetCacheKey {

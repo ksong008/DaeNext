@@ -2,6 +2,8 @@ use crate::ast::Section;
 use crate::ast::{Function, Item, Param, RoutingRule};
 use crate::error::ConfigError;
 
+mod cache;
+pub use cache::parse_config_cached;
 mod entry;
 pub use self::entry::*;
 mod token;

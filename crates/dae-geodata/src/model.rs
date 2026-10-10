@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::GeoDataError;
 use crate::wire::{
@@ -234,12 +234,12 @@ fn parse_geosite_entry(entry: &[u8]) -> Result<GeoSite, GeoDataError> {
 
 fn parse_cidr(data: &[u8]) -> Result<String, GeoDataError> {
     let mut input = data;
-    let mut ip = Vec::new();
+    let mut ip: &[u8] = &[];
     let mut prefix = 0_u32;
     while !input.is_empty() {
         let tag = read_varint(&mut input)?;
         match (tag >> 3, tag & 0x07) {
-            (1, 2) => ip = read_length_delimited(&mut input)?.to_vec(),
+            (1, 2) => ip = read_length_delimited(&mut input)?,
             (2, 0) => {
                 let raw = read_varint(&mut input)?;
                 prefix = u32::try_from(raw).map_err(|_| GeoDataError::InvalidCidrPrefix(raw))?;
@@ -249,11 +249,11 @@ fn parse_cidr(data: &[u8]) -> Result<String, GeoDataError> {
     }
 
     let addr = match ip.len() {
-        4 => Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]).to_string(),
+        4 => IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3])),
         16 => {
             let mut octets = [0_u8; 16];
-            octets.copy_from_slice(&ip);
-            Ipv6Addr::from(octets).to_string()
+            octets.copy_from_slice(ip);
+            IpAddr::V6(Ipv6Addr::from(octets))
         }
         length => return Err(GeoDataError::InvalidIpLength(length)),
     };

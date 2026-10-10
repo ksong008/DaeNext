@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::io;
 
-use dae_config::parser::parse_config;
+use dae_config::parser::parse_config_cached;
 use dae_config::{Function, Param};
 use dae_product_core::{
     RuntimeNodeTag, product_preferred_group_names_from_routing,
@@ -56,7 +56,7 @@ fn render_named_section(raw: Option<&str>, name: &str) -> String {
     if trimmed.is_empty() {
         return format!("{name} {{}}\n");
     }
-    if parse_config(trimmed)
+    if parse_config_cached(trimmed)
         .map(|sections| sections.iter().any(|section| section.name == name))
         .unwrap_or(false)
     {

@@ -226,7 +226,7 @@ pub fn product_render_routing_section(raw: Option<&str>) -> String {
     if trimmed.is_empty() {
         return "routing {}\n".to_owned();
     }
-    if dae_config::parser::parse_config(trimmed)
+    if dae_config::parser::parse_config_cached(trimmed)
         .map(|sections| sections.iter().any(|section| section.name == "routing"))
         .unwrap_or(false)
     {
@@ -245,10 +245,10 @@ pub fn product_referenced_group_names_from_routing(
 pub fn product_preferred_group_names_from_routing(routing_text: &str) -> Option<Vec<String>> {
     use dae_config::Item;
 
-    let sections = dae_config::parser::parse_config(routing_text).ok()?;
+    let sections = dae_config::parser::parse_config_cached(routing_text).ok()?;
     let mut groups = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for section in &sections {
+    for section in sections.iter() {
         if section.name != "routing" {
             continue;
         }
@@ -262,7 +262,7 @@ pub fn product_preferred_group_names_from_routing(routing_text: &str) -> Option<
             }
         }
     }
-    for section in &sections {
+    for section in sections.iter() {
         if section.name != "routing" {
             continue;
         }
