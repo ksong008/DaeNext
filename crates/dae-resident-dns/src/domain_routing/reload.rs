@@ -11,6 +11,7 @@ pub struct ResidentDnsDomainRoutingRestoreReport {
     pub sniffed_domain_entries: usize,
     pub skipped_expired_entries: usize,
     pub skipped_unmatched_entries: usize,
+    pub skipped_superseded_entries: usize,
 }
 
 impl ResidentDnsDomainRoutingReloadSnapshot {
@@ -44,6 +45,7 @@ impl ResidentDnsDomainRouting {
                 report.skipped_expired_entries += 1;
                 continue;
             }
+            let revision = self.response_revisions.begin(key)?;
             let Some(plan) = build_resident_dns_domain_routing_update_plan_from_entry(
                 &self.routing_matcher,
                 &mut domain_bitmap,
@@ -54,10 +56,12 @@ impl ResidentDnsDomainRouting {
                 report.skipped_unmatched_entries += 1;
                 continue;
             };
-            if self.commit_response(plan)? {
+            if self.commit_response(Some(plan), &revision, || Ok(()))? {
                 report.accepted_response_entries += 1;
-            } else {
+            } else if entry.cache_expires_at() <= unix_now() {
                 report.skipped_expired_entries += 1;
+            } else {
+                report.skipped_superseded_entries += 1;
             }
         }
 
@@ -92,6 +96,7 @@ pub(super) fn build_resident_dns_domain_routing_update_plan_from_entry(
         key: key.clone(),
         entry,
         ips,
+        restore_only: true,
     }))
 }
 

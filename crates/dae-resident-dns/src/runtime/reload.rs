@@ -104,6 +104,7 @@ impl ResidentDnsReloadRestoreReport {
                     "sniffedDomainEntries": report.sniffed_domain_entries,
                     "skippedExpiredEntries": report.skipped_expired_entries,
                     "skippedUnmatchedEntries": report.skipped_unmatched_entries,
+                    "skippedSupersededEntries": report.skipped_superseded_entries,
                 })
             })
             .unwrap_or_else(|| {

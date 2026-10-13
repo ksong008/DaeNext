@@ -50,9 +50,12 @@ impl ResidentDnsRuntimeCache {
                 .lock()
                 .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
             remove_expired_entries(&mut state, now_unix);
-            if !state.entries.contains_key(key) {
-                evict_entries(&mut state, now_unix, self.shard_limit(&key.base));
+            // A live query may have already published a fresher response while
+            // reload was preparing its snapshot. Restore only missing scopes.
+            if state.entries.contains_key(key) {
+                continue;
             }
+            evict_entries(&mut state, now_unix, self.shard_limit(&key.base));
             insert_cache_entry(&mut state, key.clone(), Arc::clone(entry));
             restored += 1;
         }
@@ -63,6 +66,27 @@ impl ResidentDnsRuntimeCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reload_does_not_replace_an_existing_live_response() {
+        let source = ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+        let key = ResidentDnsResponseCacheKey::new(
+            DnsCacheKey::new("reload.example", 1, 1),
+            ResidentDnsResponseCacheScope::Reject,
+        );
+        let now = unix_now();
+        source
+            .insert_response(now, key.clone(), DnsCacheEntry::new(now + 300, now + 300))
+            .unwrap();
+        let snapshot = source.snapshot_for_reload().unwrap();
+        let destination = ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+        destination
+            .insert_response(now, key.clone(), DnsCacheEntry::new(now + 100, now + 100))
+            .unwrap();
+        assert_eq!(destination.restore_reload_snapshot(&snapshot).unwrap(), 0);
+        let state = destination.shard(&key.base).lock().unwrap();
+        assert_eq!(state.entries[&key].entry.deadline_unix, now + 100);
+    }
 
     #[test]
     fn reload_snapshot_shares_entries_with_the_source_cache() {

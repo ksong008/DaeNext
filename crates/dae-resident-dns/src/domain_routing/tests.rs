@@ -1,5 +1,7 @@
 use super::*;
 
+mod commit_tests;
+
 #[test]
 fn expired_response_cannot_install_a_routing_owner() {
     let routing = matching_domain_routing();
@@ -47,7 +49,10 @@ fn insert_after_sweep_gap_keeps_expired_owner_reachable_by_maintenance() {
     .unwrap()
     .unwrap();
     drop(state);
-    routing.commit_response(plan).unwrap();
+    let revision = routing.response_revisions.begin(&plan.key).unwrap();
+    routing
+        .commit_response(Some(plan), &revision, || Ok(()))
+        .unwrap();
     let state = routing.state.lock().unwrap();
     assert_eq!(state.cache.len(), 2);
     assert_eq!(
@@ -597,6 +602,7 @@ fn bpf_commit_keeps_committed_cache_readable_and_releases_state_lock() {
             0,
             "uncommitted cache entry was published"
         );
+        assert!(state.owner_checked_out);
         Ok(())
     }
     let mut routing = matching_domain_routing();
@@ -613,4 +619,5 @@ fn bpf_commit_keeps_committed_cache_readable_and_releases_state_lock() {
     let state = routing.state.lock().unwrap();
     assert_eq!(state.cache.len(), 1);
     assert_eq!(state.owner.tracker().owner_count(), 1);
+    assert!(!state.owner_checked_out);
 }

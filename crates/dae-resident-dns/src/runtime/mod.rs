@@ -583,13 +583,17 @@ pub fn record_accepted_dns_response(
     else {
         return Ok(());
     };
-    plan.cache.insert_response(
-        now_unix,
-        cache_key.with_base(cache_plan.key.clone()),
-        cache_plan.entry.clone(),
-    )?;
+    let publish_response = || {
+        plan.cache.insert_response(
+            now_unix,
+            cache_key.with_base(cache_plan.key.clone()),
+            cache_plan.entry.clone(),
+        )
+    };
     if let Some(domain_routing) = plan.domain_routing.as_ref() {
-        domain_routing.record_accepted_response(&cache_plan)?;
+        domain_routing.record_accepted_response_with(&cache_plan, publish_response)?;
+    } else {
+        publish_response()?;
     }
     Ok(())
 }
@@ -599,9 +603,11 @@ fn remove_dns_response_cache_for_request(
     request: &DnsPacketView<'_>,
 ) -> Result<(), String> {
     let key = dns_cache_key_for_request(request)?;
-    let _ = plan.cache.remove_base_key(&key)?;
+    let remove_response = || plan.cache.remove_base_key(&key).map(|_| ());
     if let Some(domain_routing) = plan.domain_routing.as_ref() {
-        domain_routing.remove_request(request)?;
+        domain_routing.remove_request_with(request, remove_response)?;
+    } else {
+        remove_response()?;
     }
     Ok(())
 }
