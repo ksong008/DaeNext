@@ -114,4 +114,13 @@ fn runtime_stop_database_failure_keeps_runtime_and_persisted_state_running() {
             .as_deref(),
         Some("41")
     );
+
+    assert_eq!(runtime.summary()["applyCoordinator"]["stopPending"], 0);
+    conn.execute_batch("DROP TRIGGER reject_runtime_stop_metadata;")
+        .unwrap();
+    assert_eq!(
+        stop_runtime_and_persist(fixture.state(), &runtime).unwrap()["stopped"],
+        true
+    );
+    assert!(runtime.wait_for_cleanup_idle(Duration::from_secs(1)));
 }

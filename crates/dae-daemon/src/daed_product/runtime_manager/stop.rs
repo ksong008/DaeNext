@@ -210,3 +210,6 @@ fn stop_report(
         "cleanupReport": cleanup_report,
     })
 }
+
+#[cfg(test)]
+mod poison_tests;
