@@ -80,9 +80,10 @@ impl DnsCacheEntries {
                 .iter()
                 .take_while(|(deadline, _)| *deadline <= now)
                 .take(limit)
-                .filter_map(|(_, key)| {
+                .filter_map(|(deadline, key)| {
                     entries
                         .get(key)
+                        .filter(|entry| entry.cache_expires_at() == *deadline)
                         .map(|entry| (key.clone(), Arc::clone(entry)))
                 })
                 .collect(),
@@ -427,9 +428,32 @@ mod tests {
         if let DnsCacheEntries::Map { deadlines, .. } = &mut index {
             deadlines.insert((10, key.clone()));
         }
+        assert!(index.expired_shared(20, 1).is_empty());
         assert!(index.remove_expired_entries(20, 1).is_empty());
         assert!(index.get(&key).is_some());
         assert_eq!(index.next_expiry_unix(), Some(200));
+    }
+
+    #[test]
+    fn expiry_snapshot_and_removal_observe_the_same_mixed_batch_limit() {
+        let mut index = DnsCacheEntries::new(4096);
+        let live = DnsCacheKey::new("live.test", 1, 1);
+        let expired = DnsCacheKey::new("expired.test", 1, 1);
+        index.insert(live.clone(), DnsCacheEntry::new(200, 200));
+        index.insert(expired.clone(), DnsCacheEntry::new(12, 12));
+        if let DnsCacheEntries::Map { deadlines, .. } = &mut index {
+            deadlines.insert((10, live.clone()));
+            deadlines.insert((11, DnsCacheKey::new("missing.test", 1, 1)));
+        }
+        assert!(index.expired_shared(20, 2).is_empty());
+        assert!(index.remove_expired_entries(20, 2).is_empty());
+        let snapshot = index.expired_shared(20, 2);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].0, expired);
+        let removed = index.remove_expired_entries(20, 2);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].0, snapshot[0].0);
+        assert!(index.get(&live).is_some());
     }
 
     #[test]

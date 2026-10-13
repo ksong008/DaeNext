@@ -9,6 +9,7 @@ use crate::message::{
 };
 
 mod entries;
+mod removal;
 mod transactions;
 
 use entries::DnsCacheEntries;
@@ -89,11 +90,16 @@ impl DnsCacheStore {
         }
     }
 
+    /// Insert into a standalone cache. Automatic expiry/capacity eviction does
+    /// not notify external routing owners; use `insert_with_eviction` and an
+    /// explicit owner sweep transaction when entries have external owners.
     pub fn insert(&mut self, now_unix: i64, key: DnsCacheKey, mut entry: DnsCacheEntry) {
         entry.route_owner_key = key.to_string();
         self.insert_entry(now_unix, key, entry);
     }
 
+    /// Insert without changing the owner key. Like `insert`, this can evict
+    /// entries without updating any external routing owner.
     pub fn insert_without_route_owner_key(
         &mut self,
         now_unix: i64,
@@ -359,10 +365,6 @@ impl DnsCacheStore {
                     )
                 })
             })
-    }
-
-    pub fn restore_removed_entry(&mut self, key: DnsCacheKey, entry: DnsCacheEntry) {
-        self.entries.insert(key, entry);
     }
 
     pub fn stats(&self) -> &DnsCacheStats {

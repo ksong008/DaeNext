@@ -233,7 +233,8 @@ impl ResidentDnsDomainRouting {
         let mut state = self.lock_state()?;
         state.owner = owner;
         result.map_err(|e| format!("remove resident DNS domain routing owner: {e}"))?;
-        state.cache.remove(&key);
+        drop(entry);
+        state.cache.discard(&key);
         drop(state);
         self.maintenance.notify_deadline_changed();
         Ok(())
@@ -259,6 +260,7 @@ impl ResidentDnsDomainRouting {
         let mut state = self.lock_state()?;
         let expired = state.cache.expired_entries_shared(now_unix, 128);
         if expired.is_empty() {
+            state.cache.discard_expired_entries_limited(now_unix, 128);
             return Ok(());
         }
         let mut owner = std::mem::take(&mut state.owner);
@@ -271,7 +273,8 @@ impl ResidentDnsDomainRouting {
         let mut state = self.lock_state()?;
         state.owner = owner;
         result.map_err(|err| format!("remove expired resident DNS domain routing owner: {err}"))?;
-        state.cache.sweep_entries_limited(now_unix, 128);
+        drop(expired);
+        state.cache.discard_expired_entries_limited(now_unix, 128);
         Ok(())
     }
 
