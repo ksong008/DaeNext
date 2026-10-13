@@ -7,10 +7,14 @@ pub(super) fn lock_cache_shard(
     match shard.lock() {
         Ok(state) => state,
         Err(poisoned) => {
-            // Responses are an optional cache with no external owner. A panic
-            // can leave its entry and deadline indexes inconsistent; discard
-            // this shard rather than reuse partially mutated state or disable
-            // unrelated queries permanently. Routing owners live separately.
+            // Only a panic unwinding while this mutex is held poisons it;
+            // ordinary upstream errors do not. Partially mutated entries and
+            // deadlines cannot be trusted, so reset the entire shard, including
+            // unexpired responses, deadlines and local statistics, before
+            // clearing poison. Healthy shards and acquired Arc snapshots stay
+            // valid. Subsequent misses need the upstream again and can fail if
+            // it is unavailable. This cache owns no routing state: the separate
+            // routing cache retains owners and their original expiry deadlines.
             let mut state = poisoned.into_inner();
             *state = ResidentDnsRuntimeCacheState::default();
             shard.clear_poison();

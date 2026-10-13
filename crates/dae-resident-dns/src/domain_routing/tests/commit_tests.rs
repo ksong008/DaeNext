@@ -246,3 +246,71 @@ fn response_and_removal_callbacks_run_inside_mutation_after_owner_is_restored() 
         })
         .unwrap();
 }
+
+#[test]
+fn response_cache_poison_loses_live_responses_but_preserves_routing_until_original_expiry() {
+    let routing = matching_domain_routing();
+    let cache = crate::ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+    let now = unix_now();
+    let mut response = response_plan("poison.example.test", "192.0.2.1", now + 300);
+    let payload = query(&response.key.qname);
+    let mut packet = payload.clone();
+    packet[2] = 0x81;
+    packet[3] = 0x80;
+    response.entry.packed_response = packet;
+    let key = crate::ResidentDnsResponseCacheKey::new(
+        response.key.clone(),
+        crate::ResidentDnsResponseCacheScope::Reject,
+    );
+    routing
+        .record_accepted_response_with(&response, || {
+            cache.insert_response(now, key.clone(), response.entry.clone())
+        })
+        .unwrap();
+    let request = DnsPacketView::parse(&payload).unwrap();
+    let mut cached = Vec::new();
+    assert!(
+        cache
+            .lookup_response_into(&key, &request, false, &mut cached)
+            .unwrap()
+    );
+    assert_eq!(cache.deadline_len(), 1);
+    let owners = routing.state.lock().unwrap().owner.tracker().entries();
+    assert_eq!(owners.len(), 1);
+
+    cache.poison_shard_for_test(&response.key);
+    assert!(
+        !cache
+            .lookup_response_into(&key, &request, false, &mut cached)
+            .unwrap()
+    );
+    assert!(cached.is_empty());
+    assert_eq!(cache.entry_count().unwrap(), 0);
+    assert_eq!(cache.deadline_len(), 0);
+    {
+        let state = routing.state.lock().unwrap();
+        assert_eq!(state.owner.tracker().entries(), owners);
+        let entry = state.cache.shared_entry(&response.key).unwrap();
+        assert_eq!(entry.cache_expires_at(), now + 300);
+        assert_eq!(entry.ips, response.entry.ips);
+    }
+
+    cache
+        .insert_response(now, key.clone(), response.entry)
+        .unwrap();
+    assert!(
+        cache
+            .lookup_response_into(&key, &request, false, &mut cached)
+            .unwrap()
+    );
+    assert_eq!(cache.deadline_len(), 1);
+    assert_eq!(
+        routing.state.lock().unwrap().owner.tracker().entries(),
+        owners
+    );
+    routing.sweep_expired_batch(now + 300).unwrap();
+    let state = routing.state.lock().unwrap();
+    assert!(state.cache.is_empty());
+    assert_eq!(state.owner.tracker().owner_count(), 0);
+    assert_eq!(state.owner.tracker().ip_count(), 0);
+}

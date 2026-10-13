@@ -27,6 +27,8 @@ fn poisoned_shard_is_rebuilt_without_losing_healthy_shards_or_blocking_global_sw
             .insert_response(now, key.clone(), DnsCacheEntry::new(now + 300, now + 300))
             .unwrap();
     }
+    let snapshot = Arc::clone(&cache.shards[0].lock().unwrap().entries[&damaged].entry);
+    assert_eq!(cache.shards[0].lock().unwrap().deadlines.len(), 1);
     let poison = Arc::clone(&cache);
     assert!(
         std::thread::spawn(move || {
@@ -45,12 +47,29 @@ fn poisoned_shard_is_rebuilt_without_losing_healthy_shards_or_blocking_global_sw
         )
         .unwrap();
     assert!(!cache.shards[0].is_poisoned());
-    assert!(cache.shards[0].lock().unwrap().entries.is_empty());
+    let damaged_state = cache.shards[0].lock().unwrap();
+    assert!(damaged_state.entries.is_empty());
+    assert_eq!(damaged_state.deadlines.len(), 0);
+    drop(damaged_state);
+    assert_eq!(Arc::strong_count(&snapshot), 1);
+    assert_eq!(snapshot.cache_expires_at(), now + 300);
     let state = cache.shards[1].lock().unwrap();
     assert!(state.entries.contains_key(&healthy));
     assert!(state.entries.contains_key(&new));
+    assert_eq!(state.deadlines.len(), 2);
     assert_eq!(state.next_sweep_unix, now + 120);
     assert_eq!(cache.next_sweep.load(Ordering::Relaxed), now + 120);
+}
+
+impl ResidentDnsRuntimeCache {
+    pub(crate) fn poison_shard_for_test(&self, key: &DnsCacheKey) {
+        let panic = std::panic::catch_unwind(|| {
+            let _state = self.shard(key).lock().unwrap();
+            panic!("test panic while holding response cache shard");
+        });
+        assert!(panic.is_err());
+        assert!(self.shard(key).is_poisoned());
+    }
 }
 
 #[test]
