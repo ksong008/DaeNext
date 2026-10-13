@@ -227,6 +227,9 @@ struct Hysteria2PortHoppingPaths {
     generation: u64,
 }
 
+#[cfg(test)]
+mod poison_tests;
+
 struct Hysteria2PortHoppingState {
     runtime: Arc<dyn quinn::Runtime>,
     addresses: Arc<Vec<IpAddr>>,
@@ -244,8 +247,15 @@ impl Hysteria2PortHoppingState {
     fn hop(&self) {
         let started = Instant::now();
         self.metrics.transition_started();
+        if self.paths.is_poisoned() {
+            self.metrics.transition_finished(started, false);
+            return;
+        }
         let active_socket_count = {
-            let paths = self.paths.read().unwrap();
+            let paths = self
+                .paths
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             1 + usize::from(paths.previous.is_some())
         };
         if active_socket_count.saturating_add(1) > self.transition_socket_limit {
@@ -273,7 +283,15 @@ impl Hysteria2PortHoppingState {
         };
         self.metrics.socket_opened();
         let dropped_previous = {
-            let mut paths = self.paths.write().unwrap();
+            let mut paths = match self.paths.write() {
+                Ok(paths) => paths,
+                Err(_) => {
+                    // Freeze the valid owned sockets after an interrupted hop.
+                    self.metrics.sockets_closed(1);
+                    self.metrics.transition_finished(started, false);
+                    return;
+                }
+            };
             paths.destination =
                 select_hysteria2_hop_remote(&self.addresses, &self.ports, paths.destination);
             let old_current = std::mem::replace(&mut paths.current, next);
@@ -320,11 +338,11 @@ fn select_hysteria2_hop_remote(
 
 impl Drop for Hysteria2PortHoppingState {
     fn drop(&mut self) {
-        let socket_count = self
+        let paths = self
             .paths
             .get_mut()
-            .map(|paths| 1 + usize::from(paths.previous.is_some()))
-            .unwrap_or(0);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let socket_count = 1 + usize::from(paths.previous.is_some());
         self.metrics.sockets_closed(socket_count);
     }
 }
@@ -371,7 +389,11 @@ impl fmt::Debug for Hysteria2PortHoppingUdpSocket {
 impl quinn::AsyncUdpSocket for Hysteria2PortHoppingUdpSocket {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn quinn::UdpPoller>> {
         let (socket, generation) = {
-            let paths = self.state.paths.read().unwrap();
+            let paths = self
+                .state
+                .paths
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             (Arc::clone(&paths.current), paths.generation)
         };
         let poller = Arc::clone(&socket).create_io_poller();
@@ -385,7 +407,11 @@ impl quinn::AsyncUdpSocket for Hysteria2PortHoppingUdpSocket {
 
     fn try_send(&self, transmit: &udp::Transmit<'_>) -> io::Result<()> {
         let (socket, destination) = {
-            let paths = self.state.paths.read().unwrap();
+            let paths = self
+                .state
+                .paths
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             (Arc::clone(&paths.current), paths.destination)
         };
         let transmit = udp::Transmit {
@@ -405,7 +431,11 @@ impl quinn::AsyncUdpSocket for Hysteria2PortHoppingUdpSocket {
         metadata: &mut [udp::RecvMeta],
     ) -> Poll<io::Result<usize>> {
         let (current, previous) = {
-            let paths = self.state.paths.read().unwrap();
+            let paths = self
+                .state
+                .paths
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             (Arc::clone(&paths.current), paths.previous.clone())
         };
         let Some(previous) = previous else {
@@ -425,14 +455,19 @@ impl quinn::AsyncUdpSocket for Hysteria2PortHoppingUdpSocket {
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.state.paths.read().unwrap().current.local_addr()
+        self.state
+            .paths
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .current
+            .local_addr()
     }
 
     fn max_transmit_segments(&self) -> usize {
         self.state
             .paths
             .read()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .current
             .max_transmit_segments()
     }
@@ -441,13 +476,18 @@ impl quinn::AsyncUdpSocket for Hysteria2PortHoppingUdpSocket {
         self.state
             .paths
             .read()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .current
             .max_receive_segments()
     }
 
     fn may_fragment(&self) -> bool {
-        self.state.paths.read().unwrap().current.may_fragment()
+        self.state
+            .paths
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .current
+            .may_fragment()
     }
 }
 
@@ -489,8 +529,12 @@ impl quinn::UdpPoller for Hysteria2PortHoppingPoller {
     fn poll_writable(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.as_mut().get_mut();
         let replacement = {
-            let paths = this.state.paths.read().unwrap();
-            (paths.generation != this.generation)
+            let paths = this
+                .state
+                .paths
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (paths.generation != this.generation || !Arc::ptr_eq(&paths.current, &this.socket))
                 .then(|| (Arc::clone(&paths.current), paths.generation))
         };
         if let Some((socket, generation)) = replacement {
@@ -714,7 +758,13 @@ mod tests {
 
         state.hop();
         assert_eq!(
-            state.paths.read().unwrap().current.local_addr().unwrap(),
+            state
+                .paths
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .current
+                .local_addr()
+                .unwrap(),
             current_local
         );
         let snapshot = metrics.snapshot();

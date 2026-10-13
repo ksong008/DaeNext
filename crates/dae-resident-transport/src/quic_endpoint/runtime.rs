@@ -79,7 +79,7 @@ impl quinn::Runtime for EndpointDriverTrackingRuntime {
         let registration = self
             .endpoint_driver_abort
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take()
             .expect("first Quinn EndpointDriver spawn owns its abort registration");
         self.inner.spawn(Box::pin(async move {

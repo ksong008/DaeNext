@@ -38,7 +38,14 @@ impl<T> XhttpH1UploadPool<T> {
     pub fn close(&self) {
         self.inner.closed.store(true, Ordering::Release);
         self.inner.permits.close();
-        self.inner.idle.lock().unwrap().clear();
+        let idle = std::mem::take(
+            &mut *self
+                .inner
+                .idle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        drop(idle);
     }
 
     pub(super) async fn take(
@@ -48,7 +55,14 @@ impl<T> XhttpH1UploadPool<T> {
             .acquire_owned()
             .await
             .map_err(|_| "xHTTP H1 upload pool is closed".to_owned())?;
-        let mut idle = self.inner.idle.lock().unwrap();
+        let mut idle = self.inner.idle.lock().map_err(|_| {
+            self.inner.closed.store(true, Ordering::Release);
+            self.inner.permits.close();
+            "xHTTP H1 upload pool lock poisoned".to_owned()
+        })?;
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err("xHTTP H1 upload pool is closed".to_owned());
+        }
         idle.retain(|(at, _)| at.elapsed() < IDLE_TTL);
         Ok((
             idle.pop().map(|(_, client)| client),
@@ -66,7 +80,14 @@ impl<T> Drop for XhttpH1UploadPool<T> {
 
 impl<T> PoolInner<T> {
     pub(super) fn put(&self, client: T) {
-        let mut idle = self.idle.lock().unwrap();
+        let mut idle = match self.idle.lock() {
+            Ok(idle) => idle,
+            Err(_) => {
+                self.closed.store(true, Ordering::Release);
+                self.permits.close();
+                return;
+            }
+        };
         if !self.closed.load(Ordering::Acquire) {
             idle.push((time::Instant::now(), client));
         }
@@ -180,3 +201,6 @@ async fn bounded_line<T: AsyncRead + Unpin>(
     }
     Err("H1 chunk framing exceeds limit".to_owned())
 }
+
+#[cfg(test)]
+mod poison_tests;

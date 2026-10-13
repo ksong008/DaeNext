@@ -649,7 +649,7 @@ fn state_name(state: PhysicalOwnerState) -> &'static str {
 pub fn configure_quic_endpoint_observability_retention(retention: usize) -> Result<(), String> {
     let retention = retention.max(1);
     if let Some(registry) = REGISTRY.get() {
-        let configured = registry.lock().unwrap().inactive_generation_retention;
+        let configured = lock_registry(registry).inactive_generation_retention;
         return if configured == retention {
             Ok(())
         } else {
@@ -724,7 +724,7 @@ impl QuicEndpointObservation {
         provenance: QuicEndpointProvenance,
         reservation: OwnerReservation,
     ) -> Arc<Self> {
-        let id = registry().lock().unwrap().register(provenance.clone());
+        let id = lock_registry(registry()).register(provenance.clone());
         Arc::new(Self {
             id,
             provenance,
@@ -738,55 +738,43 @@ impl QuicEndpointObservation {
     }
 
     pub(super) fn endpoint_created(&self) {
-        registry().lock().unwrap().endpoint_created(self.id);
+        lock_registry(registry()).endpoint_created(self.id);
     }
 
     pub(super) fn mark_ready(&self) {
-        registry()
-            .lock()
-            .unwrap()
-            .transition(self.id, PhysicalOwnerState::Ready);
+        lock_registry(registry()).transition(self.id, PhysicalOwnerState::Ready);
     }
 
     pub(super) fn mark_failed(&self) {
-        registry()
-            .lock()
-            .unwrap()
-            .transition(self.id, PhysicalOwnerState::Failed);
+        lock_registry(registry()).transition(self.id, PhysicalOwnerState::Failed);
     }
 
     pub(super) fn udp_fd_opened(&self) {
-        registry().lock().unwrap().set_udp_fd_live(self.id, true);
+        lock_registry(registry()).set_udp_fd_live(self.id, true);
     }
 
     pub(super) fn udp_fd_closed(&self) {
-        registry().lock().unwrap().set_udp_fd_live(self.id, false);
+        lock_registry(registry()).set_udp_fd_live(self.id, false);
     }
 
     pub(super) fn endpoint_driver_started(&self) {
-        registry()
-            .lock()
-            .unwrap()
-            .set_endpoint_driver_live(self.id, true);
+        lock_registry(registry()).set_endpoint_driver_live(self.id, true);
     }
 
     pub(super) fn endpoint_driver_finished(&self) {
-        registry().lock().unwrap().endpoint_driver_finished(self.id);
+        lock_registry(registry()).endpoint_driver_finished(self.id);
     }
 
     pub(super) fn explicit_close_requested(&self) {
-        registry().lock().unwrap().explicit_close_requested(self.id);
+        lock_registry(registry()).explicit_close_requested(self.id);
     }
 
     pub(super) fn endpoint_handles_released(&self) {
-        registry()
-            .lock()
-            .unwrap()
-            .endpoint_handles_released(self.id);
+        lock_registry(registry()).endpoint_handles_released(self.id);
     }
 
     pub(super) fn wait_idle_completed(&self) {
-        registry().lock().unwrap().wait_idle_completed(self.id);
+        lock_registry(registry()).wait_idle_completed(self.id);
     }
 
     pub(super) fn release_signal(&self) -> Arc<QuicEndpointReleaseSignal> {
@@ -797,22 +785,52 @@ impl QuicEndpointObservation {
 impl Drop for QuicEndpointObservation {
     fn drop(&mut self) {
         drop(self.reservation.take());
-        registry().lock().unwrap().release(self.id);
+        lock_registry(registry()).release(self.id);
         self.release.complete();
     }
 }
 
 pub fn quic_endpoint_metrics_snapshot(generation: u64) -> Value {
-    registry()
+    let registry = registry();
+    let guard = lock_registry(registry);
+    let mut snapshot = guard.runtime_snapshot(OwnerGeneration::new(generation));
+    snapshot["registryPoisoned"] = Value::Bool(registry.is_poisoned());
+    snapshot
+}
+
+// Observability must not panic during an owner's Drop or skip release signals.
+// Preserve live identities and reservations; this lock remains marked poisoned.
+fn lock_registry(
+    registry: &Mutex<QuicEndpointMetricsRegistry>,
+) -> std::sync::MutexGuard<'_, QuicEndpointMetricsRegistry> {
+    registry
         .lock()
-        .unwrap()
-        .runtime_snapshot(OwnerGeneration::new(generation))
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]
 mod registry_tests {
     use super::*;
     use crate::quic_endpoint::{charge::QuicEndpointCharge, model::QuicEndpointOpenContext};
+
+    #[test]
+    fn poisoned_observability_registry_preserves_live_records_and_allows_release() {
+        let registry = Mutex::new(QuicEndpointMetricsRegistry::default());
+        let id = lock_registry(&registry).register(provenance(
+            QuicEndpointProtocol::DnsOverHttp3,
+            QuicEndpointCallerClass::ManualProbe,
+            Some(OwnerGeneration::new(15)),
+            false,
+        ));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = registry.lock().unwrap();
+            panic!("injected metrics registry poison");
+        }));
+        assert!(lock_registry(&registry).live_record(id).is_some());
+        lock_registry(&registry).release(id);
+        assert!(lock_registry(&registry).live_record(id).is_none());
+        assert!(registry.is_poisoned());
+    }
 
     fn provenance(
         protocol: QuicEndpointProtocol,
