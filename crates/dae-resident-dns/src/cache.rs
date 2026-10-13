@@ -18,6 +18,8 @@ mod reload;
 pub use self::reload::ResidentDnsRuntimeCacheSnapshot;
 mod deadline_index;
 use self::deadline_index::{ResidentDnsCacheDeadline, ResidentDnsCacheDeadlineIndex};
+mod maintenance;
+use self::maintenance::lock_cache_shard;
 
 const DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS: i64 = 60;
 const DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES: usize = 4 * 1024;
@@ -217,6 +219,8 @@ impl ResidentDnsRuntimeCache {
     }
 
     fn shard_limit(&self, key: &DnsCacheKey) -> usize {
+        // Fixed shares bound per-shard memory and keep hits independent. A hot
+        // working set can evict early; unused shares are not borrowed globally.
         self.cache_entry_limit / self.shards.len()
             + usize::from(self.shard_index(key) < self.cache_entry_limit % self.shards.len())
     }
@@ -345,10 +349,7 @@ impl ResidentDnsRuntimeCache {
         // own only an Arc snapshot; packet restoration and UDP fitting do not
         // serialize other cache users or mutate the stored response.
         let entry = {
-            let mut state = self
-                .shard(&key.base)
-                .lock()
-                .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+            let mut state = lock_cache_shard(self.shard(&key.base));
             lookup_scoped_response_snapshot(&mut state, now_unix, key, ignore_fixed_ttl)
         };
         let Some(entry) = entry else {
@@ -371,10 +372,7 @@ impl ResidentDnsRuntimeCache {
         ignore_fixed_ttl: bool,
     ) -> Result<bool, String> {
         let now_unix = unix_now();
-        let mut state = self
-            .shard(key)
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        let mut state = lock_cache_shard(self.shard(key));
         sweep_expired_if_due(&mut state, now_unix);
         let first_scoped_key = ResidentDnsResponseCacheKey::first_for_base(key);
         Ok(state
@@ -395,25 +393,8 @@ impl ResidentDnsRuntimeCache {
         if entry.packed_response.len() > DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES {
             return Ok(());
         }
-        if self
-            .next_sweep
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                (next <= now_unix)
-                    .then_some(now_unix.saturating_add(DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS))
-            })
-            .is_ok()
-        {
-            for shard in &self.shards {
-                let mut state = shard
-                    .lock()
-                    .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
-                sweep_expired_if_due(&mut state, now_unix);
-            }
-        }
-        let mut state = self
-            .shard(&key.base)
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        self.sweep_all_if_due(now_unix);
+        let mut state = lock_cache_shard(self.shard(&key.base));
         sweep_expired_if_due(&mut state, now_unix);
         if !state.entries.contains_key(&key) {
             evict_entries(&mut state, now_unix, self.shard_limit(&key.base));
@@ -424,10 +405,19 @@ impl ResidentDnsRuntimeCache {
     }
 
     pub fn remove_base_key(&self, key: &DnsCacheKey) -> Result<Vec<DnsCacheEntry>, String> {
-        let mut state = self
-            .shard(key)
-            .lock()
-            .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+        Ok(self
+            .remove_base_key_shared(key)
+            .into_iter()
+            .map(|entry| Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()))
+            .collect())
+    }
+
+    pub(crate) fn discard_base_key(&self, key: &DnsCacheKey) -> Result<usize, String> {
+        Ok(self.remove_base_key_shared(key).len())
+    }
+
+    fn remove_base_key_shared(&self, key: &DnsCacheKey) -> Vec<Arc<DnsCacheEntry>> {
+        let mut state = lock_cache_shard(self.shard(key));
         let first_scoped_key = ResidentDnsResponseCacheKey::first_for_base(key);
         let scoped_keys = state
             .entries
@@ -438,12 +428,12 @@ impl ResidentDnsRuntimeCache {
             .collect::<Vec<_>>();
         let mut removed = Vec::with_capacity(scoped_keys.len());
         for scoped_key in scoped_keys {
-            if let Some(entry) = remove_cache_entry(&mut state, &scoped_key) {
+            if let Some(entry) = remove_cache_entry_shared(&mut state, &scoped_key) {
                 removed.push(entry);
             }
         }
         state.stats.remove_callback_total += removed.len() as u64;
-        Ok(removed)
+        removed
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -463,7 +453,7 @@ impl ResidentDnsRuntimeCache {
     pub fn entry_len(&self) -> usize {
         self.shards
             .iter()
-            .filter_map(|shard| shard.lock().ok())
+            .map(lock_cache_shard)
             .map(|state| state.entries.len())
             .sum()
     }
@@ -472,9 +462,7 @@ impl ResidentDnsRuntimeCache {
         let now_unix = unix_now();
         let mut count = 0;
         for shard in &self.shards {
-            let mut state = shard
-                .lock()
-                .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+            let mut state = lock_cache_shard(shard);
             sweep_expired_if_due(&mut state, now_unix);
             count += state.entries.len();
         }
@@ -485,7 +473,7 @@ impl ResidentDnsRuntimeCache {
     pub fn deadline_len(&self) -> usize {
         self.shards
             .iter()
-            .filter_map(|shard| shard.lock().ok())
+            .map(lock_cache_shard)
             .map(|state| state.deadlines.len())
             .sum()
     }
@@ -493,7 +481,7 @@ impl ResidentDnsRuntimeCache {
     #[cfg(any(test, feature = "test-support"))]
     pub fn stats(&self) -> dae_dns::DnsCacheStats {
         let mut stats = DnsCacheStats::default();
-        for state in self.shards.iter().filter_map(|shard| shard.lock().ok()) {
+        for state in self.shards.iter().map(lock_cache_shard) {
             stats.hit_total += state.stats.hit_total;
             stats.expired_removal_total += state.stats.expired_removal_total;
             stats.remove_callback_total += state.stats.remove_callback_total;
@@ -587,9 +575,17 @@ fn remove_cache_entry(
     state: &mut ResidentDnsRuntimeCacheState,
     key: &ResidentDnsResponseCacheKey,
 ) -> Option<DnsCacheEntry> {
+    remove_cache_entry_shared(state, key)
+        .map(|entry| Arc::try_unwrap(entry).unwrap_or_else(|entry| entry.as_ref().clone()))
+}
+
+fn remove_cache_entry_shared(
+    state: &mut ResidentDnsRuntimeCacheState,
+    key: &ResidentDnsResponseCacheKey,
+) -> Option<Arc<DnsCacheEntry>> {
     let stored = state.entries.remove(key)?;
     state.deadlines.remove(&stored.deadline);
-    Some(Arc::try_unwrap(stored.entry).unwrap_or_else(|entry| entry.as_ref().clone()))
+    Some(stored.entry)
 }
 
 impl ResidentDnsFlightPermit<'_> {

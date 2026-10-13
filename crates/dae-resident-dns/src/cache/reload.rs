@@ -16,9 +16,7 @@ impl ResidentDnsRuntimeCache {
         let now_unix = unix_now();
         let mut entries = Vec::new();
         for shard in &self.shards {
-            let mut state = shard
-                .lock()
-                .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+            let mut state = lock_cache_shard(shard);
             remove_expired_entries(&mut state, now_unix);
             entries.extend(
                 state
@@ -45,10 +43,7 @@ impl ResidentDnsRuntimeCache {
             if entry.cache_expires_at() <= now_unix {
                 continue;
             }
-            let mut state = self
-                .shard(&key.base)
-                .lock()
-                .map_err(|_| "resident DNS response cache lock poisoned".to_owned())?;
+            let mut state = lock_cache_shard(self.shard(&key.base));
             remove_expired_entries(&mut state, now_unix);
             // A live query may have already published a fresher response while
             // reload was preparing its snapshot. Restore only missing scopes.

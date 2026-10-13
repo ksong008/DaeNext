@@ -603,7 +603,7 @@ fn remove_dns_response_cache_for_request(
     request: &DnsPacketView<'_>,
 ) -> Result<(), String> {
     let key = dns_cache_key_for_request(request)?;
-    let remove_response = || plan.cache.remove_base_key(&key).map(|_| ());
+    let remove_response = || plan.cache.discard_base_key(&key).map(|_| ());
     if let Some(domain_routing) = plan.domain_routing.as_ref() {
         domain_routing.remove_request_with(request, remove_response)?;
     } else {
