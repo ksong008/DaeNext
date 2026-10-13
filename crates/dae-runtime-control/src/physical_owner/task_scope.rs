@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use tokio::sync::watch;
@@ -104,7 +104,7 @@ impl GenerationOwnerBoundary {
     }
 
     pub fn snapshot(&self) -> GenerationOwnerSnapshot {
-        let state = self.inner.state.lock().unwrap();
+        let state = self.inner.lock_state();
         snapshot_from_state(&self.inner, &state)
     }
 
@@ -134,7 +134,7 @@ impl GenerationOwnerBoundary {
         &self,
         role: OwnerTaskRole,
     ) -> Result<GenerationTaskGuard, OwnerTaskRegistrationError> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         match state.state {
             GenerationOwnerState::Running => state.tasks.increment(role),
             GenerationOwnerState::Draining(reason) => {
@@ -151,7 +151,7 @@ impl GenerationOwnerBoundary {
     }
 
     pub fn apply_command(&self, command: GenerationOwnerCommand) -> GenerationOwnerSnapshot {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         let previous_state = state.state;
         match command {
             GenerationOwnerCommand::BeginDrain(reason) => {
@@ -214,7 +214,7 @@ impl Drop for GenerationOwnerBoundary {
         self.inner
             .cancellation
             .cancel(OwnerCancellation::GenerationDraining);
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         let transitioned = if matches!(state.state, GenerationOwnerState::Running) {
             state.state = GenerationOwnerState::Draining(OwnerDrainReason::Shutdown);
             true
@@ -344,7 +344,7 @@ impl Drop for GenerationTaskGuard {
         let Some(inner) = self.inner.take() else {
             return;
         };
-        let mut state = inner.state.lock().unwrap();
+        let mut state = inner.lock_state();
         state.tasks.decrement(self.role);
         drop(state);
         notify_state_changed(&inner.state_changed);
@@ -366,3 +366,22 @@ fn snapshot_from_state(
         tasks: state.tasks,
     }
 }
+
+impl GenerationOwnerInner {
+    fn lock_state(&self) -> MutexGuard<'_, GenerationOwnerRuntimeState> {
+        self.state.lock().unwrap_or_else(|poisoned| {
+            let mut state = poisoned.into_inner();
+            // Preserve outstanding tasks for drain/join instead of resetting.
+            if matches!(state.state, GenerationOwnerState::Running) {
+                state.state = GenerationOwnerState::Draining(OwnerDrainReason::Fault);
+                self.cancellation
+                    .cancel(OwnerCancellation::GenerationDraining);
+                notify_state_changed(&self.state_changed);
+            }
+            state
+        })
+    }
+}
+
+#[cfg(test)]
+mod poison_tests;

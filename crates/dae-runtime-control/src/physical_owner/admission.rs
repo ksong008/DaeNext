@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use tokio::sync::{Notify, watch};
@@ -139,7 +139,7 @@ impl PhysicalOwnerAdmission {
     }
 
     pub fn metrics(&self) -> OwnerAdmissionMetrics {
-        let counters = self.inner.counters.lock().unwrap();
+        let counters = self.inner.lock_counters();
         metrics_from_counters(self.inner.budget, &counters)
     }
 
@@ -156,7 +156,7 @@ impl PhysicalOwnerAdmission {
             .check()
             .map_err(OwnerAdmissionRejection::Cancelled)?;
 
-        let mut counters = self.inner.counters.lock().unwrap();
+        let mut counters = self.inner.lock_counters();
         match counters.state {
             OwnerAdmissionState::Open => {}
             OwnerAdmissionState::Draining(reason) => {
@@ -218,7 +218,7 @@ impl PhysicalOwnerAdmission {
             .map_err(OwnerAdmissionRejection::Cancelled)?;
 
         let mut registration = {
-            let mut counters = self.inner.counters.lock().unwrap();
+            let mut counters = self.inner.lock_counters();
             match counters.state {
                 OwnerAdmissionState::Open => {}
                 OwnerAdmissionState::Draining(reason) => {
@@ -260,7 +260,7 @@ impl PhysicalOwnerAdmission {
             let mut admitted = false;
             let mut rejection = None;
             {
-                let mut counters = self.inner.counters.lock().unwrap();
+                let mut counters = self.inner.lock_counters();
                 match counters.state {
                     OwnerAdmissionState::Open => {}
                     OwnerAdmissionState::Draining(reason) => {
@@ -339,7 +339,7 @@ impl PhysicalOwnerAdmission {
     }
 
     pub fn begin_drain(&self, reason: OwnerDrainReason) -> OwnerAdmissionMetrics {
-        let mut counters = self.inner.counters.lock().unwrap();
+        let mut counters = self.inner.lock_counters();
         let transitioned = if matches!(counters.state, OwnerAdmissionState::Open) {
             counters.state = OwnerAdmissionState::Draining(reason);
             true
@@ -389,7 +389,7 @@ impl PhysicalOwnerAdmission {
         &self,
         reason: OwnerCloseReason,
     ) -> Result<OwnerAdmissionMetrics, OwnerAdmissionCloseError> {
-        let mut counters = self.inner.counters.lock().unwrap();
+        let mut counters = self.inner.lock_counters();
         if counters.active_owners != 0 {
             return Err(OwnerAdmissionCloseError::OwnersStillActive(
                 metrics_from_counters(self.inner.budget, &counters),
@@ -437,7 +437,7 @@ impl Drop for OwnerAdmissionWaitRegistration {
             return;
         }
         {
-            let mut counters = self.inner.counters.lock().unwrap();
+            let mut counters = self.inner.lock_counters();
             let Some(position) = counters
                 .waiters
                 .iter()
@@ -467,9 +467,7 @@ fn next_waiter_ticket(counters: &mut OwnerAdmissionCounters) -> u64 {
 
 fn wake_next_waiter(inner: &OwnerAdmissionInner) {
     let wake = inner
-        .counters
-        .lock()
-        .unwrap()
+        .lock_counters()
         .waiters
         .front()
         .map(|waiter| Arc::clone(&waiter.wake));
@@ -511,3 +509,25 @@ fn metrics_from_counters(
         budget,
     }
 }
+
+impl OwnerAdmissionInner {
+    fn lock_counters(&self) -> MutexGuard<'_, OwnerAdmissionCounters> {
+        self.counters.lock().unwrap_or_else(|poisoned| {
+            let mut counters = poisoned.into_inner();
+            // Live reservations must keep their charges. Quarantine admission,
+            // wake blocked callers, and leave teardown able to release charges.
+            if matches!(counters.state, OwnerAdmissionState::Open) {
+                counters.state = OwnerAdmissionState::Draining(OwnerDrainReason::Fault);
+                for waiter in &counters.waiters {
+                    waiter.wake.notify_one();
+                }
+                notify_state_changed(&self.state_changed);
+                notify_state_changed(&self.admission_state_changed);
+            }
+            counters
+        })
+    }
+}
+
+#[cfg(test)]
+mod poison_tests;

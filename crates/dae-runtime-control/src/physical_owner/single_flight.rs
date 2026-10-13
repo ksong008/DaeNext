@@ -1,11 +1,11 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use tokio::sync::watch;
 
 use super::{
-    AbsoluteDeadline, OwnerCancellationSignal, OwnerDrainReason, PhysicalOwnerFailure,
-    PhysicalOwnerState,
+    AbsoluteDeadline, OwnerCancellationSignal, OwnerDrainReason, OwnerFailureClass,
+    PhysicalOwnerFailure, PhysicalOwnerState,
 };
 
 mod build;
@@ -72,7 +72,7 @@ impl<T> SingleFlightPhysicalOwner<T> {
     }
 
     pub fn snapshot(&self) -> SingleFlightOwnerSnapshot {
-        self.inner.state.lock().unwrap().snapshot
+        self.inner.lock_state().snapshot
     }
 
     pub fn begin_or_observe(
@@ -85,7 +85,7 @@ impl<T> SingleFlightPhysicalOwner<T> {
             .map_err(SingleFlightError::Cancelled)?;
         cancellation.check().map_err(SingleFlightError::Cancelled)?;
 
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         if !state.accepting {
             return match state.snapshot.state {
                 PhysicalOwnerState::Draining => Err(SingleFlightError::Draining(
@@ -142,7 +142,7 @@ impl<T> SingleFlightPhysicalOwner<T> {
     }
 
     pub fn begin_drain(&self, reason: OwnerDrainReason) -> SingleFlightOwnerSnapshot {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         if !state.accepting {
             return state.snapshot;
         }
@@ -158,7 +158,7 @@ impl<T> SingleFlightPhysicalOwner<T> {
     }
 
     pub fn prepare_retry(&self) -> Result<SingleFlightOwnerSnapshot, SingleFlightError> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         if !state.accepting {
             return Err(SingleFlightError::Closed);
         }
@@ -175,7 +175,7 @@ impl<T> SingleFlightPhysicalOwner<T> {
     }
 
     pub fn close(&self) -> SingleFlightOwnerSnapshot {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         if !state.accepting && state.snapshot.state == PhysicalOwnerState::Closed {
             return state.snapshot;
         }
@@ -194,7 +194,7 @@ impl<T> SingleFlightPhysicalOwner<T> {
         expected_revision: u64,
         failure: PhysicalOwnerFailure,
     ) -> Result<SingleFlightOwnerSnapshot, SingleFlightError> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         if !state.accepting {
             return match state.snapshot.state {
                 PhysicalOwnerState::Draining => Err(SingleFlightError::Draining(
@@ -232,3 +232,27 @@ impl<T> SingleFlightPhysicalOwner<T> {
         Ok(snapshot)
     }
 }
+
+impl<T> SingleFlightInner<T> {
+    fn lock_state(&self) -> MutexGuard<'_, SingleFlightState<T>> {
+        self.state.lock().unwrap_or_else(|poisoned| {
+            let mut state = poisoned.into_inner();
+            // No value or version reset: reject new builders and preserve the
+            // existing value until explicit close. Wake every pending observer.
+            if state.accepting {
+                state.accepting = false;
+                state.snapshot.state = PhysicalOwnerState::Failed;
+                state.snapshot.failure = Some(PhysicalOwnerFailure::new(
+                    OwnerFailureClass::Resource,
+                    "owner-state-lock-poisoned",
+                ));
+                state.snapshot.revision = state.snapshot.revision.wrapping_add(1);
+                self.revision.send_replace(state.snapshot.revision);
+            }
+            state
+        })
+    }
+}
+
+#[cfg(test)]
+mod poison_tests;

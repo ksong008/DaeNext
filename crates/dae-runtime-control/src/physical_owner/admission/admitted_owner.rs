@@ -26,7 +26,7 @@ impl Drop for OwnerReservation {
         let Some(inner) = self.inner.take() else {
             return;
         };
-        let mut counters = inner.counters.lock().unwrap();
+        let mut counters = inner.lock_counters();
         counters.active_owners = counters.active_owners.saturating_sub(1);
         counters.active_charged_bytes = counters
             .active_charged_bytes

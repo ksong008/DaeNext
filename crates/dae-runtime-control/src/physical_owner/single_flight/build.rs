@@ -37,7 +37,7 @@ pub struct SingleFlightBuilder<T> {
 impl<T> SingleFlightBuilder<T> {
     pub fn publish_ready(mut self, value: T) -> Result<Arc<T>, SingleFlightError> {
         let value = Arc::new(value);
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.lock_state();
         if state.snapshot.state != PhysicalOwnerState::Connecting
             || state.snapshot.revision != self.revision
         {
@@ -91,7 +91,7 @@ impl<T> SingleFlightObserver<T> {
                 .map_err(SingleFlightError::Cancelled)?;
 
             {
-                let state = self.inner.state.lock().unwrap();
+                let state = self.inner.lock_state();
                 match state.snapshot.state {
                     PhysicalOwnerState::Ready => return Ok(state.value.as_ref().unwrap().clone()),
                     PhysicalOwnerState::Failed => {
@@ -135,7 +135,7 @@ pub(super) fn publish_builder_failure<T>(
     failure: PhysicalOwnerFailure,
     expected_revision: u64,
 ) -> SingleFlightOwnerSnapshot {
-    let mut state = inner.state.lock().unwrap();
+    let mut state = inner.lock_state();
     if state.snapshot.state == PhysicalOwnerState::Connecting
         && state.snapshot.revision == expected_revision
     {

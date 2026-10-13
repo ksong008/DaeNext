@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhysicalOwnerState {
@@ -87,7 +87,7 @@ impl PhysicalOwnerLifecycle {
     }
 
     pub fn snapshot(&self) -> OwnerLifecycleSnapshot {
-        *self.snapshot.lock().unwrap()
+        *self.lock_snapshot()
     }
 
     pub fn mark_connecting(&self) -> Result<(), OwnerStateTransitionError> {
@@ -120,7 +120,7 @@ impl PhysicalOwnerLifecycle {
         drain_reason: Option<OwnerDrainReason>,
         close_reason: Option<OwnerCloseReason>,
     ) -> Result<(), OwnerStateTransitionError> {
-        let mut current = self.snapshot.lock().unwrap();
+        let mut current = self.lock_snapshot();
         if current.state == to {
             return Ok(());
         }
@@ -161,3 +161,26 @@ const fn transition_allowed(from: PhysicalOwnerState, to: PhysicalOwnerState) ->
             | (State::Draining, State::Closed)
     )
 }
+
+impl PhysicalOwnerLifecycle {
+    fn lock_snapshot(&self) -> MutexGuard<'_, OwnerLifecycleSnapshot> {
+        self.snapshot.lock().unwrap_or_else(|poisoned| {
+            let mut snapshot = poisoned.into_inner();
+            if !matches!(
+                snapshot.state,
+                PhysicalOwnerState::Draining | PhysicalOwnerState::Closed
+            ) {
+                snapshot.state = PhysicalOwnerState::Draining;
+                snapshot.drain_reason = Some(OwnerDrainReason::Fault);
+                snapshot.failure = Some(PhysicalOwnerFailure::new(
+                    OwnerFailureClass::Resource,
+                    "owner-lifecycle-lock-poisoned",
+                ));
+            }
+            snapshot
+        })
+    }
+}
+
+#[cfg(test)]
+mod poison_tests;
