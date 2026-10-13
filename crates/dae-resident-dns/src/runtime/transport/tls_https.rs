@@ -14,7 +14,7 @@ use boring::ssl::SslContext;
 use dae_outbound_quic::system_ca::{SystemCaIdentity, system_ca_snapshot};
 use dae_tls::{build_boring_tls_context_with_system_ca, connect_boring_tls_async};
 use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 mod proxy;
 
@@ -22,6 +22,22 @@ use self::proxy::{forward_dns_https_to_proxy_async, forward_dns_tls_to_proxy_asy
 
 const DNS_HTTPS_H2_RETRY_COOLDOWN: std::time::Duration = RESIDENT_UDP_RESPONSE_TIMEOUT;
 type ResidentDnsTlsContextCache = Mutex<BTreeMap<(SystemCaIdentity, String), Arc<SslContext>>>;
+
+fn lock_boring_context_cache(
+    cache: &ResidentDnsTlsContextCache,
+) -> MutexGuard<'_, BTreeMap<(SystemCaIdentity, String), Arc<SslContext>>> {
+    cache.lock().unwrap_or_else(|poisoned| {
+        let mut contexts = poisoned.into_inner();
+        // Rebuild with the normal CA and ALPN policy; live Arc users survive.
+        contexts.clear();
+        cache.clear_poison();
+        contexts
+    })
+}
+
+#[cfg(test)]
+#[path = "tls_https/tests.rs"]
+mod poison_tests;
 
 pub async fn forward_dns_tls_async(
     upstream: &ResidentDnsUpstream,
@@ -252,12 +268,7 @@ fn resident_dns_boring_context(alpn: &[&str]) -> Result<Arc<SslContext>, String>
         system_ca_snapshot().map_err(|err| format!("load DNS system CA bundle: {err}"))?;
     let key = (snapshot.identity().clone(), alpn.join("\0"));
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
-    if let Some(context) = cache
-        .lock()
-        .map_err(|_| "DNS BoringSSL context cache lock poisoned".to_owned())?
-        .get(&key)
-        .cloned()
-    {
+    if let Some(context) = lock_boring_context_cache(cache).get(&key).cloned() {
         return Ok(context);
     }
     let protocol_bytes = alpn
@@ -266,9 +277,7 @@ fn resident_dns_boring_context(alpn: &[&str]) -> Result<Arc<SslContext>, String>
         .collect::<Vec<_>>();
     let context = build_boring_tls_context_with_system_ca(&snapshot, &protocol_bytes)
         .map_err(|err| format!("build DNS BoringSSL context: {err}"))?;
-    let mut guard = cache
-        .lock()
-        .map_err(|_| "DNS BoringSSL context cache lock poisoned".to_owned())?;
+    let mut guard = lock_boring_context_cache(cache);
     guard.retain(|(identity, _), _| identity == &key.0);
     Ok(guard
         .entry(key)

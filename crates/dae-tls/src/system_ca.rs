@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use boring::error::ErrorStack;
 use boring::ssl::{SslContext, SslContextBuilder};
@@ -194,7 +194,7 @@ fn cached_system_ca_snapshot(
     cache: &Mutex<CachedSystemCaSnapshot>,
     load: impl FnOnce() -> Result<SystemCaSnapshot, SystemCaError>,
 ) -> Result<Arc<SystemCaSnapshot>, SystemCaError> {
-    let mut cache = cache.lock().map_err(|_| SystemCaError::CachePoisoned)?;
+    let mut cache = lock_system_ca_cache(cache);
     if let Some(snapshot) = cache.as_ref() {
         return snapshot.clone();
     }
@@ -211,8 +211,21 @@ pub fn invalidate_system_ca_snapshot() -> Result<bool, SystemCaError> {
 fn invalidate_cached_system_ca_snapshot(
     cache: &Mutex<CachedSystemCaSnapshot>,
 ) -> Result<bool, SystemCaError> {
-    let mut cache = cache.lock().map_err(|_| SystemCaError::CachePoisoned)?;
+    let mut cache = lock_system_ca_cache(cache);
     Ok(cache.take().is_some())
+}
+
+fn lock_system_ca_cache(
+    cache: &Mutex<CachedSystemCaSnapshot>,
+) -> MutexGuard<'_, CachedSystemCaSnapshot> {
+    cache.lock().unwrap_or_else(|poisoned| {
+        let mut snapshot = poisoned.into_inner();
+        // Reload through the same bundle selection and certificate validation.
+        // Existing Arc snapshots remain valid; no trust policy is relaxed.
+        *snapshot = None;
+        cache.clear_poison();
+        snapshot
+    })
 }
 
 fn select_bundle_path(
@@ -574,6 +587,34 @@ mod tests {
             })
         });
         assert!(recovered.is_err());
+    }
+
+    #[test]
+    fn poisoned_cache_reloads_validated_bundle_and_preserves_live_snapshot() {
+        let directory = TestDirectory::new("poison-reload");
+        let path = directory.path("roots.pem");
+        fs::write(&path, ca_pem()).unwrap();
+        let cache = Mutex::new(None);
+        let old =
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
+                .unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = cache.lock().unwrap();
+            panic!("injected CA cache poison");
+        }));
+        fs::write(&path, b"invalid certificate bundle").unwrap();
+        assert!(matches!(
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone())),
+            Err(SystemCaError::Parse { .. } | SystemCaError::NoUsableCertificates { .. })
+        ));
+        assert!(!cache.is_poisoned());
+        assert_eq!(old.identity().certificate_count, 1);
+        fs::write(&path, ca_pem()).unwrap();
+        assert!(invalidate_cached_system_ca_snapshot(&cache).unwrap());
+        let new =
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
+                .unwrap();
+        assert!(!Arc::ptr_eq(&old, &new));
     }
 
     #[test]
