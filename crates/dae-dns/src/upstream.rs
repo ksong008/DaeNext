@@ -67,16 +67,22 @@ impl UpstreamResolver {
     }
 
     pub fn with_finish(
-        self,
+        mut self,
         finish: impl FnMut(&Upstream) -> Result<(), DnsError> + Send + 'static,
     ) -> Self {
-        *self.finish.lock().unwrap() = Some(Box::new(finish));
+        *self
+            .finish
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Box::new(finish));
         self
     }
 
     pub fn get_upstream(&self, now_unix: i64) -> Result<Arc<Upstream>, DnsError> {
         let old_upstream = loop {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| DnsError::Resolve("dns upstream state lock poisoned".to_owned()))?;
             if state.init && now_unix < state.next_refresh_unix {
                 return state.upstream.clone().ok_or_else(|| {
                     DnsError::Resolve(
@@ -89,7 +95,9 @@ impl UpstreamResolver {
             }
             if state.refreshing {
                 let wait_for = Duration::from_secs(self.retry_interval_secs.max(1) as u64);
-                let (state, timeout) = self.cond.wait_timeout(state, wait_for).unwrap();
+                let (state, timeout) = self.cond.wait_timeout(state, wait_for).map_err(|_| {
+                    DnsError::Resolve("dns upstream state lock poisoned while waiting".to_owned())
+                })?;
                 if timeout.timed_out() && state.refreshing {
                     return Err(DnsError::Resolve(
                         "dns upstream refresh did not finish before the retry deadline".to_owned(),
@@ -102,7 +110,9 @@ impl UpstreamResolver {
         };
 
         let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut resolve = self.resolve.lock().unwrap();
+            let mut resolve = self.resolve.lock().map_err(|_| {
+                DnsError::Resolve("dns upstream resolve callback lock poisoned".to_owned())
+            })?;
             resolve()
         }))
         .unwrap_or_else(|_| {
@@ -114,7 +124,9 @@ impl UpstreamResolver {
         let result = match resolved {
             Ok(upstream) => {
                 let finish_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut finish = self.finish.lock().unwrap();
+                    let mut finish = self.finish.lock().map_err(|_| {
+                        DnsError::Resolve("dns upstream finish callback lock poisoned".to_owned())
+                    })?;
                     match finish.as_mut() {
                         Some(finish) => finish(&upstream),
                         None => Ok(()),
@@ -130,30 +142,35 @@ impl UpstreamResolver {
             Err(err) => Err(err),
         };
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| DnsError::Resolve("dns upstream state lock poisoned".to_owned()))?;
         state.refreshing = false;
         match result {
             Ok(new_upstream) => {
-                state.stats.refresh_success_total += 1;
+                state.stats.refresh_success_total =
+                    state.stats.refresh_success_total.saturating_add(1);
                 state.upstream = Some(new_upstream.clone());
                 state.init = true;
-                state.next_refresh_unix = now_unix + self.refresh_interval_secs;
+                state.next_refresh_unix = now_unix.saturating_add(self.refresh_interval_secs);
                 state.last_error = None;
                 self.cond.notify_all();
                 Ok(new_upstream)
             }
             Err(err) => {
-                state.stats.refresh_failure_total += 1;
+                state.stats.refresh_failure_total =
+                    state.stats.refresh_failure_total.saturating_add(1);
                 if let Some(old) = old_upstream {
-                    state.stats.stale_reuse_total += 1;
+                    state.stats.stale_reuse_total = state.stats.stale_reuse_total.saturating_add(1);
                     state.init = true;
-                    state.next_refresh_unix = now_unix + self.retry_interval_secs;
+                    state.next_refresh_unix = now_unix.saturating_add(self.retry_interval_secs);
                     state.last_error = Some(err.to_string());
                     self.cond.notify_all();
                     Ok(old)
                 } else {
                     state.init = true;
-                    state.next_refresh_unix = now_unix + self.retry_interval_secs;
+                    state.next_refresh_unix = now_unix.saturating_add(self.retry_interval_secs);
                     state.last_error = Some(err.to_string());
                     self.cond.notify_all();
                     Err(DnsError::Resolve(format!(
@@ -165,11 +182,17 @@ impl UpstreamResolver {
     }
 
     pub fn stats(&self) -> UpstreamResolverStats {
-        self.state.lock().unwrap().stats
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .stats
     }
 
     pub fn next_refresh_unix(&self) -> i64 {
-        self.state.lock().unwrap().next_refresh_unix
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .next_refresh_unix
     }
 }
 
@@ -316,3 +339,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod poison_tests;
