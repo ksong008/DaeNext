@@ -32,7 +32,7 @@ impl ResidentDnsUdpActorPool {
         let runtime = self
             .runtime
             .lock()
-            .map_err(|_| "shared DNS UDP actor runtime lock poisoned".to_owned())?
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         let Some(runtime) = runtime else {
             return Ok(());
@@ -51,6 +51,14 @@ impl ResidentDnsUdpActorPool {
                 .map(|runtime| runtime.metrics().num_workers())
         })
     }
+
+    #[cfg(test)]
+    pub(super) fn poison_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.runtime.lock().unwrap();
+            panic!("injected UDP runtime poison");
+        }));
+    }
 }
 
 impl Drop for ResidentDnsUdpActorPool {
@@ -58,8 +66,8 @@ impl Drop for ResidentDnsUdpActorPool {
         if let Some(runtime) = self
             .runtime
             .get_mut()
-            .ok()
-            .and_then(std::option::Option::take)
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
         {
             runtime.shutdown_background();
         }

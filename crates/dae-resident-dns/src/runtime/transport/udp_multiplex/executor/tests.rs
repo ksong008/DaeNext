@@ -7,6 +7,64 @@ const TEST_UPSTREAM_COUNT: usize = 24;
 
 mod cancellation;
 
+#[tokio::test]
+async fn dropping_poisoned_registry_stops_actors_on_a_shared_runtime() {
+    let executor = ResidentDnsUdpActorExecutor::new_on(
+        ResidentDnsUdpRuntimeConfig::standalone(),
+        Arc::new(ResidentDataplaneMetrics::default()),
+        tokio::runtime::Handle::current(),
+    );
+    let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let handle = executor
+        .open_handle(upstream.local_addr().unwrap(), 0)
+        .await
+        .unwrap();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = executor.actors.lock().unwrap();
+        panic!("injected registry poison before Drop");
+    }));
+    drop(executor);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !handle.is_closed() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn poisoned_registry_and_pool_still_stop_and_join_live_actors() {
+    let upstream = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let executor = ResidentDnsUdpActorExecutor::for_test_worker_count(1);
+    let handle = executor
+        .open_handle(upstream.local_addr().unwrap(), 0)
+        .await
+        .unwrap();
+    let pool = executor.pool.lock().await.as_ref().unwrap().clone();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _actors = executor.actors.lock().unwrap();
+        panic!("injected actor registry poison");
+    }));
+    pool.poison_for_test();
+    let report = executor
+        .shutdown(tokio::time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE)
+        .await;
+    assert_eq!(report["status"], "pass", "{report}");
+    assert_eq!(report["registryPoisoned"], true);
+    assert_eq!(report["joined"], 1);
+    assert!(handle.is_closed());
+    assert!(pool.runtime_handle().is_err());
+    assert_eq!(
+        executor.metrics.snapshot()["dnsUdpActorsOpened"],
+        executor.metrics.snapshot()["dnsUdpActorsClosed"]
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn shared_executor_is_lazy_and_reuses_one_worker_pool() {
     let executor = ResidentDnsUdpActorExecutor::for_test_worker_count(2);

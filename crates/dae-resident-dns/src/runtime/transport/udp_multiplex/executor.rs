@@ -267,7 +267,7 @@ impl ResidentDnsUdpActorExecutor {
             let mut actors = self
                 .actors
                 .lock()
-                .map_err(|_| "shared DNS UDP actor registry lock poisoned".to_owned())?;
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             actors
                 .iter()
                 .position(|actor| actor.task.id() == task_id)
@@ -294,13 +294,12 @@ impl ResidentDnsUdpActorExecutor {
     pub async fn shutdown(&self, deadline: tokio::time::Instant) -> serde_json::Value {
         self.closing
             .store(true, std::sync::atomic::Ordering::Release);
+        let mut registry_poisoned = false;
         let mut actors = match self.actors.lock() {
             Ok(mut registered) => std::mem::take(&mut *registered),
-            Err(_) => {
-                return serde_json::json!({
-                    "status": "fail",
-                    "error": "shared DNS UDP actor registry lock poisoned",
-                });
+            Err(poisoned) => {
+                registry_poisoned = true;
+                std::mem::take(&mut *poisoned.into_inner())
             }
         };
         for actor in &actors {
@@ -333,6 +332,7 @@ impl ResidentDnsUdpActorExecutor {
             "graceful": graceful,
             "completionMode": completion_mode,
             "generation": self.runtime_config.generation,
+            "registryPoisoned": registry_poisoned,
             "taskCount": task_count,
             "joined": joined,
             "panicked": panicked,
@@ -402,13 +402,15 @@ impl Drop for ResidentDnsUdpActorExecutor {
     fn drop(&mut self) {
         self.closing
             .store(true, std::sync::atomic::Ordering::Release);
-        if let Ok(mut actors) = self.actors.lock() {
-            for actor in actors.drain(..) {
-                if let Some(lifecycle) = actor.lifecycle.upgrade() {
-                    lifecycle.stop();
-                }
-                actor.task.abort();
+        let mut actors = self
+            .actors
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for actor in actors.drain(..) {
+            if let Some(lifecycle) = actor.lifecycle.upgrade() {
+                lifecycle.stop();
             }
+            actor.task.abort();
         }
     }
 }

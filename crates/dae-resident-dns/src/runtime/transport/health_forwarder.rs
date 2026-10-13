@@ -123,7 +123,8 @@ impl ResidentDnsForwarderCache {
             let mut state = self
                 .health_state
                 .lock()
-                .map_err(|_| "resident DNS health forwarder cache lock poisoned".to_owned())?;
+                // Cleanup must remain possible after admission fails closed.
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let Some(entry) = state.entries.get_mut(&key) else {
                 return Ok(());
             };
@@ -136,7 +137,6 @@ impl ResidentDnsForwarderCache {
             if !Arc::ptr_eq(current, &forwarder) {
                 return Ok(());
             }
-            debug_assert!(entry.health_leases > 0, "DNS health lease underflow");
             entry.health_leases = entry.health_leases.saturating_sub(1);
             if entry.health_leases > 0 || entry.health_close.is_some() {
                 return Ok(());
@@ -155,7 +155,11 @@ impl ResidentDnsForwarderCache {
             let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
             let report = forwarder.shutdown(deadline).await;
             let released = report["status"].as_str() == Some("pass");
-            if let Ok(mut state) = cache.health_state.lock() {
+            {
+                let mut state = cache
+                    .health_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 let remove = state.entries.get(&key).is_some_and(|entry| {
                     matches!(
                         &entry.kind,

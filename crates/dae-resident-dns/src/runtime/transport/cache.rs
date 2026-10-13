@@ -2,6 +2,9 @@ use super::super::*;
 use dae_resident_plan::resident_udp_chain_admission;
 use serde_json::{Value, json};
 
+#[cfg(test)]
+mod tests;
+
 impl ResidentDnsForwarderCache {
     pub async fn shutdown(&self, deadline: time::Instant) -> Value {
         if self.closing.swap(true, std::sync::atomic::Ordering::AcqRel) {
@@ -11,21 +14,18 @@ impl ResidentDnsForwarderCache {
                 "alreadyClosed": true,
             });
         }
+        let mut recovered_locks = Vec::new();
         let (entries, retired, health_entries, health_retired) = {
-            let Ok(mut state) = self.state.lock() else {
-                return json!({
-                    "status": "fail",
-                    "generation": self.udp_runtime.generation,
-                    "error": "resident DNS forwarder cache lock poisoned",
-                });
-            };
-            let Ok(mut health_state) = self.health_state.lock() else {
-                return json!({
-                    "status": "fail",
-                    "generation": self.udp_runtime.generation,
-                    "error": "resident DNS health forwarder cache lock poisoned",
-                });
-            };
+            // Poison still rejects new work, but must not strand owned tasks.
+            // Drain the registries without trusting their LRU bookkeeping.
+            let mut state = self.state.lock().unwrap_or_else(|poisoned| {
+                recovered_locks.push("forwarder cache");
+                poisoned.into_inner()
+            });
+            let mut health_state = self.health_state.lock().unwrap_or_else(|poisoned| {
+                recovered_locks.push("health forwarder cache");
+                poisoned.into_inner()
+            });
             state.lru.clear();
             health_state.lru.clear();
             (
@@ -103,6 +103,7 @@ impl ResidentDnsForwarderCache {
             "healthEntriesClosed": health_entry_count,
             "retiredOwnersClosed": retired_count,
             "forwardersFailed": failed,
+            "recoveredPoisonedLocks": recovered_locks,
             "forwarders": forwarder_reports,
             "directUdpActors": direct_report,
         })
