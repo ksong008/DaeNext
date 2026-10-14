@@ -286,6 +286,17 @@ impl PartialEq for VlessEncryptionClient {
 impl Eq for VlessEncryptionClient {}
 
 impl VlessEncryptionClient {
+    pub(crate) fn ticket_guard(&self) -> std::sync::MutexGuard<'_, Option<VlessEncryptionTicket>> {
+        self.ticket.lock().unwrap_or_else(|poisoned| {
+            // A ticket only accelerates the next handshake. Drop uncertain key
+            // material (including secret cleansing) and use a full handshake.
+            let mut ticket = poisoned.into_inner();
+            *ticket = None;
+            self.ticket.clear_poison();
+            ticket
+        })
+    }
+
     pub fn parse(raw: &str) -> Result<Option<Self>, OutboundError> {
         let Some(spec) = VlessEncryptionSpec::parse(raw)? else {
             return Ok(None);

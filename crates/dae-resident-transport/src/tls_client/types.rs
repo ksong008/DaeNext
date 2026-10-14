@@ -55,6 +55,19 @@ pub(super) static BORING_CONNECTOR_CACHE: OnceLock<
 
 const RESIDENT_TLS_CONFIG_CACHE_MAX_ENTRIES: usize = 64;
 
+pub(super) fn lock_tls_config_cache<T>(
+    mutex: &Mutex<ResidentTlsConfigCache<T>>,
+) -> std::sync::MutexGuard<'_, ResidentTlsConfigCache<T>> {
+    mutex.lock().unwrap_or_else(|poisoned| {
+        // The cache is derived from complete security keys. Discard uncertain
+        // cache/index state; existing connections retain their own Arc context.
+        let mut cache = poisoned.into_inner();
+        *cache = ResidentTlsConfigCache::default();
+        mutex.clear_poison();
+        cache
+    })
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ResidentTlsConfigCacheClearReport {
     pub boring: usize,
@@ -222,7 +235,7 @@ impl ResidentTlsConfigCache<ResidentBoringTlsContextEntry> {
 pub fn clear_resident_tls_config_caches() -> ResidentTlsConfigCacheClearReport {
     let (boring, boring_sessions) = BORING_CONNECTOR_CACHE
         .get()
-        .and_then(|cache| cache.lock().ok().map(|mut cache| cache.clear_boring()))
+        .map(|cache| lock_tls_config_cache(cache).clear_boring())
         .unwrap_or_default();
     let _ = dae_outbound_quic::system_ca::invalidate_system_ca_snapshot();
     ResidentTlsConfigCacheClearReport {
@@ -251,12 +264,7 @@ pub fn retain_resident_tls_config_cache_for_plans<'a>(
     }
     BORING_CONNECTOR_CACHE
         .get()
-        .and_then(|cache| {
-            cache
-                .lock()
-                .ok()
-                .map(|mut cache| cache.retain_active(&exact, &ca_agnostic))
-        })
+        .map(|cache| lock_tls_config_cache(cache).retain_active(&exact, &ca_agnostic))
         .unwrap_or(ResidentTlsConfigCacheRetainReport {
             active_keys: exact.len().saturating_add(ca_agnostic.len()),
             ca_identity_fallbacks: ca_agnostic.len(),
@@ -321,7 +329,7 @@ fn collect_active_tls_key(
 pub fn resident_tls_config_cache_metrics() -> Value {
     let cache = BORING_CONNECTOR_CACHE
         .get()
-        .and_then(|cache| cache.lock().ok())
+        .map(lock_tls_config_cache)
         .map(|cache| {
             (
                 cache.len(),
@@ -341,6 +349,9 @@ pub fn resident_tls_config_cache_metrics() -> Value {
         "lastCaIdentityFallbacks": cache.4,
     })
 }
+
+#[cfg(test)]
+mod poison_tests;
 
 #[cfg(test)]
 mod tests {

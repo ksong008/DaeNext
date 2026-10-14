@@ -348,9 +348,7 @@ where
         let mut united_key = SecretVec::new();
         if spec.rtt == VlessEncryptionRtt::ZeroRtt {
             let ticket = client
-                .ticket
-                .lock()
-                .map_err(|_| io_other("VLESS Encryption ticket mutex poisoned"))?
+                .ticket_guard()
                 .clone()
                 .filter(|ticket| ticket.expires_at > Instant::now());
             if let Some(ticket) = ticket {
@@ -510,10 +508,7 @@ where
         // The actual ticket duration is encoded in the first two bytes by
         // Xray. A zero value means no 0-RTT cache is admitted.
         if spec.rtt == VlessEncryptionRtt::ZeroRtt && server_seconds != 0 {
-            let mut guard = client
-                .ticket
-                .lock()
-                .map_err(|_| io_other("VLESS Encryption ticket mutex poisoned"))?;
+            let mut guard = client.ticket_guard();
             *guard = Some(VlessEncryptionTicket {
                 expires_at: Instant::now() + Duration::from_secs(server_seconds),
                 pfs_key: pfs_key.copied(),
@@ -640,7 +635,8 @@ where
         let Some(expected_identity) = self.used_cached_ticket_identity else {
             return false;
         };
-        if let Ok(mut guard) = self.client.ticket.lock() {
+        {
+            let mut guard = self.client.ticket_guard();
             // Xray treats an invalid 0-RTT response as a stale or replayed
             // ticket and forces the next connection through a full handshake.
             // Keeping a still-in-TTL ticket after an invalid record would
@@ -1120,6 +1116,47 @@ mod tests {
         VlessEncryptionClient::parse(&format!("mlkem768x25519plus.native.1rtt.{public_key}"))
             .expect("fixture encryption must parse")
             .expect("fixture encryption must be admitted")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn poisoned_ticket_cache_starts_a_full_handshake_and_recovers_shared_clones() {
+        let public_key = URL_SAFE_NO_PAD.encode([0x42_u8; 32]);
+        let client = VlessEncryptionClient::parse(&format!(
+            "mlkem768x25519plus.native.0rtt.{public_key}.100-35-35"
+        ))
+        .unwrap()
+        .unwrap();
+        let shared = client.clone();
+        *client.ticket_guard() = Some(VlessEncryptionTicket {
+            expires_at: Instant::now() + Duration::from_secs(60),
+            pfs_key: [0x33; 64],
+            ticket: [0x55; 16],
+        });
+        let cached =
+            VlessEncryptedStream::handshake(ChunkedIo::new(Vec::new(), 10000), client.clone())
+                .await
+                .unwrap();
+        assert!(cached.used_cached_ticket_identity.is_some());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = client.ticket.lock().unwrap();
+            panic!("injected ticket poison");
+        }));
+        let (io, mut peer) = tokio::io::duplex(4096);
+        let handshake = tokio::spawn(VlessEncryptedStream::handshake(io, client));
+        // The full PFS hello is > 1,216 bytes. The cached 0-RTT branch would
+        // return before emitting a hello and never satisfy this read.
+        let mut hello = vec![0; 1217];
+        tokio::time::timeout(Duration::from_secs(1), peer.read_exact(&mut hello))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(shared.ticket_guard().is_none());
+        assert!(!shared.ticket.is_poisoned());
+        drop(peer);
+        assert_eq!(
+            handshake.await.unwrap().err().unwrap().kind(),
+            std::io::ErrorKind::UnexpectedEof
+        );
     }
 
     fn test_stream(inner: ChunkedIo, read_state: ReadState) -> VlessEncryptedStream<ChunkedIo> {

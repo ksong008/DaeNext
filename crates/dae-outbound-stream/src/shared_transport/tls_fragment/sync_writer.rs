@@ -43,29 +43,30 @@ where
             .push(buf)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
         write_tls_fragment_plan(&mut self.inner, &plan)?;
-        self.record_reports(&plan)?;
+        self.record_reports(&plan);
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
         let plan = self.planner.finish_incomplete();
         write_tls_fragment_plan(&mut self.inner, &plan)?;
-        self.record_reports(&plan)?;
+        self.record_reports(&plan);
         self.inner.flush()
     }
 }
 
 impl<S> TlsFragmentingStream<S> {
-    fn record_reports(&self, plan: &TlsFragmentPlan) -> io::Result<()> {
+    fn record_reports(&self, plan: &TlsFragmentPlan) {
         if plan.reports().is_empty() {
-            return Ok(());
+            return;
         }
-        let mut stats = self
-            .stats
-            .lock()
-            .map_err(|_| io::Error::other("tls fragment stats mutex poisoned"))?;
+        let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+            let mut stats = poisoned.into_inner();
+            *stats = super::TlsFragmentStats::default();
+            self.stats.clear_poison();
+            stats
+        });
         stats.writes.extend_from_slice(plan.reports());
-        Ok(())
     }
 }
 
@@ -88,6 +89,27 @@ where
 mod tests {
     use super::*;
     use crate::shared_transport::{TLS_HANDSHAKE_CONTENT_TYPE, TLS_RECORD_HEADER_LEN};
+
+    #[test]
+    fn poisoned_statistics_do_not_fail_an_already_written_record() {
+        let stats = crate::shared_transport::new_tls_fragment_stats();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = stats.lock().unwrap();
+            panic!("injected stats poison");
+        }));
+        let options = TlsFragmentOptions::from_ranges("8-8", "0-0").unwrap();
+        let mut stream = TlsFragmentingStream::new(Vec::new(), options, stats.clone());
+        let mut input = vec![TLS_HANDSHAKE_CONTENT_TYPE, 3, 3, 0, 20];
+        input.extend(0_u8..20);
+        assert_eq!(stream.write(&input).unwrap(), input.len());
+        stream.flush().unwrap();
+        assert_eq!(stream.inner.len(), input.len() + 2 * TLS_RECORD_HEADER_LEN);
+        assert!(!stats.is_poisoned());
+        assert_eq!(
+            crate::shared_transport::snapshot_tls_fragment_stats(&stats).fragment_payload_lens(),
+            vec![8, 8, 4]
+        );
+    }
 
     #[test]
     fn synchronous_stream_buffers_split_records_until_complete() {

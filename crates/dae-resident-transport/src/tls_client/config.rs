@@ -51,9 +51,7 @@ fn boring_connector_cached(
     let cache =
         BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
-        let mut cache = cache
-            .lock()
-            .map_err(|_| format!("{context} BoringSSL connector cache lock poisoned"))?;
+        let mut cache = lock_tls_config_cache(cache);
         if let Some(connector) = cache.get(&key) {
             return Ok(connector);
         }
@@ -83,9 +81,7 @@ fn boring_connector_cached(
             .map_err(|err| format!("set {context} BoringSSL ALPN: {err}"))?;
     }
     let connector = Arc::new(ResidentBoringTlsContextEntry::build(builder, context)?);
-    let mut cache = cache
-        .lock()
-        .map_err(|_| format!("{context} BoringSSL connector cache lock poisoned"))?;
+    let mut cache = lock_tls_config_cache(cache);
     Ok(cache.insert_or_get(key, connector))
 }
 
@@ -112,9 +108,7 @@ pub(super) fn boring_xhttp_endpoint_connector(
     let cache =
         BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
     {
-        let mut cache = cache
-            .lock()
-            .map_err(|_| "xHTTP BoringSSL connector cache lock poisoned".to_owned())?;
+        let mut cache = lock_tls_config_cache(cache);
         if let Some(connector) = cache.get(&key) {
             return Ok(connector);
         }
@@ -144,9 +138,7 @@ pub(super) fn boring_xhttp_endpoint_connector(
             .map_err(|err| format!("set xHTTP BoringSSL ALPN: {err}"))?;
     }
     let connector = Arc::new(ResidentBoringTlsContextEntry::build(builder, "xHTTP")?);
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "xHTTP BoringSSL connector cache lock poisoned".to_owned())?;
+    let mut cache = lock_tls_config_cache(cache);
     Ok(cache.insert_or_get(key, connector))
 }
 
@@ -277,11 +269,9 @@ impl ResidentTlsClientConfigKey {
 fn cached_connector_matching(
     matches: impl Fn(&ResidentTlsClientConfigKey) -> bool,
 ) -> Result<Option<Arc<ResidentBoringTlsContextEntry>>, String> {
-    BORING_CONNECTOR_CACHE
-        .get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()))
-        .lock()
-        .map_err(|_| "BoringSSL connector cache lock poisoned".to_owned())
-        .map(|mut cache| cache.get_matching(matches))
+    let cache =
+        BORING_CONNECTOR_CACHE.get_or_init(|| Mutex::new(ResidentTlsConfigCache::default()));
+    Ok(lock_tls_config_cache(cache).get_matching(matches))
 }
 
 impl ResidentTlsFingerprintConfigKey {
