@@ -55,9 +55,12 @@ impl ResidentDnsUdpActorLifecycle {
     }
 
     pub fn stop(&self) {
-        if let Ok(mut stop) = self.stop.lock()
-            && let Some(stop) = stop.take()
-        {
+        let stop = self
+            .stop
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(stop) = stop {
             let _ = stop.send(());
         }
     }

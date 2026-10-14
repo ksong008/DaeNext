@@ -7,6 +7,46 @@ const TEST_UPSTREAM_COUNT: usize = 24;
 
 mod cancellation;
 
+#[tokio::test(flavor = "current_thread")]
+async fn poisoned_admission_reaps_a_new_actor_with_a_non_stopping_handle() {
+    let executor = ResidentDnsUdpActorExecutor::new_on(
+        ResidentDnsUdpRuntimeConfig::standalone(),
+        Arc::new(ResidentDataplaneMetrics::default()),
+        tokio::runtime::Handle::current(),
+    );
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = executor.actors.lock().unwrap();
+        panic!("injected admission poison");
+    }));
+    let completion = super::super::ResidentDnsUdpActorCompletion::new();
+    let probe = Arc::clone(&completion);
+    let result = executor
+        .spawn_actor(move || async move {
+            Ok(ResidentDnsUdpActorRegistration {
+                handle: (),
+                lifecycle: std::sync::Weak::new(),
+                completion,
+                task: tokio::spawn(std::future::pending()),
+            })
+        })
+        .await;
+    assert!(result.unwrap_err().contains("registry lock poisoned"));
+    assert!(
+        probe
+            .wait(tokio::time::Instant::now() + std::time::Duration::from_secs(1))
+            .await
+    );
+    assert!(
+        executor
+            .actors
+            .lock()
+            .err()
+            .unwrap()
+            .into_inner()
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn dropping_poisoned_registry_stops_actors_on_a_shared_runtime() {
     let executor = ResidentDnsUdpActorExecutor::new_on(

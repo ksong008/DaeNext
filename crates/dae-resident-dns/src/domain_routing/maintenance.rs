@@ -136,13 +136,15 @@ fn run_domain_routing_maintenance(
     domain_routing: Arc<ResidentDnsDomainRouting>,
     signal: ResidentDnsDomainRoutingMaintenanceSignal,
 ) {
+    let mut last_error = None;
     loop {
         let Some(generation) = signal.generation() else {
             return;
         };
         let next_expiry = match domain_routing.next_expiry_unix() {
             Ok(next_expiry) => next_expiry,
-            Err(_) => {
+            Err(error) => {
+                report_maintenance_error(&mut last_error, error);
                 if signal.wait_for_change(generation, Some(DOMAIN_ROUTING_MAINTENANCE_RETRY_DELAY))
                 {
                     return;
@@ -152,13 +154,18 @@ fn run_domain_routing_maintenance(
         };
         let now_unix = unix_now();
         if next_expiry.is_some_and(|deadline| deadline <= now_unix) {
-            if domain_routing.sweep_expired().is_err()
-                && signal.wait_for_change(generation, Some(DOMAIN_ROUTING_MAINTENANCE_RETRY_DELAY))
-            {
-                return;
+            if let Err(error) = domain_routing.sweep_expired() {
+                report_maintenance_error(&mut last_error, error);
+                if signal.wait_for_change(generation, Some(DOMAIN_ROUTING_MAINTENANCE_RETRY_DELAY))
+                {
+                    return;
+                }
+            } else {
+                last_error = None;
             }
             continue;
         }
+        last_error = None;
         let timeout = next_expiry.map(|deadline| {
             Duration::from_secs(
                 deadline
@@ -170,6 +177,13 @@ fn run_domain_routing_maintenance(
         if signal.wait_for_change(generation, timeout) {
             return;
         }
+    }
+}
+
+fn report_maintenance_error(last_error: &mut Option<String>, error: String) {
+    if last_error.as_ref() != Some(&error) {
+        eprintln!("resident DNS domain routing maintenance failed: {error}");
+        *last_error = Some(error);
     }
 }
 

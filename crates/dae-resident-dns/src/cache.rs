@@ -277,10 +277,7 @@ impl ResidentDnsRuntimeCache {
         &self,
         key: ResidentDnsResponseCacheKey,
     ) -> Result<ResidentDnsFlightPermit<'_>, String> {
-        let mut inflight = self
-            .inflight
-            .lock()
-            .map_err(|_| "resident DNS inflight lock poisoned".to_owned())?;
+        let mut inflight = self.lock_flights();
         let (state, role) = match inflight.get(&key) {
             Some(state) => {
                 state
@@ -313,6 +310,20 @@ impl ResidentDnsRuntimeCache {
             role,
             published: false,
         })
+    }
+
+    fn lock_flights(
+        &self,
+    ) -> std::sync::MutexGuard<'_, BTreeMap<ResidentDnsResponseCacheKey, Arc<ResidentDnsFlightState>>>
+    {
+        // Entries contain valid Arc identities; retain live leaders/followers
+        // and their budgets instead of resetting coordination as a cache shard.
+        let flights = self
+            .inflight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.inflight.clear_poison();
+        flights
     }
 
     pub fn lookup_response_into(
@@ -666,31 +677,45 @@ impl ResidentDnsFlightPermit<'_> {
     }
 
     fn publish_outcome(&mut self, outcome: Arc<ResidentDnsFlightOutcome>) -> Result<(), String> {
+        let mut poisoned = false;
         {
-            let mut current = self
-                .state
-                .outcome
-                .lock()
-                .map_err(|_| "resident DNS flight outcome lock poisoned".to_owned())?;
-            if current.is_some() {
+            let mut current = match self.state.outcome.lock() {
+                Ok(current) => current,
+                Err(error) => {
+                    poisoned = true;
+                    error.into_inner()
+                }
+            };
+            if current.is_some() && !poisoned {
                 return Err("resident DNS flight outcome was already published".to_owned());
             }
-            *current = Some(outcome);
+            *current = if poisoned {
+                Some(Arc::new(ResidentDnsFlightOutcome {
+                    result: Err(Arc::from("resident DNS flight outcome lock poisoned")),
+                    _retained: None,
+                }))
+            } else {
+                Some(outcome)
+            };
         }
         self.published = true;
         self.state.notify.notify_waiters();
         self.remove_registry_entry();
-        Ok(())
+        if poisoned {
+            Err("resident DNS flight outcome lock poisoned".to_owned())
+        } else {
+            Ok(())
+        }
     }
 
     fn remove_registry_entry(&self) {
         if self.role == ResidentDnsFlightRole::DetachedLeader {
             return;
         }
-        if let Ok(mut inflight) = self.cache.inflight.lock()
-            && inflight
-                .get(&self.key)
-                .is_some_and(|current| Arc::ptr_eq(current, &self.state))
+        let mut inflight = self.cache.lock_flights();
+        if inflight
+            .get(&self.key)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
         {
             inflight.remove(&self.key);
         }
@@ -722,9 +747,12 @@ impl Drop for ResidentDnsFlightPermit<'_> {
         if !self.is_leader() || self.published {
             return;
         }
-        if let Ok(mut outcome) = self.state.outcome.lock()
-            && outcome.is_none()
-        {
+        let mut outcome = self
+            .state
+            .outcome
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if outcome.is_none() {
             *outcome = Some(Arc::new(ResidentDnsFlightOutcome {
                 result: Err(Arc::<str>::from(
                     "resident DNS flight leader ended before publishing a result",
@@ -732,7 +760,11 @@ impl Drop for ResidentDnsFlightPermit<'_> {
                 _retained: None,
             }));
         }
+        drop(outcome);
         self.state.notify.notify_waiters();
         self.remove_registry_entry();
     }
 }
+
+#[cfg(test)]
+mod poison_tests;

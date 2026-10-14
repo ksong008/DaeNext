@@ -31,6 +31,31 @@ struct ResidentDnsOwnedTask<T> {
     task: tokio::task::JoinHandle<T>,
 }
 
+// Own the actor throughout construction, channel handover and admission. T is
+// generic, so dropping the user handle cannot be relied on to stop its task.
+struct PendingDnsActor<T> {
+    opened: Option<ResidentDnsUdpActorRegistration<T>>,
+    runtime: tokio::runtime::Handle,
+}
+
+impl<T> Drop for PendingDnsActor<T> {
+    fn drop(&mut self) {
+        let Some(opened) = self.opened.take() else {
+            return;
+        };
+        if let Some(lifecycle) = opened.lifecycle.upgrade() {
+            lifecycle.stop();
+        }
+        opened.task.abort();
+        let task = opened.task;
+        let completion = opened.completion;
+        self.runtime.spawn(async move {
+            let _ = task.await;
+            completion.finish();
+        });
+    }
+}
+
 impl<T> Future for ResidentDnsOwnedTask<T> {
     type Output = Result<T, tokio::task::JoinError>;
 
@@ -177,51 +202,35 @@ impl ResidentDnsUdpActorExecutor {
         self.pool().await?.runtime_handle()
     }
 
-    async fn register_actor<T>(
-        &self,
-        opened: ResidentDnsUdpActorRegistration<T>,
-    ) -> Result<T, String>
+    async fn register_actor<T>(&self, mut pending: PendingDnsActor<T>) -> Result<T, String>
     where
         T: Send + 'static,
     {
-        let ResidentDnsUdpActorRegistration {
-            handle,
-            lifecycle,
-            completion,
-            task,
-        } = opened;
         self.reap_finished_actors().await?;
-        let mut task = Some(task);
-        let closing = {
+        {
             let mut actors = self
                 .actors
                 .lock()
                 .map_err(|_| "shared DNS UDP actor registry lock poisoned".to_owned())?;
             if self.closing.load(std::sync::atomic::Ordering::Acquire) {
-                true
-            } else {
-                let Some(task) = task.take() else {
-                    return Err("shared DNS UDP actor task is missing".to_owned());
-                };
-                actors.push(ResidentDnsUdpActorTask {
-                    lifecycle: lifecycle.clone(),
-                    completion: Arc::clone(&completion),
-                    task,
-                });
-                false
+                return Err("shared DNS UDP actor executor closed during initialization".to_owned());
             }
-        };
-        if closing {
-            if let Some(lifecycle) = lifecycle.upgrade() {
-                lifecycle.stop();
-            }
-            if let Some(task) = task {
-                let _ = task.await;
-                completion.finish();
-            }
-            return Err("shared DNS UDP actor executor closed during initialization".to_owned());
+            let ResidentDnsUdpActorRegistration {
+                handle,
+                lifecycle,
+                completion,
+                task,
+            } = pending
+                .opened
+                .take()
+                .ok_or_else(|| "shared DNS UDP actor task is missing".to_owned())?;
+            actors.push(ResidentDnsUdpActorTask {
+                lifecycle,
+                completion,
+                task,
+            });
+            Ok(handle)
         }
-        Ok(handle)
     }
 
     async fn reap_finished_actors(&self) -> Result<(), String> {
@@ -229,7 +238,9 @@ impl ResidentDnsUdpActorExecutor {
             let mut actors = self
                 .actors
                 .lock()
-                .map_err(|_| "shared DNS UDP actor registry lock poisoned".to_owned())?;
+                // Reaping is cleanup, not admission. Preserve poison for the
+                // later registration lock but still join already finished tasks.
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let mut finished = Vec::new();
             let mut active = Vec::with_capacity(actors.len());
             for actor in std::mem::take(&mut *actors) {
@@ -378,7 +389,7 @@ impl ResidentDnsUdpActorExecutor {
 }
 
 async fn run_dns_udp_actor_build<T, Build, BuildFuture>(
-    mut ready: tokio::sync::oneshot::Sender<Result<ResidentDnsUdpActorRegistration<T>, String>>,
+    mut ready: tokio::sync::oneshot::Sender<Result<PendingDnsActor<T>, String>>,
     build: Build,
 ) where
     T: Send + 'static,
@@ -395,7 +406,11 @@ async fn run_dns_udp_actor_build<T, Build, BuildFuture>(
         _ = ready.closed() => return,
         opened = build() => opened,
     };
-    let _ = ready.send(opened);
+    let pending = opened.map(|opened| PendingDnsActor {
+        opened: Some(opened),
+        runtime: tokio::runtime::Handle::current(),
+    });
+    let _ = ready.send(pending);
 }
 
 impl Drop for ResidentDnsUdpActorExecutor {

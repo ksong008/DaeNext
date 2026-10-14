@@ -108,7 +108,9 @@ impl ResidentDnsTargetRefreshOwner {
         let receiver = self
             .receiver
             .lock()
-            .map_err(|_| "resident DNS target refresh owner lock poisoned".to_owned())?
+            // Option::take keeps the sole receiver identity valid after an
+            // unwind. Recover the same receiver; never create a second one.
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         Ok(receiver.map(|receiver| {
             Box::pin(run_resident_dns_target_refresh_owner(
@@ -154,6 +156,38 @@ mod tests {
     use super::*;
     use dae_resident_core::ResidentStopSignal;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn poisoned_receiver_is_taken_once_and_still_processes_refreshes() {
+        let (owner, handle) = ResidentDnsTargetRefreshOwner::with_limits(1, 4);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = owner.receiver.lock().unwrap();
+            panic!("injected receiver poison");
+        }));
+        let stop = ResidentStopSignal::shared();
+        let task = tokio::spawn(owner.take_task(Arc::clone(&stop)).unwrap().unwrap());
+        assert!(owner.take_task(Arc::clone(&stop)).unwrap().is_none());
+        let cache = Arc::new(ResidentDnsResolvedTargetCache::new(Duration::from_secs(60)));
+        cache.install_refresh_handle(handle);
+        cache
+            .seed(vec!["192.0.2.1:53".parse().unwrap()], Duration::ZERO)
+            .await;
+        cache
+            .resolve(|_| async { Ok(resolved("192.0.2.2:53", Duration::from_secs(60))) })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while cache.cached_addrs_for_test().unwrap()[0]
+                != "192.0.2.2:53".parse::<SocketAddr>().unwrap()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        stop.store(true, Ordering::Release);
+        task.await.unwrap();
+    }
 
     fn resolved(addr: &str, valid_for: Duration) -> ResolvedHostAddrs {
         ResolvedHostAddrs {
