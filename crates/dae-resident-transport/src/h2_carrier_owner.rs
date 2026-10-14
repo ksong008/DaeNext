@@ -15,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::Notify;
 use tokio::time;
 
+use crate::owner_cleanup::cleanup_lock;
 use crate::transport_identity::resident_transport_binding_identity_digest;
 use crate::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name,
@@ -512,9 +513,7 @@ impl Drop for H2BuildMetricGuard {
             .metrics
             .active_builds
             .fetch_sub(1, Ordering::Relaxed);
-        if let Ok(mut builds) = self.owner.builds.lock() {
-            builds.remove(&self.build_id);
-        }
+        cleanup_lock(&self.owner.builds).remove(&self.build_id);
     }
 }
 
@@ -535,9 +534,7 @@ struct H2DriverInventoryGuard {
 
 impl Drop for H2DriverInventoryGuard {
     fn drop(&mut self) {
-        if let Ok(mut drivers) = self.owner.drivers.lock() {
-            drivers.remove(&self.instance_id);
-        }
+        cleanup_lock(&self.owner.drivers).remove(&self.instance_id);
     }
 }
 
@@ -650,14 +647,15 @@ fn register_h2_carrier_generation(owner: &Arc<H2CarrierGenerationOwner>) -> Resu
 }
 
 fn unregister_h2_carrier_generation(owner: &Arc<H2CarrierGenerationOwner>) {
-    if let Some(generations) = H2_CARRIER_GENERATIONS.get()
-        && let Ok(mut generations) = generations.lock()
-        && generations
+    if let Some(generations) = H2_CARRIER_GENERATIONS.get() {
+        let mut generations = cleanup_lock(generations);
+        if generations
             .get(&owner.generation.get())
             .and_then(Weak::upgrade)
             .is_some_and(|registered| Arc::ptr_eq(&registered, owner))
-    {
-        generations.remove(&owner.generation.get());
+        {
+            generations.remove(&owner.generation.get());
+        }
     }
 }
 
@@ -831,11 +829,7 @@ fn spawn_h2_carrier_build(
 }
 
 fn abort_h2_build(owner: &H2CarrierGenerationOwner, build_id: u64) {
-    let abort = owner
-        .builds
-        .lock()
-        .ok()
-        .and_then(|mut builds| builds.remove(&build_id));
+    let abort = cleanup_lock(&owner.builds).remove(&build_id);
     if let Some(abort) = abort {
         abort.abort();
     }
@@ -973,6 +967,9 @@ async fn build_h2_carrier(
         .drivers
         .lock()
         .map_err(|_| "HTTP/2 carrier driver inventory lock poisoned".to_owned())?;
+    if owner.closing.load(Ordering::Acquire) {
+        return Err("HTTP/2 carrier owner closed during handshake".to_owned());
+    }
     let instance_id = loop {
         let candidate = owner.next_instance_id.fetch_add(1, Ordering::Relaxed);
         if candidate != 0 && !drivers.contains_key(&candidate) {
@@ -1021,11 +1018,7 @@ async fn build_h2_carrier(
 }
 
 fn abort_h2_driver(owner: &H2CarrierGenerationOwner, instance_id: u64) {
-    let abort = owner
-        .drivers
-        .lock()
-        .ok()
-        .and_then(|mut drivers| drivers.remove(&instance_id));
+    let abort = cleanup_lock(&owner.drivers).remove(&instance_id);
     if let Some(abort) = abort {
         abort.abort();
     }
@@ -1036,11 +1029,7 @@ async fn invalidate_h2_carrier(
     key: H2CarrierKey,
     instance_id: u64,
 ) {
-    let manager = owner
-        .managers
-        .lock()
-        .ok()
-        .and_then(|managers| managers.get(&key).cloned());
+    let manager = cleanup_lock(&owner.managers).get(&key).cloned();
     let Some(manager) = manager else {
         return;
     };
@@ -1059,23 +1048,24 @@ async fn invalidate_h2_carrier(
 }
 
 async fn cleanup_h2_carrier_owner(owner: &Arc<H2CarrierGenerationOwner>) {
-    let managers = owner
-        .managers
-        .lock()
-        .map(|mut managers| {
-            managers
-                .drain()
-                .map(|(_, manager)| manager)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    owner.closing.store(true, Ordering::Release);
+    let managers = cleanup_lock(&owner.managers)
+        .drain()
+        .map(|(_, manager)| manager)
+        .collect::<Vec<_>>();
     let cleanup = async {
-        let build_aborts = owner
-            .builds
-            .lock()
-            .map(|mut builds| builds.drain().map(|(_, abort)| abort).collect::<Vec<_>>())
-            .unwrap_or_default();
+        let build_aborts = cleanup_lock(&owner.builds)
+            .drain()
+            .map(|(_, abort)| abort)
+            .collect::<Vec<_>>();
         for abort in build_aborts {
+            abort.abort();
+        }
+        let driver_aborts = cleanup_lock(&owner.drivers)
+            .drain()
+            .map(|(_, abort)| abort)
+            .collect::<Vec<_>>();
+        for abort in driver_aborts {
             abort.abort();
         }
         for manager in managers {
@@ -1087,14 +1077,6 @@ async fn cleanup_h2_carrier_owner(owner: &Arc<H2CarrierGenerationOwner>) {
             state.opening_build = None;
             drop(state);
             manager.changed.notify_waiters();
-        }
-        let driver_aborts = owner
-            .drivers
-            .lock()
-            .map(|mut drivers| drivers.drain().map(|(_, abort)| abort).collect::<Vec<_>>())
-            .unwrap_or_default();
-        for abort in driver_aborts {
-            abort.abort();
         }
         while owner.metrics.active_physical.load(Ordering::Relaxed) != 0
             || owner.metrics.active_builds.load(Ordering::Relaxed) != 0
@@ -1113,6 +1095,9 @@ async fn cleanup_h2_carrier_owner(owner: &Arc<H2CarrierGenerationOwner>) {
             .store(true, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod poison_tests;
 
 #[cfg(test)]
 mod tests {

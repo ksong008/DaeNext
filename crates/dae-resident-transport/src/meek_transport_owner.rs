@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crate::owner_cleanup::cleanup_lock;
+
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -352,9 +354,7 @@ impl Drop for MeekBuildGuard {
             .metrics
             .active_builds
             .fetch_sub(1, Ordering::Relaxed);
-        if let Ok(mut builds) = self.owner.builds.lock() {
-            builds.remove(&self.build_id);
-        }
+        cleanup_lock(&self.owner.builds).remove(&self.build_id);
         self.owner.changed.notify_waiters();
     }
 }
@@ -530,14 +530,15 @@ fn register_meek_transport_generation(
 }
 
 fn unregister_meek_transport_generation(owner: &Arc<MeekTransportGenerationOwner>) {
-    if let Some(generations) = MEEK_TRANSPORT_GENERATIONS.get()
-        && let Ok(mut generations) = generations.lock()
-        && generations
+    if let Some(generations) = MEEK_TRANSPORT_GENERATIONS.get() {
+        let mut generations = cleanup_lock(generations);
+        if generations
             .get(&owner.generation.get())
             .and_then(Weak::upgrade)
             .is_some_and(|registered| Arc::ptr_eq(&registered, owner))
-    {
-        generations.remove(&owner.generation.get());
+        {
+            generations.remove(&owner.generation.get());
+        }
     }
 }
 
@@ -604,7 +605,7 @@ pub async fn acquire_meek_transport(
             ));
         }
         prune_pool_expired_idle(&owner, &pool, Instant::now());
-        if let Some(physical) = take_meek_idle(&owner, &pool) {
+        if let Some(physical) = take_meek_idle(&owner, &pool)? {
             owner.metrics.lease_opened();
             owner
                 .metrics
@@ -660,10 +661,16 @@ pub async fn acquire_meek_transport(
 fn take_meek_idle(
     owner: &Arc<MeekTransportGenerationOwner>,
     pool: &Arc<MeekTransportPool>,
-) -> Option<MeekPhysicalConnection> {
-    let physical = pool.idle.lock().ok()?.pop_front()?.physical;
+) -> Result<Option<MeekPhysicalConnection>, String> {
+    let mut idle = pool
+        .idle
+        .lock()
+        .map_err(|_| "Meek transport idle pool lock poisoned".to_owned())?;
+    let Some(physical) = idle.pop_front().map(|entry| entry.physical) else {
+        return Ok(None);
+    };
     owner.metrics.idle_closed();
-    Some(physical)
+    Ok(Some(physical))
 }
 
 fn try_reserve_meek_physical(
@@ -816,11 +823,10 @@ async fn build_meek_transport(
 }
 
 fn prune_expired_meek_idle(owner: &Arc<MeekTransportGenerationOwner>) {
-    let pools = owner
-        .pools
-        .lock()
-        .map(|pools| pools.values().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
+    let pools = cleanup_lock(&owner.pools)
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
     let now = Instant::now();
     for pool in pools {
         prune_pool_expired_idle(owner, &pool, now);
@@ -833,10 +839,12 @@ fn prune_pool_expired_idle(
     now: Instant,
 ) {
     let mut expired = Vec::new();
-    if let Ok(mut idle) = pool.idle.lock() {
+    {
+        let mut idle = cleanup_lock(&pool.idle);
         while idle.front().is_some_and(|entry| {
-            now.saturating_duration_since(entry.idle_since)
-                >= owner.resources.idle_connection_timeout()
+            pool.idle.is_poisoned()
+                || now.saturating_duration_since(entry.idle_since)
+                    >= owner.resources.idle_connection_timeout()
         }) {
             if let Some(entry) = idle.pop_front() {
                 expired.push(entry.physical);
@@ -858,26 +866,22 @@ fn prune_pool_expired_idle(
 }
 
 async fn cleanup_meek_transport_owner(owner: &Arc<MeekTransportGenerationOwner>) {
-    let pools = owner
-        .pools
-        .lock()
-        .map(|mut pools| pools.drain().map(|(_, pool)| pool).collect::<Vec<_>>())
-        .unwrap_or_default();
+    owner.closing.store(true, Ordering::Release);
+    owner.changed.notify_waiters();
+    let pools = cleanup_lock(&owner.pools)
+        .drain()
+        .map(|(_, pool)| pool)
+        .collect::<Vec<_>>();
     let cleanup = async {
-        let build_aborts = owner
-            .builds
-            .lock()
-            .map(|mut builds| builds.drain().map(|(_, abort)| abort).collect::<Vec<_>>())
-            .unwrap_or_default();
+        let build_aborts = cleanup_lock(&owner.builds)
+            .drain()
+            .map(|(_, abort)| abort)
+            .collect::<Vec<_>>();
         for abort in build_aborts {
             abort.abort();
         }
         for pool in pools {
-            let idle = pool
-                .idle
-                .lock()
-                .map(|mut idle| idle.drain(..).collect::<Vec<_>>())
-                .unwrap_or_default();
+            let idle = cleanup_lock(&pool.idle).drain(..).collect::<Vec<_>>();
             owner
                 .metrics
                 .idle_physical
@@ -903,6 +907,9 @@ async fn cleanup_meek_transport_owner(owner: &Arc<MeekTransportGenerationOwner>)
             .store(true, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod poison_tests;
 
 #[cfg(test)]
 mod tests {

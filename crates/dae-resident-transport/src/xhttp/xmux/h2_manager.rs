@@ -386,30 +386,33 @@ pub async fn clear_xhttp_h2_xmux_managers(
     generation: &XhttpH2GenerationManagers,
     deadline: tokio::time::Instant,
 ) -> XhttpXmuxManagerClearReport {
-    let drained = match generation.managers.lock() {
-        Ok(mut managers) => managers
-            .drain()
-            .map(|(_, manager)| manager)
-            .collect::<Vec<_>>(),
-        Err(_) => {
-            return XhttpXmuxManagerClearReport {
-                locked_managers: 1,
-                ..XhttpXmuxManagerClearReport::default()
-            };
-        }
-    };
+    // Keep the inventory until each manager finishes cleanup. Cancellation or
+    // a lock deadline must leave a retryable entry behind.
+    let drained = cleanup_lock(&generation.managers)
+        .iter()
+        .map(|(key, manager)| (key.clone(), manager.clone()))
+        .collect::<Vec<_>>();
 
     let mut report = XhttpXmuxManagerClearReport {
         managers: drained.len(),
         ..XhttpXmuxManagerClearReport::default()
     };
-    for manager in &drained {
+    for (_, manager) in &drained {
         manager.lifecycle.close();
     }
-    for manager in drained {
+    for (key, manager) in drained {
         let (clients, deferred) = close_xhttp_h2_manager(&manager, deadline).await;
         report.clients = report.clients.saturating_add(clients);
         report.locked_managers = report.locked_managers.saturating_add(usize::from(deferred));
+        if !deferred {
+            let mut managers = cleanup_lock(&generation.managers);
+            if managers
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(&current.manager, &manager.manager))
+            {
+                managers.remove(&key);
+            }
+        }
     }
     report
 }
@@ -425,8 +428,10 @@ async fn close_xhttp_h2_manager(
     let tasks = state.take_connection_tasks();
     let clients = tasks.len();
     drop(state);
-    for mut task in tasks {
+    for task in &tasks {
         task.abort();
+    }
+    for mut task in tasks {
         let _ = tokio::time::timeout_at(deadline, &mut task).await;
     }
     (clients, false)
@@ -448,6 +453,9 @@ where
             .managers
             .lock()
             .map_err(|_| "resident xHTTP H2 xmux manager lock poisoned".to_owned())?;
+        if generation.closing.load(Ordering::Acquire) {
+            return Err("resident xHTTP xmux owner closed before manager registration".to_owned());
+        }
         managers
             .entry(key)
             .or_insert_with(|| {

@@ -241,8 +241,8 @@ async fn open_xhttp_h3_connection(
         let _ = poll_fn(|cx| driver.poll_close(cx)).await;
         let endpoint = driver_endpoint
             .lock()
-            .ok()
-            .and_then(|mut endpoint| endpoint.take());
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
         if let Some(endpoint) = endpoint {
             let guard = endpoint.cancellation_guard();
             endpoint.wait_idle().await;
@@ -395,8 +395,8 @@ impl XhttpH3Connection {
     fn take_endpoint(&self) -> Option<ObservedQuicEndpoint> {
         self.endpoint
             .lock()
-            .ok()
-            .and_then(|mut endpoint| endpoint.take())
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
     }
 
     pub fn abort_with_reason(mut self, reason: &[u8]) {

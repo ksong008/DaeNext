@@ -1,6 +1,104 @@
 use super::super::test_support::{download_test_key, download_test_plan};
 use super::*;
 
+#[tokio::test]
+async fn poisoned_h2_registry_closes_connections_and_invalidates_old_openings() {
+    let generation = XhttpH2GenerationManagers::new();
+    let key = cancellation_test_key(1);
+    let manager = XhttpXmuxManagerHandle::new(|lifecycle| {
+        XhttpXmuxH2Manager::new(cancellation_test_plan(1), lifecycle)
+    });
+    let opening = manager.lifecycle.reserve_opening().unwrap();
+    let sender = open_test_h2_sender().await.unwrap();
+    let abort = sender.connection_task.as_ref().unwrap().abort_handle();
+    let selected = manager
+        .manager
+        .lock()
+        .await
+        .complete_new_client(sender, &opening)
+        .unwrap();
+    generation
+        .managers
+        .lock()
+        .unwrap()
+        .insert(key, manager.clone());
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = generation.managers.lock().unwrap();
+        panic!("injected H2 registry poison");
+    }));
+    let report = clear_xhttp_h2_xmux_managers(
+        &generation,
+        tokio::time::Instant::now() + Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(report.managers, 1);
+    assert_eq!(report.clients, 1);
+    assert_eq!(report.locked_managers, 0);
+    assert!(abort.is_finished());
+    assert!(!opening.is_current());
+    assert!(generation.managers.is_poisoned());
+    assert!(cleanup_lock(&generation.managers).is_empty());
+    drop(selected);
+}
+
+#[tokio::test]
+async fn deferred_h2_close_remains_registered_for_retry() {
+    let generation = XhttpH2GenerationManagers::new();
+    let key = cancellation_test_key(1);
+    let manager = XhttpXmuxManagerHandle::new(|lifecycle| {
+        XhttpXmuxH2Manager::new(cancellation_test_plan(1), lifecycle)
+    });
+    generation
+        .managers
+        .lock()
+        .unwrap()
+        .insert(key, manager.clone());
+    let guard = manager.manager.lock().await;
+    let first = clear_xhttp_h2_xmux_managers(&generation, tokio::time::Instant::now()).await;
+    assert_eq!(first.locked_managers, 1);
+    assert_eq!(cleanup_lock(&generation.managers).len(), 1);
+    drop(guard);
+    let second = clear_xhttp_h2_xmux_managers(
+        &generation,
+        tokio::time::Instant::now() + Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(second.managers, 1);
+    assert_eq!(second.locked_managers, 0);
+    assert!(cleanup_lock(&generation.managers).is_empty());
+}
+
+#[tokio::test]
+async fn cancelling_h2_cleanup_preserves_the_manager_for_retry() {
+    let generation = XhttpH2GenerationManagers::new();
+    let key = cancellation_test_key(1);
+    let manager = XhttpXmuxManagerHandle::new(|lifecycle| {
+        XhttpXmuxH2Manager::new(cancellation_test_plan(1), lifecycle)
+    });
+    generation
+        .managers
+        .lock()
+        .unwrap()
+        .insert(key, manager.clone());
+    let guard = manager.manager.lock().await;
+    let mut cleanup = Box::pin(clear_xhttp_h2_xmux_managers(
+        &generation,
+        tokio::time::Instant::now() + Duration::from_secs(10),
+    ));
+    assert!(futures_util::poll!(&mut cleanup).is_pending());
+    drop(cleanup);
+    assert_eq!(cleanup_lock(&generation.managers).len(), 1);
+    assert!(manager.lifecycle.is_closing());
+    drop(guard);
+    let retry = clear_xhttp_h2_xmux_managers(
+        &generation,
+        tokio::time::Instant::now() + Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(retry.locked_managers, 0);
+    assert!(cleanup_lock(&generation.managers).is_empty());
+}
+
 const XHTTP_XMUX_TEST_OWNER_STACK_BYTES: usize = 1024 * 1024;
 
 fn cancellation_test_key(runtime_generation: u64) -> XhttpXmuxKey {

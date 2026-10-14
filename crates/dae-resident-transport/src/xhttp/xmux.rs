@@ -1,4 +1,5 @@
 use super::*;
+use crate::owner_cleanup::cleanup_lock;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{
@@ -205,14 +206,15 @@ fn xhttp_xmux_generation_owner(
 }
 
 fn unregister_xhttp_xmux_generation_owner(owner: &Arc<XhttpXmuxGenerationOwner>) {
-    if let Some(owners) = XHTTP_XMUX_GENERATION_OWNERS.get()
-        && let Ok(mut owners) = owners.lock()
-        && owners
+    if let Some(owners) = XHTTP_XMUX_GENERATION_OWNERS.get() {
+        let mut owners = cleanup_lock(owners);
+        if owners
             .get(&owner.runtime_generation)
             .and_then(Weak::upgrade)
             .is_some_and(|registered| Arc::ptr_eq(&registered, owner))
-    {
-        owners.remove(&owner.runtime_generation);
+        {
+            owners.remove(&owner.runtime_generation);
+        }
     }
 }
 
@@ -422,12 +424,12 @@ pub fn stop_xhttp_xmux_generation_owner(
     owner: &XhttpXmuxGenerationOwnerHandle,
     grace: Duration,
 ) -> XhttpXmuxClearReport {
-    let already_closing = owner.owner.closing.swap(true, Ordering::AcqRel);
+    owner.owner.closing.store(true, Ordering::Release);
     unregister_xhttp_xmux_generation_owner(&owner.owner);
 
-    let report = if already_closing {
-        XhttpXmuxClearReport::default()
-    } else {
+    // Retry cleanup even after a previous stop timed out. Closing fences new
+    // opens; it does not imply the recorded resources have been reclaimed.
+    let report = {
         let deadline = tokio::time::Instant::now() + grace;
         let (report_tx, report_rx) = std::sync::mpsc::sync_channel(1);
         let task_owner = Arc::clone(&owner.owner);
@@ -451,9 +453,8 @@ pub fn stop_xhttp_xmux_generation_owner(
         }
     };
 
-    if let Ok(mut shutdown) = owner.owner.shutdown.lock()
-        && let Some(shutdown) = shutdown.take()
-    {
+    let shutdown = cleanup_lock(&owner.owner.shutdown).take();
+    if let Some(shutdown) = shutdown {
         let _ = shutdown.send(());
     }
     report
@@ -478,6 +479,22 @@ pub struct XhttpXmuxManagerClearReport {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn poisoned_shutdown_sender_still_stops_owner_and_allows_stop_retry() {
+        let (owner, thread) = start_xhttp_xmux_generation_owner(982_714, 1024 * 1024, 1).unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = owner.owner.shutdown.lock().unwrap();
+            panic!("injected shutdown poison");
+        }));
+        let first = stop_xhttp_xmux_generation_owner(&owner, Duration::from_secs(1));
+        assert!(!first.cleanup_timed_out);
+        thread.join().unwrap();
+        let retry = stop_xhttp_xmux_generation_owner(&owner, Duration::from_millis(20));
+        assert!(owner.owner.closing.load(Ordering::Acquire));
+        assert_eq!(retry.h2.clients + retry.h3.clients, 0);
+        assert!(cleanup_lock(&owner.owner.shutdown).is_none());
+    }
 
     fn xmux_usage(left_requests: i32, unreusable_at: Option<Instant>) -> Arc<XhttpXmuxUsage> {
         Arc::new(XhttpXmuxUsage {

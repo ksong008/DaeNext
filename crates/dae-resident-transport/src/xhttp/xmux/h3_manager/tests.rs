@@ -1,6 +1,35 @@
 use super::super::test_support::{download_test_key, download_test_plan};
 use super::*;
 
+#[tokio::test]
+async fn poisoned_h3_registry_closes_lifecycle_and_preserves_admission_failure() {
+    let generation = XhttpH3GenerationManagers::new();
+    let manager = XhttpXmuxManagerHandle::new(|lifecycle| {
+        XhttpXmuxH3Manager::new(cancellation_test_plan(1), lifecycle)
+    });
+    let opening = manager.lifecycle.reserve_opening().unwrap();
+    generation
+        .managers
+        .lock()
+        .unwrap()
+        .insert(cancellation_test_key(1), manager.clone());
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = generation.managers.lock().unwrap();
+        panic!("injected H3 registry poison");
+    }));
+    let report = clear_xhttp_h3_xmux_managers(
+        &generation,
+        tokio::time::Instant::now() + Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(report.managers, 1);
+    assert_eq!(report.locked_managers, 0);
+    assert!(!opening.is_current());
+    assert!(manager.lifecycle.reserve_opening().is_none());
+    assert!(cleanup_lock(&generation.managers).is_empty());
+    assert!(generation.managers.is_poisoned());
+}
+
 const XHTTP_XMUX_TEST_OWNER_STACK_BYTES: usize = 1024 * 1024;
 
 fn cancellation_test_key(runtime_generation: u64) -> XhttpXmuxKey {

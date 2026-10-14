@@ -33,6 +33,7 @@ mod hysteria2_port_hopping;
 mod juicity_owner;
 mod logical_stream;
 mod meek_transport_owner;
+mod owner_cleanup;
 mod owner_registries;
 mod proxy_handshake;
 mod quic_candidate_race;

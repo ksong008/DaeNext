@@ -15,6 +15,63 @@ use dae_resident_model::ResidentProxyProtocolPlan;
 
 const XHTTP_H3_OWNER_TEST_STACK_BYTES: usize = 1024 * 1024;
 
+#[tokio::test]
+async fn poisoned_endpoint_inventory_still_closes_the_live_quic_driver() {
+    let server_endpoint =
+        dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
+            h3_server_config(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .unwrap();
+    let address = server_endpoint.local_addr().unwrap();
+    let accepting = server_endpoint.clone();
+    let server_task = tokio::spawn(async move {
+        let connection = accepting.accept().await.unwrap().await.unwrap();
+        let closed = connection.clone();
+        let _incoming: server::Connection<h3_quinn::Connection, Bytes> =
+            server::Connection::new(h3_quinn::Connection::new(connection))
+                .await
+                .unwrap();
+        closed.closed().await;
+    });
+    let generation = fastrand::u64(..);
+    let (proxy, endpoint) = xhttp_h3_owner_plan(generation, address);
+    let connection = open_xhttp_h3_connection(
+        &proxy,
+        OwnerGeneration::new(generation),
+        &endpoint,
+        &[address],
+        0,
+        QuicEndpointIdentityRole::XhttpPrimary,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = connection.endpoint.lock().unwrap();
+        panic!("injected endpoint inventory poison");
+    }));
+    assert!(
+        connection
+            .shutdown_until(
+                b"poison test",
+                time::Instant::now() + Duration::from_secs(1)
+            )
+            .await
+    );
+    tokio::time::timeout(Duration::from_secs(1), server_task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        crate::quic_endpoint_metrics_snapshot(generation)["endpointDriverTasks"]["live"],
+        0
+    );
+    server_endpoint.close(0_u32.into(), b"test complete");
+    server_endpoint.wait_idle().await;
+}
+
 fn h3_server_config() -> quinn::ServerConfig {
     let identity = self_signed_tls_identity(&["localhost"]).unwrap();
     boring_quic_server_config(
