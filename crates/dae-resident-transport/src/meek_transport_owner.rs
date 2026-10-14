@@ -300,10 +300,15 @@ impl MeekTransportLease {
         if owner.closing.load(Ordering::Acquire) {
             return;
         }
+        #[cfg(test)]
+        poison_tests::before_recycle_lock();
         let mut idle = match self.pool.idle.lock() {
             Ok(idle) => idle,
             Err(_) => return,
         };
+        if owner.closing.load(Ordering::Acquire) {
+            return;
+        }
         if idle.len() >= owner.resources.idle_connection_limit() {
             owner
                 .metrics

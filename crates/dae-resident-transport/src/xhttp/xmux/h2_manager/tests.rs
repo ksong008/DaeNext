@@ -1,7 +1,7 @@
 use super::super::test_support::{download_test_key, download_test_plan};
 use super::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_h2_registry_closes_connections_and_invalidates_old_openings() {
     let generation = XhttpH2GenerationManagers::new();
     let key = cancellation_test_key(1);
@@ -41,7 +41,7 @@ async fn poisoned_h2_registry_closes_connections_and_invalidates_old_openings() 
     drop(selected);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deferred_h2_close_remains_registered_for_retry() {
     let generation = XhttpH2GenerationManagers::new();
     let key = cancellation_test_key(1);
@@ -68,7 +68,7 @@ async fn deferred_h2_close_remains_registered_for_retry() {
     assert!(cleanup_lock(&generation.managers).is_empty());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelling_h2_cleanup_preserves_the_manager_for_retry() {
     let generation = XhttpH2GenerationManagers::new();
     let key = cancellation_test_key(1);

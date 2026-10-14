@@ -1,7 +1,7 @@
 use super::super::test_support::{download_test_key, download_test_plan};
 use super::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_h3_registry_closes_lifecycle_and_preserves_admission_failure() {
     let generation = XhttpH3GenerationManagers::new();
     let manager = XhttpXmuxManagerHandle::new(|lifecycle| {

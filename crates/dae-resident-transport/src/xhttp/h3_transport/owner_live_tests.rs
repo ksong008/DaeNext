@@ -15,7 +15,7 @@ use dae_resident_model::ResidentProxyProtocolPlan;
 
 const XHTTP_H3_OWNER_TEST_STACK_BYTES: usize = 1024 * 1024;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_endpoint_inventory_still_closes_the_live_quic_driver() {
     let server_endpoint =
         dae_outbound::shared_transport::test_support::boring_quic_server_endpoint(
@@ -25,6 +25,7 @@ async fn poisoned_endpoint_inventory_still_closes_the_live_quic_driver() {
         .unwrap();
     let address = server_endpoint.local_addr().unwrap();
     let accepting = server_endpoint.clone();
+    let (ready_sender, ready) = tokio::sync::oneshot::channel();
     let server_task = tokio::spawn(async move {
         let connection = accepting.accept().await.unwrap().await.unwrap();
         let closed = connection.clone();
@@ -32,6 +33,7 @@ async fn poisoned_endpoint_inventory_still_closes_the_live_quic_driver() {
             server::Connection::new(h3_quinn::Connection::new(connection))
                 .await
                 .unwrap();
+        ready_sender.send(()).unwrap();
         closed.closed().await;
     });
     let generation = fastrand::u64(..);
@@ -48,6 +50,10 @@ async fn poisoned_endpoint_inventory_still_closes_the_live_quic_driver() {
     )
     .await
     .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), ready)
+        .await
+        .unwrap()
+        .unwrap();
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = connection.endpoint.lock().unwrap();
         panic!("injected endpoint inventory poison");

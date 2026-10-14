@@ -10,7 +10,7 @@ fn poison<T>(lock: &Mutex<T>) {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_carrier_inventories_still_abort_tasks_and_wake_managers() {
     let stop = dae_resident_core::ResidentStopSignal::shared();
     let (handle, shutdown) = start_h2_carrier_generation_owner_on(

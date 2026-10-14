@@ -9,7 +9,7 @@ fn poison<T>(lock: &Mutex<T>) {
     assert!(lock.is_poisoned());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_build_registry_rejects_without_spinning_or_leaking_capacity() {
     let stop = dae_resident_core::ResidentStopSignal::shared();
     let (handle, shutdown) = start_vless_mux_generation_owner_on(
@@ -44,7 +44,7 @@ async fn poisoned_build_registry_rejects_without_spinning_or_leaking_capacity() 
     shutdown.await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_mux_inventories_close_existing_physical_and_reap_builds() {
     let stop = dae_resident_core::ResidentStopSignal::shared();
     let (handle, shutdown) = start_vless_mux_generation_owner_on(
@@ -91,11 +91,16 @@ async fn poisoned_mux_inventories_close_existing_physical_and_reap_builds() {
     poison(&owner.pools);
     poison(&owner.builds);
     assert!(select_vless_mux_physical(owner, &pool).is_err());
+    let concurrent_close = {
+        let owner = Arc::clone(owner);
+        tokio::spawn(async move { cleanup_vless_mux_owner(&owner).await })
+    };
     stop.store(true, Ordering::Release);
     time::timeout(std::time::Duration::from_secs(1), shutdown)
         .await
         .unwrap()
         .unwrap();
+    concurrent_close.await.unwrap();
     actor.await.unwrap();
     assert!(build.await.unwrap_err().is_cancelled());
     assert!(physical.closed.load(Ordering::Acquire));
@@ -108,7 +113,77 @@ async fn poisoned_mux_inventories_close_existing_physical_and_reap_builds() {
     assert!(!owner.metrics.shutdown_timed_out.load(Ordering::Relaxed));
 }
 
-fn test_binding(generation: u64) -> plan::ResidentProxyBinding {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn builder_waiting_for_inventory_rechecks_closing_and_releases_capacity() {
+    let stop = dae_resident_core::ResidentStopSignal::shared();
+    let (handle, shutdown) = start_vless_mux_generation_owner_on(
+        &tokio::runtime::Handle::current(),
+        fastrand::u64(..),
+        Arc::clone(&stop),
+        2,
+    )
+    .unwrap();
+    let owner = Arc::clone(&handle.owner);
+    let binding = test_binding(owner.generation.get());
+    let key = VlessMuxTransportKey::for_binding(&binding);
+    let pool = vless_mux_pool(&owner, key).unwrap();
+    let capacity = try_reserve_vless_mux_physical(&owner, &pool).unwrap();
+    let (locked, ready) = std::sync::mpsc::channel();
+    let holder_owner = Arc::clone(&owner);
+    let holder = std::thread::spawn(move || {
+        let _guard = holder_owner.builds.lock().unwrap();
+        locked.send(()).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while !holder_owner.closing.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    });
+    ready
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    let build_owner = Arc::clone(&owner);
+    let build_pool = Arc::clone(&pool);
+    let (entering, entered) = oneshot::channel();
+    let builder = tokio::spawn(async move {
+        entering.send(()).unwrap();
+        build_vless_mux_physical(
+            &build_owner,
+            &build_pool,
+            binding,
+            key,
+            AbsoluteDeadline::from_now(Instant::now(), std::time::Duration::from_secs(2)),
+            capacity,
+        )
+        .await
+    });
+    entered.await.unwrap();
+    stop.store(true, Ordering::Release);
+    let error = time::timeout(std::time::Duration::from_secs(2), builder)
+        .await
+        .unwrap()
+        .unwrap()
+        .err()
+        .unwrap();
+    assert!(error.contains("closed before build"));
+    holder.join().unwrap();
+    shutdown.await.unwrap();
+    assert_eq!(owner.metrics.cumulative_builds.load(Ordering::Relaxed), 0);
+    assert_eq!(owner.metrics.active_builds.load(Ordering::Relaxed), 0);
+    assert_eq!(pool.physical_count.load(Ordering::Relaxed), 0);
+    assert_eq!(owner.metrics.reserved_physical.load(Ordering::Relaxed), 0);
+    assert!(cleanup_lock(&owner.builds).is_empty());
+    assert!(!owner.metrics.shutdown_timed_out.load(Ordering::Relaxed));
+}
+
+pub(crate) fn test_binding(generation: u64) -> plan::ResidentProxyBinding {
+    test_binding_at(generation, "127.0.0.1:1".parse().unwrap())
+}
+
+pub(crate) fn test_binding_at(
+    generation: u64,
+    address: std::net::SocketAddr,
+) -> plan::ResidentProxyBinding {
     let mut proxy = plan::ResidentProxyPlan {
         graph_id: "resident-graph:poison-test".to_owned(),
         graph_link_hash: "sha256:poison-test".to_owned(),
@@ -117,8 +192,8 @@ fn test_binding(generation: u64) -> plan::ResidentProxyBinding {
         group_name: "mux-owner-test".to_owned(),
         group_policy: "fixed".to_owned(),
         node_tag: "mux-owner-node".to_owned(),
-        server_host: "127.0.0.1".to_owned(),
-        server_port: 1,
+        server_host: address.ip().to_string(),
+        server_port: address.port(),
         server_name: "localhost".to_owned(),
         alpn: Vec::new(),
         flow: String::new(),

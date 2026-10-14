@@ -1836,7 +1836,7 @@ async fn cleanup_vless_mux_owner(owner: &Arc<VlessMuxGenerationOwner>) {
 }
 
 #[cfg(test)]
-mod poison_tests;
+pub(crate) mod poison_tests;
 
 #[cfg(test)]
 mod tests {
