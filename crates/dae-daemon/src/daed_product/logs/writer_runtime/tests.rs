@@ -118,7 +118,7 @@ fn writer_segments_keep_exact_recent_entries_and_cursor() {
             )
             .unwrap();
     }
-    assert!(!product_log_segments(&dir).unwrap().is_empty());
+    assert!(!product_log_segments_shared(&dir).unwrap().is_empty());
     let items = list_logs_value(&dir, &state, Some("all"), None, 2_000).unwrap();
     let items = items["items"].as_array().unwrap();
     assert_eq!(items.len(), KEEP as usize);
@@ -221,7 +221,7 @@ fn writer_recovers_interrupted_lifecycle_clear_without_duplicates() {
             })
             .unwrap();
     }
-    assert!(!product_log_segments(&dir).unwrap().is_empty());
+    assert!(!product_log_segments_shared(&dir).unwrap().is_empty());
     LOG_CLEAR_INTERRUPT_AFTER_RENAME.set(true);
     assert!(writer.clear_preserving_lifecycle().is_err());
     drop(writer);
@@ -268,7 +268,7 @@ fn writer_recovers_interrupted_full_clear_before_next_append() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["id"], json!(1));
     assert_eq!(items[0]["message"], json!("after-clear"));
-    assert!(product_log_segments(&dir).unwrap().is_empty());
+    assert!(product_log_segments_shared(&dir).unwrap().is_empty());
     assert!(
         !product_log_file(&dir)
             .with_extension("jsonl.clear.ready")
@@ -442,7 +442,7 @@ fn writer_preserves_sealed_history_after_partial_append_failure() {
     for id in 1..=600 {
         writer.append(request(format!("before-{id}"))).unwrap();
     }
-    assert!(!product_log_segments(&dir).unwrap().is_empty());
+    assert!(!product_log_segments_shared(&dir).unwrap().is_empty());
     LOG_APPEND_PARTIAL_FAILURE.with(|fail| fail.set(true));
     assert_eq!(
         writer
@@ -612,7 +612,7 @@ fn writer_adopts_legacy_single_file_and_preserves_ids_across_rotation() {
     runtime
         .append("error".to_owned(), "new-format", BTreeMap::new(), true)
         .unwrap();
-    assert!(!product_log_segments(&dir).unwrap().is_empty());
+    assert!(!product_log_segments_shared(&dir).unwrap().is_empty());
     let logs = list_logs_value(&dir, &state, Some("all"), None, 2000).unwrap();
     let items = logs["items"].as_array().unwrap();
     assert_eq!(items.len(), 601);
@@ -699,7 +699,7 @@ fn writer_discards_old_segments_after_external_replacement() {
             )
             .unwrap();
     }
-    assert!(!product_log_segments(&dir).unwrap().is_empty());
+    assert!(!product_log_segments_shared(&dir).unwrap().is_empty());
     let path = product_log_file(&dir);
     fs::write(
         &path,
@@ -709,7 +709,7 @@ fn writer_discards_old_segments_after_external_replacement() {
     runtime
         .append("error".to_owned(), "after", BTreeMap::new(), true)
         .unwrap();
-    assert!(product_log_segments(&dir).unwrap().is_empty());
+    assert!(product_log_segments_shared(&dir).unwrap().is_empty());
     let items = list_logs_value(&dir, &state, Some("all"), None, 500).unwrap();
     let items = items["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);

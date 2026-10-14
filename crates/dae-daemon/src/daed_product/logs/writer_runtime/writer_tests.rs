@@ -26,3 +26,12 @@ pub(super) fn write_log_visibility_record(file: &mut fs::File, record: &[u8]) ->
     }
     file.write_all(record)
 }
+
+pub(super) fn interrupt_log_rotation(
+    failure: &'static std::thread::LocalKey<std::cell::Cell<bool>>,
+) -> io::Result<()> {
+    if failure.replace(false) {
+        return Err(io::Error::from_raw_os_error(libc::ENOSPC));
+    }
+    Ok(())
+}

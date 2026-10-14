@@ -48,7 +48,7 @@ pub(crate) fn apply_product_log_limits_without_runtime(
     max_entries: i64,
     max_bytes: i64,
 ) -> io::Result<()> {
-    let mut fallback = fallback::fallback_writers()?;
+    let mut fallback = fallback::fallback_writers();
     fallback.retain(|(path, _)| *path != product_log_file(config_dir));
     if let Some(runtime) = product_log_runtime_for(config_dir) {
         return runtime.apply_limits(max_entries, max_bytes);
@@ -81,7 +81,13 @@ impl ProductLogRuntime {
         config: ProductLogRuntimeConfig,
     ) -> io::Result<Arc<Self>> {
         let policy = ProductLogPolicy::load(state)?;
-        let mut fallback = fallback::fallback_writers()?;
+        let mut fallback = fallback::fallback_writers();
+        if product_log_runtime_for(config_dir).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "product log runtime is already active for this log store",
+            ));
+        }
         fallback.retain(|(path, _)| *path != product_log_file(config_dir));
         let queue = Arc::new(ProductLogQueue::new(config.queue_capacity));
         let metrics = Arc::new(ProductLogRuntimeMetrics::default());

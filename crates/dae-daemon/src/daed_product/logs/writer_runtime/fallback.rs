@@ -7,10 +7,10 @@ const FALLBACK_WRITER_LIMIT: usize = 4;
 static FALLBACK_WRITERS: Mutex<VecDeque<(PathBuf, ProductLogWriter)>> = Mutex::new(VecDeque::new());
 
 pub(super) fn fallback_writers()
--> io::Result<std::sync::MutexGuard<'static, VecDeque<(PathBuf, ProductLogWriter)>>> {
-    FALLBACK_WRITERS
-        .lock()
-        .map_err(|_| io::Error::other("product log fallback writers poisoned"))
+-> std::sync::MutexGuard<'static, VecDeque<(PathBuf, ProductLogWriter)>> {
+    // Reopen stale writers under the retained store lock. Check runtime
+    // ownership again before fallback opens a replacement.
+    log_cache_lock(&FALLBACK_WRITERS)
 }
 
 pub(super) fn append_without_runtime(
@@ -25,7 +25,7 @@ pub(super) fn append_without_runtime(
     if respect_runtime_log_level && !log_level_enabled(&level, &policy.runtime_level) {
         return Ok(());
     }
-    let mut writers = fallback_writers()?;
+    let mut writers = fallback_writers();
     if let Some(runtime) = product_log_runtime_for(config_dir) {
         return runtime.append(level, message, fields, respect_runtime_log_level);
     }

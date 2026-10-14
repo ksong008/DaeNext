@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::PoisonError;
 use std::time::SystemTime;
 
 type SegmentCache = Option<(ProductLogContentVersion, Arc<[ProductLogSegmentFile]>)>;
@@ -36,9 +37,8 @@ pub(super) struct ProductLogStore {
 }
 
 impl ProductLogStore {
-    pub(super) fn invalidate_segments(&self) -> io::Result<()> {
-        log_lock(&self.segment_cache)?.take();
-        Ok(())
+    pub(super) fn invalidate_segments(&self) {
+        log_cache_lock(&self.segment_cache).take();
     }
     pub(super) fn lock(&self) -> io::Result<std::sync::MutexGuard<'_, ()>> {
         log_lock(&self.mutation)
@@ -49,20 +49,19 @@ impl ProductLogStore {
         identity: Option<ProductLogFileIdentity>,
         bytes: u64,
         count: usize,
-    ) -> io::Result<()> {
-        *log_lock(&self.count)? =
+    ) {
+        *log_cache_lock(&self.count) =
             identity.map(|identity| (identity, bytes, count.min(i64::MAX as usize) as i64));
-        Ok(())
     }
 
-    pub(super) fn cached_count(&self, metadata: &fs::Metadata) -> io::Result<Option<i64>> {
-        let value = log_lock(&self.count)?;
-        Ok(value
+    pub(super) fn cached_count(&self, metadata: &fs::Metadata) -> Option<i64> {
+        let value = log_cache_lock(&self.count);
+        value
             .filter(|(identity, bytes, _)| {
                 *identity == ProductLogFileIdentity::from_metadata(metadata)
                     && *bytes == metadata.len()
             })
-            .map(|(_, _, count)| count))
+            .map(|(_, _, count)| count)
     }
 }
 
@@ -73,7 +72,10 @@ pub(super) fn product_log_store(config_dir: &Path) -> io::Result<Arc<ProductLogS
     let path = product_log_dir(config_dir);
     // Canonicalize existing directories so symlink aliases share one writer lock.
     let key = fs::canonicalize(&path).unwrap_or(path);
-    let mut stores = log_lock(STORES.get_or_init(|| Mutex::new(HashMap::new())))?;
+    // Preserve live store identities and their shared mutation locks.
+    let registry = STORES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut stores = registry.lock().unwrap_or_else(PoisonError::into_inner);
+    registry.clear_poison();
     if let Some(store) = stores.get(&key).and_then(std::sync::Weak::upgrade) {
         return Ok(store);
     }
@@ -184,7 +186,8 @@ pub(super) fn with_product_log_snapshot<T>(
     mut scan: impl FnMut(ProductLogSnapshot) -> io::Result<T>,
 ) -> io::Result<T> {
     let store = product_log_store(config_dir)?;
-    let _reader = log_lock(&store.scan)?;
+    // Scans rebuild and validate file identities; this lock only serializes them.
+    let _reader = store.scan.lock().unwrap_or_else(PoisonError::into_inner);
     for _ in 0..3 {
         let (snapshot, directory_version, active_version) = {
             let _guard = store.lock()?;
@@ -255,7 +258,7 @@ pub(super) fn with_product_log_snapshot<T>(
             return result;
         }
         // Discard any partially parsed result and rebuild the directory inventory.
-        *log_lock(&store.segment_cache)? = None;
+        *log_cache_lock(&store.segment_cache) = None;
     }
     Err(io::Error::new(
         io::ErrorKind::WouldBlock,
@@ -276,3 +279,16 @@ pub(super) fn log_lock<T>(mutex: &Mutex<T>) -> io::Result<std::sync::MutexGuard<
         .lock()
         .map_err(|_| io::Error::other("product log lock poisoned"))
 }
+
+// Only derived caches may reset; mutation/visibility locks and inventories may not.
+pub(super) fn log_cache_lock<T: Default>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| {
+        let mut cache = poisoned.into_inner();
+        *cache = T::default();
+        mutex.clear_poison();
+        cache
+    })
+}
+
+#[cfg(test)]
+mod poison_tests;

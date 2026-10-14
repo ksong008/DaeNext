@@ -97,14 +97,20 @@ pub(crate) struct ProductLogSegmentFile {
     pub(super) version: ProductLogContentVersion,
 }
 
+fn log_segment_ids(name: &std::ffi::OsStr) -> Option<(u64, u64)> {
+    let bounds = name
+        .to_str()?
+        .strip_prefix(PRODUCT_LOG_SEGMENT_PREFIX)?
+        .strip_suffix(PRODUCT_LOG_SEGMENT_SUFFIX)?;
+    let (first, last) = bounds.split_once('-')?;
+    let (first, last) = (first.parse().ok()?, last.parse().ok()?);
+    (first <= last).then_some((first, last))
+}
+
 pub(crate) fn product_log_segment_path(config_dir: &Path, first_id: u64, last_id: u64) -> PathBuf {
     product_log_dir(config_dir).join(format!(
         "{PRODUCT_LOG_SEGMENT_PREFIX}{first_id:020}-{last_id:020}{PRODUCT_LOG_SEGMENT_SUFFIX}"
     ))
-}
-
-pub(crate) fn product_log_segments(config_dir: &Path) -> io::Result<Vec<ProductLogSegmentFile>> {
-    Ok(product_log_segments_shared(config_dir)?.to_vec())
 }
 
 pub(crate) fn product_log_segments_shared(
@@ -118,7 +124,7 @@ pub(crate) fn product_log_segments_shared(
         Err(error) => return Err(error),
     };
     let version = ProductLogContentVersion::from_metadata(&metadata);
-    if let Some((cached_version, segments)) = log_lock(&store.segment_cache)?.as_ref()
+    if let Some((cached_version, segments)) = log_cache_lock(&store.segment_cache).as_ref()
         && *cached_version == version
     {
         return Ok(Arc::clone(segments));
@@ -131,21 +137,10 @@ pub(crate) fn product_log_segments_shared(
     let mut segments = Vec::new();
     for entry in entries {
         let entry = entry?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let Some(bounds) = name
-            .strip_prefix(PRODUCT_LOG_SEGMENT_PREFIX)
-            .and_then(|name| name.strip_suffix(PRODUCT_LOG_SEGMENT_SUFFIX))
-        else {
+        let Some((first_id, last_id)) = log_segment_ids(&entry.file_name()) else {
             continue;
         };
-        let Some((first, last)) = bounds.split_once('-') else {
-            continue;
-        };
-        let (Ok(first_id), Ok(last_id)) = (first.parse::<u64>(), last.parse::<u64>()) else {
-            continue;
-        };
-        if first_id > last_id || !entry.file_type()?.is_file() {
+        if !entry.file_type()?.is_file() {
             continue;
         }
         segments.push(ProductLogSegmentFile {
@@ -157,24 +152,24 @@ pub(crate) fn product_log_segments_shared(
     }
     segments.sort_unstable_by_key(|segment| (segment.first_id, segment.last_id));
     let segments: Arc<[ProductLogSegmentFile]> = segments.into();
-    *log_lock(&store.segment_cache)? = Some((version, segments.clone()));
+    *log_cache_lock(&store.segment_cache) = Some((version, segments.clone()));
     Ok(segments)
 }
 
 pub(crate) fn product_log_files(config_dir: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut files: Vec<_> = product_log_segments(config_dir)?
-        .into_iter()
-        .map(|segment| segment.path)
+    let mut files: Vec<_> = product_log_segments_shared(config_dir)?
+        .iter()
+        .map(|segment| segment.path.clone())
         .collect();
     files.push(product_log_file(config_dir));
     Ok(files)
 }
 
 pub(crate) fn remove_product_log_segments(config_dir: &Path) -> io::Result<()> {
-    let segments = product_log_segments(config_dir)?;
-    product_log_store(config_dir)?.invalidate_segments()?;
-    for segment in segments {
-        match fs::remove_file(segment.path) {
+    let segments = product_log_segments_shared(config_dir)?;
+    product_log_store(config_dir)?.invalidate_segments();
+    for segment in segments.iter() {
+        match fs::remove_file(&segment.path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -239,10 +234,7 @@ pub(crate) fn recover_product_log_clear(config_dir: &Path) -> io::Result<()> {
         .open(&install)?;
     set_log_file_permissions(&install)?;
     #[cfg(test)]
-    if LOG_CLEAR_INTERRUPT_DURING_COPY.replace(false) {
-        io::copy(&mut Read::by_ref(&mut input).take(7), &mut output)?;
-        return Err(io::Error::from_raw_os_error(libc::ENOSPC));
-    }
+    interrupt_log_clear_copy(&mut input, &mut output)?;
     io::copy(&mut input, &mut output)?;
     output.sync_all()?;
     drop(output);
@@ -288,7 +280,7 @@ fn clear_log_file_filtered(config_dir: &Path, preserve: bool) -> io::Result<()> 
     ensure_log_dir(config_dir)?;
     let store = product_log_store(config_dir)?;
     let _guard = store.lock()?;
-    store.publish_count(None, 0, 0)?;
+    store.publish_count(None, 0, 0);
     recover_product_log_clear(config_dir)?;
     let first_visible_id = read_log_visibility(config_dir)?.0;
     let tmp_path = log_file.with_extension("jsonl.clear.tmp");
@@ -565,16 +557,13 @@ pub(crate) fn read_last_log_id(path: &Path) -> io::Result<u64> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(err) => return Err(err),
     };
-    for line in data.split(|byte| *byte == b'\n').rev() {
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(line) = std::str::from_utf8(line) else {
-            continue;
-        };
-        if let Some(entry) = parse_log_entry_line(line) {
-            return Ok(entry.id);
-        }
+    if let Some(entry) = data
+        .split(|byte| *byte == b'\n')
+        .rev()
+        .filter_map(|line| std::str::from_utf8(line).ok())
+        .find_map(parse_log_entry_line)
+    {
+        return Ok(entry.id);
     }
     let Some(dir) = path.parent() else {
         return Ok(0);
@@ -587,17 +576,7 @@ pub(crate) fn read_last_log_id(path: &Path) -> io::Result<u64> {
     };
     for entry in entries {
         let entry = entry?;
-        let name = entry.file_name();
-        let Some(bounds) = name
-            .to_str()
-            .and_then(|name| name.strip_prefix(PRODUCT_LOG_SEGMENT_PREFIX))
-            .and_then(|name| name.strip_suffix(PRODUCT_LOG_SEGMENT_SUFFIX))
-        else {
-            continue;
-        };
-        if let Some((_, last)) = bounds.split_once('-')
-            && let Ok(id) = last.parse::<u64>()
-        {
+        if let Some((_, id)) = log_segment_ids(&entry.file_name()) {
             last_id = last_id.max(id);
         }
     }
@@ -645,7 +624,7 @@ pub(crate) fn count_log_file_entries(config_dir: &Path) -> io::Result<i64> {
     {
         let _guard = store.lock()?;
         if let Ok(metadata) = fs::metadata(product_log_file(config_dir))
-            && let Some(count) = store.cached_count(&metadata)?
+            && let Some(count) = store.cached_count(&metadata)
         {
             return Ok(count);
         }

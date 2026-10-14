@@ -20,7 +20,7 @@ impl ProductLogScanCursor {
             Ok(metadata) => Ok(Self {
                 offset: metadata.len(),
                 identity: Some(ProductLogFileIdentity::from_metadata(&metadata)),
-                file_index: product_log_segments(config_dir)?.len(),
+                file_index: product_log_segments_shared(config_dir)?.len(),
             }),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::start()),
             Err(error) => Err(error),

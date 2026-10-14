@@ -133,7 +133,7 @@ impl ProductLogWriter {
         }
         let store = Arc::clone(&self.store);
         let _guard = store.lock()?;
-        store.publish_count(None, 0, 0)?;
+        store.publish_count(None, 0, 0);
         self.ensure_current_file_locked()?;
         if self.size_bytes >= PRODUCT_LOG_SEGMENT_MAX_BYTES
             || self
@@ -236,7 +236,7 @@ impl ProductLogWriter {
         repair_log_file_mode_if_needed(&self.path, &metadata)?;
         let metadata = file.metadata()?;
         let mut segments = VecDeque::new();
-        for segment in product_log_segments(&self.config_dir)? {
+        for segment in product_log_segments_shared(&self.config_dir)?.iter() {
             segments.push_back(ProductLogWriterSegment::scan(
                 &segment.path,
                 Some((segment.first_id, segment.last_id)),
@@ -280,7 +280,7 @@ impl ProductLogWriter {
     }
 
     fn prune_if_over_limit_locked(&mut self) -> io::Result<bool> {
-        self.store.publish_count(None, 0, 0)?;
+        self.store.publish_count(None, 0, 0);
         let max_entries = normalize_log_max_entries(self.policy.max_entries) as usize;
         let max_bytes = normalize_log_max_bytes(self.policy.max_bytes) as u64;
         let visible_byte_limit = max_bytes
@@ -307,7 +307,7 @@ impl ProductLogWriter {
         self.persist_visibility_locked()?;
         set_log_visible_first_id(&self.path, self.first_visible_id)?;
         self.store
-            .publish_count(self.identity, self.size_bytes, self.entry_count)?;
+            .publish_count(self.identity, self.size_bytes, self.entry_count);
         Ok(pruned)
     }
 
@@ -367,7 +367,7 @@ impl ProductLogWriter {
             if front.visible_entries == 0 {
                 if front.sealed_ids.is_some() {
                     self.visible_bytes = self.visible_bytes.saturating_sub(front.visible_bytes);
-                    self.store.invalidate_segments()?;
+                    self.store.invalidate_segments();
                     fs::remove_file(front.path(&self.path))?;
                     self.segments.pop_front();
                     continue;
@@ -410,7 +410,7 @@ impl ProductLogWriter {
                 self.first_visible_id = entry.id.saturating_add(1);
             }
             if front.visible_entries == 0 && front.sealed_ids.is_some() {
-                self.store.invalidate_segments()?;
+                self.store.invalidate_segments();
                 fs::remove_file(path)?;
                 self.segments.pop_front();
             }
@@ -433,7 +433,7 @@ impl ProductLogWriter {
         if front.sealed_ids.is_none() {
             self.file.take();
         }
-        self.store.invalidate_segments()?;
+        self.store.invalidate_segments();
         fs::rename(&tmp_path, &path)?;
         front.size_bytes = front.visible_bytes;
         front.head_offset = 0;
@@ -467,15 +467,13 @@ impl ProductLogWriter {
             ));
         }
         self.file.take();
-        self.store.invalidate_segments()?;
+        self.store.invalidate_segments();
         fs::rename(&self.path, &archived)?;
         // The old inode is now archived. A failure while creating or preparing
         // our replacement must not look like an external replacement on reopen.
         self.identity = None;
         #[cfg(test)]
-        if LOG_ROTATE_AFTER_RENAME_FAILURE.replace(false) {
-            return Err(io::Error::from_raw_os_error(libc::ENOSPC));
-        }
+        interrupt_log_rotation(&LOG_ROTATE_AFTER_RENAME_FAILURE)?;
         if let Some(active) = self.segments.back_mut() {
             active.sealed_ids = Some((active.first_id, active.last_id));
         }
@@ -485,9 +483,7 @@ impl ProductLogWriter {
             .append(true)
             .open(&self.path)?;
         #[cfg(test)]
-        if LOG_ROTATE_AFTER_CREATE_FAILURE.replace(false) {
-            return Err(io::Error::from_raw_os_error(libc::ENOSPC));
-        }
+        interrupt_log_rotation(&LOG_ROTATE_AFTER_CREATE_FAILURE)?;
         self.identity = Some(ProductLogFileIdentity::from_metadata(&file.metadata()?));
         set_log_file_permissions(&self.path)?;
         self.size_bytes = 0;

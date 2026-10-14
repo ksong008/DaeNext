@@ -15,7 +15,7 @@ impl ProductLogWriter {
         let store = Arc::clone(&self.store);
         let result = (|| -> io::Result<()> {
             let _guard = store.lock()?;
-            store.publish_count(None, 0, 0)?;
+            store.publish_count(None, 0, 0);
             self.ensure_current_file_locked()?;
             for request in requests {
                 if request.respect_runtime_log_level

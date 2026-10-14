@@ -77,3 +77,14 @@ fn write_pruned_log_tail(path: &Path, data: &[u8], max_entries: usize) -> io::Re
     }
     writer.flush()
 }
+
+pub(super) fn interrupt_log_clear_copy(
+    input: &mut fs::File,
+    output: &mut fs::File,
+) -> io::Result<()> {
+    if LOG_CLEAR_INTERRUPT_DURING_COPY.replace(false) {
+        io::copy(&mut Read::by_ref(input).take(7), output)?;
+        return Err(io::Error::from_raw_os_error(libc::ENOSPC));
+    }
+    Ok(())
+}

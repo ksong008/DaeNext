@@ -292,7 +292,7 @@ fn snapshot_retries_sealed_segment_replacement() {
     for _ in 0..513 {
         writer.append(request("before")).unwrap();
     }
-    let segment = product_log_segments(&dir).unwrap()[0].path.clone();
+    let segment = product_log_segments_shared(&dir).unwrap()[0].path.clone();
     LOG_READER_AFTER_ENUMERATION.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move || {
             let replacement = segment.with_extension("replacement");
@@ -346,7 +346,7 @@ fn append_batches_preserve_ids_rotation_and_partial_write_rollback() {
             .iter()
             .all(Result::is_ok)
     );
-    assert_eq!(product_log_segments(&dir).unwrap().len(), 1);
+    assert_eq!(product_log_segments_shared(&dir).unwrap().len(), 1);
     LOG_APPEND_PARTIAL_FAILURE.set(true);
     assert!(
         writer

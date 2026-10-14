@@ -18,7 +18,7 @@ pub(super) fn sealed_entries(
         return Ok(None);
     }
     {
-        let mut cache = log_lock(&store.parsed_cache)?;
+        let mut cache = log_cache_lock(&store.parsed_cache);
         if let Some(index) = cache.entries.iter().position(|(key, _)| *key == version) {
             let entry = cache.entries.remove(index).expect("cache index");
             let result = Arc::clone(&entry.1);
@@ -57,7 +57,7 @@ pub(super) fn sealed_entries(
     if retained > 512 * 1024 || entries.len() > 512 {
         return Ok(Some(entries));
     }
-    let mut cache = log_lock(&store.parsed_cache)?;
+    let mut cache = log_cache_lock(&store.parsed_cache);
     if cache.entries.len() == 8 {
         cache.entries.pop_front();
     }
