@@ -78,10 +78,13 @@ impl Default for ProductPprofRuntime {
 impl ProductPprofRuntime {
     pub fn apply_port(&self, requested_port: u16) -> Result<(), String> {
         let old = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| "pprof runtime lock poisoned".to_owned())?;
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                // Closing remains possible; a new listener must not be admitted
+                // while an interrupted replacement has not been reconciled.
+                Err(poisoned) if requested_port == 0 => poisoned.into_inner(),
+                Err(_) => return Err("pprof runtime lock poisoned".to_owned()),
+            };
             if state
                 .listener
                 .as_ref()
@@ -107,8 +110,10 @@ impl ProductPprofRuntime {
     pub fn port(&self) -> u16 {
         self.state
             .lock()
-            .ok()
-            .and_then(|state| state.listener.as_ref().map(|listener| listener.port))
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .listener
+            .as_ref()
+            .map(|listener| listener.port)
             .unwrap_or(0)
     }
 
@@ -118,6 +123,7 @@ impl ProductPprofRuntime {
             "configuredPort": port,
             "effectivePort": port,
             "bound": port != 0,
+            "lockPoisoned": self.state.is_poisoned(),
             "address": if port == 0 { Value::Null } else { json!(format!("127.0.0.1:{port}")) },
             "endpoints": ["/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/profile", "/debug/pprof/symbol"],
         })
@@ -126,9 +132,13 @@ impl ProductPprofRuntime {
 
 impl Drop for ProductPprofRuntime {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.state.lock()
-            && let Some(listener) = state.listener.take()
-        {
+        let listener = self
+            .state
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .listener
+            .take();
+        if let Some(listener) = listener {
             listener.stop();
         }
     }
@@ -198,6 +208,9 @@ fn serve_pprof_connection(mut stream: TcpStream) {
     let _ = stream.write_all(&body);
     let _ = stream.shutdown(Shutdown::Both);
 }
+
+#[cfg(test)]
+mod poison_tests;
 
 #[cfg(test)]
 mod tests {

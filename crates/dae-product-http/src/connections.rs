@@ -49,7 +49,9 @@ impl ProductHttpConnectionRegistry {
             let mut connections = self
                 .connections
                 .lock()
-                .map_err(|_| io::Error::other("HTTP connection registry lock poisoned"))?;
+                // Preserve the socket inventory so poison cannot skip shutdown.
+                // Registration still fails closed on this poisoned mutex.
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             connections
                 .drain()
                 .map(|(_, stream)| stream)
@@ -74,16 +76,17 @@ impl ProductHttpConnectionRegistry {
     }
 
     fn unregister(&self, id: u64) {
-        if let Ok(mut connections) = self.connections.lock() {
-            connections.remove(&id);
-        }
+        self.connections
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&id);
     }
 
     pub fn active_count(&self) -> usize {
         self.connections
             .lock()
-            .map(|connections| connections.len())
-            .unwrap_or(usize::MAX)
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 }
 
@@ -92,6 +95,9 @@ impl Drop for ProductHttpConnectionLease {
         self.registry.unregister(self.id);
     }
 }
+
+#[cfg(test)]
+mod poison_tests;
 
 #[cfg(test)]
 mod tests {
