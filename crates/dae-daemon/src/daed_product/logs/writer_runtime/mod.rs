@@ -12,7 +12,7 @@ mod queue;
 use self::queue::*;
 mod registry;
 pub(crate) use self::registry::product_log_runtime_for;
-use self::registry::{register_product_log_runtime, unregister_product_log_runtime};
+use self::registry::{ensure_product_log_worker_stopped, register_product_log_runtime};
 mod worker;
 use self::worker::*;
 mod writer;
@@ -22,6 +22,8 @@ mod fallback;
 mod recovery_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod worker_lifetime_tests;
 #[cfg(test)]
 pub(crate) use tests::start_product_log_runtime_for_test;
 
@@ -53,6 +55,7 @@ pub(crate) fn apply_product_log_limits_without_runtime(
     if let Some(runtime) = product_log_runtime_for(config_dir) {
         return runtime.apply_limits(max_entries, max_bytes);
     }
+    ensure_product_log_worker_stopped(config_dir)?;
     let mut writer = ProductLogWriter::open(
         config_dir.to_path_buf(),
         ProductLogPolicy {
@@ -82,12 +85,6 @@ impl ProductLogRuntime {
     ) -> io::Result<Arc<Self>> {
         let policy = ProductLogPolicy::load(state)?;
         let mut fallback = fallback::fallback_writers();
-        if product_log_runtime_for(config_dir).is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "product log runtime is already active for this log store",
-            ));
-        }
         fallback.retain(|(path, _)| *path != product_log_file(config_dir));
         let queue = Arc::new(ProductLogQueue::new(config.queue_capacity));
         let metrics = Arc::new(ProductLogRuntimeMetrics::default());
@@ -109,7 +106,7 @@ impl ProductLogRuntime {
             metrics,
             updates,
         });
-        register_product_log_runtime(&runtime)?;
+        register_product_log_runtime(&runtime);
         Ok(runtime)
     }
 
@@ -200,15 +197,10 @@ impl ProductLogRuntime {
             .submit(ProductLogCommand { action, completion }, Duration::ZERO)
             .inspect_err(|_| self.metrics.enqueue_rollback())
     }
-
-    pub(super) fn registry_key(&self) -> &Path {
-        &self.registry_key
-    }
 }
 
 impl Drop for ProductLogRuntime {
     fn drop(&mut self) {
-        unregister_product_log_runtime(self);
         self.queue.close();
         let worker = self
             .worker

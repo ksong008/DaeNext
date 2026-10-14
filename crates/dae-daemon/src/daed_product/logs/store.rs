@@ -75,7 +75,6 @@ pub(super) fn product_log_store(config_dir: &Path) -> io::Result<Arc<ProductLogS
     // Preserve live store identities and their shared mutation locks.
     let registry = STORES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut stores = registry.lock().unwrap_or_else(PoisonError::into_inner);
-    registry.clear_poison();
     if let Some(store) = stores.get(&key).and_then(std::sync::Weak::upgrade) {
         return Ok(store);
     }

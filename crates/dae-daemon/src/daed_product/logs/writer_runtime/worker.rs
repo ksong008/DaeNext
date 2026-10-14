@@ -23,6 +23,7 @@ pub(super) fn start_product_log_worker(
     metrics: Arc<ProductLogRuntimeMetrics>,
     updates: tokio::sync::watch::Sender<u64>,
 ) -> io::Result<ProductLogWorkerHandle> {
+    registry::reserve_product_log_worker(&config_dir, &queue)?;
     let (ready_sender, ready) = mpsc::sync_channel(1);
     let (completed_sender, completed) = mpsc::sync_channel(1);
     let worker_queue = Arc::clone(&queue);
@@ -31,11 +32,11 @@ pub(super) fn start_product_log_worker(
         .stack_size(config.worker_stack_bytes)
         .spawn(move || {
             let _completion = ProductLogWorkerCompletion(completed_sender);
-            let writer = ProductLogWriter::open(config_dir, policy);
-            match writer {
+            // Retain the registry lease until the writer itself has dropped.
+            match ProductLogWriter::open(config_dir, policy) {
                 Ok(writer) => {
                     let _ = ready_sender.send(Ok(()));
-                    run_product_log_worker(writer, worker_queue, metrics, updates);
+                    run_product_log_worker(writer, Arc::clone(&worker_queue), metrics, updates);
                 }
                 Err(error) => {
                     let _ = ready_sender.send(Err(error));

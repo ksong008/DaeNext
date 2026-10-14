@@ -29,6 +29,7 @@ pub(super) fn append_without_runtime(
     if let Some(runtime) = product_log_runtime_for(config_dir) {
         return runtime.append(level, message, fields, respect_runtime_log_level);
     }
+    ensure_product_log_worker_stopped(config_dir)?;
     let path = product_log_file(config_dir);
     let index = writers.iter().position(|(key, _)| *key == path);
     let mut writer = match index.and_then(|index| writers.remove(index)) {

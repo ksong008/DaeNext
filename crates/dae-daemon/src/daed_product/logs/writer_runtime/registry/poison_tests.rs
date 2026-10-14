@@ -16,14 +16,18 @@ fn poisoned_registry_retains_the_runtime_and_segment_history() {
     }
     assert!(!product_log_segments_shared(&dir).unwrap().is_empty());
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = PRODUCT_LOG_RUNTIME_REGISTRY.get().unwrap().lock().unwrap();
+        let _guard = PRODUCT_LOG_RUNTIME_REGISTRY
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         panic!("injected runtime registry poison");
     }));
     assert!(Arc::ptr_eq(
         &product_log_runtime_for(&dir).unwrap(),
         &runtime
     ));
-    assert!(!PRODUCT_LOG_RUNTIME_REGISTRY.get().unwrap().is_poisoned());
+    assert!(PRODUCT_LOG_RUNTIME_REGISTRY.get().unwrap().is_poisoned());
     assert_eq!(
         start_product_log_runtime_for_test(&dir, &state)
             .err()
