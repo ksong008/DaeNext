@@ -139,12 +139,20 @@ impl LatencyJobManager {
     }
 
     pub fn current_value(&self) -> Value {
-        self.current
-            .lock()
-            .ok()
-            .and_then(|current| current.clone())
-            .map(|job| job.to_value())
-            .unwrap_or(Value::Null)
+        let (current, poisoned) = match self.current.lock() {
+            Ok(current) => (current, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
+        };
+        let mut value = current
+            .as_ref()
+            .map_or(Value::Null, LatencyJobRecord::to_value);
+        if poisoned {
+            if value.is_null() {
+                value = json!({});
+            }
+            value["lockPoisoned"] = json!(true);
+        }
+        value
     }
 
     pub fn request_cancel(
@@ -154,7 +162,7 @@ impl LatencyJobManager {
         let mut current = self
             .current
             .lock()
-            .map_err(|_| LatencyJobCancelError::ManagerUnavailable)?;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(job) = current.as_mut() else {
             return Err(LatencyJobCancelError::NoCurrentJob);
         };
@@ -265,9 +273,12 @@ impl LatencyJobManager {
     }
 
     fn update_job(&self, id: u64, update: impl FnOnce(&mut LatencyJobRecord)) {
-        let Ok(mut current) = self.current.lock() else {
-            return;
-        };
+        // Keep the job/token identity for cancellation and terminal accounting.
+        // Poison remains sticky so admission cannot launch a second worker.
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(job) = current.as_mut().filter(|job| job.id == id) else {
             return;
         };
@@ -316,3 +327,6 @@ pub fn cancel_node_latency_job_value(
     let job = jobs.request_cancel(expected_job_id)?;
     Ok(json!({"job": job.to_value()}))
 }
+
+#[cfg(test)]
+mod poison_tests;

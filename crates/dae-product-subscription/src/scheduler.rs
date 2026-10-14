@@ -326,10 +326,13 @@ fn parse_cron_expression(raw: &str) -> Result<Arc<CronExpression>, String> {
     type CronCache = HashMap<String, (Result<Arc<CronExpression>, String>, u64)>;
     static CACHE: OnceLock<Mutex<CronCache>> = OnceLock::new();
     static TICK: AtomicU64 = AtomicU64::new(1);
-    let mut cache = CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .map_err(|_| "subscription cron cache poisoned".to_owned())?;
+    let mutex = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = mutex.lock().unwrap_or_else(|poisoned| {
+        let mut cache = poisoned.into_inner();
+        cache.clear();
+        mutex.clear_poison();
+        cache
+    });
     let tick = TICK.fetch_add(1, Ordering::Relaxed);
     if let Some((value, used)) = cache.get_mut(raw) {
         *used = tick;
@@ -644,9 +647,7 @@ pub fn notify_subscription_scheduler() {
     let Some(registry) = SCHEDULER_WAKE.get() else {
         return;
     };
-    let Ok(registry) = registry.lock() else {
-        return;
-    };
+    let registry = scheduler_registry_guard(registry);
     if let Some((_, sender)) = registry.as_ref() {
         let _ = sender.send(SchedulerCommand::Wake);
     }
@@ -654,9 +655,7 @@ pub fn notify_subscription_scheduler() {
 
 fn register_scheduler(id: u64, sender: Sender<SchedulerCommand>) -> io::Result<()> {
     let registry = SCHEDULER_WAKE.get_or_init(|| Mutex::new(None));
-    let mut registry = registry
-        .lock()
-        .map_err(|_| io::Error::other("subscription scheduler registry lock poisoned"))?;
+    let mut registry = scheduler_registry_guard(registry);
     if registry.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -671,12 +670,22 @@ fn unregister_scheduler(id: u64) {
     let Some(registry) = SCHEDULER_WAKE.get() else {
         return;
     };
-    let Ok(mut registry) = registry.lock() else {
-        return;
-    };
+    let mut registry = scheduler_registry_guard(registry);
     if registry.as_ref().is_some_and(|(current, _)| *current == id) {
         *registry = None;
     }
+}
+
+fn scheduler_registry_guard(
+    mutex: &Mutex<Option<(u64, Sender<SchedulerCommand>)>>,
+) -> std::sync::MutexGuard<'_, Option<(u64, Sender<SchedulerCommand>)>> {
+    let registry = mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Retain the live sender and ID: poison must not admit a second scheduler
+    // or prevent the original handle from unregistering on stop.
+    mutex.clear_poison();
+    registry
 }
 
 fn run_subscription_scheduler<C: SubscriptionSchedulerCallbacks + 'static>(
@@ -926,6 +935,25 @@ mod tests {
     use dae_product_core::product_iso8601_utc;
     use dae_product_persistence::{ensure_state_schema, open_state_connection};
     use rusqlite::params;
+
+    #[test]
+    fn poisoned_scheduler_registry_retains_sender_identity() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let registry = Mutex::new(Some((17, sender)));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = registry.lock().unwrap();
+            panic!("injected scheduler poison");
+        }));
+        let guard = scheduler_registry_guard(&registry);
+        let (id, sender) = guard.as_ref().unwrap();
+        assert_eq!(*id, 17);
+        sender.send(SchedulerCommand::Wake).unwrap();
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            SchedulerCommand::Wake
+        ));
+        assert!(!registry.is_poisoned());
+    }
 
     #[test]
     fn subscription_cron_due_since_matches_default_schedule() {

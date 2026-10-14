@@ -37,10 +37,7 @@ impl LatencyPersistenceQueue {
                 "selected-state latency results cannot enter the retry queue",
             ));
         }
-        let mut pending = self
-            .pending
-            .lock()
-            .map_err(|_| io::Error::other("latency persistence queue lock poisoned"))?;
+        let mut pending = self.pending_guard();
         for result in results {
             pending.insert(result.node_id, result.clone());
         }
@@ -79,27 +76,30 @@ impl LatencyPersistenceQueue {
     }
 
     pub fn pending_count(&self) -> usize {
-        self.pending
-            .lock()
-            .map(|pending| pending.len())
-            .unwrap_or(0)
+        self.pending_guard().len()
     }
 
     fn take_pending(&self) -> io::Result<BTreeMap<i64, NodeLatencyWrite>> {
-        let mut pending = self
-            .pending
-            .lock()
-            .map_err(|_| io::Error::other("latency persistence queue lock poisoned"))?;
+        let mut pending = self.pending_guard();
         Ok(std::mem::take(&mut *pending))
     }
 
     fn restore_pending(&self, queued: Vec<NodeLatencyWrite>) {
-        let Ok(mut pending) = self.pending.lock() else {
-            return;
-        };
+        let mut pending = self.pending_guard();
         for result in queued {
             pending.entry(result.node_id).or_insert(result);
         }
+    }
+
+    fn pending_guard(&self) -> std::sync::MutexGuard<'_, BTreeMap<i64, NodeLatencyWrite>> {
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // These are unwritten results, not a disposable cache. Map mutations
+        // preserve complete values; DB generation/link fences still run at flush.
+        self.pending.clear_poison();
+        pending
     }
 }
 
@@ -218,6 +218,38 @@ mod tests {
     use std::sync::Arc;
 
     use dae_product_persistence::ensure_state_schema;
+
+    #[test]
+    fn poisoned_pending_results_survive_failed_flush_and_newer_results_win() {
+        let queue = LatencyPersistenceQueue::default();
+        let result = |node_id, latency_ms| NodeLatencyWrite {
+            node_id,
+            latency_ms: Some(latency_ms),
+            node_link: format!("socks://127.0.0.1:1080#{node_id}"),
+            probe_generation: None,
+            desired_state_revision: None,
+            alive: true,
+            tested_at: "now".to_owned(),
+            message: None,
+        };
+        queue.queue(&[result(1, 100), result(2, 200)]).unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = queue.pending.lock().unwrap();
+            panic!("injected persistence poison");
+        }));
+        assert_eq!(queue.pending_count(), 2);
+        assert!(!queue.pending.is_poisoned());
+        let fixture = FreshProductState::new("poison-persistence");
+        let failed = queue.flush(&fixture.root);
+        assert!(failed.error.is_some());
+        assert_eq!(failed.pending, 2);
+        let old = queue.take_pending().unwrap().into_values().collect();
+        queue.queue(&[result(1, 10)]).unwrap();
+        queue.restore_pending(old);
+        let pending = queue.take_pending().unwrap();
+        assert_eq!(pending[&1].latency_ms, Some(10));
+        assert_eq!(pending[&2].latency_ms, Some(200));
+    }
 
     struct FreshProductState {
         root: PathBuf,
