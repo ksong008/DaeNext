@@ -19,7 +19,7 @@
     },
     "dae-product-http": {
       "production": 3387,
-      "tests": 0
+      "tests": 83
     },
     "dae-product-persistence": {
       "production": 2364,
@@ -31,11 +31,11 @@
     },
     "dae-product-subscription": {
       "production": 7800,
-      "tests": 0
+      "tests": 35
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 22170
+      "tests": 22366
     },
     "dae-outbound": {
       "production": 9255,
@@ -59,7 +59,7 @@
     },
     "dae-resident-transport": {
       "production": 35875,
-      "tests": 6512
+      "tests": 7006
     },
     "dae-resident-tcp": {
       "production": 14295,
@@ -71,7 +71,7 @@
     },
     "dae-resident-dns": {
       "production": 20904,
-      "tests": 2800
+      "tests": 2923
     }
   },
   "counting": "production means non-test-named Rust LOC, including inline tests, comments and blanks; overlapping subtrees are not summed",
@@ -80,7 +80,7 @@
   "subtrees": {
     "crates/dae-daemon/src/daed_product": {
       "production": 20300,
-      "tests": 17304
+      "tests": 17500
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,
