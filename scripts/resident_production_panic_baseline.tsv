@@ -17,7 +17,6 @@ crates/dae-resident-tcp/src/vless_relay/vision_duplex/driver.rs	1	InternalInvari
 crates/dae-resident-transport/src/anytls_owner.rs	1	InternalInvariant	Static AnyTLS owner identity namespace is valid.
 crates/dae-resident-transport/src/dns_request/bytes.rs	2	InternalInvariant	Move-only DNS byte owners retain their admitted permit and payload until consumption.
 crates/dae-resident-transport/src/hysteria2_owner.rs	4	InternalInvariant	Validated owner limits and queued messages remain present during one owner turn.
-crates/dae-resident-transport/src/hysteria2_port_hopping.rs	10	InternalInvariant	Port-hopping state locks can only be poisoned by an internal task panic.
 crates/dae-resident-transport/src/juicity_owner.rs	1	InternalInvariant	An elected Juicity build has a queued waiter.
 crates/dae-resident-transport/src/meek_transport_owner.rs	1	InternalInvariant	A live Meek lease owns its physical connection.
 crates/dae-resident-transport/src/quic_endpoint.rs	2	InternalInvariant	Validated resource profiles use nonzero QUIC limits.
@@ -31,7 +30,6 @@ crates/dae-resident-transport/src/transport_identity.rs	1	InternalInvariant	Stat
 crates/dae-resident-transport/src/tuic_owner.rs	3	InternalInvariant	Validated TUIC owner state retains limits and queued messages during one owner turn.
 crates/dae-resident-transport/src/websocket/duplex_control.rs	2	InternalInvariant	Queued WebSocket control frames retain their active frame state.
 crates/dae-resident-transport/src/xhttp/client_io.rs	4	InternalInvariant	Successful poll_ready installs Ready under the same exclusive borrow; peer errors return before ready_mut.
-crates/dae-resident-transport/src/xhttp/h1/pool.rs	3	InternalInvariant	Idle pool locks guard local push/pop/expiry only and can only be poisoned by an internal task panic.
 crates/dae-resident-transport/src/xhttp/response.rs	1	InternalInvariant	Successful poll_ready installs Ready under the same exclusive borrow; no state change or await occurs before ready_mut.
 crates/dae-resident-transport/src/xhttp/xmux/h2_manager.rs	2	InternalInvariant	An admitted H2 xmux lease owns its selected client and permit.
 crates/dae-resident-transport/src/xhttp/xmux/h3_manager.rs	2	InternalInvariant	An admitted H3 xmux lease owns its selected client and permit.

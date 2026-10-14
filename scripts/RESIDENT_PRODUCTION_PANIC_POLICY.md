@@ -13,6 +13,9 @@ policy explicitly.
 
 The gate rejects new diagnostics, budget increases, malformed entries, missing
 source files, and baseline entries that no longer correspond to a diagnostic.
+Remove an entry when its production panic sites are eliminated. Hysteria2
+port-hopping state and the xHTTP H1 idle pool now recover poisoned state;
+neither retains an approved production panic budget.
 The current focused gate covers resident production targets and the two
 Clippy panic lints. The workspace release gate separately runs all-target
 Clippy; additional panic classes must be introduced with an audited baseline,

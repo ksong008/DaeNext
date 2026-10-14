@@ -52,7 +52,7 @@ impl ResidentDnsUdpActorPool {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "dns-runtime-tests"))]
     pub(super) fn poison_for_test(&self) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = self.runtime.lock().unwrap();
