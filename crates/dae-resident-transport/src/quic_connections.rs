@@ -2,12 +2,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dae_outbound_quic::hysteria2::{
-    Hysteria2CongestionRuntime, build_hysteria2_runtime_client_config_with_session_cache,
-};
-use dae_outbound_quic::tuic::{
-    TuicCongestionController, build_tuic_runtime_client_config_with_session_cache,
-};
+use dae_outbound_quic::hysteria2::Hysteria2CongestionRuntime;
+use dae_outbound_quic::tuic::TuicCongestionController;
 use dae_resident_core::Hysteria2OwnerResourceProfile;
 use dae_resident_model::{ResidentHysteria2ObfsPlan, ResidentProxyBinding, ResidentProxyPlan};
 use dae_runtime_control::OwnerGeneration;
@@ -114,11 +110,12 @@ pub(crate) async fn open_hysteria2_quic_connection_candidates_async(
             "select Hysteria2 initial remote failed",
         ))
     })?;
-    let client_config = build_hysteria2_runtime_client_config_with_session_cache(
+    let client_config = dae_outbound_quic::hysteria2::tls::build_hysteria2_runtime_client_config_with_receive_budget(
         tls_identity,
         obfs.udp_packet_overhead(),
         Some(congestion),
         session_cache,
+        quic_receive_budget(),
     )
     .map_err(|_| {
         Hysteria2ConnectionFailure::without_endpoint(Hysteria2Failure::new(
@@ -250,11 +247,12 @@ pub(crate) async fn open_tuic_quic_connection_candidates_async(
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
     let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
-    let client_config = build_tuic_runtime_client_config_with_session_cache(
+    let client_config = dae_outbound_quic::tuic::tls::build_tuic_client_config_with_receive_budget(
         alpn,
         allow_insecure,
         congestion,
         session_cache,
+        quic_receive_budget(),
     )
     .map_err(|err| format!("build TUIC QUIC client config: {err}"))?;
     let endpoint_context = quic_endpoint_context_for_proxy(
@@ -304,11 +302,12 @@ pub(crate) async fn open_juicity_quic_connection_candidates_async(
 ) -> Result<ResidentConnectedQuicEndpoint, String> {
     let proxy = binding.plan();
     let candidates = resolve_proxy_udp_addr_candidates_async(proxy, deadline).await?;
-    let client_config = dae_outbound_quic::juicity::build_juicity_runtime_client_config_with_congestion_and_session_cache(
+    let client_config = dae_outbound_quic::juicity::runtime::build_juicity_runtime_client_config_with_receive_budget(
         allow_insecure,
         pinned_certchain_sha256,
         congestion,
         session_cache,
+        quic_receive_budget(),
     )
     .map_err(|err| format!("build Juicity QUIC client config: {err}"))?;
     let endpoint_context = quic_endpoint_context_for_proxy(
@@ -374,5 +373,15 @@ mod tests {
         assert!(!deadline.allows_candidate_retry());
         assert!(!draining.allows_candidate_retry());
         assert!(!resource.allows_candidate_retry());
+    }
+}
+
+fn quic_receive_budget() -> dae_outbound_quic::receive_budget::QuicReceiveBudget {
+    use dae_outbound_quic::receive_budget::QuicReceiveBudget;
+    use dae_resident_core::{ResidentRuntimeProfile, ResidentRuntimeProfileSelection};
+    match ResidentRuntimeProfileSelection::selected().profile {
+        ResidentRuntimeProfile::LowMemory => QuicReceiveBudget::LowMemory,
+        ResidentRuntimeProfile::Balanced => QuicReceiveBudget::Balanced,
+        ResidentRuntimeProfile::HighPerformance => QuicReceiveBudget::HighPerformance,
     }
 }

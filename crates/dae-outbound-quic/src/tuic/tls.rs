@@ -8,6 +8,8 @@ pub const DEFAULT_TUIC_ALPN: &str = "h3";
 pub const DEFAULT_TUIC_SERVER_NAME: &str = "localhost";
 pub const DEFAULT_TUIC_KEEPALIVE_SECS: u64 = 3;
 pub const DEFAULT_TUIC_HANDSHAKE_IDLE_TIMEOUT_SECS: u64 = 8;
+// Handshake attempts are bounded separately by the caller deadline.
+pub const DEFAULT_TUIC_MAX_IDLE_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_TUIC_INITIAL_STREAM_RECEIVE_WINDOW: u64 = 2 * 1024 * 1024;
 pub const DEFAULT_TUIC_MAX_STREAM_RECEIVE_WINDOW: u64 = 32 * 1024 * 1024;
 pub const DEFAULT_TUIC_INITIAL_CONNECTION_RECEIVE_WINDOW: u64 = 32 * 1024 * 1024;
@@ -52,7 +54,25 @@ pub fn build_tuic_client_config_with_session_cache(
     congestion: TuicCongestionController,
     session_cache: Option<crate::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let transport = Arc::new(tuic_transport_config(Some(congestion))?);
+    build_tuic_client_config_with_receive_budget(
+        alpn,
+        allow_insecure,
+        congestion,
+        session_cache,
+        crate::receive_budget::QuicReceiveBudget::default(),
+    )
+}
+
+pub fn build_tuic_client_config_with_receive_budget(
+    alpn: &[String],
+    allow_insecure: bool,
+    congestion: TuicCongestionController,
+    session_cache: Option<crate::boring_quic::BoringQuicSessionCache>,
+    receive_budget: crate::receive_budget::QuicReceiveBudget,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let mut transport = tuic_transport_config(Some(congestion))?;
+    receive_budget.apply(&mut transport);
+    let transport = Arc::new(transport);
     let policy = crate::boring_quic::BoringQuicClientPolicy::new(alpn_protocols(alpn))?
         .allow_insecure(allow_insecure)
         .zero_rtt(false);
@@ -86,16 +106,17 @@ fn alpn_protocols(alpn: &[String]) -> Vec<Vec<u8>> {
         .collect()
 }
 
-fn tuic_transport_config(
+pub(crate) fn tuic_transport_config(
     congestion: Option<TuicCongestionController>,
 ) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
+    crate::receive_budget::QuicReceiveBudget::default().apply(&mut transport);
     if let Some(congestion) = congestion {
         congestion.install(&mut transport);
     }
     transport.keep_alive_interval(Some(Duration::from_secs(DEFAULT_TUIC_KEEPALIVE_SECS)));
     transport.max_idle_timeout(Some(
-        Duration::from_secs(DEFAULT_TUIC_HANDSHAKE_IDLE_TIMEOUT_SECS)
+        Duration::from_secs(DEFAULT_TUIC_MAX_IDLE_TIMEOUT_SECS)
             .try_into()
             .map_err(|err| bad_tls(format!("TUIC idle timeout config: {err}")))?,
     ));

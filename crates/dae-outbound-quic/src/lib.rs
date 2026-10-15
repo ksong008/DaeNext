@@ -4,6 +4,7 @@ pub mod hysteria2;
 pub mod juicity;
 #[cfg(any(test, feature = "test-support"))]
 pub mod quic_h3;
+pub mod receive_budget;
 pub mod system_ca;
 pub mod tuic;
 
@@ -27,3 +28,6 @@ pub use congestion::{QuicCongestionController, QuicCongestionControllerError};
 
 #[cfg(test)]
 mod datagram_tests;
+
+#[cfg(test)]
+mod receive_budget_tests;

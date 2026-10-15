@@ -8,9 +8,10 @@ use dae_outbound_core::error::OutboundError;
 use dae_outbound_core::trojan::{TrojanMetadata, TrojanNetwork};
 
 use super::auth_stream::build_authenticate_header;
-use super::contract::{
-    RUNTIME_ALPN, RUNTIME_HANDSHAKE_IDLE_TIMEOUT_SECONDS, RUNTIME_KEEPALIVE_SECONDS,
-};
+use super::contract::{RUNTIME_ALPN, RUNTIME_KEEPALIVE_SECONDS};
+
+// A connect attempt has its own caller deadline; this governs the live carrier.
+const RUNTIME_MAX_IDLE_TIMEOUT_SECONDS: u64 = 30;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JuicityAuthReport {
@@ -78,7 +79,25 @@ pub fn build_juicity_runtime_client_config_with_congestion_and_session_cache(
     congestion: QuicCongestionController,
     session_cache: Option<crate::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let transport = Arc::new(transport_config(congestion)?);
+    build_juicity_runtime_client_config_with_receive_budget(
+        allow_insecure,
+        pinned_certchain_sha256,
+        congestion,
+        session_cache,
+        crate::receive_budget::QuicReceiveBudget::default(),
+    )
+}
+
+pub fn build_juicity_runtime_client_config_with_receive_budget(
+    allow_insecure: bool,
+    pinned_certchain_sha256: &str,
+    congestion: QuicCongestionController,
+    session_cache: Option<crate::boring_quic::BoringQuicSessionCache>,
+    receive_budget: crate::receive_budget::QuicReceiveBudget,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let mut transport = transport_config(congestion)?;
+    receive_budget.apply(&mut transport);
+    let transport = Arc::new(transport);
     let mut policy = crate::boring_quic::BoringQuicClientPolicy::new([RUNTIME_ALPN.as_bytes()])?
         .allow_insecure(allow_insecure)
         .zero_rtt(false);
@@ -151,16 +170,17 @@ pub fn build_juicity_tcp_request(
     Ok(request)
 }
 
-fn transport_config(
+pub(crate) fn transport_config(
     congestion: QuicCongestionController,
 ) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
+    crate::receive_budget::QuicReceiveBudget::default().apply(&mut transport);
     congestion.install(&mut transport);
     transport.keep_alive_interval(Some(Duration::from_secs(RUNTIME_KEEPALIVE_SECONDS)));
     transport.max_idle_timeout(Some(
-        Duration::from_secs(RUNTIME_HANDSHAKE_IDLE_TIMEOUT_SECONDS)
+        Duration::from_secs(RUNTIME_MAX_IDLE_TIMEOUT_SECONDS)
             .try_into()
-            .map_err(|err| bad_runtime(format!("h3 idle timeout config: {err}")))?,
+            .map_err(|err| bad_runtime(format!("Juicity idle timeout config: {err}")))?,
     ));
     transport.datagram_receive_buffer_size(None);
     transport.datagram_send_buffer_size(0);

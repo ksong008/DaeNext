@@ -63,10 +63,25 @@ pub fn build_hysteria2_runtime_client_config_with_session_cache(
     congestion: Option<Arc<Hysteria2CongestionRuntime>>,
     session_cache: Option<crate::boring_quic::BoringQuicSessionCache>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
-    let transport = Arc::new(hysteria2_transport_config(
+    build_hysteria2_runtime_client_config_with_receive_budget(
+        identity,
         udp_packet_overhead,
-        congestion.clone(),
-    )?);
+        congestion,
+        session_cache,
+        crate::receive_budget::QuicReceiveBudget::default(),
+    )
+}
+
+pub fn build_hysteria2_runtime_client_config_with_receive_budget(
+    identity: &Hysteria2TlsIdentity,
+    udp_packet_overhead: usize,
+    congestion: Option<Arc<Hysteria2CongestionRuntime>>,
+    session_cache: Option<crate::boring_quic::BoringQuicSessionCache>,
+    receive_budget: crate::receive_budget::QuicReceiveBudget,
+) -> Result<quinn::ClientConfig, OutboundError> {
+    let mut transport = hysteria2_transport_config(udp_packet_overhead, congestion.clone())?;
+    receive_budget.apply(&mut transport);
+    let transport = Arc::new(transport);
     let mut policy = crate::boring_quic::BoringQuicClientPolicy::new([identity
         .application_protocol()
         .wire_value()
@@ -117,11 +132,12 @@ pub fn selected_alpn(connection: &quinn::Connection) -> String {
         .unwrap_or_default()
 }
 
-fn hysteria2_transport_config(
+pub(crate) fn hysteria2_transport_config(
     udp_packet_overhead: usize,
     congestion: Option<Arc<Hysteria2CongestionRuntime>>,
 ) -> Result<quinn::TransportConfig, OutboundError> {
     let mut transport = quinn::TransportConfig::default();
+    crate::receive_budget::QuicReceiveBudget::default().apply(&mut transport);
     transport.keep_alive_interval(Some(Duration::from_secs(DEFAULT_HYSTERIA2_KEEPALIVE_SECS)));
     transport.max_idle_timeout(Some(
         Duration::from_secs(DEFAULT_HYSTERIA2_MAX_IDLE_TIMEOUT_SECS)
