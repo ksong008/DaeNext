@@ -140,7 +140,31 @@ impl quinn::Runtime for Hysteria2SalamanderRuntime {
         &self,
         t: std::net::UdpSocket,
     ) -> io::Result<Arc<dyn quinn::AsyncUdpSocket>> {
+        // Quinn enables GRO while wrapping. Disable it afterwards because this
+        // adapter decodes one salt per datagram and advertises one segment.
+        #[cfg(target_os = "linux")]
+        let socket = t.try_clone()?;
         let inner = self.inner.wrap_udp_socket(t)?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            let disabled: libc::c_int = 0;
+            let result = unsafe {
+                libc::setsockopt(
+                    socket.as_raw_fd(),
+                    libc::SOL_UDP,
+                    libc::UDP_GRO,
+                    (&disabled as *const libc::c_int).cast(),
+                    std::mem::size_of_val(&disabled) as libc::socklen_t,
+                )
+            };
+            if result != 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ENOPROTOOPT) {
+                    return Err(error);
+                }
+            }
+        }
         Ok(Arc::new(Hysteria2SalamanderUdpSocket {
             inner,
             key: Arc::clone(&self.key),
@@ -1146,3 +1170,7 @@ mod tests {
 #[cfg(test)]
 #[path = "quic_helpers_port_hopping_tests.rs"]
 mod port_hopping_live_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "quic_transport_gro_tests.rs"]
+mod gro_tests;

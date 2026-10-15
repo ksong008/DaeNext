@@ -59,7 +59,7 @@
     },
     "dae-resident-transport": {
       "production": 35875,
-      "tests": 7259
+      "tests": 7336
     },
     "dae-resident-tcp": {
       "production": 14295,
