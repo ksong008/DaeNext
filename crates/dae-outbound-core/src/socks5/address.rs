@@ -204,6 +204,21 @@ fn split_host_port(input: &str) -> Result<(&str, u16), OutboundError> {
     Ok((host, port))
 }
 
+impl From<SocketAddr> for Socks5Address {
+    fn from(address: SocketAddr) -> Self {
+        match address {
+            SocketAddr::V4(address) => Self::Ipv4 {
+                addr: *address.ip(),
+                port: address.port(),
+            },
+            SocketAddr::V6(address) => Self::Ipv6 {
+                addr: *address.ip(),
+                port: address.port(),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,21 +231,6 @@ mod tests {
             let (decoded, consumed) = Socks5Address::decode(&encoded).unwrap();
             assert_eq!(decoded, address);
             assert_eq!(consumed, encoded.len());
-        }
-    }
-}
-
-impl From<SocketAddr> for Socks5Address {
-    fn from(address: SocketAddr) -> Self {
-        match address {
-            SocketAddr::V4(address) => Self::Ipv4 {
-                addr: *address.ip(),
-                port: address.port(),
-            },
-            SocketAddr::V6(address) => Self::Ipv6 {
-                addr: *address.ip(),
-                port: address.port(),
-            },
         }
     }
 }

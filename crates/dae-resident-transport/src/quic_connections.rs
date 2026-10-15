@@ -343,6 +343,16 @@ pub(crate) async fn open_juicity_quic_connection_candidates_async(
     })
 }
 
+fn quic_receive_budget() -> dae_outbound_quic::receive_budget::QuicReceiveBudget {
+    use dae_outbound_quic::receive_budget::QuicReceiveBudget;
+    use dae_resident_core::{ResidentRuntimeProfile, ResidentRuntimeProfileSelection};
+    match ResidentRuntimeProfileSelection::selected().profile {
+        ResidentRuntimeProfile::LowMemory => QuicReceiveBudget::LowMemory,
+        ResidentRuntimeProfile::Balanced => QuicReceiveBudget::Balanced,
+        ResidentRuntimeProfile::HighPerformance => QuicReceiveBudget::HighPerformance,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,15 +383,5 @@ mod tests {
         assert!(!deadline.allows_candidate_retry());
         assert!(!draining.allows_candidate_retry());
         assert!(!resource.allows_candidate_retry());
-    }
-}
-
-fn quic_receive_budget() -> dae_outbound_quic::receive_budget::QuicReceiveBudget {
-    use dae_outbound_quic::receive_budget::QuicReceiveBudget;
-    use dae_resident_core::{ResidentRuntimeProfile, ResidentRuntimeProfileSelection};
-    match ResidentRuntimeProfileSelection::selected().profile {
-        ResidentRuntimeProfile::LowMemory => QuicReceiveBudget::LowMemory,
-        ResidentRuntimeProfile::Balanced => QuicReceiveBudget::Balanced,
-        ResidentRuntimeProfile::HighPerformance => QuicReceiveBudget::HighPerformance,
     }
 }
