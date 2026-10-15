@@ -43,7 +43,7 @@
     },
     "dae-outbound-core": {
       "production": 14473,
-      "tests": 149
+      "tests": 172
     },
     "dae-outbound-quic": {
       "production": 5898,
@@ -51,7 +51,7 @@
     },
     "dae-outbound-stream": {
       "production": 26000,
-      "tests": 207
+      "tests": 245
     },
     "dae-resident-dataplane": {
       "production": 33363,
@@ -67,7 +67,7 @@
     },
     "dae-resident-udp": {
       "production": 12946,
-      "tests": 1850
+      "tests": 1865
     },
     "dae-resident-dns": {
       "production": 20904,

@@ -261,6 +261,7 @@ pub(super) async fn open_marked_tokio_udp_socket(
         set_socket_mark(socket.as_raw_fd(), mark)
             .map_err(|err| format!("set UDP relay SO_MARK {mark}: {err}"))?;
     }
+    apply_resident_udp_socket_buffer_tuning(&socket);
     socket
         .set_nonblocking(true)
         .map_err(|err| format!("set UDP relay socket nonblocking: {err}"))?;

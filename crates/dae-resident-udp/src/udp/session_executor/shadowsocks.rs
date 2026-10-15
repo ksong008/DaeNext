@@ -9,21 +9,13 @@ const WIRE_RANDOM_POOL_REFILL_BYTES: usize = 512;
 // SOCKS/SS carries IP bytes and a port, never an interface scope or flow label.
 // In particular, do not stringify scoped IPv6 into a bogus domain address.
 fn shadowsocks_udp_target(original_dst: SocketAddr) -> Socks5Address {
-    match original_dst {
-        SocketAddr::V4(address) => Socks5Address::Ipv4 {
-            addr: *address.ip(),
-            port: address.port(),
-        },
-        SocketAddr::V6(address) => Socks5Address::Ipv6 {
-            addr: *address.ip(),
-            port: address.port(),
-        },
-    }
+    original_dst.into()
 }
 
 pub(in crate::udp) struct ShadowsocksAeadDatagramSession {
     codec: Result<AeadUdpCodec, String>,
     salt_len: usize,
+    request: Vec<u8>,
     relay: DatagramRelay,
     // See `Shadowsocks2022DatagramSession`: UDP salts are wire-visible and
     // feed the AEAD subkey derivation, so they must come from a CSPRNG.
@@ -35,6 +27,7 @@ impl ShadowsocksAeadDatagramSession {
         Self {
             codec: AeadUdpCodec::new(&cipher, &password).map_err(|error| error.to_string()),
             salt_len,
+            request: Vec::new(),
             relay: DatagramRelay::default(),
             random_pool: dae_resident_core::WireRandomPool::default(),
         }
@@ -56,10 +49,12 @@ impl ShadowsocksAeadDatagramSession {
             .fill(salt)
             .map_err(|error| format!("generate Shadowsocks UDP wire randomness: {error}"))?;
         let target = shadowsocks_udp_target(original_dst);
-        let request = codec
-            .encode_packet(salt, &target, payload)
+        codec
+            .encode_packet_into(salt, &target, payload, &mut self.request)
             .map_err(|err| format!("encode Shadowsocks UDP packet: {err}"))?;
-        self.relay.send(binding, &request, "Shadowsocks").await?;
+        self.relay
+            .send(binding, &self.request, "Shadowsocks")
+            .await?;
         if let Some(response) = self.poll_response()? {
             return Ok(response);
         }

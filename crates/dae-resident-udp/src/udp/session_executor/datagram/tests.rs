@@ -283,3 +283,32 @@ async fn reclaimed_response_buffer_stays_released_until_socket_is_readable() {
     assert_eq!(relay.response_buf.len(), UDP_DATAGRAM_RESPONSE_CAPACITY);
     assert!(!relay.response_buffer_reclaimed);
 }
+
+#[tokio::test]
+async fn relay_socket_uses_the_shared_bounded_socket_buffer_policy() {
+    let remote: SocketAddr = "127.0.0.1:53".parse().unwrap();
+    let socket = open_marked_tokio_udp_socket(remote, 0).await.unwrap();
+    let reference = UdpSocket::bind("127.0.0.1:0").unwrap();
+    apply_resident_udp_socket_buffer_tuning(&reference);
+    for option in [libc::SO_RCVBUF, libc::SO_SNDBUF] {
+        let read = |fd| {
+            let mut bytes: libc::c_int = 0;
+            let mut len = std::mem::size_of_val(&bytes) as libc::socklen_t;
+            assert_eq!(
+                unsafe {
+                    libc::getsockopt(
+                        fd,
+                        libc::SOL_SOCKET,
+                        option,
+                        (&mut bytes as *mut libc::c_int).cast(),
+                        &mut len,
+                    )
+                },
+                0
+            );
+            bytes
+        };
+        // Compare effective kernel values, including sysctl clamps and doubling.
+        assert_eq!(read(socket.as_raw_fd()), read(reference.as_raw_fd()));
+    }
+}

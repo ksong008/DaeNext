@@ -219,3 +219,18 @@ mod tests {
         }
     }
 }
+
+impl From<SocketAddr> for Socks5Address {
+    fn from(address: SocketAddr) -> Self {
+        match address {
+            SocketAddr::V4(address) => Self::Ipv4 {
+                addr: *address.ip(),
+                port: address.port(),
+            },
+            SocketAddr::V6(address) => Self::Ipv6 {
+                addr: *address.ip(),
+                port: address.port(),
+            },
+        }
+    }
+}

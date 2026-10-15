@@ -9,6 +9,7 @@ pub(in crate::udp) struct TrojanUdpStreamSession {
     password: String,
     carrier_kind: TrojanUdpCarrierKind,
     carrier: Option<TrojanUdpCarrier>,
+    request: Vec<u8>,
     response_plaintext: Vec<u8>,
     response_plaintext_cursor: usize,
 }
@@ -35,6 +36,7 @@ impl TrojanUdpStreamSession {
             password,
             carrier_kind,
             carrier: None,
+            request: Vec::new(),
             response_plaintext: Vec::new(),
             response_plaintext_cursor: 0,
         }
@@ -46,16 +48,17 @@ impl TrojanUdpStreamSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        let packet = trojan_packet::udp_packet(&original_dst.to_string(), payload)
+        let target = dae_outbound_core::socks5::Socks5Address::from(original_dst);
+        trojan_packet::udp_packet_into(&target, payload, &mut self.request)
             .map_err(|err| format!("build Trojan UDP packet: {err}"))?;
         let result = if let Some(carrier) = self.carrier.as_mut() {
-            carrier.write_packet(&packet).await
+            carrier.write_packet(&self.request).await
         } else {
             let request = trojan_packet::tcp_request_header(
                 &self.password,
                 "udp",
-                &original_dst.to_string(),
-                &packet,
+                &target.authority(),
+                &self.request,
             )
             .map_err(|err| format!("build Trojan UDP-over-stream request: {err}"))?;
             self.carrier =

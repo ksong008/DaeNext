@@ -564,15 +564,28 @@ impl AeadUdpCodec {
         target: &Socks5Address,
         payload: &[u8],
     ) -> Result<Vec<u8>, OutboundError> {
-        let packet_cipher = self.packet_cipher(salt)?;
-        let mut plain = Vec::with_capacity(target.encoded_len() + payload.len());
-        target.write_to(&mut plain)?;
-        plain.extend_from_slice(payload);
-        let encrypted = packet_cipher.encrypt(&nonce_from_counter(0), &plain)?;
-        let mut out = Vec::with_capacity(salt.len() + encrypted.len());
-        out.extend_from_slice(salt);
-        out.extend_from_slice(&encrypted);
+        let mut out = Vec::new();
+        self.encode_packet_into(salt, target, payload, &mut out)?;
         Ok(out)
+    }
+
+    /// Reuse storage while deriving an independent salt-bound cipher per packet.
+    pub fn encode_packet_into(
+        &self,
+        salt: &[u8],
+        target: &Socks5Address,
+        payload: &[u8],
+        out: &mut Vec<u8>,
+    ) -> Result<(), OutboundError> {
+        let packet_cipher = self.packet_cipher(salt)?;
+        out.clear();
+        out.reserve(salt.len() + target.encoded_len() + payload.len() + TAG_LEN);
+        out.extend_from_slice(salt);
+        target.write_to(out)?;
+        out.extend_from_slice(payload);
+        let tag = packet_cipher.encrypt_in_place(&nonce_from_counter(0), &mut out[salt.len()..])?;
+        out.extend_from_slice(&tag);
+        Ok(())
     }
 
     pub fn decode_packet(&self, packet: &[u8]) -> Result<ShadowsocksAeadUdpPacket, OutboundError> {
@@ -1265,3 +1278,7 @@ mod in_place_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "aead_udp_tests.rs"]
+mod udp_scratch_tests;

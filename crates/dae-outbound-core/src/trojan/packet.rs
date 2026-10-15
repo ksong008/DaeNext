@@ -28,20 +28,34 @@ pub fn tcp_request_header(
 }
 
 pub fn udp_packet(target: &str, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    let mut out = Vec::new();
+    udp_packet_into(
+        &crate::socks5::Socks5Address::parse(target)?,
+        payload,
+        &mut out,
+    )?;
+    Ok(out)
+}
+
+/// Encode a typed destination into a reusable packet buffer.
+pub fn udp_packet_into(
+    target: &crate::socks5::Socks5Address,
+    payload: &[u8],
+    out: &mut Vec<u8>,
+) -> Result<(), OutboundError> {
     if payload.len() > u16::MAX as usize {
         return Err(OutboundError::BadTrojan(format!(
             "trojan UDP payload too large: {} bytes",
             payload.len()
         )));
     }
-    let metadata = TrojanMetadata::parse("udp", target)?;
-    let metadata_bytes = metadata.encode()?;
-    let mut out = Vec::with_capacity(metadata_bytes.len() + 4 + payload.len());
-    out.extend_from_slice(&metadata_bytes);
+    out.clear();
+    out.reserve(target.encoded_len() + 4 + payload.len());
+    target.write_to(out)?;
     out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
     out.extend_from_slice(CRLF);
     out.extend_from_slice(payload);
-    Ok(out)
+    Ok(())
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -53,3 +67,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "packet_tests.rs"]
+mod tests;
