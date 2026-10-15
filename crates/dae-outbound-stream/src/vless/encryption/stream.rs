@@ -678,10 +678,6 @@ where
             let copied = remaining.len().min(target.remaining());
             target.put_slice(&remaining[..copied]);
             self.read_plain_offset += copied;
-            if self.read_plain_offset == self.read_plain.len() {
-                self.read_plain.clear();
-                self.read_plain_offset = 0;
-            }
             return Poll::Ready(Ok(()));
         }
         loop {
@@ -817,7 +813,8 @@ where
                                 })));
                             }
                             let mut body = std::mem::take(&mut self.read_plain);
-                            body.clear();
+                            // Fully consumed bytes may be overwritten by this record.
+                            self.read_plain_offset = 0;
                             body.resize(length, 0);
                             self.read_state = ReadState::Body {
                                 header: buffer,
@@ -885,10 +882,6 @@ where
                                         let copied = self.read_plain.len().min(target.remaining());
                                         target.put_slice(&self.read_plain[..copied]);
                                         self.read_plain_offset = copied;
-                                        if self.read_plain_offset == self.read_plain.len() {
-                                            self.read_plain.clear();
-                                            self.read_plain_offset = 0;
-                                        }
                                         return Poll::Ready(Ok(()));
                                     }
                                 }
