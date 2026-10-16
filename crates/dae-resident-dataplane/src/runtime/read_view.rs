@@ -29,6 +29,7 @@ impl ResidentRuntimeOwnerReadHandle {
         snapshot["udpPayloadAdmission"] = self.udp_payload_admission.snapshot();
         snapshot["eventWriter"] = self.event_writer.metrics_snapshot();
         snapshot["tlsConfigCache"] = crate::client::resident_tls_config_cache_metrics();
+        snapshot["udpSocketBuffers"] = dae_resident_core::udp_socket_buffer_tuning_snapshot();
         snapshot["connectUdpPools"] =
             udp::connect_udp_pool_metrics_snapshot(self.reload_generation);
         snapshot["quicEndpoints"] = tcp::quic_endpoint_metrics_snapshot(self.reload_generation);

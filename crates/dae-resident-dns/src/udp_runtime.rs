@@ -1,14 +1,13 @@
 use std::time::Duration;
 
 use dae_resident_core::{
-    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT, ResidentRuntimeProfile,
-    ResidentUdpPayloadAdmission, resident_udp_runtime_topology,
+    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, RESIDENT_UDP_RESPONSE_TIMEOUT,
+    RESIDENT_UDP_SOCKET_BUFFER_BYTES_DEFAULT, RESIDENT_UDP_SOCKET_BUFFER_BYTES_ENV,
+    RESIDENT_UDP_SOCKET_BUFFER_BYTES_MAX, RESIDENT_UDP_SOCKET_BUFFER_BYTES_MIN,
+    ResidentRuntimeProfile, ResidentUdpPayloadAdmission, resident_udp_runtime_topology,
 };
 
 const DNS_TRANSPORT_WORKER_STACK_BYTES_MIN: usize = 2 * 1024 * 1024;
-const UDP_SOCKET_BUFFER_BYTES_DEFAULT: usize = 512 * 1024;
-const UDP_SOCKET_BUFFER_BYTES_MIN: usize = 64 * 1024;
-const UDP_SOCKET_BUFFER_BYTES_MAX: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResidentDnsUdpRuntimeConfig {
@@ -95,9 +94,12 @@ fn partitioned_resource(total: usize, index: usize, partitions: usize) -> usize 
 }
 
 fn standalone_socket_buffer_bytes() -> usize {
-    std::env::var("RESIDENT_UDP_SOCKET_BUFFER_BYTES")
+    std::env::var(RESIDENT_UDP_SOCKET_BUFFER_BYTES_ENV)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(UDP_SOCKET_BUFFER_BYTES_DEFAULT)
-        .clamp(UDP_SOCKET_BUFFER_BYTES_MIN, UDP_SOCKET_BUFFER_BYTES_MAX)
+        .unwrap_or(RESIDENT_UDP_SOCKET_BUFFER_BYTES_DEFAULT)
+        .clamp(
+            RESIDENT_UDP_SOCKET_BUFFER_BYTES_MIN,
+            RESIDENT_UDP_SOCKET_BUFFER_BYTES_MAX,
+        )
 }

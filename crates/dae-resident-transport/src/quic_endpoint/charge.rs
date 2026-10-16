@@ -174,6 +174,8 @@ pub(super) fn charge_model_json() -> serde_json::Value {
         "modelVersion": QUIC_ENDPOINT_CHARGE_MODEL_VERSION,
         "quinnReceivePayloadCapBytes": QUINN_RECEIVE_DATAGRAM_LIMIT_BYTES,
         "quinnUdpBatchSize": quinn::udp::BATCH_SIZE,
+        "udpSocketBufferRequestBytes": super::QUIC_UDP_SOCKET_BUFFER_BYTES,
+        "udpSocketBufferPolicy": "fixed QUIC request; independent of RESIDENT_UDP_SOCKET_BUFFER_BYTES",
         "preSocketOrdinaryReceiveSegments": conservative_platform_receive_segments(),
         "preSocketSalamanderReceiveSegments": QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS,
         "portHoppingSocketCountSource": "runtimeProfile",

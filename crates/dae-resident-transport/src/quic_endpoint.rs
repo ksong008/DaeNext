@@ -305,6 +305,8 @@ pub async fn open_observed_quic_endpoint_waiting(
 
 // Per-socket, bounded buffering for multiplexed QUIC bursts. Linux may clamp
 // this request to rmem_max/wmem_max; no global sysctls or privileged FORCE options.
+// This independent QUIC policy does not use RESIDENT_UDP_SOCKET_BUFFER_BYTES;
+// charge::QuicEndpointSafetyChargeProfile reserves for this same fixed request.
 pub(crate) const QUIC_UDP_SOCKET_BUFFER_BYTES: usize = 256 * 1024;
 
 pub(crate) fn tune_quic_udp_socket(socket: &UdpSocket) {

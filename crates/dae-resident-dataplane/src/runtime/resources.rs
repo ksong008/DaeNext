@@ -273,6 +273,7 @@ impl ResidentRuntimeResourceConfig {
                 "runtimeShards": self.udp_runtime_shards.json(),
                 "dispatchQueueDepth": self.udp_dispatch_queue_depth.json(),
                 "socketBufferBytes": self.udp_socket_buffer_bytes.json(),
+                "socketBufferBytesScope": "configured request; udpSocketBuffers reports observed kernel accounting values",
             },
             "ss2022Replay": {
                 "windowPackets": ss2022_replay.window_size(),

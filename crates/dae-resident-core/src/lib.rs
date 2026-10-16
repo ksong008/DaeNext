@@ -71,7 +71,9 @@ pub use resource_profile::*;
 pub use session_admission::{
     ResidentUdpSessionAdmission, ResidentUdpSessionAdmissionError, ResidentUdpSessionPermit,
 };
-pub use socket::{apply_udp_socket_buffer_tuning, set_socket_mark};
+pub use socket::{
+    apply_udp_socket_buffer_tuning, set_socket_mark, udp_socket_buffer_tuning_snapshot,
+};
 pub use stop_signal::{
     ResidentStopListener, ResidentStopSignal, SharedResidentStopSignal, run_until_resident_stop,
 };
