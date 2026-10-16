@@ -16,7 +16,7 @@ pub(in crate::udp) struct ShadowsocksAeadDatagramSession {
     codec: Result<AeadUdpCodec, String>,
     salt_len: usize,
     request: Vec<u8>,
-    relay: DatagramRelay,
+    pub(super) relay: DatagramRelay,
     // See `Shadowsocks2022DatagramSession`: UDP salts are wire-visible and
     // feed the AEAD subkey derivation, so they must come from a CSPRNG.
     random_pool: dae_resident_core::WireRandomPool<WIRE_RANDOM_POOL_REFILL_BYTES>,
@@ -55,6 +55,9 @@ impl ShadowsocksAeadDatagramSession {
         self.relay
             .send(binding, &self.request, "Shadowsocks")
             .await?;
+        if self.relay.batch.is_some() {
+            return Ok(self.pending_response_result());
+        }
         if let Some(response) = self.poll_response()? {
             return Ok(response);
         }
@@ -110,7 +113,7 @@ pub(in crate::udp) struct Shadowsocks2022DatagramSession {
     packet_nonce_len: usize,
     codec: Option<Ss2022UdpCodec>,
     response_identity: ProtocolIdentityCache<8>,
-    relay: DatagramRelay,
+    pub(super) relay: DatagramRelay,
     runtime_metrics: Option<Arc<ResidentDataplaneMetrics>>,
     replay_metrics: Ss2022UdpReplayMetricsSnapshot,
     // CSPRNG pool for wire-visible salt/session-id/nonce material; see
@@ -191,6 +194,9 @@ impl Shadowsocks2022DatagramSession {
         self.relay
             .send(binding, &request.wire, "Shadowsocks 2022")
             .await?;
+        if self.relay.batch.is_some() {
+            return Ok(self.pending_response_result());
+        }
         if let Some(response) = self.poll_response()? {
             return Ok(response);
         }

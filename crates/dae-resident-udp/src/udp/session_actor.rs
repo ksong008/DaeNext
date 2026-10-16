@@ -119,16 +119,10 @@ async fn run_udp_session_actor(
                 break;
             }
             maybe_managed = receiver.recv() => {
-                let mut managed = match maybe_managed {
+                let managed = match maybe_managed {
                     Some(managed) => managed,
                     None => break,
                 };
-                let mut work = managed.work.take();
-                if let Some(work) = work.as_mut() {
-                    work.transition(ResidentUdpWorkStage::Processing);
-                }
-                last_activity = time::Instant::now();
-                packets += 1;
                 if executor.is_none() {
                     let mut selected_executor = if managed.force_proxy_packet {
                         UdpSessionExecutor::new_proxy_packet_with_transport_owner(
@@ -152,7 +146,20 @@ async fn run_udp_session_actor(
                     executor = Some(Box::new(selected_executor));
                     session_proxy = Some(managed.proxy.clone());
                 }
-                let (exchange, execute_timed_out) = match executor.as_mut() {
+                let can_batch = executor.as_mut().is_some_and(|executor| executor.begin_datagram_batch());
+                let mut batch = vec![managed];
+                if can_batch {
+                    while batch.len() < 32 {
+                        match receiver.try_recv() { Ok(packet) => batch.push(packet), Err(_) => break }
+                    }
+                }
+                let mut completed = Vec::with_capacity(batch.len());
+                for mut managed in batch {
+                    let mut work = managed.work.take();
+                    if let Some(work) = work.as_mut() { work.transition(ResidentUdpWorkStage::Processing); }
+                    last_activity = time::Instant::now();
+                    packets += 1;
+                    let (exchange, execute_timed_out) = match executor.as_mut() {
                     Some(executor) => tokio::select! {
                         biased;
                         _ = stop_listener.cancelled() => {
@@ -183,6 +190,32 @@ async fn run_udp_session_actor(
                         false,
                     ),
                 };
+                    completed.push((managed, work, exchange, execute_timed_out));
+                    if execute_timed_out { break; }
+                }
+                let sent = if can_batch {
+                    let mark = session_proxy.as_ref().map_or(0, |proxy| proxy.effective_socket_mark());
+                    let Some(executor) = executor.as_mut() else { stop_reason = "executor-missing".to_owned(); break 'session; };
+                    tokio::select! {
+                        biased;
+                        _ = stop_listener.cancelled() => { stop_reason = "generation-stop".to_owned(); break 'session; }
+                        result = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, executor.flush_datagram_batch(mark)) => result,
+                    }
+                } else { Ok(Vec::new()) };
+                let mut sent = match sent {
+                    Ok(sent) => sent.into_iter(),
+                    Err(_) => {
+                        for (_, _, exchange, timed_out) in &mut completed {
+                            if exchange.is_ok() { *exchange = Err("UDP outbound batch send timed out".to_owned()); }
+                            *timed_out = true;
+                        }
+                        Vec::new().into_iter()
+                    }
+                };
+                for (managed, _work, mut exchange, execute_timed_out) in completed {
+                    if can_batch && exchange.is_ok() && let Some(Err(error)) = sent.next() {
+                        exchange = Err(error);
+                    }
                 if exchange.is_ok()
                     && let Some(network_type) = managed.data_udp_network_type
                 {
@@ -212,7 +245,8 @@ async fn run_udp_session_actor(
                 }
                 if execute_timed_out {
                     stop_reason = "execute-timeout".to_owned();
-                    break;
+                    break 'session;
+                }
                 }
                 if let (Some(executor), Some(proxy)) = (executor.as_mut(), session_proxy.as_ref())
                 {

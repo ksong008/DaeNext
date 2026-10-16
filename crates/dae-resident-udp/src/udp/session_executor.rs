@@ -149,6 +149,7 @@ const UDP_DATAGRAM_RESPONSE_CAPACITY: usize = 64 * 1024;
 
 mod connect_udp;
 mod datagram;
+mod datagram_batch;
 mod dispatch;
 mod selection;
 #[cfg(any(test, feature = "test-support"))]

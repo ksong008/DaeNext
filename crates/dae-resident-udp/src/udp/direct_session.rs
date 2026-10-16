@@ -211,50 +211,33 @@ async fn run_udp_direct_session_actor(
                         }
                     }
                 }
-                let send_result = match session.as_ref() {
-                    Some(session) => tokio::select! {
-                        biased;
-                        _ = stop_listener.cancelled() => {
-                            stop_reason = "generation-stop".to_owned();
-                            break 'session;
-                        }
-                        result = time::timeout(
-                            RESIDENT_UDP_RESPONSE_TIMEOUT,
-                            session.send(&managed.packet.payload, managed.original_dst),
-                        ) => result,
-                    },
-                    None => continue,
+                let mut batch = vec![(managed, work)];
+                while batch.len() < 32 {
+                    let Ok(mut packet) = receiver.try_recv() else { break; };
+                    let mut work = packet.work.take();
+                    if let Some(work) = work.as_mut() { work.transition(ResidentUdpWorkStage::Processing); }
+                    packets += 1;
+                    batch.push((packet, work));
+                }
+                let datagrams: Vec<_> = batch.iter().map(|(managed, _)| UdpSendMessage {
+                    payload: &managed.packet.payload, peer: Some(managed.original_dst),
+                }).collect();
+                let Some(session_ref) = session.as_ref() else { stop_reason = "direct-session-missing".to_owned(); break 'session; };
+                let send_results = tokio::select! {
+                    biased;
+                    _ = stop_listener.cancelled() => { stop_reason = "generation-stop".to_owned(); break 'session; }
+                    result = time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, session_ref.send_batch(&datagrams)) => result,
                 };
-                match send_result {
-                    Ok(Ok(())) => {
-                        context.metrics.add_upload(managed.packet.payload.len());
-                    }
-                    Ok(Err(err)) => {
-                        append_udp_direct_exchange_failed(
-                            &context,
-                            &key,
-                            managed.original_dst,
-                            managed.packet.payload.len(),
-                            Some(managed.dscp),
-                            err,
-                        );
-                    }
-                    Err(_) => {
-                        append_udp_direct_exchange_failed(
-                            &context,
-                            &key,
-                            managed.original_dst,
-                            managed.packet.payload.len(),
-                            Some(managed.dscp),
-                            format!(
-                                "direct UDP send timed out after {}ms",
-                                RESIDENT_UDP_RESPONSE_TIMEOUT.as_millis()
-                            ),
-                        );
-                        stop_reason = "execute-timeout".to_owned();
-                        break;
+                let timed_out = send_results.is_err();
+                let send_results = send_results.unwrap_or_else(|_| (0..batch.len()).map(|_| Err("direct UDP batch send timed out".to_owned())).collect());
+                for ((managed, _work), result) in batch.into_iter().zip(send_results) {
+                    match result {
+                        Ok(()) => context.metrics.add_upload(managed.packet.payload.len()),
+                        Err(error) => append_udp_direct_exchange_failed(&context, &key, managed.original_dst,
+                            managed.packet.payload.len(), Some(managed.dscp), error),
                     }
                 }
+                if timed_out { stop_reason = "execute-timeout".to_owned(); break 'session; }
                 if let Some(session) = session.as_mut() {
                     let drain = drain_direct_udp_session_responses(&key, &context, session, &mut last_activity);
                     tokio::select! {
@@ -454,12 +437,47 @@ impl DirectUdpSession {
         })
     }
 
+    async fn send_batch(&self, datagrams: &[UdpSendMessage<'_>]) -> Vec<Result<(), String>> {
+        let mut results = Vec::with_capacity(datagrams.len());
+        while results.len() < datagrams.len() {
+            let remaining = &datagrams[results.len()..];
+            match self
+                .socket
+                .async_io(tokio::io::Interest::WRITABLE, || {
+                    try_sendmmsg(self.socket.as_raw_fd(), remaining)
+                })
+                .await
+            {
+                Ok(sent) if sent > 0 => results.extend((0..sent).map(|_| Ok(()))),
+                _ => {
+                    // Isolate an invalid datagram without replaying a prefix
+                    // already accepted by the kernel.
+                    let datagram = &remaining[0];
+                    let Some(peer) = datagram.peer else {
+                        results.push(Err("direct UDP target missing".to_owned()));
+                        continue;
+                    };
+                    let result = self
+                        .socket
+                        .send_to(datagram.payload, peer)
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| format!("send direct UDP datagram: {error}"));
+                    results.push(result);
+                }
+            }
+        }
+        results
+    }
+
+    #[cfg(test)]
     async fn send(&self, payload: &[u8], target: SocketAddr) -> Result<(), String> {
-        self.socket
-            .send_to(payload, target)
-            .await
-            .map_err(|err| format!("send direct UDP datagram to {target}: {err}"))?;
-        Ok(())
+        self.send_batch(&[UdpSendMessage {
+            payload,
+            peer: Some(target),
+        }])
+        .await
+        .remove(0)
     }
 
     async fn wait_readable(&self) -> Result<(), String> {

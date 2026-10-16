@@ -4,7 +4,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[derive(Default)]
 pub(in crate::udp) struct Socks5UdpAssociateSession {
     control: Option<tokio::net::TcpStream>,
-    relay: DatagramRelay,
+    pub(super) relay: DatagramRelay,
 }
 
 impl Socks5UdpAssociateSession {
@@ -20,6 +20,9 @@ impl Socks5UdpAssociateSession {
         self.relay
             .send_packet(&request, binding.effective_socket_mark(), "SOCKS5")
             .await?;
+        if self.relay.batch.is_some() {
+            return Ok(self.pending_response_result());
+        }
         if let Some(response) = self.poll_response()? {
             return Ok(response);
         }
@@ -84,6 +87,7 @@ impl Socks5UdpAssociateSession {
             .open_candidates(relay_candidates, binding.effective_socket_mark(), "SOCKS5")
             .await?;
         self.control = Some(control);
+        relay.batch = self.relay.batch.take();
         self.relay = relay;
         Ok(())
     }
