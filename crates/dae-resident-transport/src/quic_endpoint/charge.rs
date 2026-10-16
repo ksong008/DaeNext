@@ -156,13 +156,9 @@ fn conservative_platform_receive_segments() -> usize {
     if cfg!(target_os = "linux") {
         return super::receive_tier::selected_segments();
     }
-    if cfg!(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "windows"
-    )) {
-        // Quinn 0.11 / quinn-udp 0.5 reserve for Linux UDP_GRO_CNT_MAX and use the same
-        // conservative segment count on Windows. This is deliberately evaluated before bind.
+    if cfg!(any(target_os = "android", target_os = "windows")) {
+        // Android and Windows retain Quinn's conservative 64-segment estimate
+        // until the wrapped socket reports its receive capacity.
         QUINN_GRO_RECEIVE_SEGMENTS
     } else {
         QUINN_SINGLE_DATAGRAM_RECEIVE_SEGMENTS
