@@ -56,8 +56,7 @@ where
     let payload_len = u16::from_be_bytes(len) as usize;
     // The response payload is a single TLS application-data record carrying
     // the server salt plus the first encrypted Shadowsocks AEAD chunk.  A
-    // strict 16 KiB cap (the per-frame bound AsyncSimpleObfsTlsAppDataReader
-    // enforces below) would reject a legitimate full-size first chunk
+    // strict 16 KiB cap would reject a legitimate full-size first chunk
     // (32-byte salt + max chunk wire 2+16+16383+16 = 16449 bytes), so bound
     // by the TLS record payload ceiling instead.  This keeps a peer-controlled
     // length from forcing a large allocation or an unbounded read that would
@@ -186,7 +185,7 @@ where
                         )));
                     }
                     let len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
-                    if len > 16 * 1024 {
+                    if len > TLS_RECORD_MAX_PAYLOAD_LEN {
                         return Poll::Ready(Err(std::io::Error::new(
                             ErrorKind::InvalidData,
                             format!("simple-obfs TLS application data too large: {len}"),
@@ -232,6 +231,59 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn simple_obfs_tls_reads_large_fragmented_and_consecutive_records() {
+        let lengths = [
+            0,
+            1,
+            16 * 1024,
+            16399,
+            16417,
+            16449,
+            TLS_RECORD_MAX_PAYLOAD_LEN,
+        ];
+        let mut wire = Vec::new();
+        let mut expected = Vec::new();
+        for (index, len) in lengths.into_iter().enumerate() {
+            let payload = vec![index as u8; len];
+            wire.extend(simple_obfs_tls_application_data_frame(&payload).unwrap());
+            expected.extend(payload);
+        }
+        let (mut writer, mut stream) = tokio::io::duplex(257);
+        let task = tokio::spawn(async move {
+            for chunk in wire.chunks(113) {
+                writer.write_all(chunk).await.unwrap();
+            }
+        });
+        let mut reader = AsyncSimpleObfsTlsAppDataReader::new(Vec::new(), &mut stream);
+        let mut actual = Vec::new();
+        reader.read_to_end(&mut actual).await.unwrap();
+        task.await.unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn simple_obfs_tls_rejects_oversized_and_truncated_records() {
+        let wire = simple_obfs_tls_application_data_header(TLS_RECORD_MAX_PAYLOAD_LEN + 1).unwrap();
+        let mut stream = std::io::Cursor::new(wire);
+        let mut reader = AsyncSimpleObfsTlsAppDataReader::new(Vec::new(), &mut stream);
+        assert_eq!(
+            reader.read(&mut [0; 1]).await.unwrap_err().kind(),
+            ErrorKind::InvalidData
+        );
+
+        let mut wire = simple_obfs_tls_application_data_header(16417)
+            .unwrap()
+            .to_vec();
+        wire.extend_from_slice(&[0; 7]);
+        let mut stream = std::io::Cursor::new(wire);
+        let mut reader = AsyncSimpleObfsTlsAppDataReader::new(Vec::new(), &mut stream);
+        assert_eq!(
+            reader.read(&mut [0; 1]).await.unwrap_err().kind(),
+            ErrorKind::UnexpectedEof
+        );
+    }
 
     #[tokio::test]
     async fn generic_http_head_reader_returns_early_tunnel_bytes() {
