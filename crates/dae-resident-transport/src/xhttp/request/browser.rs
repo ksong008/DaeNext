@@ -27,6 +27,17 @@ pub(super) fn request_headers(
     version: ResidentXhttpHttpVersion,
 ) -> HeaderList {
     let cache = TEMPLATES.get_or_init(|| std::sync::Mutex::new(IndexedCache::new(64)));
+    request_headers_with_cache(settings, version, cache, || {
+        build_request_headers(settings, version)
+    })
+}
+
+fn request_headers_with_cache(
+    settings: &ResidentXhttpSettingsPlan,
+    version: ResidentXhttpHttpVersion,
+    cache: &std::sync::Mutex<IndexedCache<HeaderTemplate>>,
+    build: impl FnOnce() -> HeaderList,
+) -> HeaderList {
     {
         let mut templates = cache.lock().unwrap_or_else(|error| error.into_inner());
         let hash = templates.hash((&settings.headers, version as u8));
@@ -36,7 +47,7 @@ pub(super) fn request_headers(
             return headers.clone();
         }
     }
-    let headers = build_request_headers(settings, version);
+    let headers = build();
     if settings
         .headers
         .iter()
@@ -46,10 +57,20 @@ pub(super) fn request_headers(
     {
         let mut templates = cache.lock().unwrap_or_else(|error| error.into_inner());
         let hash = templates.hash((&settings.headers, version as u8));
+        // Rendering happens outside the lock. Another caller may have filled
+        // this key meanwhile; reuse its value instead of consuming another slot.
+        if let Some((_, _, existing)) = templates.get(hash, |(headers, v, _)| {
+            headers == &settings.headers && *v == version
+        }) {
+            return existing.clone();
+        }
         templates.insert(hash, (settings.headers.clone(), version, headers.clone()));
     }
     headers
 }
+
+#[cfg(test)]
+mod cache_tests;
 
 fn build_request_headers(
     settings: &ResidentXhttpSettingsPlan,
