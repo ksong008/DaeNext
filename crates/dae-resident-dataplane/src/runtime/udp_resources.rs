@@ -20,6 +20,7 @@ pub(crate) struct ResidentUdpRuntimeConfig {
     pub(crate) ingress_syscall_batch_limit: usize,
     pub(crate) reply_queue_depth: usize,
     pub(crate) reply_send_batch_limit: usize,
+    pub(crate) outbound_send_batch_limit: usize,
     pub(crate) reply_socket_cache_capacity: usize,
     pub(crate) reply_socket_idle_timeout: Duration,
     pub(crate) direct_response_buffer_idle_timeout: Duration,
@@ -72,6 +73,11 @@ impl ResidentUdpRuntimeConfig {
             ingress_syscall_batch_limit: runtime_profile.udp_syscall_batch_limit(),
             reply_queue_depth: dispatch_queue_depth,
             reply_send_batch_limit: runtime_profile.udp_syscall_batch_limit(),
+            outbound_send_batch_limit: if cfg!(feature = "test-scalar-udp-send") {
+                1
+            } else {
+                runtime_profile.udp_syscall_batch_limit()
+            },
             reply_socket_cache_capacity: session_admission_limit.unwrap_or(session_soft_watermark),
             reply_socket_idle_timeout: resources
                 .runtime_profile
@@ -191,6 +197,7 @@ impl ResidentUdpRuntimeConfig {
                     "softWatermark": self.session_soft_watermark,
                 },
                 "perSessionQueueDepth": self.session_queue_depth,
+                "outboundSendBatchLimit": self.outbound_send_batch_limit,
                 "dispatchQueueDepth": self.dispatch_queue_depth,
                 "perShardDispatchQueueDepth": self.per_shard_dispatch_queue_depth(),
                 "perShardCleanupQueueDepth": self.per_shard_cleanup_queue_depth(),
@@ -260,6 +267,7 @@ mod tests {
             ingress_syscall_batch_limit: 16,
             reply_queue_depth: 512,
             reply_send_batch_limit: 16,
+            outbound_send_batch_limit: 16,
             reply_socket_cache_capacity: 512,
             reply_socket_idle_timeout: Duration::from_secs(180),
             direct_response_buffer_idle_timeout: Duration::from_secs(30),
@@ -369,6 +377,7 @@ mod tests {
             ingress_syscall_batch_limit: 8,
             reply_queue_depth: 96,
             reply_send_batch_limit: 8,
+            outbound_send_batch_limit: 8,
             reply_socket_cache_capacity: 64,
             reply_socket_idle_timeout: Duration::from_secs(180),
             direct_response_buffer_idle_timeout: Duration::from_secs(30),

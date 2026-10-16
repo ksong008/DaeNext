@@ -10,7 +10,7 @@ default = ["test-boringssl-tcp-tls", "test-boringssl-quic"]
 benchmark-support = []
 dns-runtime-tests = []
 test-scalar-udp-recv = ["dae-datapath/test-scalar-udp-recv"]
-test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send", "dae-resident-dns/test-scalar-udp-send"]
+test-scalar-udp-send = ["dae-datapath/test-scalar-udp-send", "dae-resident-dns/test-scalar-udp-send", "dae-resident-udp/test-scalar-udp-send"]
 test-boringssl-tcp-tls = []
 test-boringssl-tls-profile = [
     "test-boringssl-tcp-tls",

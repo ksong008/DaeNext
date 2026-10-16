@@ -32,8 +32,38 @@ fn context(
         session_idle_timeout: IDLE,
         proxy_session_idle_timeout: IDLE,
         response_buffer_idle_timeout: Duration::from_millis(60),
+        outbound_send_batch_limit: 8,
         actor_stop: ResidentStopSignal::shared(),
     })
+}
+
+#[tokio::test]
+async fn direct_and_proxy_collectors_obey_profile_and_scalar_limits() {
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let (reply, _packets, reply_task) = super::reply::test_reply_handle(Arc::clone(&metrics));
+    let mut context = context(metrics, reply);
+    for (profile, limit) in [
+        (ResidentRuntimeProfile::LowMemory, 8),
+        (ResidentRuntimeProfile::Balanced, 16),
+        (ResidentRuntimeProfile::HighPerformance, 32),
+    ] {
+        Arc::get_mut(&mut context)
+            .unwrap()
+            .outbound_send_batch_limit = profile.udp_syscall_batch_limit();
+        let expected = if cfg!(feature = "test-scalar-udp-send") {
+            1
+        } else {
+            limit
+        };
+        let (sender, mut receiver) = mpsc::channel(64);
+        for packet in 1..64 {
+            sender.try_send(packet).unwrap();
+        }
+        let batch = context.collect_outbound_batch(0, &mut receiver);
+        assert_eq!(batch, (0..expected).collect::<Vec<_>>());
+        assert_eq!(receiver.try_recv().unwrap(), expected);
+    }
+    reply_task.abort();
 }
 
 fn proxy(upstream: SocketAddr) -> ResidentProxyBinding {

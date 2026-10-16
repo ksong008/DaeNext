@@ -8,6 +8,7 @@ use dae_resident_transport::try_socket_addr_candidates;
 #[derive(Default)]
 pub(super) struct DatagramRelay {
     pub(super) batch: Option<Vec<PooledBuffer>>,
+    pub(super) batch_limit: usize,
     pub(super) socket: Option<tokio::net::UdpSocket>,
     pub(super) remote_candidates: Vec<SocketAddr>,
     pub(super) selected_index: usize,
@@ -47,8 +48,11 @@ impl DatagramRelay {
         label: &str,
     ) -> Result<(), String> {
         if let Some(batch) = &mut self.batch {
-            if batch.len() >= 32 {
-                return Err("UDP outbound batch exceeds 32 packets".to_owned());
+            if batch.len() >= self.batch_limit {
+                return Err(format!(
+                    "UDP outbound batch exceeds {} packets",
+                    self.batch_limit
+                ));
             }
             let mut buffer = PooledBuffer::with_capacity(request.len());
             buffer.extend_from_slice(request);

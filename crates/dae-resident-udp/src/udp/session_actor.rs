@@ -37,7 +37,33 @@ pub struct UdpSessionSharedContext {
     pub session_idle_timeout: Duration,
     pub proxy_session_idle_timeout: Duration,
     pub response_buffer_idle_timeout: Duration,
+    pub outbound_send_batch_limit: usize,
     pub actor_stop: SharedResidentStopSignal,
+}
+
+impl UdpSessionSharedContext {
+    pub(super) fn outbound_batch_limit(&self) -> usize {
+        if cfg!(feature = "test-scalar-udp-send") {
+            1
+        } else {
+            self.outbound_send_batch_limit.clamp(1, 32)
+        }
+    }
+
+    pub(super) fn collect_outbound_batch<T>(
+        &self,
+        first: T,
+        receiver: &mut mpsc::Receiver<T>,
+    ) -> Vec<T> {
+        let mut batch = vec![first];
+        while batch.len() < self.outbound_batch_limit() {
+            match receiver.try_recv() {
+                Ok(packet) => batch.push(packet),
+                Err(_) => break,
+            }
+        }
+        batch
+    }
 }
 
 pub type UdpSessionActorContext = Arc<UdpSessionSharedContext>;
@@ -146,13 +172,9 @@ async fn run_udp_session_actor(
                     executor = Some(Box::new(selected_executor));
                     session_proxy = Some(managed.proxy.clone());
                 }
-                let can_batch = executor.as_mut().is_some_and(|executor| executor.begin_datagram_batch());
-                let mut batch = vec![managed];
-                if can_batch {
-                    while batch.len() < 32 {
-                        match receiver.try_recv() { Ok(packet) => batch.push(packet), Err(_) => break }
-                    }
-                }
+                let batch_limit = context.outbound_batch_limit();
+                let can_batch = executor.as_mut().is_some_and(|executor| executor.begin_datagram_batch(batch_limit));
+                let batch = if can_batch { context.collect_outbound_batch(managed, &mut receiver) } else { vec![managed] };
                 let mut completed = Vec::with_capacity(batch.len());
                 for mut managed in batch {
                     let mut work = managed.work.take();

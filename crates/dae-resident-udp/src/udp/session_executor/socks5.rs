@@ -88,6 +88,7 @@ impl Socks5UdpAssociateSession {
             .await?;
         self.control = Some(control);
         relay.batch = self.relay.batch.take();
+        relay.batch_limit = self.relay.batch_limit;
         self.relay = relay;
         Ok(())
     }

@@ -87,7 +87,29 @@ async fn udp_associate_reuses_existing_control_and_relay() {
     proxy.materialize_execution();
     let binding = ResidentProxyBinding::configuration(Arc::new(proxy)).unwrap();
     let mut session = Socks5UdpAssociateSession::default();
-
+    // The actor starts batching before the first UDP ASSOCIATE handshake.
+    // Replacing the unopened relay must retain its batch and profile limit.
+    session.relay.batch = Some(Vec::with_capacity(16));
+    session.relay.batch_limit = 16;
+    let target: SocketAddr = "192.0.2.1:5300".parse().unwrap();
+    session.exchange(&binding, target, b"first").await.unwrap();
+    assert_eq!(session.relay.batch_limit, 16);
+    assert_eq!(session.relay.batch.as_ref().unwrap().len(), 1);
+    let mut executor = UdpSessionExecutor::Socks5(session);
+    let results = executor.flush_datagram_batch(0).await;
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_ok());
+    let mut received = [0; 64];
+    let len = time::timeout(Duration::from_secs(1), relay.recv(&mut received))
+        .await
+        .unwrap()
+        .unwrap();
+    let decoded = udp_packet::unwrap(&received[..len]).unwrap();
+    assert_eq!(decoded.target.socket_addr(), Some(target));
+    assert_eq!(decoded.payload, b"first");
+    let UdpSessionExecutor::Socks5(mut session) = executor else {
+        unreachable!()
+    };
     session.ensure_open(&binding).await.unwrap();
     let first_peer = session.control.as_ref().unwrap().peer_addr().unwrap();
     session.ensure_open(&binding).await.unwrap();

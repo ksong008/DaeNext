@@ -181,8 +181,7 @@ async fn run_udp_direct_session_actor(
                     Some(managed) => managed,
                     None => break,
                 };
-                let mut work = managed.work.take();
-                if let Some(work) = work.as_mut() {
+                if let Some(work) = managed.work.as_mut() {
                     work.transition(ResidentUdpWorkStage::Processing);
                 }
                 last_activity = time::Instant::now();
@@ -211,14 +210,13 @@ async fn run_udp_direct_session_actor(
                         }
                     }
                 }
-                let mut batch = vec![(managed, work)];
-                while batch.len() < 32 {
-                    let Ok(mut packet) = receiver.try_recv() else { break; };
+                let batch = context.collect_outbound_batch(managed, &mut receiver);
+                packets += batch.len().saturating_sub(1) as u64;
+                let batch: Vec<_> = batch.into_iter().map(|mut packet| {
                     let mut work = packet.work.take();
                     if let Some(work) = work.as_mut() { work.transition(ResidentUdpWorkStage::Processing); }
-                    packets += 1;
-                    batch.push((packet, work));
-                }
+                    (packet, work)
+                }).collect();
                 let datagrams: Vec<_> = batch.iter().map(|(managed, _)| UdpSendMessage {
                     payload: &managed.packet.payload, peer: Some(managed.original_dst),
                 }).collect();
@@ -439,6 +437,12 @@ impl DirectUdpSession {
 
     async fn send_batch(&self, datagrams: &[UdpSendMessage<'_>]) -> Vec<Result<(), String>> {
         let mut results = Vec::with_capacity(datagrams.len());
+        if cfg!(feature = "test-scalar-udp-send") {
+            for datagram in datagrams {
+                results.push(self.send_datagram(datagram).await);
+            }
+            return results;
+        }
         while results.len() < datagrams.len() {
             let remaining = &datagrams[results.len()..];
             match self
@@ -452,22 +456,22 @@ impl DirectUdpSession {
                 _ => {
                     // Isolate an invalid datagram without replaying a prefix
                     // already accepted by the kernel.
-                    let datagram = &remaining[0];
-                    let Some(peer) = datagram.peer else {
-                        results.push(Err("direct UDP target missing".to_owned()));
-                        continue;
-                    };
-                    let result = self
-                        .socket
-                        .send_to(datagram.payload, peer)
-                        .await
-                        .map(|_| ())
-                        .map_err(|error| format!("send direct UDP datagram: {error}"));
-                    results.push(result);
+                    results.push(self.send_datagram(&remaining[0]).await);
                 }
             }
         }
         results
+    }
+
+    async fn send_datagram(&self, datagram: &UdpSendMessage<'_>) -> Result<(), String> {
+        let peer = datagram
+            .peer
+            .ok_or_else(|| "direct UDP target missing".to_owned())?;
+        self.socket
+            .send_to(datagram.payload, peer)
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("send direct UDP datagram: {error}"))
     }
 
     #[cfg(test)]
