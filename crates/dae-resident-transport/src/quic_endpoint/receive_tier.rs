@@ -11,7 +11,11 @@ use std::{
 };
 
 pub(super) fn selected_segments() -> usize {
-    match ResidentRuntimeProfileSelection::selected().profile {
+    segments_for_profile(ResidentRuntimeProfileSelection::selected().profile)
+}
+
+fn segments_for_profile(profile: ResidentRuntimeProfile) -> usize {
+    match profile {
         ResidentRuntimeProfile::LowMemory => 1,
         ResidentRuntimeProfile::Balanced => 64,
         ResidentRuntimeProfile::HighPerformance => 64,

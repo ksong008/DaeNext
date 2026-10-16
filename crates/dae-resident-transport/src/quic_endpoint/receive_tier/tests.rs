@@ -1,6 +1,17 @@
 use super::*;
 use quinn::Runtime;
 
+#[test]
+fn profiles_preserve_gro_capacity_outside_low_memory() {
+    for (profile, expected) in [
+        (ResidentRuntimeProfile::LowMemory, 1),
+        (ResidentRuntimeProfile::Balanced, 64),
+        (ResidentRuntimeProfile::HighPerformance, 64),
+    ] {
+        assert_eq!(segments_for_profile(profile), expected, "{profile:?}");
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn every_replacement_disables_gro_before_advertising_a_smaller_slab() {
