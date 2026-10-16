@@ -13,7 +13,7 @@ use std::{
 pub(super) fn selected_segments() -> usize {
     match ResidentRuntimeProfileSelection::selected().profile {
         ResidentRuntimeProfile::LowMemory => 1,
-        ResidentRuntimeProfile::Balanced => 16,
+        ResidentRuntimeProfile::Balanced => 64,
         ResidentRuntimeProfile::HighPerformance => 64,
     }
 }
@@ -50,7 +50,7 @@ impl quinn::Runtime for ReceiveTierRuntime {
             return Ok(inner);
         }
         // A smaller advertised slab MUST NOT receive a 64-segment kernel GRO
-        // packet. Low/balanced profiles trade GRO for bounded slab capacity.
+        // packet. Only the low-memory profile trades GRO for bounded slab capacity.
         // Keep the conservative tier reservation even with GRO disabled.
         #[cfg(target_os = "linux")]
         {
