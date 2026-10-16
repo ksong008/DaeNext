@@ -21,6 +21,7 @@ mod stop_signal;
 mod task_set;
 mod wire_random;
 
+pub use dae_netutil::{IndexedCache, PooledBuffer};
 use std::time::Duration;
 
 use serde_json::{Value, json};

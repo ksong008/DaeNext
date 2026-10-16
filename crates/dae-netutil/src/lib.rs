@@ -8,4 +8,8 @@ pub use magic_network::{
 };
 pub use route_aware::{RouteAwareTarget, RouteAwareTargetError, route_aware_dial_target};
 
+mod buffer_pool;
+mod indexed_cache;
+pub use indexed_cache::IndexedCache;
 pub mod wire_random;
+pub use buffer_pool::PooledBuffer;
