@@ -33,8 +33,9 @@ pub async fn relay_tcp_over_xhttp_packet_up(
             match inbound.read_chunk(pipeline.max_post_bytes()).await {
                 Ok(None) => return finish_xhttp_packet_up_upload(&mut pipeline, upload).await,
                 Ok(Some(chunk)) => {
-                    let read = chunk.len();
-                    pipeline.send(upload, session_id, &mut seq, chunk).await?;
+                    let read = pipeline
+                        .send_coalescing(upload, session_id, &mut seq, chunk, &mut inbound)
+                        .await?;
                     upload_progress.record_upload(read);
                     metrics.add_upload(read);
                 }
@@ -239,6 +240,31 @@ struct XhttpUploadChunkReader<R> {
     buffer: BytesMut,
     terminal_error: Option<std::io::Error>,
     eof: bool,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for XhttpUploadChunkReader<R> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        out: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if out.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        if !this.buffer.is_empty() {
+            let len = out.remaining().min(this.buffer.len());
+            out.put_slice(&this.buffer.split_to(len));
+            return Poll::Ready(Ok(()));
+        }
+        if let Some(error) = this.terminal_error.take() {
+            return Poll::Ready(Err(error));
+        }
+        if this.eof {
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut this.inbound).poll_read(cx, out)
+    }
 }
 
 impl<R> XhttpUploadChunkReader<R>

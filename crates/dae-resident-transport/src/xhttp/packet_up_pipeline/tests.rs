@@ -5,6 +5,69 @@ use std::sync::{
 };
 use tokio::sync::oneshot;
 
+#[tokio::test]
+async fn post_wait_aggregates_later_arrivals_and_stops_at_post_bound() {
+    use tokio::io::AsyncWriteExt;
+    let (mut writer, mut reader) = tokio::io::duplex(128);
+    let (ready_tx, ready_rx) = oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        coalesce_until_ready(
+            async {
+                ready_rx.await.unwrap();
+                Ok(())
+            },
+            &mut reader,
+            Bytes::from_static(b"first"),
+            10,
+        )
+        .await
+        .unwrap()
+    });
+    tokio::task::yield_now().await;
+    writer.write_all(b"second-and-tail").await.unwrap();
+    tokio::task::yield_now().await;
+    assert!(
+        !task.is_finished(),
+        "POST gate must remain authoritative when full"
+    );
+    ready_tx.send(()).unwrap();
+    assert_eq!(task.await.unwrap(), Bytes::from_static(b"firstsecon"));
+}
+
+#[tokio::test]
+async fn post_ready_does_not_wait_for_an_idle_reader_or_copy_the_payload() {
+    let (_writer, mut reader) = tokio::io::duplex(128);
+    let payload = Bytes::from_static(b"ready");
+    let pointer = payload.as_ptr();
+    let actual = time::timeout(
+        Duration::from_millis(100),
+        coalesce_until_ready(async { Ok(()) }, &mut reader, payload, 100),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(actual.as_ptr(), pointer);
+}
+
+#[tokio::test]
+async fn post_wait_flushes_buffered_data_at_eof() {
+    let (mut writer, mut reader) = tokio::io::duplex(128);
+    writer.write_all(b"tail").await.unwrap();
+    drop(writer);
+    let actual = coalesce_until_ready(
+        async {
+            time::sleep(Duration::from_millis(5)).await;
+            Ok(())
+        },
+        &mut reader,
+        Bytes::from_static(b"head"),
+        100,
+    )
+    .await
+    .unwrap();
+    assert_eq!(actual, Bytes::from_static(b"headtail"));
+}
+
 fn controlled_completion(
     receiver: oneshot::Receiver<Result<(), String>>,
 ) -> XhttpPacketUpCompletion {

@@ -39,7 +39,13 @@ async fn drive_xhttp_packet_up_payload_stream(
                 return Ok(());
             };
             pipeline
-                .send(&mut upload, &session_id, &mut sequence, chunk)
+                .send_coalescing(
+                    &mut upload,
+                    &session_id,
+                    &mut sequence,
+                    chunk,
+                    &mut logical_read,
+                )
                 .await?;
         }
     };

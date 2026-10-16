@@ -66,6 +66,11 @@ impl XhttpPacketUpPipeline {
         seq: &mut u64,
         payload: Bytes,
     ) -> Result<(), String> {
+        self.prepare(upload).await?;
+        self.send_prepared(upload, session_id, seq, payload).await
+    }
+
+    async fn prepare(&mut self, upload: &mut XhttpUploadClient) -> Result<(), String> {
         self.poll_ready()?;
         if reserve_xhttp_packet_up_post(upload) {
             self.finish().await?;
@@ -73,11 +78,44 @@ impl XhttpPacketUpPipeline {
         }
         self.wait_for_capacity().await?;
         self.wait_post_interval().await;
+        Ok(())
+    }
+
+    async fn send_prepared(
+        &mut self,
+        upload: &mut XhttpUploadClient,
+        session_id: &str,
+        seq: &mut u64,
+        payload: Bytes,
+    ) -> Result<(), String> {
         let completion = begin_xhttp_packet_up_request(upload, session_id, *seq, payload).await?;
         *seq = seq.saturating_add(1);
         self.last_post_started = Some(time::Instant::now());
         self.completions.push(completion);
         self.poll_ready()
+    }
+
+    /// Keep reading during capacity/interval waits, bounded by one POST. Reads
+    /// use AsyncRead's cancellation-safe single-read operation; ordering and
+    /// HTTP concurrency remain owned by this pipeline.
+    pub async fn send_coalescing(
+        &mut self,
+        upload: &mut XhttpUploadClient,
+        session_id: &str,
+        seq: &mut u64,
+        payload: Bytes,
+        reader: &mut (impl AsyncRead + Unpin),
+    ) -> Result<usize, String> {
+        if payload.len() >= self.max_post_bytes {
+            let len = payload.len();
+            self.send(upload, session_id, seq, payload).await?;
+            return Ok(len);
+        }
+        let maximum = self.max_post_bytes;
+        let payload = coalesce_until_ready(self.prepare(upload), reader, payload, maximum).await?;
+        let len = payload.len();
+        self.send_prepared(upload, session_id, seq, payload).await?;
+        Ok(len)
     }
 
     async fn wait_for_capacity(&mut self) -> Result<(), String> {
@@ -151,6 +189,37 @@ impl XhttpPacketUpPipeline {
     pub fn push_test_completion(&self, completion: XhttpPacketUpCompletion) {
         self.completions.push(completion);
     }
+}
+
+async fn coalesce_until_ready(
+    ready: impl std::future::Future<Output = Result<(), String>>,
+    reader: &mut (impl AsyncRead + Unpin),
+    mut payload: Bytes,
+    maximum: usize,
+) -> Result<Bytes, String> {
+    tokio::pin!(ready);
+    let mut combined = bytes::BytesMut::new();
+    let mut scratch = PooledBuffer::default();
+    while payload.len() + combined.len() < maximum {
+        let remaining = maximum - payload.len() - combined.len();
+        scratch.resize(remaining.min(16 * 1024), 0);
+        tokio::select! {
+            biased;
+            result = &mut ready => { result?; return Ok(if combined.is_empty() { payload } else { combined.freeze() }); }
+            read = reader.read(&mut scratch) => {
+                let read = read.map_err(|error| format!("read xHTTP upload while awaiting POST: {error}"))?;
+                if read == 0 { break; }
+                if !payload.is_empty() { combined.extend_from_slice(&payload); payload = Bytes::new(); }
+                combined.extend_from_slice(&scratch[..read]);
+            }
+        }
+    }
+    ready.await?;
+    Ok(if combined.is_empty() {
+        payload
+    } else {
+        combined.freeze()
+    })
 }
 
 #[cfg(test)]
