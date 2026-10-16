@@ -61,6 +61,7 @@ pub async fn relay_tcp_over_shadowsocks_simple_obfs_tls_async(
 
     let (mut proxy_read, mut proxy_write) = proxy.split();
     let mut proxy_reader = AsyncSimpleObfsTlsAppDataReader::new(response_payload, &mut proxy_read);
+    let mut proxy_reader = dae_resident_transport::PooledReader::new(&mut proxy_reader);
     let mut server_salt = vec![0_u8; salt_len];
     proxy_reader
         .read_exact(&mut server_salt)

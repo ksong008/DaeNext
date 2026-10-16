@@ -218,8 +218,11 @@ pub struct VisionDuplexDriver {
     outer_read_handoff_pending: bool,
     direct_downlink_len: usize,
     downlink_write_offset: usize,
-    inbound_buffer: [u8; VISION_RELAY_BUFFER_SIZE],
-    proxy_buffer: [u8; VISION_RELAY_BUFFER_SIZE],
+    // These buffers are allocated on first use and returned to the bounded
+    // resident pool with the driver. Keeping them off the future's inline
+    // layout avoids reserving two 32 KiB arrays for idle relays.
+    inbound_buffer: PooledBuffer,
+    proxy_buffer: PooledBuffer,
     inbound_closed: bool,
     proxy_closed: bool,
     proxy_write_shutdown: bool,
@@ -261,8 +264,8 @@ impl VisionDuplexDriver {
             outer_read_handoff_pending: false,
             direct_downlink_len: 0,
             downlink_write_offset: 0,
-            inbound_buffer: [0; VISION_RELAY_BUFFER_SIZE],
-            proxy_buffer: [0; VISION_RELAY_BUFFER_SIZE],
+            inbound_buffer: PooledBuffer::default(),
+            proxy_buffer: PooledBuffer::default(),
             inbound_closed: false,
             proxy_closed: false,
             proxy_write_shutdown: false,
@@ -547,6 +550,7 @@ impl VisionDuplexDriver {
         Proxy: VisionProxyIo + ?Sized,
     {
         loop {
+            self.proxy_buffer.resize(VISION_RELAY_BUFFER_SIZE, 0);
             let mut read_buffer = tokio::io::ReadBuf::new(&mut self.proxy_buffer);
             let result = match self.downlink_state {
                 VisionDownlinkState::Overlay | VisionDownlinkState::DirectPending => {
@@ -662,6 +666,7 @@ impl VisionDuplexDriver {
     where
         IO: AsyncRead + Unpin + ?Sized,
     {
+        self.inbound_buffer.resize(VISION_RELAY_BUFFER_SIZE, 0);
         let mut read_buffer = tokio::io::ReadBuf::new(&mut self.inbound_buffer);
         match Pin::new(inbound).poll_read(cx, &mut read_buffer) {
             Poll::Ready(Ok(())) => {

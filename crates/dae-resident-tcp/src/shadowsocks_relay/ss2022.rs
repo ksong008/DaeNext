@@ -36,6 +36,7 @@ pub async fn relay_tcp_over_shadowsocks_2022_async(
 
     let (mut inbound_reader, mut inbound_writer) = tokio::io::split(inbound);
     let (mut proxy_reader, mut proxy_writer) = tokio::io::split(proxy);
+    let mut proxy_reader = dae_resident_transport::PooledReader::new(&mut proxy_reader);
     let upload_stop = Arc::clone(&stop);
     let download_stop = Arc::clone(&stop);
     let upload = relay_shadowsocks_2022_upload_async(

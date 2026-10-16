@@ -1,16 +1,14 @@
 use super::*;
+use crate::PooledReader;
 use dae_outbound_stream::shared_transport::{TlsFragmentPlan, TlsFragmentPlanner};
 use std::future::Future;
 use std::time::Duration;
-use tokio::io::BufReader;
-
-const BORING_TLS_BIO_READ_BUFFER_BYTES: usize = 64 * 1024;
 
 pub(crate) enum AsyncResidentTcpStream {
     Plain(TokioTcpStream),
     Fragmenting(AsyncTlsFragmentingTcpStream),
-    BufferedPlain(BufReader<TokioTcpStream>),
-    BufferedFragmenting(BufReader<AsyncTlsFragmentingTcpStream>),
+    BufferedPlain(PooledReader<TokioTcpStream>),
+    BufferedFragmenting(PooledReader<AsyncTlsFragmentingTcpStream>),
     VisionPlain(TlsRecordBoundedReader<TokioTcpStream>),
     VisionFragmenting(TlsRecordBoundedReader<AsyncTlsFragmentingTcpStream>),
 }
@@ -28,14 +26,10 @@ impl AsyncResidentTcpStream {
             return Self::new(tcp, options);
         }
         match options {
-            Some(options) => Self::BufferedFragmenting(BufReader::with_capacity(
-                BORING_TLS_BIO_READ_BUFFER_BYTES,
+            Some(options) => Self::BufferedFragmenting(PooledReader::new(
                 AsyncTlsFragmentingTcpStream::new(tcp, options),
             )),
-            None => Self::BufferedPlain(BufReader::with_capacity(
-                BORING_TLS_BIO_READ_BUFFER_BYTES,
-                tcp,
-            )),
+            None => Self::BufferedPlain(PooledReader::new(tcp)),
         }
     }
 

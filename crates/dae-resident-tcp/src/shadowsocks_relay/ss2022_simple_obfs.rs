@@ -45,6 +45,7 @@ pub async fn relay_tcp_over_shadowsocks_2022_simple_obfs_http_async(
     drop((initial, obfs_request, response_head, initial_payload));
 
     let mut proxy_reader = AsyncPrefixedStream::new(response_leftover, proxy);
+    let mut proxy_reader = dae_resident_transport::PooledReader::new(&mut proxy_reader);
     let (mut decoder, start) =
         ss2022_tcp_server_stream_decoder_async(&mut proxy_reader, cipher, password, &client_salt)
             .await
