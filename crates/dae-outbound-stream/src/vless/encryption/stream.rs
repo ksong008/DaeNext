@@ -18,7 +18,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use super::boring_mlkem::{DecapsulationKey, EncapsulationKey};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-const MAX_RECORD_PAYLOAD: usize = 8192;
+// Keep the encrypted record within the 16 KiB TLS-style payload ceiling.
+const MAX_RECORD_PAYLOAD: usize = 16 * 1024;
 const RECORD_HEADER_LEN: usize = 5;
 const AEAD_TAG_LEN: usize = 16;
 const MAX_RECORD_LEN: usize = 16_640;
@@ -1188,6 +1189,39 @@ mod tests {
         .expect("write_all must succeed");
         stream.flush().await.expect("flush must drain the record");
         assert!(!stream.into_inner().writes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sixteen_kib_records_preserve_large_writes_and_short_inner_writes() {
+        for size in [8193_usize, 16383, 16384, 16385, 65537] {
+            let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+            let mut stream = test_stream(ChunkedIo::new(Vec::new(), 7), ReadState::Eof);
+            stream.write_all(&payload).await.unwrap();
+            stream.flush().await.unwrap();
+            let wire = stream.into_inner().writes;
+            let mut aead = AeadState::new(b"fixture-write", &[0x11; 32]);
+            let mut cursor = 0;
+            let mut recovered = Vec::new();
+            let mut records = 0;
+            while cursor < wire.len() {
+                let header = &wire[cursor..cursor + RECORD_HEADER_LEN];
+                let len = u16::from_be_bytes([header[3], header[4]]) as usize;
+                assert!(len <= 16384 + AEAD_TAG_LEN);
+                assert!(len + RECORD_HEADER_LEN <= MAX_RECORD_LEN);
+                recovered.extend_from_slice(
+                    &aead
+                        .open_next(
+                            &wire[cursor + RECORD_HEADER_LEN..cursor + RECORD_HEADER_LEN + len],
+                            header,
+                        )
+                        .unwrap(),
+                );
+                cursor += RECORD_HEADER_LEN + len;
+                records += 1;
+            }
+            assert_eq!(recovered, payload);
+            assert_eq!(records, size.div_ceil(16384));
+        }
     }
 
     #[test]
