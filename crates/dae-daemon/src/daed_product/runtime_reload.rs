@@ -161,7 +161,18 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_inner(
     } else {
         true
     };
-    if runtime.is_running() && !modified && activation_identity_consistent {
+    // CA bundles are external inputs and are absent from the config fingerprint.
+    // Re-read trust at the explicit reload boundary before coalescing; changed
+    // trust needs a new generation so pooled transport owners are renewed too.
+    let system_ca_changed = if runtime.is_running() && !modified && activation_identity_consistent {
+        let previous = dae_tls::system_ca_snapshot().ok();
+        let current = dae_tls::refresh_system_ca_snapshot().ok();
+        previous.as_ref().map(|snapshot| snapshot.identity())
+            != current.as_ref().map(|snapshot| snapshot.identity())
+    } else {
+        false
+    };
+    if runtime.is_running() && !modified && activation_identity_consistent && !system_ca_changed {
         let commit = lead.begin_commit();
         if commit.is_err() {
             let error = commit

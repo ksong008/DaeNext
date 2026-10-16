@@ -21,7 +21,7 @@ pub const SYSTEM_CA_BUNDLE_PATHS: &[&str] = &[
     "/etc/ssl/cert.pem",
 ];
 
-type CachedSystemCaSnapshot = Option<Result<Arc<SystemCaSnapshot>, SystemCaError>>;
+type CachedSystemCaSnapshot = Option<Arc<SystemCaSnapshot>>;
 
 static SYSTEM_CA_SNAPSHOT: OnceLock<Mutex<CachedSystemCaSnapshot>> = OnceLock::new();
 
@@ -196,11 +196,31 @@ fn cached_system_ca_snapshot(
 ) -> Result<Arc<SystemCaSnapshot>, SystemCaError> {
     let mut cache = lock_system_ca_cache(cache);
     if let Some(snapshot) = cache.as_ref() {
-        return snapshot.clone();
+        return Ok(Arc::clone(snapshot));
     }
-    let snapshot = load().map(Arc::new);
-    *cache = Some(snapshot.clone());
-    snapshot
+    // Missing mounts and bundles can recover without a process restart. Cache
+    // only validated successes; an error must not disable every future attempt.
+    let snapshot = Arc::new(load()?);
+    *cache = Some(Arc::clone(&snapshot));
+    Ok(snapshot)
+}
+
+/// Reload trust for a new configuration generation. Existing snapshot owners
+/// retain their trust; a failed reload leaves no stale success for new callers.
+pub fn refresh_system_ca_snapshot() -> Result<Arc<SystemCaSnapshot>, SystemCaError> {
+    let cache = SYSTEM_CA_SNAPSHOT.get_or_init(|| Mutex::new(None));
+    refresh_cached_system_ca_snapshot(cache, SystemCaSnapshot::load_from_environment)
+}
+
+fn refresh_cached_system_ca_snapshot(
+    cache: &Mutex<CachedSystemCaSnapshot>,
+    load: impl FnOnce() -> Result<SystemCaSnapshot, SystemCaError>,
+) -> Result<Arc<SystemCaSnapshot>, SystemCaError> {
+    let mut cache = lock_system_ca_cache(cache);
+    *cache = None;
+    let snapshot = Arc::new(load()?);
+    *cache = Some(Arc::clone(&snapshot));
+    Ok(snapshot)
 }
 
 pub fn invalidate_system_ca_snapshot() -> Result<bool, SystemCaError> {
@@ -566,27 +586,58 @@ mod tests {
     }
 
     #[test]
-    fn cache_keeps_failure_until_explicit_invalidation() {
+    fn cache_retries_missing_and_invalid_bundles_without_invalidation() {
+        let directory = TestDirectory::new("cache-retry");
+        let path = directory.path("roots.pem");
         let cache = Mutex::new(None);
-        let first = cached_system_ca_snapshot(&cache, || {
-            Err(SystemCaError::NoBundleFound {
-                candidates: Vec::new(),
-            })
-        });
-        assert!(first.is_err());
+        assert!(
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
+                .is_err()
+        );
+        fs::write(&path, b"invalid certificate bundle").unwrap();
+        assert!(
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
+                .is_err()
+        );
+        fs::write(&path, ca_pem()).unwrap();
+        let recovered =
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
+                .unwrap();
+        assert_eq!(recovered.identity().certificate_count, 1);
+    }
 
-        let cached = cached_system_ca_snapshot(&cache, || {
-            SystemCaSnapshot::load_from_path(PathBuf::from("unused"))
-        });
-        assert!(matches!(cached, Err(SystemCaError::NoBundleFound { .. })));
-
-        assert!(invalidate_cached_system_ca_snapshot(&cache).unwrap());
-        let recovered = cached_system_ca_snapshot(&cache, || {
-            Err(SystemCaError::NoBundleFound {
-                candidates: Vec::new(),
-            })
-        });
-        assert!(recovered.is_err());
+    #[test]
+    fn refresh_replaces_trust_and_failed_refresh_cannot_reuse_stale_roots() {
+        let directory = TestDirectory::new("cache-refresh");
+        let path = directory.path("roots.pem");
+        fs::write(&path, ca_pem()).unwrap();
+        let cache = Mutex::new(None);
+        let old =
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
+                .unwrap();
+        fs::write(&path, ca_pem()).unwrap();
+        let new = refresh_cached_system_ca_snapshot(&cache, || {
+            SystemCaSnapshot::load_from_path(path.clone())
+        })
+        .unwrap();
+        assert_ne!(old.identity(), new.identity());
+        fs::remove_file(&path).unwrap();
+        assert!(
+            refresh_cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(
+                path.clone()
+            ))
+            .is_err()
+        );
+        assert!(
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
+                .is_err()
+        );
+        assert_eq!(old.identity().certificate_count, 1);
+        fs::write(&path, ca_pem()).unwrap();
+        assert!(
+            cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -610,7 +661,6 @@ mod tests {
         assert!(!cache.is_poisoned());
         assert_eq!(old.identity().certificate_count, 1);
         fs::write(&path, ca_pem()).unwrap();
-        assert!(invalidate_cached_system_ca_snapshot(&cache).unwrap());
         let new =
             cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
                 .unwrap();

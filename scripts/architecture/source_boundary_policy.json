@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 22497
+      "tests": 22565
     },
     "dae-outbound": {
       "production": 9255,
@@ -80,7 +80,7 @@
   "subtrees": {
     "crates/dae-daemon/src/daed_product": {
       "production": 20300,
-      "tests": 17631
+      "tests": 17699
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,

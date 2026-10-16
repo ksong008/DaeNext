@@ -253,7 +253,9 @@ pub fn retain_resident_tls_config_cache_for_plans<'a>(
 ) -> ResidentTlsConfigCacheRetainReport {
     let mut exact = BTreeSet::new();
     let mut ca_agnostic = BTreeSet::new();
-    let system_ca = system_ca_snapshot();
+    // This is the generation-build boundary, not a per-connection hot path.
+    // Refresh once so reload observes trust changes and partitions config keys.
+    let system_ca = dae_outbound_quic::system_ca::refresh_system_ca_snapshot();
     for plan in plans {
         collect_active_tls_keys(
             plan,
