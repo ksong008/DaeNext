@@ -68,7 +68,8 @@ pub(crate) async fn open_marked_hysteria2_quic_endpoint_for_remote(
     let transition_socket_limit = port_hopping
         .as_ref()
         .map(|config| config.transition_socket_limit);
-    let runtime = quinn::default_runtime();
+    // Install below port hopping so every replacement socket has the same cap.
+    let runtime = quinn::default_runtime().map(crate::quic_endpoint::tiered_runtime);
     let mut runtime = if obfs.is_salamander() {
         let runtime = runtime.ok_or(QuicEndpointOpenError::Construction)?;
         Some(Arc::new(Hysteria2SalamanderRuntime {
@@ -222,25 +223,44 @@ impl quinn::AsyncUdpSocket for Hysteria2SalamanderUdpSocket {
     fn try_send(&self, transmit: &udp::Transmit<'_>) -> io::Result<()> {
         let segment_size = transmit.segment_size.unwrap_or(transmit.contents.len());
         if segment_size == 0 {
-            return self.inner.try_send(transmit);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "empty Salamander segment",
+            ));
         }
         let mut send_state = self
             .send_state
             .lock()
             .map_err(|_| io::Error::other("Hysteria2 Salamander send state lock is poisoned"))?;
+        // One atomic GSO submission avoids duplicating accepted prefixes on a
+        // WouldBlock retry. Each wire datagram still has an independent salt.
+        send_state.packet.clear();
         for chunk in transmit.contents.chunks(segment_size) {
             let salt = send_state.take_salt()?;
-            salamander_obfuscate_packet_into(&self.key, chunk, &salt, &mut send_state.packet);
-            let obfs_transmit = udp::Transmit {
-                destination: transmit.destination,
-                ecn: transmit.ecn,
-                contents: &send_state.packet,
-                segment_size: None,
-                src_ip: transmit.src_ip,
-            };
-            self.inner.try_send(&obfs_transmit)?;
+            let start = send_state.packet.len();
+            send_state.packet.extend_from_slice(&salt);
+            send_state.packet.extend_from_slice(chunk);
+            let hash = salamander_hash(&self.key, &salt);
+            salamander_xor_in_place(
+                &mut send_state.packet[start + HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD..],
+                &hash,
+            );
         }
-        Ok(())
+        let wire_segment = segment_size
+            .checked_add(HYSTERIA2_SALAMANDER_UDP_PACKET_OVERHEAD)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Salamander segment size overflow",
+                )
+            })?;
+        self.inner.try_send(&udp::Transmit {
+            destination: transmit.destination,
+            ecn: transmit.ecn,
+            contents: &send_state.packet,
+            segment_size: transmit.segment_size.map(|_| wire_segment),
+            src_ip: transmit.src_ip,
+        })
     }
 
     fn poll_recv(
@@ -265,7 +285,7 @@ impl quinn::AsyncUdpSocket for Hysteria2SalamanderUdpSocket {
     }
 
     fn max_transmit_segments(&self) -> usize {
-        1
+        self.inner.max_transmit_segments().min(32)
     }
 
     fn max_receive_segments(&self) -> usize {
@@ -277,6 +297,7 @@ impl quinn::AsyncUdpSocket for Hysteria2SalamanderUdpSocket {
     }
 }
 
+#[cfg(test)]
 fn salamander_obfuscate_packet_into(
     key: &[u8],
     payload: &[u8],
@@ -957,3 +978,7 @@ mod port_hopping_live_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "quic_transport_gro_tests.rs"]
 mod gro_tests;
+
+#[cfg(test)]
+#[path = "quic_transport_send_tests.rs"]
+mod send_tests;

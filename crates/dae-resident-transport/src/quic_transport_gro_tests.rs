@@ -2,6 +2,55 @@ use super::*;
 use quinn::Runtime;
 use std::{future::poll_fn, net::UdpSocket, os::fd::AsRawFd};
 
+#[tokio::test]
+async fn salamander_gso_send_reaches_the_kernel_as_independently_decodable_datagrams() {
+    let key = Arc::new(b"sal-gso-send".to_vec());
+    let runtime = Hysteria2SalamanderRuntime {
+        inner: quinn::default_runtime().unwrap(),
+        key: key.clone(),
+    };
+    let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+    sender.set_nonblocking(true).unwrap();
+    let sender = runtime.wrap_udp_socket(sender).unwrap();
+    assert!(sender.max_transmit_segments() >= 3);
+    let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let payload: Vec<u8> = (0..2705).map(|i| (i % 251) as u8).collect();
+    let transmit = udp::Transmit {
+        destination: receiver.local_addr().unwrap(),
+        contents: &payload,
+        segment_size: Some(1200),
+        ecn: None,
+        src_ip: None,
+    };
+    let mut poller = sender.clone().create_io_poller();
+    poll_fn(|cx| {
+        std::task::ready!(poller.as_mut().poll_writable(cx))?;
+        match sender.try_send(&transmit) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            result => Poll::Ready(result),
+        }
+    })
+    .await
+    .unwrap();
+    let mut salts = std::collections::HashSet::new();
+    for chunk in payload.chunks(1200) {
+        let mut wire = vec![0; 2000];
+        let len = time::timeout(Duration::from_secs(1), receiver.recv(&mut wire))
+            .await
+            .unwrap()
+            .unwrap();
+        wire.truncate(len);
+        assert_eq!(len, chunk.len() + 8);
+        let salt: [u8; 8] = wire[..8].try_into().unwrap();
+        assert!(salts.insert(salt));
+        salamander_xor_in_place(&mut wire[8..], &salamander_hash(&key, &salt));
+        assert_eq!(&wire[8..], chunk);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn salamander_disables_gro_after_wrap_and_receives_gso_datagrams() {
     let runtime = Hysteria2SalamanderRuntime {

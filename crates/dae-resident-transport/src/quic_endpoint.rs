@@ -3,6 +3,8 @@ mod charge;
 mod drain;
 mod metrics;
 mod model;
+mod receive_tier;
+pub(crate) use receive_tier::tiered_runtime;
 mod runtime;
 mod socket;
 
@@ -360,7 +362,7 @@ fn finish_open_observed_quic_endpoint(
         set_socket_mark(socket.as_raw_fd(), mark)
             .map_err(|error| format!("set QUIC UDP SO_MARK {mark}: {error}"))?;
     }
-    let runtime = runtime.ok_or_else(|| "no quinn runtime available".to_owned())?;
+    let runtime = tiered_runtime(runtime.ok_or_else(|| "no quinn runtime available".to_owned())?);
     let socket = runtime
         .wrap_udp_socket(socket)
         .map_err(|error| format!("wrap QUIC UDP socket: {error}"))?;

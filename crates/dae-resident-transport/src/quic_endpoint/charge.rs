@@ -6,7 +6,7 @@ pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA: &str = "quinn-endpoint-charge";
 pub(super) const QUIC_ENDPOINT_CHARGE_SCHEMA_VERSION: u64 = 3;
 pub(super) const QUIC_ENDPOINT_CHARGE_MODEL: &str =
     "quinn-0.11-endpoint-and-underlay-safety-reserve";
-pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 5;
+pub(super) const QUIC_ENDPOINT_CHARGE_MODEL_VERSION: u64 = 6;
 
 const QUINN_RECEIVE_DATAGRAM_LIMIT_BYTES: u64 = 64 * 1024;
 const QUINN_GRO_RECEIVE_SEGMENTS: usize = 64;
@@ -152,7 +152,10 @@ impl QuicEndpointCharge {
     }
 }
 
-const fn conservative_platform_receive_segments() -> usize {
+fn conservative_platform_receive_segments() -> usize {
+    if cfg!(target_os = "linux") {
+        return super::receive_tier::selected_segments();
+    }
     if cfg!(any(
         target_os = "linux",
         target_os = "android",
