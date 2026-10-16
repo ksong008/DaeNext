@@ -30,14 +30,14 @@ pub fn new_boring_quic_session_cache() -> BoringQuicSessionCache {
     ))
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum BoringQuicClientHelloProfile {
     #[default]
     Generic,
     Chrome,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum BoringQuicVerificationPolicy {
     SystemRoots,
     ExplicitInsecure,
@@ -66,7 +66,7 @@ impl BoringQuicVerificationPolicy {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct BoringQuicClientPolicy {
     pub alpn: Vec<Vec<u8>>,
     pub verification: BoringQuicVerificationPolicy,

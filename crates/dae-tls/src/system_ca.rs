@@ -25,7 +25,7 @@ type CachedSystemCaSnapshot = Option<Result<Arc<SystemCaSnapshot>, SystemCaError
 
 static SYSTEM_CA_SNAPSHOT: OnceLock<Mutex<CachedSystemCaSnapshot>> = OnceLock::new();
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SystemCaIdentity {
     pub path: PathBuf,
     pub sha256: String,

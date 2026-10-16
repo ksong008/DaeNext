@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::VecDeque;
+use dae_netutil::IndexedCache;
 use std::sync::{Mutex, OnceLock, Weak};
 
 struct Entry {
@@ -10,7 +10,7 @@ struct Entry {
 }
 #[cfg(test)]
 thread_local! { static BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-static CONFIGS: OnceLock<Mutex<VecDeque<Entry>>> = OnceLock::new();
+static CONFIGS: OnceLock<Mutex<IndexedCache<Entry>>> = OnceLock::new();
 
 pub(super) fn client_config(
     policy: &BoringQuicClientPolicy,
@@ -31,10 +31,17 @@ pub(super) fn client_config(
         None
     };
     let ca_identity = ca.as_ref().map(|ca| ca.identity());
-    let configs = CONFIGS.get_or_init(|| Mutex::new(VecDeque::new()));
+    let configs = CONFIGS.get_or_init(|| Mutex::new(IndexedCache::new(64)));
     {
         let mut cache = configs.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some(index) = cache.iter().position(|entry| {
+        let hash = cache.hash((
+            policy,
+            ca_identity,
+            sessions
+                .as_ref()
+                .map(|s| Arc::as_ptr(s) as *const () as usize),
+        ));
+        if let Some(entry) = cache.get(hash, |entry| {
             &entry.policy == policy
                 && entry.ca.as_ref() == ca_identity
                 && match (&entry.sessions, &sessions) {
@@ -45,9 +52,7 @@ pub(super) fn client_config(
                     _ => false,
                 }
         }) {
-            let entry = cache.remove(index).expect("cached index");
             let mut config = entry.config.clone();
-            cache.push_back(entry);
             // Congestion factories and transport limits belong to this caller.
             config.transport_config(transport);
             return Ok(config);
@@ -67,13 +72,14 @@ pub(super) fn client_config(
     };
     let retired = {
         let mut cache = configs.lock().unwrap_or_else(|error| error.into_inner());
-        let retired = if cache.len() >= 64 {
-            cache.pop_front()
-        } else {
-            None
-        };
-        cache.push_back(entry);
-        retired
+        let hash = cache.hash((
+            policy,
+            ca_identity,
+            sessions
+                .as_ref()
+                .map(|s| Arc::as_ptr(s) as *const () as usize),
+        ));
+        cache.insert(hash, entry)
     };
     drop(retired);
     Ok(config)

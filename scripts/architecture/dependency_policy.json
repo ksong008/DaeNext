@@ -310,7 +310,7 @@
     },
     "dae-outbound-quic": {
       "layer": "outbound-quic",
-      "normal": ["dae-outbound-core", "dae-tls"],
+      "normal": ["dae-outbound-core", "dae-tls", "dae-netutil"],
       "build": [],
       "dev": []
     },

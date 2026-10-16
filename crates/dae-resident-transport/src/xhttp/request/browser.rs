@@ -20,24 +20,20 @@ type HeaderTemplate = (
     ResidentXhttpHttpVersion,
     HeaderList,
 );
-static TEMPLATES: OnceLock<std::sync::Mutex<std::collections::VecDeque<HeaderTemplate>>> =
-    OnceLock::new();
+static TEMPLATES: OnceLock<std::sync::Mutex<IndexedCache<HeaderTemplate>>> = OnceLock::new();
 
 pub(super) fn request_headers(
     settings: &ResidentXhttpSettingsPlan,
     version: ResidentXhttpHttpVersion,
 ) -> HeaderList {
-    let cache = TEMPLATES.get_or_init(std::sync::Mutex::default);
+    let cache = TEMPLATES.get_or_init(|| std::sync::Mutex::new(IndexedCache::new(64)));
     {
         let mut templates = cache.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some(index) = templates
-            .iter()
-            .position(|(headers, v, _)| headers == &settings.headers && *v == version)
-            && let Some(template) = templates.remove(index)
-        {
-            let headers = template.2.clone();
-            templates.push_back(template);
-            return headers;
+        let hash = templates.hash((&settings.headers, version as u8));
+        if let Some((_, _, headers)) = templates.get(hash, |(headers, v, _)| {
+            headers == &settings.headers && *v == version
+        }) {
+            return headers.clone();
         }
     }
     let headers = build_request_headers(settings, version);
@@ -49,10 +45,8 @@ pub(super) fn request_headers(
         <= 32 * 1024
     {
         let mut templates = cache.lock().unwrap_or_else(|error| error.into_inner());
-        if templates.len() >= 64 {
-            templates.pop_front();
-        }
-        templates.push_back((settings.headers.clone(), version, headers.clone()));
+        let hash = templates.hash((&settings.headers, version as u8));
+        templates.insert(hash, (settings.headers.clone(), version, headers.clone()));
     }
     headers
 }
