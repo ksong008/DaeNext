@@ -39,6 +39,7 @@ run_step "production feature checker tests" python3 scripts/architecture/test_ch
 run_step "independent default product check" cargo check -p dae-daemon --bin daed "${cargo_profile_args[@]}"
 run_step "workspace check" cargo check --workspace --all-targets "${cargo_profile_args[@]}"
 run_step "workspace library tests" cargo test --workspace --lib "${cargo_profile_args[@]}" -- --test-threads=1
+run_step "isolated QUIC library tests" cargo test -p dae-outbound-quic --lib "${cargo_profile_args[@]}" -- --test-threads=1
 # test-support exposes fixtures; dns-runtime-tests selects the actual suites.
 # Keep both graphs separate from the production feature check above.
 dns_test_args=(-p dae-resident-dataplane -p dae-resident-dns --lib --features dae-resident-dataplane/dns-runtime-tests,dae-resident-dns/dns-runtime-tests)
