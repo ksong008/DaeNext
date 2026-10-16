@@ -49,23 +49,26 @@ pub async fn send_grpc_data(
     end_stream: bool,
     mode: GrpcMode,
 ) -> Result<(), String> {
-    let hunk = grpc_data_frame(mode, payload)
-        .map_err(|err| format!("build Xray gRPC {} frame: {err}", mode.link_value()))?;
-    send_h2_data(send_stream, Bytes::from(hunk), end_stream).await
+    // A single Hunk has the same wire shape in Gun and Multi modes.
+    let _ = mode;
+    let mut buffer = PooledBuffer::with_capacity(GRPC_HUNK_IN_PLACE_PREFIX_BYTES + payload.len());
+    buffer.resize(GRPC_HUNK_IN_PLACE_PREFIX_BYTES, 0);
+    buffer.extend_from_slice(payload);
+    let hunk = grpc_hunk_from_prefixed_payload(buffer, GRPC_HUNK_IN_PLACE_PREFIX_BYTES)?;
+    send_h2_data(send_stream, hunk, end_stream).await
 }
 
-#[cfg(test)]
 pub const GRPC_HUNK_IN_PLACE_PREFIX_BYTES: usize = 16;
 
-#[cfg(test)]
-pub fn grpc_hunk_from_prefixed_payload(
-    mut buffer: Vec<u8>,
+pub fn grpc_hunk_from_prefixed_payload<B: AsRef<[u8]> + AsMut<[u8]> + Send + 'static>(
+    mut buffer: B,
     payload_start: usize,
 ) -> Result<Bytes, String> {
-    if payload_start > buffer.len() {
+    let buffer_slice = buffer.as_mut();
+    if payload_start > buffer_slice.len() {
         return Err("gRPC payload start exceeds owned buffer".to_owned());
     }
-    let payload_len = buffer.len() - payload_start;
+    let payload_len = buffer_slice.len() - payload_start;
     let mut encoded_len = [0_u8; 10];
     let encoded_len_bytes = encode_grpc_varint(payload_len as u64, &mut encoded_len);
     let message_header_len = 1 + encoded_len_bytes;
@@ -81,16 +84,15 @@ pub fn grpc_hunk_from_prefixed_payload(
         .checked_sub(5)
         .ok_or_else(|| "gRPC owned buffer has no frame prefix room".to_owned())?;
 
-    buffer[message_start] = 0x0a;
-    buffer[message_start + 1..message_start + message_header_len]
+    buffer_slice[message_start] = 0x0a;
+    buffer_slice[message_start + 1..message_start + message_header_len]
         .copy_from_slice(&encoded_len[..encoded_len_bytes]);
-    buffer[frame_start] = 0;
-    buffer[frame_start + 1..frame_start + 5].copy_from_slice(&message_len.to_be_bytes());
-    let end = buffer.len();
-    Ok(Bytes::from(buffer).slice(frame_start..end))
+    buffer_slice[frame_start] = 0;
+    buffer_slice[frame_start + 1..frame_start + 5].copy_from_slice(&message_len.to_be_bytes());
+    let end = buffer_slice.len();
+    Ok(Bytes::from_owner(buffer).slice(frame_start..end))
 }
 
-#[cfg(test)]
 fn encode_grpc_varint(mut value: u64, output: &mut [u8; 10]) -> usize {
     let mut written = 0;
     loop {

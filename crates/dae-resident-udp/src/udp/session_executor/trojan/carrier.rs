@@ -164,17 +164,19 @@ impl TrojanUdpCarrier {
     pub(super) async fn read_chunk(
         &mut self,
         mode: UdpStreamReadMode,
-    ) -> Result<Option<Vec<u8>>, String> {
+        output: &mut Vec<u8>,
+    ) -> Result<bool, String> {
         match self {
-            Self::Grpc { .. } => self.read_grpc_chunk(mode).await,
-            _ => self.read_stream_chunk(mode).await,
+            Self::Grpc { .. } => self.read_grpc_chunk(mode, output).await,
+            _ => self.read_stream_chunk(mode, output).await,
         }
     }
 
     async fn read_stream_chunk(
         &mut self,
         mode: UdpStreamReadMode,
-    ) -> Result<Option<Vec<u8>>, String> {
+        output: &mut Vec<u8>,
+    ) -> Result<bool, String> {
         match self {
             Self::Tls {
                 client,
@@ -194,7 +196,10 @@ impl TrojanUdpCarrier {
                     "read Trojan UDP session plaintext",
                 )
                 .await?;
-                Ok(read.map(|read| read_buffer[..read].to_vec()))
+                match read {
+                    Some(read) => append_response(output, &read_buffer[..read]),
+                    None => Ok(false),
+                }
             }
             Self::WebSocket {
                 client,
@@ -211,7 +216,10 @@ impl TrojanUdpCarrier {
                     "read Trojan WebSocket UDP session payload",
                 )
                 .await?;
-                Ok(read.map(|read| read_buffer[..read].to_vec()))
+                match read {
+                    Some(read) => append_response(output, &read_buffer[..read]),
+                    None => Ok(false),
+                }
             }
             Self::Grpc { .. } => Err("Trojan gRPC UDP uses the hunk response reader".to_owned()),
         }
@@ -220,7 +228,8 @@ impl TrojanUdpCarrier {
     async fn read_grpc_chunk(
         &mut self,
         mode: UdpStreamReadMode,
-    ) -> Result<Option<Vec<u8>>, String> {
+        output: &mut Vec<u8>,
+    ) -> Result<bool, String> {
         let Self::Grpc {
             response,
             response_buf,
@@ -230,10 +239,10 @@ impl TrojanUdpCarrier {
             return Err("Trojan gRPC reader received a non-gRPC carrier".to_owned());
         };
         loop {
-            if let Some(payload) = response_buf.pop_payload()?
+            if let Some(payload) = response_buf.next_payload()?
                 && !payload.is_empty()
             {
-                return Ok(Some(payload));
+                return append_response(output, payload);
             }
             let data = if mode.waits_for_readiness() {
                 Some(response.next_data().await)
@@ -244,7 +253,7 @@ impl TrojanUdpCarrier {
                 Some(Ok(Some(bytes))) => response_buf.extend_from_slice(&bytes),
                 Some(Err(err)) => return Err(err),
                 Some(Ok(None)) => return Err("Trojan gRPC response stream closed".to_owned()),
-                None => return Ok(None),
+                None => return Ok(false),
             }
         }
     }
@@ -295,4 +304,15 @@ async fn write_websocket_packet(
     )
     .await
     .map_err(|_| format!("{label} timeout"))?
+}
+
+fn append_response(output: &mut Vec<u8>, payload: &[u8]) -> Result<bool, String> {
+    if output.len().saturating_add(payload.len()) > TROJAN_UDP_RESPONSE_BUFFER_CAPACITY {
+        return Err(format!(
+            "Trojan UDP response buffer exceeds {} bytes",
+            TROJAN_UDP_RESPONSE_BUFFER_CAPACITY
+        ));
+    }
+    output.extend_from_slice(payload);
+    Ok(true)
 }

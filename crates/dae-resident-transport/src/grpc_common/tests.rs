@@ -2,6 +2,45 @@ use super::*;
 use dae_outbound::shared_transport::grpc_hunk_frame;
 
 #[test]
+fn pooled_frame_keeps_storage_until_the_final_bytes_slice_drops() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Owner {
+        bytes: Vec<u8>,
+        drops: Arc<AtomicUsize>,
+    }
+    impl AsRef<[u8]> for Owner {
+        fn as_ref(&self) -> &[u8] {
+            &self.bytes
+        }
+    }
+    impl AsMut<[u8]> for Owner {
+        fn as_mut(&mut self) -> &mut [u8] {
+            &mut self.bytes
+        }
+    }
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut owner = Owner {
+        bytes: vec![0; 16],
+        drops: drops.clone(),
+    };
+    owner.bytes.extend_from_slice(b"payload");
+    let original = owner.bytes.as_ptr();
+    let frame = grpc_hunk_from_prefixed_payload(owner, 16).unwrap();
+    let tail = frame.slice(frame.len() - 7..);
+    assert_eq!(tail.as_ptr(), original.wrapping_add(16));
+    drop(frame);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(&tail[..], b"payload");
+    drop(tail);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn prefixed_owned_grpc_hunk_matches_the_allocating_encoder() {
     for payload_len in [0, 1, 127, 128, 16 * 1024] {
         let payload = vec![payload_len as u8; payload_len];

@@ -151,17 +151,25 @@ async fn drive_grpc_h2_payload_stream(
     let grpc_mode = response.grpc_mode();
     let (mut logical_read, mut logical_write) = tokio::io::split(logical);
     let upload = async {
-        let mut buffer = [0_u8; 16 * 1024];
         loop {
+            let prefix = GRPC_HUNK_IN_PLACE_PREFIX_BYTES;
+            let mut buffer = PooledBuffer::with_capacity(prefix + 16 * 1024);
+            buffer.resize(prefix + 16 * 1024, 0);
             let read = logical_read
-                .read(&mut buffer)
+                .read(&mut buffer[prefix..])
                 .await
                 .map_err(|error| format!("read VLESS Encryption gRPC logical stream: {error}"))?;
             if read == 0 {
                 send_grpc_data(&mut send_stream, &[], true, grpc_mode).await?;
                 return Ok(());
             }
-            send_grpc_data(&mut send_stream, &buffer[..read], false, grpc_mode).await?;
+            buffer.truncate(prefix + read);
+            send_h2_data(
+                &mut send_stream,
+                grpc_hunk_from_prefixed_payload(buffer, prefix)?,
+                false,
+            )
+            .await?;
         }
     };
     let download = async {

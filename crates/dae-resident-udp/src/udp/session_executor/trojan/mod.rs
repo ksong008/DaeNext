@@ -96,22 +96,18 @@ impl TrojanUdpStreamSession {
         let Some(carrier) = self.carrier.as_mut() else {
             return Ok(None);
         };
-        let Some(chunk) = carrier.read_chunk(mode).await? else {
-            return Ok(None);
-        };
         compact_trojan_response_buffer(
             &mut self.response_plaintext,
             &mut self.response_plaintext_cursor,
         );
-        let new_len = self.response_plaintext.len().saturating_add(chunk.len());
-        if new_len > TROJAN_UDP_RESPONSE_BUFFER_CAPACITY {
-            self.shutdown().await;
-            return Err(format!(
-                "Trojan UDP response buffer exceeds {} bytes",
-                TROJAN_UDP_RESPONSE_BUFFER_CAPACITY
-            ));
+        match carrier.read_chunk(mode, &mut self.response_plaintext).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(error) => {
+                self.shutdown().await;
+                return Err(error);
+            }
         }
-        self.response_plaintext.extend_from_slice(&chunk);
         self.try_pop_response_packet()
             .map(|packet| packet.map(|packet| self.response_result(packet)))
     }

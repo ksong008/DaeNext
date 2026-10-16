@@ -20,9 +20,11 @@ pub async fn relay_tcp_over_grpc_h2(
     let upload_progress = progress.clone();
     let upload = async move {
         let mut inbound_read = inbound_read;
-        let mut buffer = [0_u8; 16 * 1024];
         loop {
-            let read = match inbound_read.read(&mut buffer).await {
+            let prefix = dae_resident_transport::GRPC_HUNK_IN_PLACE_PREFIX_BYTES;
+            let mut buffer = PooledBuffer::with_capacity(prefix + 16 * 1024);
+            buffer.resize(prefix + 16 * 1024, 0);
+            let read = match inbound_read.read(&mut buffer[prefix..]).await {
                 Ok(0) => {
                     send_h2_data(send_stream, Bytes::new(), true).await?;
                     return Ok(());
@@ -34,7 +36,9 @@ pub async fn relay_tcp_over_grpc_h2(
                 }
                 Err(err) => return Err(format!("read inbound TCP for gRPC relay: {err}")),
             };
-            send_grpc_data(send_stream, &buffer[..read], false, grpc_mode).await?;
+            buffer.truncate(prefix + read);
+            let frame = dae_resident_transport::grpc_hunk_from_prefixed_payload(buffer, prefix)?;
+            send_h2_data(send_stream, frame, false).await?;
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }

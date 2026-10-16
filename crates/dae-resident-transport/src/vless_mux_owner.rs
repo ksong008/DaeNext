@@ -13,8 +13,8 @@ use bytes::Bytes;
 use dae_outbound_core::vmess::VMessMetadata;
 use dae_outbound_stream::mux::{
     MuxFrame, MuxFrameDecoder, MuxFrameOptions, OPTION_DATA, SESSION_STATUS_END,
-    SESSION_STATUS_KEEP, SESSION_STATUS_KEEPALIVE, SESSION_STATUS_NEW, mux_data_frame,
-    mux_end_frame, mux_error_frame, mux_new_frame,
+    SESSION_STATUS_KEEP, SESSION_STATUS_KEEPALIVE, SESSION_STATUS_NEW, mux_end_frame,
+    mux_error_frame, mux_new_frame,
 };
 use dae_outbound_stream::vless::{VlessEncryptedStream, packet};
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
@@ -33,8 +33,8 @@ use crate::{
 #[cfg(test)]
 use dae_resident_core::ResidentRuntimeProfile;
 use dae_resident_core::{
-    RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal, VLESS_RESPONSE_VERSION,
-    VlessMuxOwnerResourceProfile,
+    PooledBuffer, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal,
+    VLESS_RESPONSE_VERSION, VlessMuxOwnerResourceProfile,
 };
 use dae_resident_model::{ResidentProtocolShape, ResidentProxyBinding, ResidentStreamWrapperPlan};
 
@@ -1287,15 +1287,7 @@ async fn run_vless_mux_physical(
                             if !sessions.contains_key(&sid) {
                                 continue;
                             }
-                            let frame = match mux_data_frame(sid.to_be_bytes(), &payload) {
-                                Ok(frame) => frame,
-                                Err(error) => {
-                                    terminal_error = Some(format!("build VLESS mux payload frame: {error}"));
-                                    break;
-                                }
-                            };
-                            if let Err(error) = client.write_all(&frame).await
-                            {
+                            if let Err(error) = client.write_all(&payload).await {
                                 terminal_error = Some(format!("write VLESS mux logical payload: {error}"));
                                 break;
                             }
@@ -1525,18 +1517,37 @@ async fn run_vless_mux_uplink(
     sender: mpsc::Sender<VlessMuxPhysicalCommand>,
     frame_bytes: usize,
 ) {
-    let mut buffer = vec![0_u8; frame_bytes.max(1)];
+    let prefix = dae_outbound_stream::mux::MUX_DATA_FRAME_HEADER_BYTES;
     loop {
-        match stream.read(&mut buffer).await {
+        let mut buffer = PooledBuffer::with_capacity(prefix + frame_bytes.max(1));
+        buffer.resize(prefix + frame_bytes.max(1), 0);
+        match stream.read(&mut buffer[prefix..]).await {
             Ok(0) => {
                 let _ = sender.send(VlessMuxPhysicalCommand::LocalEnd { sid }).await;
                 return;
             }
             Ok(read) => {
+                let header = match dae_outbound_stream::mux::mux_data_frame_header(
+                    sid.to_be_bytes(),
+                    read,
+                ) {
+                    Ok(header) => header,
+                    Err(error) => {
+                        let _ = sender
+                            .send(VlessMuxPhysicalCommand::LogicalFault {
+                                sid,
+                                error: error.to_string(),
+                            })
+                            .await;
+                        return;
+                    }
+                };
+                buffer[..prefix].copy_from_slice(&header);
+                buffer.truncate(prefix + read);
                 if sender
                     .send(VlessMuxPhysicalCommand::Payload {
                         sid,
-                        payload: Bytes::copy_from_slice(&buffer[..read]),
+                        payload: Bytes::from_owner(buffer),
                     })
                     .await
                     .is_err()

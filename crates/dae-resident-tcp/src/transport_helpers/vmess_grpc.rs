@@ -22,10 +22,17 @@ pub async fn relay_tcp_over_vmess_grpc_h2(
     let upload_progress = progress.clone();
     let upload = async move {
         let mut inbound_read = inbound_read;
-        let mut inbound_buf = Box::new([0_u8; VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE]);
         loop {
+            let prefix = dae_resident_transport::GRPC_HUNK_IN_PLACE_PREFIX_BYTES;
+            let mut inbound_buf =
+                PooledBuffer::with_capacity(prefix + VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE);
+            inbound_buf.resize(prefix + VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE, 0);
+            let wire_buffer: &mut [u8; VMESS_AEAD_TCP_UPLOAD_BUFFER_SIZE] = (&mut inbound_buf
+                [prefix..])
+                .try_into()
+                .map_err(|_| "VMess upload buffer size mismatch".to_owned())?;
             let read = match inbound_read
-                .read(upload_codec.chunk_payload_buffer(inbound_buf.as_mut()))
+                .read(upload_codec.chunk_payload_buffer(wire_buffer))
                 .await
             {
                 Ok(0) => {
@@ -42,9 +49,12 @@ pub async fn relay_tcp_over_vmess_grpc_h2(
                 }
             };
             let wire_len = upload_codec
-                .seal_chunk_in_place(inbound_buf.as_mut(), read)
+                .seal_chunk_in_place(wire_buffer, read)
                 .map_err(|err| format!("encode VMess gRPC upload chunk: {err}"))?;
-            send_grpc_data(send_stream, &inbound_buf[..wire_len], false, grpc_mode).await?;
+            inbound_buf.truncate(prefix + wire_len);
+            let frame =
+                dae_resident_transport::grpc_hunk_from_prefixed_payload(inbound_buf, prefix)?;
+            send_h2_data(send_stream, frame, false).await?;
             upload_progress.record_upload(read);
             metrics.add_upload(read);
         }
