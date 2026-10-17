@@ -17,6 +17,7 @@ CRITICAL_TESTS = {
         "hot_path::tests::truncated_responses_never_produce_cache_or_route_owner_plans",
         "name::tests::all_question_and_answer_parsers_reject_overlong_names",
         "name::tests::expanded_name_limits_apply_across_compression_and_scopes",
+        "name::tests::compressed_wire_bytes_do_not_consume_the_expanded_name_budget",
         "cache_key::label_boundary_tests::presentation_names_preserve_labels_octets_and_hash_identity",
         "reuse::tests::request_reuse_separates_flags_edns_versions_and_udp_sizes",
         "hot_path::negative::tests::negative_cache_uses_soa_ttl_and_minimum_and_fixed_ttl_only_shortens",
@@ -30,6 +31,8 @@ CRITICAL_TESTS = {
         "cache::poison_tests::publication_without_followers_does_not_copy_or_reserve_a_response",
         "runtime::transport::wire::doh_limit_tests::doh_http1_limits_decoded_body_separately_from_headers_and_chunks",
         "runtime::transport::tls_https::tests::doh_h2_bounds_decoded_body_across_data_frames",
+        "runtime::transport::tls_https::tests::doh_h2_rejects_oversized_content_length_before_waiting_for_data",
+        "runtime::transport::h3::proxied::request::body_limit_tests::direct_and_proxy_doh3_bound_body_and_reject_large_declared_lengths",
         "clock::tests::wall_clock_steps_do_not_change_fixed_original_ttls_or_reload_deadlines",
     ],
     "dae-resident-dataplane": [

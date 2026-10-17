@@ -71,7 +71,7 @@
     },
     "dae-resident-dns": {
       "production": 20904,
-      "tests": 3148
+      "tests": 3291
     }
   },
   "counting": "production means non-test-named Rust LOC, including inline tests, comments and blanks; overlapping subtrees are not summed",
