@@ -1115,10 +1115,21 @@ fn a_response_for_query(query: &[u8], address: [u8; 4]) -> Vec<u8> {
     response
 }
 
-fn response_with_question_qtype(mut response: Vec<u8>, qtype: u16) -> Vec<u8> {
-    let view = DnsPacketView::parse(&response).unwrap();
-    let qtype_offset = view.answer_offset() - 4;
-    response[qtype_offset..qtype_offset + 2].copy_from_slice(&qtype.to_be_bytes());
+fn aaaa_response_for_query(query: &[u8]) -> Vec<u8> {
+    let mut response = query.to_vec();
+    response[2..4].copy_from_slice(&0x8180_u16.to_be_bytes());
+    response[6..8].copy_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&[0xc0, 12]);
+    response.extend_from_slice(&DNS_QTYPE_AAAA.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&60_u32.to_be_bytes());
+    response.extend_from_slice(&16_u16.to_be_bytes());
+    response.extend_from_slice(
+        &"2001:db8::42"
+            .parse::<std::net::Ipv6Addr>()
+            .unwrap()
+            .octets(),
+    );
     response
 }
 
@@ -1207,9 +1218,10 @@ async fn resident_dns_ipversion_prefer_preserves_non_preferred_cached_response()
     record_accepted_dns_response(
         &plan,
         &aaaa_cache_key,
-        &response_with_question_qtype(a_response([198, 51, 100, 42]), DNS_QTYPE_AAAA),
+        &aaaa_response_for_query(&aaaa_query),
     )
     .unwrap();
+    assert_eq!(plan.cache.entry_len(), 2);
 
     let response =
         handle_resident_dns_udp_async(&plan, "127.0.0.1:53".parse().unwrap(), &aaaa_query)
@@ -1223,6 +1235,10 @@ async fn resident_dns_ipversion_prefer_preserves_non_preferred_cached_response()
     assert_eq!(
         response_view.questions().next().unwrap().qtype(),
         DNS_QTYPE_AAAA
+    );
+    assert_eq!(
+        response_view.answers().next().unwrap().unwrap().ip(),
+        Some("2001:db8::42".parse().unwrap())
     );
 }
 

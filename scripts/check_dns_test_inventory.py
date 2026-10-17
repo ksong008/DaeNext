@@ -37,6 +37,7 @@ CRITICAL_TESTS = {
     ],
     "dae-resident-dataplane": [
         "udp::proxy_dns_forwarder::tests::request_local_oversize_send_failure_preserves_an_existing_pending_response",
+        "dns_runtime_tests::plan::resident_dns_ipversion_prefer_preserves_non_preferred_cached_response",
     ],
 }
 

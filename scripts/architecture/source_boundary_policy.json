@@ -55,7 +55,7 @@
     },
     "dae-resident-dataplane": {
       "production": 33363,
-      "tests": 35005
+      "tests": 35021
     },
     "dae-resident-transport": {
       "production": 35887,
