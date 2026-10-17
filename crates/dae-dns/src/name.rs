@@ -198,6 +198,29 @@ mod tests {
         ));
         assert!(scan_dns_name(&[0xc0, 99], 0, 2, true).is_err());
     }
+
+    #[test]
+    fn compressed_wire_bytes_do_not_consume_the_expanded_name_budget() {
+        // Replacing the root with a two-byte pointer makes the encoding 256 B,
+        // while the expanded name remains exactly 255 B.
+        let mut packet = vec![0];
+        packet.extend_from_slice(&name(61)[..254]);
+        packet.extend([0xc0, 0]);
+        assert_eq!(scan_dns_name(&packet, 1, packet.len(), true).unwrap(), 257);
+        assert_eq!(NameLabels::new(&packet, 1, packet.len(), true).count(), 4);
+
+        // Each pointer follows a prefix: the budget must survive every jump.
+        let suffix = packet.len();
+        packet.extend([1, b'b', 0xc0, 0]);
+        let prefix = packet.len();
+        packet.extend_from_slice(&name(59)[..252]);
+        packet.extend([0xc0 | ((suffix >> 8) as u8), suffix as u8]);
+        assert!(scan_dns_name(&packet, prefix, packet.len(), true).is_ok());
+        let extra = packet.len();
+        packet.extend([1, b'x', 0xc0 | ((prefix >> 8) as u8), prefix as u8]);
+        assert!(scan_dns_name(&packet, extra, packet.len(), true).is_err());
+        assert!(NameLabels::new(&packet, extra, packet.len(), true).any(|label| label.is_err()));
+    }
     #[test]
     fn all_question_and_answer_parsers_reject_overlong_names() {
         for last in [61, 62, 63] {
