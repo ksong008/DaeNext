@@ -666,34 +666,36 @@ impl ResidentDnsFlightPermit<'_> {
         if !self.is_leader() {
             return Err("resident DNS flight follower cannot publish".to_owned());
         }
-        let result = result.map(Arc::<[u8]>::from).map_err(Arc::<str>::from);
-        let retained_bytes = match &result {
+        if self.published {
+            return Err("resident DNS flight outcome was already published".to_owned());
+        }
+        // Registration and removal use the same lock. Once removed, no new
+        // follower can join this state; existing followers may only disappear.
+        self.remove_registry_entry();
+        if self.state.followers.load(Ordering::Acquire) == 0 {
+            self.published = true;
+            return Ok(());
+        }
+        let bytes = match &result {
             Ok(response) => response.len(),
             Err(error) => error.len(),
         };
-        let (result, retained) = match self
-            .cache
-            .flight_retained_budget
-            .try_reserve(retained_bytes)
-        {
-            Some(retained) => (result, Some(retained)),
+        let (result, retained) = match self.cache.flight_retained_budget.try_reserve(bytes) {
+            Some(retained) => (
+                result.map(Arc::<[u8]>::from).map_err(Arc::<str>::from),
+                Some(retained),
+            ),
             None => (
-                Err(Arc::<str>::from(
+                Err(Arc::from(
                     "resident DNS flight retained response byte limit reached",
                 )),
                 None,
             ),
         };
-        let outcome = Arc::new(ResidentDnsFlightOutcome {
+        self.publish_outcome(Arc::new(ResidentDnsFlightOutcome {
             result,
             _retained: retained,
-        });
-        let published_error = outcome.result.as_ref().err().map(ToString::to_string);
-        self.publish_outcome(outcome)?;
-        match published_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        }))
     }
 
     fn outcome(&self) -> Result<Option<Arc<ResidentDnsFlightOutcome>>, String> {

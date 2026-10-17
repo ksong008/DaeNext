@@ -81,3 +81,46 @@ fn dropped_leader_removes_its_identity_even_if_both_locks_are_poisoned() {
             .is_leader()
     );
 }
+
+#[test]
+fn publication_without_followers_does_not_copy_or_reserve_a_response() {
+    let cache = ResidentDnsRuntimeCache::with_flight_limits(2, 2, 1);
+    let mut leader = cache.begin_flight(key("solo.example")).unwrap();
+    let packet = vec![0; 65535];
+    leader.publish(Ok(&packet)).unwrap();
+    assert!(leader.outcome().unwrap().is_none());
+    assert_eq!(cache.flight_retained_bytes(), 0);
+    assert_eq!(cache.inflight_len(), 0);
+    assert!(leader.publish(Ok(&packet)).is_err());
+}
+
+#[tokio::test]
+async fn registering_during_publication_never_loses_a_waiter() {
+    for _ in 0..100 {
+        let cache = ResidentDnsRuntimeCache::with_flight_limits(2, 2, 4);
+        let mut leader = cache.begin_flight(key("race.example")).unwrap();
+        let barrier = std::sync::Barrier::new(2);
+        let follower = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                leader.publish(Ok(&[0, 1, 2, 3])).unwrap();
+            });
+            barrier.wait();
+            cache.begin_flight(key("race.example")).unwrap()
+        });
+        if !follower.is_leader() {
+            let packet = follower
+                .wait(
+                    ProxyDnsRequestContext::from_timeout(std::time::Duration::from_secs(1)),
+                    9,
+                )
+                .await
+                .unwrap();
+            assert_eq!(packet, [0, 9, 2, 3]);
+        }
+        drop(follower);
+        drop(leader);
+        assert_eq!(cache.inflight_len(), 0);
+        assert_eq!(cache.flight_retained_bytes(), 0);
+    }
+}

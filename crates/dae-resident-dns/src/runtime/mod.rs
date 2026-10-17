@@ -839,7 +839,7 @@ async fn handle_resident_dns_request_without_preference(
             .await
         }
     };
-    flight.publish(result.as_ref().map(Vec::as_slice).map_err(String::as_str))?;
+    let _ = flight.publish(result.as_ref().map(Vec::as_slice).map_err(String::as_str));
     result
 }
 
@@ -953,12 +953,12 @@ async fn handle_resident_dns_request_without_preference_trace(
             .await
         }
     };
-    flight.publish(
+    let _ = flight.publish(
         result
             .as_ref()
             .map(|result| result.response.as_slice())
             .map_err(String::as_str),
-    )?;
+    );
     result
 }
 

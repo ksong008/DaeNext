@@ -398,10 +398,9 @@ async fn resident_dns_flight_bounds_followers_and_retained_response_bytes() {
     let follower_error = cache.begin_flight(key).err().unwrap();
     assert!(follower_error.contains("follower limit reached"));
 
-    let leader_error = leader
+    leader
         .publish(Ok(&[0x12, 0x34, 0x81, 0x80, 0, 0, 0, 0]))
-        .unwrap_err();
-    assert!(leader_error.contains("retained response byte limit reached"));
+        .unwrap();
     assert_eq!(cache.flight_retained_bytes(), 0);
     let error = follower
         .wait(
@@ -411,7 +410,6 @@ async fn resident_dns_flight_bounds_followers_and_retained_response_bytes() {
         .await
         .unwrap_err();
     assert!(error.contains("retained response byte limit reached"));
-    assert_eq!(error, leader_error);
 
     let retained_key = ResidentDnsResponseCacheKey::new(
         DnsCacheKey::new("retained-flight.example.", DNS_QTYPE_A, 1),
