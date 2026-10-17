@@ -73,7 +73,7 @@ pub(crate) fn hash_dns_cache_key_wire_parts<H: Hasher>(
 
 fn hash_canonical_name_into<H: Hasher>(name: &str, state: &mut H) {
     let canonical;
-    let name = if name.contains('\\') || !name.is_ascii() {
+    let name = if needs_presentation_normalization(name) {
         canonical = canonical_name_lowercase(name);
         canonical.as_str()
     } else {
@@ -136,6 +136,11 @@ fn hash_canonical_wire_name_into<H: Hasher>(wire: &[u8], state: &mut H) {
     state.write_u8(0);
 }
 
+fn needs_presentation_normalization(name: &str) -> bool {
+    name.bytes()
+        .any(|byte| byte != b'.' && !crate::name::literal_byte(byte))
+}
+
 pub fn canonical_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.ends_with('.') {
@@ -147,7 +152,7 @@ pub fn canonical_name(name: &str) -> String {
 
 pub fn canonical_name_lowercase(name: &str) -> String {
     let trimmed = name.trim();
-    if trimmed.contains('\\') || !trimmed.is_ascii() || trimmed.contains('|') {
+    if needs_presentation_normalization(trimmed) {
         let mut wire = Vec::new();
         if crate::encode_dns_name_into(&mut wire, trimmed).is_ok() {
             if let Ok(canonical) = crate::name::canonical_wire_name(&wire) {
@@ -170,7 +175,7 @@ pub fn canonical_name_lowercase(name: &str) -> String {
 }
 
 pub fn canonical_name_eq_ignore_ascii_case(canonical: &str, candidate: &str) -> bool {
-    if candidate.contains('\\') || !candidate.is_ascii() {
+    if needs_presentation_normalization(candidate) {
         return canonical == canonical_name_lowercase(candidate);
     }
     let candidate = candidate.trim();
@@ -292,5 +297,14 @@ mod label_boundary_tests {
         );
         assert_ne!(hash_text(r"a\046b.test."), hash_text("a.b.test."));
         assert_eq!(hash_text(r"\065.test."), hash_text("a.test."));
+        for text in ["a|b.test", "a b.test"] {
+            let canonical = DnsCacheKey::new(text, 1, 1);
+            assert_eq!(hash_text(text), hash_text(&canonical.qname));
+            assert!(canonical.matches_view(DnsCacheKeyView {
+                qname: text,
+                qtype: 1,
+                qclass: 1
+            }));
+        }
     }
 }
