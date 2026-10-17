@@ -236,41 +236,18 @@ fn wire_name_eq_ignore_ascii_case(left: &[u8], right: &[u8]) -> bool {
 }
 
 fn wire_name_to_canonical_string(wire: &[u8]) -> Result<String, DnsError> {
-    let mut offset = 0;
-    let mut out = String::new();
-    loop {
-        if offset >= wire.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        let len = wire[offset];
-        if len & 0xc0 != 0 || len > 63 {
-            return Err(DnsError::InvalidDnsName);
-        }
-        offset += 1;
-        if len == 0 {
-            out.push('.');
-            return Ok(out);
-        }
-        let end = offset + len as usize;
-        if end > wire.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        if !out.is_empty() {
-            out.push('.');
-        }
-        let label =
-            std::str::from_utf8(&wire[offset..end]).map_err(|_| DnsError::InvalidDnsName)?;
-        for ch in label.chars() {
-            out.push(ch.to_ascii_lowercase());
-        }
-        offset = end;
-    }
+    crate::name::canonical_wire_name(wire)
 }
 
 fn wire_name_eq_canonical_ignore_ascii_case(
     wire: &[u8],
     candidate: &str,
 ) -> Result<bool, DnsError> {
+    if candidate.contains('\\') || candidate.trim() == "." {
+        return Ok(
+            wire_name_to_canonical_string(wire)? == crate::canonical_name_lowercase(candidate)
+        );
+    }
     let trimmed = candidate.trim().trim_end_matches('.');
     let mut candidate_labels = trimmed.split('.');
     let mut saw_candidate_label = false;

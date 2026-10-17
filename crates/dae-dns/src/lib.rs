@@ -6,7 +6,7 @@ pub mod error;
 pub mod hot_path;
 pub mod message;
 mod name;
-pub use name::scan_dns_name;
+pub use name::{encode_dns_name_into, scan_dns_name};
 pub mod netutils;
 pub mod resolve;
 pub mod routing;

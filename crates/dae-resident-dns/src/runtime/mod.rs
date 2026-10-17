@@ -1029,12 +1029,9 @@ fn dns_response_has_any_ip(response: &[u8]) -> Result<bool, String> {
 }
 
 pub fn build_dns_query_packet(id: u16, domain: &str, qtype: u16) -> Result<Vec<u8>, String> {
-    let domain = domain.trim().trim_end_matches('.');
+    let domain = domain.trim();
     if domain.is_empty() || domain.parse::<IpAddr>().is_ok() {
         return Err(format!("not a resolvable domain name: {domain:?}"));
-    }
-    if domain.len() > 253 {
-        return Err("DNS name exceeds 255 wire bytes".to_owned());
     }
     let mut packet = Vec::with_capacity(12 + domain.len() + 6);
     packet.extend_from_slice(&id.to_be_bytes());
@@ -1043,19 +1040,8 @@ pub fn build_dns_query_packet(id: u16, domain: &str, qtype: u16) -> Result<Vec<u
     packet.extend_from_slice(&0_u16.to_be_bytes());
     packet.extend_from_slice(&0_u16.to_be_bytes());
     packet.extend_from_slice(&0_u16.to_be_bytes());
-    for label in domain.split('.') {
-        if label.is_empty() {
-            return Err(format!("domain contains an empty label: {domain:?}"));
-        }
-        let len = u8::try_from(label.len())
-            .map_err(|_| format!("domain label is too long in {domain:?}"))?;
-        if len > 63 {
-            return Err(format!("domain label is too long in {domain:?}"));
-        }
-        packet.push(len);
-        packet.extend_from_slice(label.as_bytes());
-    }
-    packet.push(0);
+    dae_dns::encode_dns_name_into(&mut packet, domain)
+        .map_err(|error| format!("invalid DNS query name: {error}"))?;
     packet.extend_from_slice(&qtype.to_be_bytes());
     packet.extend_from_slice(&1_u16.to_be_bytes());
     Ok(packet)

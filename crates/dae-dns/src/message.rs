@@ -336,7 +336,7 @@ fn read_name(packet: &[u8], offset: usize, _depth: usize) -> Result<(String, usi
     let end = crate::scan_dns_name(packet, offset, packet.len(), true)?;
     let mut name = String::new();
     for label in crate::name::NameLabels::new(packet, offset, packet.len(), true) {
-        name.push_str(std::str::from_utf8(label?).map_err(|_| DnsError::InvalidDnsName)?);
+        crate::name::append_label(&mut name, label?);
         name.push('.');
     }
     if name.is_empty() {

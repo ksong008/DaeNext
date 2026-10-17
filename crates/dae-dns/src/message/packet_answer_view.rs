@@ -57,6 +57,9 @@ impl<'a> DnsPacketNameView<'a> {
     }
 
     pub fn canonical_eq_ignore_ascii_case(&self, candidate: &str) -> Result<bool, DnsError> {
+        if candidate.contains('\\') || candidate.trim() == "." {
+            return Ok(self.to_canonical_string()? == crate::canonical_name_lowercase(candidate));
+        }
         let trimmed = candidate.trim().trim_end_matches('.');
         let mut candidate_labels = trimmed.split('.');
         let mut saw_candidate_label = false;
@@ -80,10 +83,7 @@ impl<'a> DnsPacketNameView<'a> {
             if !out.is_empty() {
                 out.push('.');
             }
-            let label = std::str::from_utf8(label).map_err(|_| DnsError::InvalidDnsName)?;
-            for ch in label.chars() {
-                out.push(ch.to_ascii_lowercase());
-            }
+            crate::name::append_label(&mut out, label);
         }
         out.push('.');
         Ok(out)

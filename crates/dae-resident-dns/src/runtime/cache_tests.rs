@@ -539,3 +539,53 @@ fn resident_dns_runtime_cache_replacement_updates_deadline_index() {
     assert_eq!(cache.entry_len(), 2);
     assert_eq!(cache.deadline_len(), 2);
 }
+
+#[test]
+fn escaped_labels_stay_separate_in_cache_flights_reload_and_owner_removal() {
+    let mut dotted = QUERY[..12].to_vec();
+    dotted.extend_from_slice(b"\x03a.b\x04test\0\0\x01\0\x01");
+    let mut split = QUERY[..12].to_vec();
+    split.extend_from_slice(b"\x01a\x01b\x04test\0\0\x01\0\x01");
+    let requests = [
+        DnsPacketView::parse(&dotted).unwrap(),
+        DnsPacketView::parse(&split).unwrap(),
+    ];
+    let keys = requests.map(|r| test_asis_cache_key(&r));
+    assert_ne!(keys[0], keys[1]);
+    let cache = ResidentDnsRuntimeCache::with_cache_entry_limit(8);
+    let first = cache.begin_flight(keys[0].clone()).unwrap();
+    let second = cache.begin_flight(keys[1].clone()).unwrap();
+    assert!(first.is_leader() && second.is_leader());
+    for (i, query) in [&dotted, &split].into_iter().enumerate() {
+        let plan = build_response_cache_plan_from_packet(
+            unix_now(),
+            &a_response_for_query(query, [203, 0, 113, i as u8 + 1]),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            plan.entry.route_owner_key,
+            dns_cache_key_for_request(&requests[i]).unwrap().to_string()
+        );
+        cache
+            .insert_response(unix_now(), keys[i].clone(), plan.entry)
+            .unwrap();
+    }
+    let restored = ResidentDnsRuntimeCache::with_cache_entry_limit(8);
+    restored
+        .restore_reload_snapshot(&cache.snapshot_for_reload().unwrap())
+        .unwrap();
+    for (i, request) in requests.iter().enumerate() {
+        let mut response = Vec::new();
+        assert!(
+            restored
+                .lookup_response_into(&keys[i], request, false, &mut response)
+                .unwrap()
+        );
+        assert_eq!(response.last().copied(), Some(i as u8 + 1));
+    }
+    let base = dns_cache_key_for_request(&requests[0]).unwrap();
+    assert_eq!(restored.remove_base_key(&base).unwrap().len(), 1);
+    assert_eq!(restored.entry_count().unwrap(), 1);
+}

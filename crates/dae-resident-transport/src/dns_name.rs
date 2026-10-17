@@ -1,28 +1,6 @@
 pub fn encode_dns_qname(out: &mut Vec<u8>, lookup_host: &str) -> Result<(), String> {
-    let lookup_host = lookup_host.trim_end_matches('.');
-    if lookup_host.is_empty() {
-        out.push(0);
-        return Ok(());
-    }
-    if lookup_host.len() > 253 {
-        return Err("DNS name exceeds 255 wire bytes".to_owned());
-    }
-    for label in lookup_host.split('.') {
-        if label.is_empty() {
-            return Err(format!(
-                "invalid DNS lookup host {lookup_host}: empty label"
-            ));
-        }
-        if label.len() > 63 {
-            return Err(format!(
-                "invalid DNS lookup host {lookup_host}: label exceeds 63 bytes"
-            ));
-        }
-        out.push(label.len() as u8);
-        out.extend_from_slice(label.as_bytes());
-    }
-    out.push(0);
-    Ok(())
+    dae_dns::encode_dns_name_into(out, lookup_host)
+        .map_err(|error| format!("invalid DNS lookup host: {error}"))
 }
 
 #[cfg(test)]

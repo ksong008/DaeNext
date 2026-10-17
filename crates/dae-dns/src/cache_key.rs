@@ -72,6 +72,13 @@ pub(crate) fn hash_dns_cache_key_wire_parts<H: Hasher>(
 }
 
 fn hash_canonical_name_into<H: Hasher>(name: &str, state: &mut H) {
+    let canonical;
+    let name = if name.contains('\\') || !name.is_ascii() {
+        canonical = canonical_name_lowercase(name);
+        canonical.as_str()
+    } else {
+        name
+    };
     let trimmed = name.trim();
     let without_trailing_dot = trimmed.strip_suffix('.').unwrap_or(trimmed);
     if without_trailing_dot.is_empty() {
@@ -106,7 +113,19 @@ fn hash_canonical_wire_name_into<H: Hasher>(wire: &[u8], state: &mut H) {
             state.write_u8(b'.');
         }
         for byte in &wire[offset..end] {
-            state.write_u8(byte.to_ascii_lowercase());
+            let byte = byte.to_ascii_lowercase();
+            if crate::name::literal_byte(byte) {
+                state.write_u8(byte);
+            } else {
+                for escaped in [
+                    b'\\',
+                    b'0' + byte / 100,
+                    b'0' + byte / 10 % 10,
+                    b'0' + byte % 10,
+                ] {
+                    state.write_u8(escaped);
+                }
+            }
         }
         wrote_label = true;
         offset = end;
@@ -128,6 +147,14 @@ pub fn canonical_name(name: &str) -> String {
 
 pub fn canonical_name_lowercase(name: &str) -> String {
     let trimmed = name.trim();
+    if trimmed.contains('\\') || !trimmed.is_ascii() || trimmed.contains('|') {
+        let mut wire = Vec::new();
+        if crate::encode_dns_name_into(&mut wire, trimmed).is_ok() {
+            if let Ok(canonical) = crate::name::canonical_wire_name(&wire) {
+                return canonical;
+            }
+        }
+    }
     let needs_dot = !trimmed.ends_with('.');
     if !needs_dot && !trimmed.bytes().any(|byte| byte.is_ascii_uppercase()) {
         return trimmed.to_owned();
@@ -143,6 +170,9 @@ pub fn canonical_name_lowercase(name: &str) -> String {
 }
 
 pub fn canonical_name_eq_ignore_ascii_case(canonical: &str, candidate: &str) -> bool {
+    if candidate.contains('\\') || !candidate.is_ascii() {
+        return canonical == canonical_name_lowercase(candidate);
+    }
     let candidate = candidate.trim();
     if candidate.ends_with('.') {
         canonical.eq_ignore_ascii_case(candidate)
@@ -220,5 +250,47 @@ mod tests {
             parse_dns_cache_key(inet["structured"].as_str().unwrap()).unwrap(),
             DnsCacheKey::new("example.com.", 1, 1)
         );
+    }
+}
+
+#[cfg(test)]
+mod label_boundary_tests {
+    use super::*;
+    use std::hash::DefaultHasher;
+    fn hash_text(name: &str) -> u64 {
+        let mut h = DefaultHasher::new();
+        hash_dns_cache_key_parts(name, 1, 1, &mut h);
+        h.finish()
+    }
+    #[test]
+    fn presentation_names_preserve_labels_octets_and_hash_identity() {
+        let names: &[&[u8]] = &[
+            b"\x03a.b\x04test\0",
+            b"\x01a\x01b\x04test\0",
+            b"\x03A\\B\x04test\0",
+            b"\x03a|b\x04test\0",
+            b"\x03a\0\xff\x04test\0",
+            b"\0",
+        ];
+        let mut keys = std::collections::BTreeSet::new();
+        for wire in names {
+            let text = crate::name::canonical_wire_name(wire).unwrap();
+            let key = DnsCacheKey::new(&text, 1, 1);
+            assert!(keys.insert(key.clone()));
+            assert_eq!(parse_dns_cache_key(&key.to_string()).unwrap(), key);
+            let mut h = DefaultHasher::new();
+            hash_dns_cache_key_wire_parts(wire, 1, 1, &mut h);
+            assert_eq!(h.finish(), hash_text(&text));
+            let mut rebuilt = Vec::new();
+            crate::encode_dns_name_into(&mut rebuilt, &text).unwrap();
+            assert!(wire.eq_ignore_ascii_case(&rebuilt));
+            assert_eq!(key, DnsCacheKey::new(text.to_ascii_uppercase(), 1, 1));
+        }
+        assert_eq!(
+            DnsCacheKey::new(r"a\.b.test", 1, 1),
+            DnsCacheKey::new(r"a\046b.test", 1, 1)
+        );
+        assert_ne!(hash_text(r"a\046b.test."), hash_text("a.b.test."));
+        assert_eq!(hash_text(r"\065.test."), hash_text("a.test."));
     }
 }

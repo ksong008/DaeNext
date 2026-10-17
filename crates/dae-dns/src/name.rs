@@ -194,3 +194,98 @@ mod tests {
         }
     }
 }
+
+/// Presentation-format names use decimal escapes inside labels, keeping dots
+/// and arbitrary octets distinct from label separators and cache-key delimiters.
+pub(crate) fn literal_byte(byte: u8) -> bool {
+    matches!(byte, 0x21..=0x7e) && !matches!(byte, b'.' | b'\\' | b'|')
+}
+
+pub(crate) fn append_label(out: &mut String, label: &[u8]) {
+    for &byte in label {
+        let byte = byte.to_ascii_lowercase();
+        if literal_byte(byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push('\\');
+            out.push(char::from(b'0' + byte / 100));
+            out.push(char::from(b'0' + byte / 10 % 10));
+            out.push(char::from(b'0' + byte % 10));
+        }
+    }
+}
+
+/// Encode a presentation name. Escaped octets belong to the current label.
+/// The destination is unchanged on invalid input.
+pub fn encode_dns_name_into(out: &mut Vec<u8>, name: &str) -> Result<(), DnsError> {
+    let input = name.as_bytes();
+    let mut wire = [0_u8; 255];
+    let mut length = 1;
+    let mut label_start = 0;
+    let mut index = 0;
+    if input.is_empty() || input == b"." {
+        out.push(0);
+        return Ok(());
+    }
+    while index < input.len() {
+        let mut byte = input[index];
+        index += 1;
+        if byte == b'.' {
+            let label_len = length - label_start - 1;
+            if label_len == 0 {
+                return Err(DnsError::InvalidDnsName);
+            }
+            wire[label_start] = label_len as u8;
+            if length >= 255 {
+                return Err(DnsError::InvalidDnsName);
+            }
+            label_start = length;
+            length += 1;
+            if index == input.len() {
+                out.extend_from_slice(&wire[..length]);
+                return Ok(());
+            }
+            continue;
+        }
+        if byte == b'\\' {
+            byte = *input.get(index).ok_or(DnsError::InvalidDnsName)?;
+            if byte.is_ascii_digit() {
+                let digits = input
+                    .get(index..index + 3)
+                    .ok_or(DnsError::InvalidDnsName)?;
+                if !digits.iter().all(u8::is_ascii_digit) {
+                    return Err(DnsError::InvalidDnsName);
+                }
+                let value = u16::from(digits[0] - b'0') * 100
+                    + u16::from(digits[1] - b'0') * 10
+                    + u16::from(digits[2] - b'0');
+                byte = u8::try_from(value).map_err(|_| DnsError::InvalidDnsName)?;
+                index += 3;
+            } else {
+                index += 1;
+            }
+        }
+        if length >= 254 || length - label_start > 63 {
+            return Err(DnsError::InvalidDnsName);
+        }
+        wire[length] = byte;
+        length += 1;
+    }
+    wire[label_start] = (length - label_start - 1) as u8;
+    // A root octet follows the final nonempty label.
+    out.extend_from_slice(&wire[..length]);
+    out.push(0);
+    Ok(())
+}
+
+pub(crate) fn canonical_wire_name(wire: &[u8]) -> Result<String, DnsError> {
+    let mut out = String::new();
+    for label in NameLabels::new(wire, 0, wire.len(), false) {
+        append_label(&mut out, label?);
+        out.push('.');
+    }
+    if out.is_empty() {
+        out.push('.');
+    }
+    Ok(out)
+}
