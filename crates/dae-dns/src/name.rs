@@ -2,17 +2,60 @@ use crate::DnsError;
 
 /// Scan an encoded name, bounding its expanded wire representation (RFC 1035).
 /// `scope_end` bounds bytes consumed at the original location, not pointer targets.
+#[inline]
 pub fn scan_dns_name(
     packet: &[u8],
-    offset: usize,
-    scope_end: usize,
+    mut offset: usize,
+    mut scope_end: usize,
     compressed: bool,
 ) -> Result<usize, DnsError> {
-    let mut labels = NameLabels::new(packet, offset, scope_end, compressed);
-    for label in labels.by_ref() {
-        label?;
+    let mut consumed = None;
+    // Count contiguous label bytes with offsets; compression pointer bytes
+    // consume packet space but never consume the expanded-name budget.
+    let mut expanded = 0usize;
+    let mut segment_start = offset;
+    let mut segment_end = offset.saturating_add(255).min(scope_end).min(packet.len());
+    let mut jumps = 0;
+    loop {
+        let len = *packet.get(offset).ok_or(DnsError::UnexpectedEof)?;
+        if len & 0xc0 == 0xc0 {
+            if !compressed {
+                return Err(DnsError::InvalidDnsName);
+            }
+            let second = *packet.get(offset + 1).ok_or(DnsError::UnexpectedEof)?;
+            if offset + 2 > scope_end {
+                return Err(DnsError::InvalidDnsName);
+            }
+            expanded += offset - segment_start;
+            if expanded >= 255 {
+                return Err(DnsError::InvalidDnsName);
+            }
+            consumed.get_or_insert(offset + 2);
+            offset = (usize::from(len & 0x3f) << 8) | usize::from(second);
+            scope_end = packet.len();
+            segment_start = offset;
+            segment_end = offset.saturating_add(255 - expanded).min(packet.len());
+            jumps += 1;
+            if jumps > 16 {
+                return Err(DnsError::CompressionLoop);
+            }
+            continue;
+        }
+        if len & 0xc0 != 0 {
+            return Err(DnsError::InvalidDnsName);
+        }
+        offset += 1 + usize::from(len);
+        if offset > segment_end {
+            return Err(if offset > packet.len() {
+                DnsError::UnexpectedEof
+            } else {
+                DnsError::InvalidDnsName
+            });
+        }
+        if len == 0 {
+            return Ok(consumed.unwrap_or(offset));
+        }
     }
-    labels.consumed.ok_or(DnsError::InvalidDnsName)
 }
 
 #[derive(Clone, Debug)]
