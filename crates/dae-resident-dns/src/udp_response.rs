@@ -105,31 +105,9 @@ fn skip_resource_record(packet: &[u8], offset: usize) -> Result<(u16, u16, usize
     Ok((record_type, record_class, next))
 }
 
-fn skip_wire_name(packet: &[u8], mut offset: usize) -> Result<usize, String> {
-    loop {
-        let length = *packet
-            .get(offset)
-            .ok_or_else(|| "DNS resource record name is truncated".to_owned())?;
-        if length & 0xc0 == 0xc0 {
-            if packet.get(offset + 1).is_none() {
-                return Err("DNS compressed name pointer is truncated".to_owned());
-            }
-            return Ok(offset + 2);
-        }
-        if length & 0xc0 != 0 {
-            return Err("DNS resource record name has an invalid label type".to_owned());
-        }
-        offset += 1;
-        if length == 0 {
-            return Ok(offset);
-        }
-        offset = offset
-            .checked_add(length as usize)
-            .ok_or_else(|| "DNS resource record name length overflow".to_owned())?;
-        if offset > packet.len() {
-            return Err("DNS resource record label is truncated".to_owned());
-        }
-    }
+fn skip_wire_name(packet: &[u8], offset: usize) -> Result<usize, String> {
+    dae_dns::scan_dns_name(packet, offset, packet.len(), true)
+        .map_err(|error| format!("invalid DNS resource record name: {error}"))
 }
 
 fn read_u16(packet: &[u8], offset: usize) -> Result<u16, String> {

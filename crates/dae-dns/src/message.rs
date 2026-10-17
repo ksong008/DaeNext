@@ -260,6 +260,7 @@ pub fn parse_message(packet: &[u8]) -> Result<DnsMessage, DnsError> {
                 }
             }
             (5, 1, _) => {
+                crate::scan_dns_name(packet, offset, offset + rdlen, true)?;
                 let (target, _) = read_name(packet, offset, 0)?;
                 DnsAnswer::Cname {
                     name: canonical_name_lowercase(&name),
@@ -331,56 +332,17 @@ pub fn qtype_to_string(qtype: u16) -> String {
     }
 }
 
-fn read_name(packet: &[u8], mut offset: usize, depth: usize) -> Result<(String, usize), DnsError> {
-    if depth > 16 {
-        return Err(DnsError::CompressionLoop);
-    }
-    let start = offset;
-    let mut name = String::with_capacity(packet.len().saturating_sub(offset).min(255));
-    loop {
-        if offset >= packet.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        let len = packet[offset];
-        if len & 0xc0 == 0xc0 {
-            if offset + 1 >= packet.len() {
-                return Err(DnsError::UnexpectedEof);
-            }
-            let ptr = (((len & 0x3f) as usize) << 8) | packet[offset + 1] as usize;
-            let (suffix, _) = read_name(packet, ptr, depth + 1)?;
-            if suffix != "." {
-                name.push_str(&suffix);
-            }
-            return Ok((finish_name(name), offset + 2));
-        }
-        if len & 0xc0 != 0 {
-            return Err(DnsError::InvalidDnsName);
-        }
-        offset += 1;
-        if len == 0 {
-            return Ok((finish_name(name), offset));
-        }
-        let end = offset + len as usize;
-        if end > packet.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        let label =
-            std::str::from_utf8(&packet[offset..end]).map_err(|_| DnsError::InvalidDnsName)?;
-        if label.is_empty() || start == end {
-            return Err(DnsError::InvalidDnsName);
-        }
-        name.push_str(label);
+fn read_name(packet: &[u8], offset: usize, _depth: usize) -> Result<(String, usize), DnsError> {
+    let end = crate::scan_dns_name(packet, offset, packet.len(), true)?;
+    let mut name = String::new();
+    for label in crate::name::NameLabels::new(packet, offset, packet.len(), true) {
+        name.push_str(std::str::from_utf8(label?).map_err(|_| DnsError::InvalidDnsName)?);
         name.push('.');
-        offset = end;
     }
-}
-
-fn finish_name(name: String) -> String {
     if name.is_empty() {
-        ".".to_owned()
-    } else {
-        name
+        name.push('.');
     }
+    Ok((name, end))
 }
 
 fn read_u16(packet: &[u8], offset: usize) -> Result<u16, DnsError> {

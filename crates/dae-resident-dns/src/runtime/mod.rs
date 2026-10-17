@@ -1033,6 +1033,9 @@ pub fn build_dns_query_packet(id: u16, domain: &str, qtype: u16) -> Result<Vec<u
     if domain.is_empty() || domain.parse::<IpAddr>().is_ok() {
         return Err(format!("not a resolvable domain name: {domain:?}"));
     }
+    if domain.len() > 253 {
+        return Err("DNS name exceeds 255 wire bytes".to_owned());
+    }
     let mut packet = Vec::with_capacity(12 + domain.len() + 6);
     packet.extend_from_slice(&id.to_be_bytes());
     packet.extend_from_slice(&0x0100_u16.to_be_bytes());

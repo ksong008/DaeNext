@@ -1,6 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::error::DnsError;
+use crate::name::NameLabels;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DnsPacketNameView<'a> {
@@ -38,14 +39,6 @@ pub struct DnsPacketAnswerIter<'a> {
     packet: &'a [u8],
     offset: usize,
     remaining: u16,
-}
-
-#[derive(Clone, Debug)]
-struct DnsPacketNameLabelIter<'a> {
-    packet: &'a [u8],
-    offset: usize,
-    depth: usize,
-    done: bool,
 }
 
 impl<'a> DnsPacketAnswerIter<'a> {
@@ -96,13 +89,8 @@ impl<'a> DnsPacketNameView<'a> {
         Ok(out)
     }
 
-    fn labels(self) -> DnsPacketNameLabelIter<'a> {
-        DnsPacketNameLabelIter {
-            packet: self.packet,
-            offset: self.offset,
-            depth: 0,
-            done: false,
-        }
+    fn labels(self) -> NameLabels<'a> {
+        NameLabels::new(self.packet, self.offset, self.packet.len(), true)
     }
 }
 
@@ -239,98 +227,13 @@ impl<'a> Iterator for DnsPacketAnswerIter<'a> {
     }
 }
 
-impl<'a> Iterator for DnsPacketNameLabelIter<'a> {
-    type Item = Result<&'a [u8], DnsError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.done {
-                return None;
-            }
-            if self.depth > 16 {
-                self.done = true;
-                return Some(Err(DnsError::CompressionLoop));
-            }
-            if self.offset >= self.packet.len() {
-                self.done = true;
-                return Some(Err(DnsError::UnexpectedEof));
-            }
-            let len = self.packet[self.offset];
-            if len & 0xc0 == 0xc0 {
-                if self.offset + 1 >= self.packet.len() {
-                    self.done = true;
-                    return Some(Err(DnsError::UnexpectedEof));
-                }
-                self.offset =
-                    (((len & 0x3f) as usize) << 8) | self.packet[self.offset + 1] as usize;
-                self.depth += 1;
-                continue;
-            }
-            if len & 0xc0 != 0 || len > 63 {
-                self.done = true;
-                return Some(Err(DnsError::InvalidDnsName));
-            }
-            self.offset += 1;
-            if len == 0 {
-                self.done = true;
-                return None;
-            }
-            let end = self.offset + len as usize;
-            if end > self.packet.len() {
-                self.done = true;
-                return Some(Err(DnsError::UnexpectedEof));
-            }
-            let label = &self.packet[self.offset..end];
-            self.offset = end;
-            return Some(Ok(label));
-        }
-    }
-}
-
 fn scan_name(
     packet: &[u8],
-    mut offset: usize,
-    depth: usize,
+    offset: usize,
+    _depth: usize,
     scope_end: usize,
 ) -> Result<usize, DnsError> {
-    if depth > 16 {
-        return Err(DnsError::CompressionLoop);
-    }
-    loop {
-        if offset >= packet.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        let len = packet[offset];
-        if len & 0xc0 == 0xc0 {
-            if offset + 1 >= packet.len() {
-                return Err(DnsError::UnexpectedEof);
-            }
-            let consumed = offset + 2;
-            if consumed > scope_end {
-                return Err(DnsError::InvalidDnsName);
-            }
-            let ptr = (((len & 0x3f) as usize) << 8) | packet[offset + 1] as usize;
-            scan_name(packet, ptr, depth + 1, packet.len())?;
-            return Ok(consumed);
-        }
-        if len & 0xc0 != 0 || len > 63 {
-            return Err(DnsError::InvalidDnsName);
-        }
-        offset += 1;
-        if len == 0 {
-            if offset > scope_end {
-                return Err(DnsError::InvalidDnsName);
-            }
-            return Ok(offset);
-        }
-        offset += len as usize;
-        if offset > packet.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        if offset > scope_end {
-            return Err(DnsError::InvalidDnsName);
-        }
-    }
+    crate::scan_dns_name(packet, offset, scope_end, true)
 }
 
 fn read_u16(packet: &[u8], offset: usize) -> Result<u16, DnsError> {

@@ -216,28 +216,8 @@ fn validate_question_section(packet: &[u8], question_count: u16) -> Result<usize
     Ok(offset)
 }
 
-fn scan_uncompressed_name(packet: &[u8], mut offset: usize) -> Result<usize, DnsError> {
-    loop {
-        if offset >= packet.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        let len = packet[offset];
-        if len & 0xc0 != 0 {
-            return Err(DnsError::InvalidDnsName);
-        }
-        if len > 63 {
-            return Err(DnsError::InvalidDnsName);
-        }
-        offset += 1;
-        if len == 0 {
-            return Ok(offset);
-        }
-        let end = offset + len as usize;
-        if end > packet.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        offset = end;
-    }
+fn scan_uncompressed_name(packet: &[u8], offset: usize) -> Result<usize, DnsError> {
+    crate::scan_dns_name(packet, offset, packet.len(), false)
 }
 
 fn read_u16(packet: &[u8], offset: usize) -> Result<u16, DnsError> {

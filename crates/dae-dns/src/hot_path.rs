@@ -203,35 +203,8 @@ fn zero_answer_ttls(
     Ok(())
 }
 
-fn scan_name(packet: &[u8], mut offset: usize, depth: usize) -> Result<usize, DnsError> {
-    if depth > 16 {
-        return Err(DnsError::CompressionLoop);
-    }
-    loop {
-        if offset >= packet.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-        let len = packet[offset];
-        if len & 0xc0 == 0xc0 {
-            if offset + 1 >= packet.len() {
-                return Err(DnsError::UnexpectedEof);
-            }
-            let ptr = (((len & 0x3f) as usize) << 8) | packet[offset + 1] as usize;
-            scan_name(packet, ptr, depth + 1)?;
-            return Ok(offset + 2);
-        }
-        if len & 0xc0 != 0 || len > 63 {
-            return Err(DnsError::InvalidDnsName);
-        }
-        offset += 1;
-        if len == 0 {
-            return Ok(offset);
-        }
-        offset += len as usize;
-        if offset > packet.len() {
-            return Err(DnsError::UnexpectedEof);
-        }
-    }
+fn scan_name(packet: &[u8], offset: usize, _depth: usize) -> Result<usize, DnsError> {
+    crate::scan_dns_name(packet, offset, packet.len(), true)
 }
 
 fn read_u16(packet: &[u8], offset: usize) -> Result<u16, DnsError> {

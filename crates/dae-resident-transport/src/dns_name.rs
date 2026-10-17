@@ -4,6 +4,9 @@ pub fn encode_dns_qname(out: &mut Vec<u8>, lookup_host: &str) -> Result<(), Stri
         out.push(0);
         return Ok(());
     }
+    if lookup_host.len() > 253 {
+        return Err("DNS name exceeds 255 wire bytes".to_owned());
+    }
     for label in lookup_host.split('.') {
         if label.is_empty() {
             return Err(format!(
@@ -41,6 +44,20 @@ mod tests {
                 b'm', 0
             ]
         );
+    }
+
+    #[test]
+    fn qname_encoding_enforces_expanded_wire_length() {
+        for last in [61, 62, 63] {
+            let host = [
+                "a".repeat(63),
+                "b".repeat(63),
+                "c".repeat(63),
+                "d".repeat(last),
+            ]
+            .join(".");
+            assert_eq!(encode_dns_qname(&mut Vec::new(), &host).is_ok(), last == 61);
+        }
     }
 
     #[test]
