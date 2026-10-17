@@ -55,7 +55,7 @@
     },
     "dae-resident-dataplane": {
       "production": 33363,
-      "tests": 34934
+      "tests": 35005
     },
     "dae-resident-transport": {
       "production": 35887,
@@ -71,7 +71,7 @@
     },
     "dae-resident-dns": {
       "production": 20904,
-      "tests": 2923
+      "tests": 3148
     }
   },
   "counting": "production means non-test-named Rust LOC, including inline tests, comments and blanks; overlapping subtrees are not summed",
@@ -86,5 +86,6 @@
       "production": 17646,
       "tests": 3356
     }
-  }
+  },
+  "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged."
 }

@@ -6,9 +6,43 @@ import subprocess
 import sys
 
 SUITES = {
+    "dae-dns": "name::tests::",
     "dae-resident-dataplane": "dns_runtime_tests::",
     "dae-resident-dns": "runtime::transport::udp_multiplex::tests::",
 }
+
+
+CRITICAL_TESTS = {
+    "dae-dns": [
+        "hot_path::tests::truncated_responses_never_produce_cache_or_route_owner_plans",
+        "name::tests::all_question_and_answer_parsers_reject_overlong_names",
+        "name::tests::expanded_name_limits_apply_across_compression_and_scopes",
+        "cache_key::label_boundary_tests::presentation_names_preserve_labels_octets_and_hash_identity",
+        "reuse::tests::request_reuse_separates_flags_edns_versions_and_udp_sizes",
+        "hot_path::negative::tests::negative_cache_uses_soa_ttl_and_minimum_and_fixed_ttl_only_shortens",
+    ],
+    "dae-resident-dns": [
+        "runtime::cache_tests::tc_udp_then_tcp_and_edns_retry_reach_the_upstream",
+        "runtime::cache_tests::cache_and_flight_share_only_compatible_requests_and_restore_case",
+        "runtime::cache_tests::escaped_labels_stay_separate_in_cache_flights_reload_and_owner_removal",
+        "runtime::cache_tests::resident_dns_flight_bounds_followers_and_retained_response_bytes",
+        "cache::poison_tests::registering_during_publication_never_loses_a_waiter",
+        "cache::poison_tests::publication_without_followers_does_not_copy_or_reserve_a_response",
+        "runtime::transport::wire::doh_limit_tests::doh_http1_limits_decoded_body_separately_from_headers_and_chunks",
+        "runtime::transport::tls_https::tests::doh_h2_bounds_decoded_body_across_data_frames",
+        "clock::tests::wall_clock_steps_do_not_change_fixed_original_ttls_or_reload_deadlines",
+    ],
+    "dae-resident-dataplane": [
+        "udp::proxy_dns_forwarder::tests::request_local_oversize_send_failure_preserves_an_existing_pending_response",
+    ],
+}
+
+
+def verify_critical_tests(package, listed, ignored):
+    active = set(listed) - set(ignored)
+    missing = [name for name in CRITICAL_TESTS[package] if name + ": test" not in active]
+    if missing:
+        raise RuntimeError(f"{package}: critical DNS tests missing or ignored: {', '.join(missing)}")
 
 
 def main():
@@ -17,8 +51,9 @@ def main():
     args = parser.parse_args()
     for package, prefix in SUITES.items():
         command = ["cargo", "test", "--locked", "--profile", args.profile,
-                   "-p", package, "--lib", "--features", "dns-runtime-tests",
-                   "--no-run", "--message-format=json"]
+                   "-p", package, "--lib", "--no-run", "--message-format=json"]
+        if package != "dae-dns":
+            command.extend(["--features", "dns-runtime-tests"])
         binaries = []
         with subprocess.Popen(command, stdout=subprocess.PIPE, text=True) as process:
             for line in process.stdout:
@@ -38,6 +73,7 @@ def main():
                     if line.startswith(prefix) and line.endswith(": test")}
         ignored = subprocess.run([binaries[0], "--ignored", "--list", "--format", "terse"],
                                  text=True, capture_output=True, check=True)
+        verify_critical_tests(package, result.stdout.splitlines(), ignored.stdout.splitlines())
         active = required - set(ignored.stdout.splitlines())
         if not active:
             raise RuntimeError(f"{package}: required suite {prefix} has no active tests")
