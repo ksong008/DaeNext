@@ -26,6 +26,32 @@ pub enum UdpSessionExecutor {
 }
 
 impl UdpSessionExecutor {
+    /// Wire-size failures are local to one packet and must be rejected before
+    /// touching a shared relay socket or cancelling other DNS transactions.
+    pub fn validate_datagram_payload_size(
+        binding: &ResidentProxyBinding,
+        target: SocketAddr,
+        len: usize,
+    ) -> Result<(), String> {
+        let address = if target.is_ipv4() { 7usize } else { 19 };
+        let overhead = match &binding.plan().handler {
+            ResidentProxyProtocolPlan::ShadowsocksAeadTcp { salt_len, .. } => {
+                salt_len + 16 + address
+            }
+            ResidentProxyProtocolPlan::Socks5Tcp { .. } => 3 + address,
+            _ => return Ok(()),
+        };
+        // Bound the IP datagram of the relay's underlay, whose family can differ
+        // from the target encoded in the SOCKS address. IPv4 is the smaller cap.
+        let limit = 65507usize.saturating_sub(overhead);
+        if len > limit {
+            return Err(format!(
+                "proxied UDP payload exceeds datagram wire limit: {len} > {limit}"
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn execution_stage(&self) -> &'static str {
         match self {
             Self::Hysteria2(session) => session.execution_stage,

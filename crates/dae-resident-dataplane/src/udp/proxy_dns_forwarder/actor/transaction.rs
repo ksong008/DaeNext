@@ -112,6 +112,22 @@ pub(super) async fn handle_proxy_dns_udp_request(
         return Ok(ProxyDnsRequestOutcome::ResponseForwarded);
     }
 
+    if let Err(error) = UdpSessionExecutor::validate_datagram_payload_size(
+        binding,
+        original_dst,
+        request.payload.len(),
+    ) {
+        return Ok(deliver_queued_proxy_dns_error(
+            request,
+            ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::Send,
+                ProxyDnsRequestFailure::Capacity,
+                error,
+            ),
+            QueuedProxyDnsRequestRelease::Rejected,
+        ));
+    }
+
     let pending_limit = runtime_config.pending_limit.max(1);
     if pending.len() >= pending_limit {
         metrics.dns_udp_pending_rejected();

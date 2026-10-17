@@ -767,11 +767,7 @@ async fn request_local_oversize_send_failure_preserves_an_existing_pending_respo
         .unwrap()
         .unwrap();
     server.await.unwrap();
-    assert!(
-        response.is_ok(),
-        "pending A was failed by B: {response:?}; metrics={}",
-        metrics.snapshot()
-    );
+    assert!(response.is_ok(), "pending A was failed by B: {response:?}");
     assert_eq!(metrics.snapshot()["proxyDnsUdpExecutorsReset"], 0);
     let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
     assert_eq!(forwarder.shutdown(deadline).await["status"], "pass");
