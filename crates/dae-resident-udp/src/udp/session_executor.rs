@@ -38,6 +38,30 @@ impl UdpSessionExecutor {
             ResidentProxyProtocolPlan::ShadowsocksAeadTcp { salt_len, .. } => {
                 salt_len + 16 + address
             }
+            ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+                password,
+                packet_nonce_len,
+                ..
+            } => {
+                // Session/packet ID (16), type/timestamp/padding length (11),
+                // and AEAD tag (16). AES adds an identity header per extra PSK;
+                // XChaCha carries a nonce and has no separate identity headers.
+                let identities = if *packet_nonce_len == 0 {
+                    password
+                        .split(':')
+                        .count()
+                        .saturating_sub(1)
+                        .saturating_mul(16)
+                } else {
+                    0
+                };
+                16usize
+                    .saturating_add(11)
+                    .saturating_add(16)
+                    .saturating_add(address)
+                    .saturating_add(*packet_nonce_len)
+                    .saturating_add(identities)
+            }
             ResidentProxyProtocolPlan::Socks5Tcp { .. } => 3 + address,
             _ => return Ok(()),
         };
@@ -214,6 +238,70 @@ use self::vless_standard::VlessStandardUdpOverStreamSession;
 #[cfg(test)]
 mod datagram_udp_pending_tests {
     use super::*;
+
+    #[test]
+    fn datagram_size_preflight_matches_ss2022_wire_encodings() {
+        for (cipher, key, nonce_len) in [
+            ("2022-blake3-aes-128-gcm", "AAAAAAAAAAAAAAAAAAAAAA==", 0),
+            (
+                "2022-blake3-aes-256-gcm",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                0,
+            ),
+            (
+                "2022-blake3-chacha20-poly1305",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                24,
+            ),
+        ] {
+            for identities in [false, true] {
+                if nonce_len != 0 && identities {
+                    continue;
+                }
+                let password = if identities {
+                    format!("{key}:{key}")
+                } else {
+                    key.to_owned()
+                };
+                let plan = super::super::tests::tests::test_udp_proxy(
+                    ResidentProxyProtocolPlan::Shadowsocks2022Tcp {
+                        cipher: cipher.to_owned(),
+                        password: password.clone(),
+                        salt_len: if key.len() == 24 { 16 } else { 32 },
+                        packet_nonce_len: nonce_len,
+                    },
+                );
+                let binding = ResidentProxyBinding::configuration(Arc::new(plan)).unwrap();
+                for target in ["127.0.0.1:53", "[::1]:53"] {
+                    let target: SocketAddr = target.parse().unwrap();
+                    let mut codec = Ss2022UdpCodec::new(cipher, &password, [1; 8]).unwrap();
+                    let nonce = vec![2; nonce_len];
+                    let overhead = codec
+                        .encode_client_packet(&target.to_string(), &[], 1, Some(&nonce))
+                        .unwrap()
+                        .wire
+                        .len();
+                    let limit = 65507 - overhead;
+                    let encoded = codec
+                        .encode_client_packet(&target.to_string(), &vec![0; limit], 1, Some(&nonce))
+                        .unwrap();
+                    assert_eq!(encoded.wire.len(), 65507);
+                    assert!(
+                        UdpSessionExecutor::validate_datagram_payload_size(&binding, target, limit)
+                            .is_ok()
+                    );
+                    assert!(
+                        UdpSessionExecutor::validate_datagram_payload_size(
+                            &binding,
+                            target,
+                            limit + 1
+                        )
+                        .is_err()
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn shadowsocks_datagram_pending_result_does_not_forward_empty_reply() {
