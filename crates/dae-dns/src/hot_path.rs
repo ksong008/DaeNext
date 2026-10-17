@@ -8,6 +8,7 @@ use crate::message::{DnsPacketView, DnsQuestion};
 #[cfg(test)]
 const DNS_HEADER_LEN: usize = 12;
 const DNS_FLAG_RESPONSE: u16 = 0x8000;
+const DNS_FLAG_TRUNCATED: u16 = 0x0200;
 const DNS_RCODE_MASK: u16 = 0x000f;
 const DNS_RCODE_SUCCESS: u16 = 0;
 const DNS_QTYPE_A: u16 = 1;
@@ -63,7 +64,10 @@ pub fn build_response_cache_plan_from_packet(
     fixed_domain_ttl: Option<i64>,
 ) -> Result<Option<DnsResponseCachePlan>, DnsError> {
     let flags = read_u16(response_packet, 2)?;
-    if flags & DNS_FLAG_RESPONSE == 0 || flags & DNS_RCODE_MASK != DNS_RCODE_SUCCESS {
+    if flags & DNS_FLAG_RESPONSE == 0
+        || flags & DNS_FLAG_TRUNCATED != 0
+        || flags & DNS_RCODE_MASK != DNS_RCODE_SUCCESS
+    {
         return Ok(None);
     }
 
@@ -254,6 +258,27 @@ mod tests {
         0x0c, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x02, 0xc0, 0x0c, 0xc0, 0x0c,
         0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x78, 0x00, 0x04, 0xcb, 0x00, 0x71, 0x14,
     ];
+
+    #[test]
+    fn truncated_responses_never_produce_cache_or_route_owner_plans() {
+        for fixed_ttl in [None, Some(0), Some(600)] {
+            for partial_answers in [false, true] {
+                let mut packet = if partial_answers { RESPONSE } else { QUERY }.to_vec();
+                packet[2] = 0x83; // QR, TC and RD
+                packet[3] = 0x80;
+                assert!(
+                    build_response_cache_plan_from_packet(NOW, &packet, fixed_ttl)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            assert!(
+                build_response_cache_plan_from_packet(NOW, RESPONSE, fixed_ttl)
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    }
 
     #[test]
     fn response_cache_plan_preserves_dns_normalization_contract() {
