@@ -3,6 +3,32 @@ use super::super::*;
 mod chunked;
 use self::chunked::{decode_http_chunked_body, decode_http_chunked_body_with_consumed};
 
+pub(super) fn validate_doh_content_length(headers: &http::HeaderMap) -> Result<(), String> {
+    let mut declared = None;
+    for value in headers.get_all(http::header::CONTENT_LENGTH) {
+        let value = value.to_str().map_err(|_| "invalid DoH Content-Length")?;
+        for length in value.split(',') {
+            let length = length.trim();
+            if length.is_empty() || !length.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("invalid DoH Content-Length".to_owned());
+            }
+            let length = length
+                .parse::<usize>()
+                .map_err(|_| "invalid DoH Content-Length")?;
+            if length > DNS_DOH_RESPONSE_READ_LIMIT {
+                return Err(format!(
+                    "DoH Content-Length exceeds read limit {DNS_DOH_RESPONSE_READ_LIMIT}"
+                ));
+            }
+            if declared.is_some_and(|previous| previous != length) {
+                return Err("conflicting DoH Content-Length".to_owned());
+            }
+            declared = Some(length);
+        }
+    }
+    Ok(())
+}
+
 pub async fn open_dns_tcp_stream_async(
     upstream: &ResidentDnsUpstream,
     target: SocketAddr,
@@ -489,6 +515,33 @@ mod tests {
 #[cfg(all(test, feature = "dns-runtime-tests"))]
 mod doh_limit_tests {
     use super::*;
+    #[test]
+    fn doh_content_length_is_bounded_and_unambiguous() {
+        for (values, valid) in [
+            (vec![], true),
+            (vec!["65535"], true),
+            (vec!["42", "42"], true),
+            (vec!["42, 42"], true),
+            (vec!["65536"], false),
+            (vec!["42", "43"], false),
+            (vec!["42, 43"], false),
+            (vec!["-1"], false),
+            (vec!["+1"], false),
+            (vec![""], false),
+            (vec!["9999999999999999999999999"], false),
+        ] {
+            let mut headers = http::HeaderMap::new();
+            for value in values {
+                headers.append(http::header::CONTENT_LENGTH, value.parse().unwrap());
+            }
+            assert_eq!(
+                validate_doh_content_length(&headers).is_ok(),
+                valid,
+                "{headers:?}"
+            );
+        }
+    }
+
     fn response(size: usize, chunked: bool) -> Vec<u8> {
         let mut raw =
             b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nX-Padding: ".to_vec();

@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(all(test, feature = "dns-runtime-tests"))]
+mod body_limit_tests;
+
 pub async fn forward_proxied_dns_h3_request(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
@@ -80,6 +83,13 @@ pub async fn forward_proxied_dns_h3_request(
                     ProxyDnsRequestStage::Read,
                     ProxyDnsRequestFailure::Network,
                     format!("receive proxied DoH3 response: {error:?}"),
+                )
+            })?;
+            validate_doh_content_length(response.headers()).map_err(|error| {
+                ProxyDnsRequestError::new(
+                    ProxyDnsRequestStage::Read,
+                    ProxyDnsRequestFailure::Protocol,
+                    error,
                 )
             })?;
             let mut body = Vec::new();

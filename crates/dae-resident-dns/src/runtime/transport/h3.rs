@@ -9,7 +9,7 @@ use super::route::{
     ResidentDnsUpstreamRoutedTarget, race_dns_upstream_targets_with_refresh,
     refresh_dns_upstream_targets, resolved_upstream_targets, select_dns_upstream_targets,
 };
-use super::wire::{doh_request_target, restore_dns_response_id};
+use super::wire::{doh_request_target, restore_dns_response_id, validate_doh_content_length};
 use dae_resident_transport::inherit_quic_endpoint_observation;
 use serde_json::{Value, json};
 
@@ -470,6 +470,7 @@ async fn forward_dns_h3_with_client_async(
             .recv_response()
             .await
             .map_err(|err| format!("recv DoH3 response: {err:?}"))?;
+        validate_doh_content_length(response.headers())?;
         let content_type = response
             .headers()
             .get(http::header::CONTENT_TYPE)

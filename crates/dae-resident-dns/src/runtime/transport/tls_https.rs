@@ -9,7 +9,7 @@ use super::wire::{
     doh_request_target, forward_dns_framed_stream_with_reader_async,
     http1_doh_keep_alive_request_bytes, http1_doh_request_bytes, parse_doh_http_response,
     read_doh_http1_close_response_async, read_http1_response_message_capped_async,
-    restore_dns_response_id,
+    restore_dns_response_id, validate_doh_content_length,
 };
 use boring::ssl::SslContext;
 use dae_outbound_quic::system_ca::{SystemCaIdentity, system_ca_snapshot};
@@ -676,6 +676,7 @@ async fn forward_dns_https_over_h2_async(
         let response = response
             .await
             .map_err(|err| format!("receive DoH HTTP/2 response headers: {err}"))?;
+        validate_doh_content_length(response.headers())?;
         let status = response.status();
         let content_type = response
             .headers()
@@ -784,6 +785,42 @@ mod tests {
         assert_eq!(&second.unwrap()[0..2], &0x2222_u16.to_be_bytes());
         server.await.unwrap();
         client_driver.abort();
+    }
+
+    #[tokio::test]
+    async fn doh_h2_rejects_oversized_content_length_before_waiting_for_data() {
+        let (client_io, server_io) = tokio::io::duplex(8192);
+        let (mut sender, connection) = h2::client::handshake(client_io).await.unwrap();
+        let driver = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let server = tokio::spawn(async move {
+            let mut connection = h2::server::handshake(server_io).await.unwrap();
+            let (_, mut respond) = connection.accept().await.unwrap().unwrap();
+            let headers = http::Response::builder()
+                .header(http::header::CONTENT_TYPE, DOH_MEDIA_TYPE)
+                .header(http::header::CONTENT_LENGTH, "65536")
+                .body(())
+                .unwrap();
+            let _body = respond.send_response(headers, false).unwrap();
+            // Keep the stream open without DATA. The client must reject headers.
+            let _ = connection.accept().await;
+        });
+        let query = build_dns_query_packet(7, "limit.example", 1).unwrap();
+        let result = forward_dns_https_over_h2_async(
+            &h2_test_upstream(),
+            &query,
+            &mut sender,
+            ProxyDnsRequestContext::from_timeout(std::time::Duration::from_secs(2)),
+        )
+        .await;
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Content-Length exceeds read limit")
+        );
+        server.abort();
+        driver.abort();
     }
 
     #[tokio::test]
