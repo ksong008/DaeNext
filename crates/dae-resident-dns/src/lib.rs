@@ -1,4 +1,5 @@
 mod cache;
+mod clock;
 mod domain_routing;
 mod error_response;
 mod geodata;
@@ -13,7 +14,6 @@ mod udp_response;
 mod udp_runtime;
 
 use std::net::SocketAddr;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use dae_resident_core::{ResidentDnsUdpFuture, ResidentDnsUdpResolver};
 
@@ -62,9 +62,7 @@ impl ResidentDnsUdpResolver for ResidentDnsDispatcher {
     }
 }
 
+/// Timestamp in the shared monotonic cache epoch, initialized from wall time.
 fn unix_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
-        .unwrap_or(0)
+    clock::cache_now()
 }

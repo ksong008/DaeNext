@@ -4,7 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use bytes::{Buf, Bytes};
 use dae_config::{Config, DynamicFunctionValue, Function, Param, RoutingRule};
@@ -639,10 +639,7 @@ fn fixed_domain_ttl_for_response(
 }
 
 pub fn unix_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
-        .unwrap_or(0)
+    crate::clock::cache_now()
 }
 
 pub fn dns_request_action_name(action: &ResidentDnsRequestAction) -> &'static str {

@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResidentDnsRuntimeCacheSnapshot {
     entries: Vec<(ResidentDnsResponseCacheKey, Arc<DnsCacheEntry>)>,
+    epoch: Option<std::time::Instant>,
 }
 
 impl ResidentDnsRuntimeCacheSnapshot {
@@ -27,14 +28,19 @@ impl ResidentDnsRuntimeCache {
             );
         }
         entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-        Ok(ResidentDnsRuntimeCacheSnapshot { entries })
+        Ok(ResidentDnsRuntimeCacheSnapshot {
+            entries,
+            epoch: Some(crate::clock::cache_epoch()),
+        })
     }
 
     pub fn restore_reload_snapshot(
         &self,
         snapshot: &ResidentDnsRuntimeCacheSnapshot,
     ) -> Result<usize, String> {
-        if snapshot.entries.is_empty() {
+        // This opaque snapshot is for same-process reload only. A future disk
+        // format must explicitly validate wall expiry and remaining lifetime.
+        if snapshot.epoch != Some(crate::clock::cache_epoch()) || snapshot.entries.is_empty() {
             return Ok(0);
         }
         let now_unix = unix_now();
@@ -135,5 +141,27 @@ mod tests {
         large_entry.packed_response = vec![0; DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES + 1];
         cache.insert_response(now, large, large_entry).unwrap();
         assert_eq!(cache.entry_len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod epoch_tests {
+    use super::*;
+    #[test]
+    fn response_reload_rejects_snapshots_without_the_current_clock_epoch() {
+        let source = ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+        let now = unix_now();
+        let key = ResidentDnsResponseCacheKey::new(
+            DnsCacheKey::new("epoch.example", 1, 1),
+            ResidentDnsResponseCacheScope::Reject,
+        );
+        source
+            .insert_response(now, key, DnsCacheEntry::new(now + 60, now + 60))
+            .unwrap();
+        let mut snapshot = source.snapshot_for_reload().unwrap();
+        snapshot.epoch = None;
+        let target = ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+        assert_eq!(target.restore_reload_snapshot(&snapshot).unwrap(), 0);
+        assert_eq!(target.entry_count().unwrap(), 0);
     }
 }

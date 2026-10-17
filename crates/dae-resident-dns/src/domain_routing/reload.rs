@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResidentDnsDomainRoutingReloadSnapshot {
     accepted_responses: Vec<(DnsCacheKey, Arc<DnsCacheEntry>)>,
+    epoch: Option<std::time::Instant>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -29,13 +30,22 @@ impl ResidentDnsDomainRouting {
             .lock()
             .map_err(|_| "resident DNS domain routing state lock poisoned".to_owned())?;
         let accepted_responses = state.cache.snapshot_live_entries_shared(now_unix);
-        Ok(ResidentDnsDomainRoutingReloadSnapshot { accepted_responses })
+        Ok(ResidentDnsDomainRoutingReloadSnapshot {
+            accepted_responses,
+            epoch: Some(crate::clock::cache_epoch()),
+        })
     }
 
     pub fn restore_reload_snapshot(
         &self,
         snapshot: &ResidentDnsDomainRoutingReloadSnapshot,
     ) -> Result<ResidentDnsDomainRoutingRestoreReport, String> {
+        if snapshot.epoch != Some(crate::clock::cache_epoch()) {
+            return Ok(ResidentDnsDomainRoutingRestoreReport {
+                skipped_expired_entries: snapshot.accepted_responses.len(),
+                ..Default::default()
+            });
+        }
         let now_unix = unix_now();
         self.sweep_expired_until(now_unix)?;
         let mut domain_bitmap = Vec::new();
@@ -116,6 +126,7 @@ mod tests {
         entry.ips.push("192.0.2.40".parse().unwrap());
         let snapshot = ResidentDnsDomainRoutingReloadSnapshot {
             accepted_responses: vec![(key, Arc::new(entry))],
+            epoch: Some(crate::clock::cache_epoch()),
         };
 
         let report = domain_routing.restore_reload_snapshot(&snapshot).unwrap();
