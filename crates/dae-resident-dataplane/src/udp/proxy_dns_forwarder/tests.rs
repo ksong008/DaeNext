@@ -774,3 +774,7 @@ async fn request_local_oversize_send_failure_preserves_an_existing_pending_respo
     assert_eq!(executor.shutdown(deadline).await["status"], "pass");
     assert_eq!(admission.current(), 0);
 }
+
+mod backpressure;
+
+mod external_live;

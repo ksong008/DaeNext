@@ -34,3 +34,5 @@ crates/dae-resident-transport/src/xhttp/response.rs	1	InternalInvariant	Successf
 crates/dae-resident-transport/src/xhttp/xmux/h2_manager.rs	2	InternalInvariant	An admitted H2 xmux lease owns its selected client and permit.
 crates/dae-resident-transport/src/xhttp/xmux/h3_manager.rs	2	InternalInvariant	An admitted H3 xmux lease owns its selected client and permit.
 crates/dae-resident-transport/src/xhttp/xmux/key.rs	1	InternalInvariant	Static xmux identity namespace is valid.
+crates/dae-resident-dataplane/src/udp/proxy_dns_forwarder/actor.rs	5	InternalInvariant	Actor-local transitions retain the selected executor and exactly one active send until its same-turn completion.
+crates/dae-resident-dataplane/src/udp/proxy_dns_forwarder/actor/send.rs	1	InternalInvariant	The opening future releases its exclusive guard before the actor takes its retained executor.

@@ -11,7 +11,12 @@ use crate::{
 
 mod executor_state;
 mod pending;
+mod send;
 mod transaction;
+use self::send::{
+    ActiveProxyDnsSend, ProxyDnsSendCompletion, ProxyDnsSendOperation,
+    mark_send_response_delivered, wait_proxy_dns_send,
+};
 
 use self::executor_state::{reset_proxy_dns_udp_executor, wait_proxy_dns_udp_response};
 use self::pending::{
@@ -20,8 +25,8 @@ use self::pending::{
     next_proxy_dns_udp_deadline, wait_proxy_dns_udp_deadline,
 };
 use self::transaction::{
-    PendingProxyDnsDeadline, PendingProxyDnsUdpRequest, handle_proxy_dns_udp_request,
-    handle_proxy_dns_udp_response,
+    PendingProxyDnsDeadline, PendingProxyDnsUdpRequest, ProxyDnsRequestRelease,
+    handle_proxy_dns_udp_response, prepare_proxy_dns_udp_request,
 };
 
 #[derive(Clone)]
@@ -72,6 +77,7 @@ enum ResidentProxyDnsUdpActorEvent {
     Request(Option<ResidentProxyDnsUdpRequest>),
     Response(Result<Option<(ResidentEventKind, UdpExchangeResult)>, String>),
     Cancelled,
+    Sent(ProxyDnsSendCompletion),
     Deadline,
 }
 
@@ -85,6 +91,38 @@ pub(super) fn start_proxy_dns_udp_actor(
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+) -> ResidentDnsUdpActorRegistration<ResidentProxyDnsUdpActorHandle> {
+    start_proxy_dns_udp_actor_with_send(
+        binding,
+        original_dst,
+        runtime_config,
+        metrics,
+        hysteria2_owner_registry,
+        tuic_owner_registry,
+        juicity_owner_registry,
+        anytls_owner_registry,
+        UdpSessionExecutor::begin_dns_send,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn start_proxy_dns_udp_actor_with_send(
+    binding: ResidentProxyBinding,
+    original_dst: SocketAddr,
+    runtime_config: ResidentDnsUdpRuntimeConfig,
+    metrics: Arc<ResidentDataplaneMetrics>,
+    hysteria2_owner_registry: Option<Hysteria2OwnerRegistryHandle>,
+    tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
+    juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
+    anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+    prepare_send: impl FnMut(
+        &mut UdpSessionExecutor,
+        &ResidentProxyBinding,
+        SocketAddr,
+        &[u8],
+    ) -> Result<Option<dae_resident_udp::ProxyDnsUdpSend>, String>
+    + Send
+    + 'static,
 ) -> ResidentDnsUdpActorRegistration<ResidentProxyDnsUdpActorHandle> {
     let (sender, receiver) = tokio::sync::mpsc::channel(runtime_config.queue_depth.max(1));
     let cancellation_notify = Arc::new(tokio::sync::Notify::new());
@@ -111,6 +149,7 @@ pub(super) fn start_proxy_dns_udp_actor(
             tuic_owner_registry,
             juicity_owner_registry,
             anytls_owner_registry,
+            prepare_send,
         )
         .await;
         metric_guard.fatal
@@ -232,6 +271,12 @@ async fn run_proxy_dns_udp_actor(
     tuic_owner_registry: Option<TuicOwnerRegistryHandle>,
     juicity_owner_registry: Option<JuicityOwnerRegistryHandle>,
     anytls_owner_registry: Option<AnyTlsOwnerRegistryHandle>,
+    mut prepare_send: impl FnMut(
+        &mut UdpSessionExecutor,
+        &ResidentProxyBinding,
+        SocketAddr,
+        &[u8],
+    ) -> Result<Option<dae_resident_udp::ProxyDnsUdpSend>, String>,
 ) -> bool {
     let pending_limit = runtime_config.pending_limit.max(1);
     let mut pending = HashMap::<u16, PendingProxyDnsUdpRequest>::new();
@@ -242,29 +287,70 @@ async fn run_proxy_dns_udp_actor(
     // raise the stack requirement of every DNS UDP worker.
     let mut executor = None::<Box<UdpSessionExecutor>>;
     let mut next_generation = 1_u64;
+    let mut active = None::<ActiveProxyDnsSend>;
+    let mut requests_done = false;
     loop {
+        // A sending request retains its payload permit until the operation is
+        // dropped/completed, independently of pending response metadata.
+        let abort_send = active.as_ref().is_some_and(|send| {
+            send.deadline <= time::Instant::now()
+                || (!send.response_delivered
+                    && pending
+                        .get(&send.id)
+                        .is_none_or(|request| request.generation != send.generation))
+        });
+        if abort_send {
+            let send = active.take().expect("active send");
+            let reset = send.reset_on_cancel();
+            let deadline = send.deadline;
+            if let Some(request) = pending.remove(&send.id) {
+                id_allocator.release(send.id);
+                request.deliver(
+                    Err(ProxyDnsRequestError::deadline(send.stage)),
+                    ProxyDnsRequestRelease::Expired,
+                );
+            }
+            send.cancel(&mut executor).await;
+            if reset {
+                fail_proxy_dns_udp_requests(
+                    &mut pending,
+                    &mut deadlines,
+                    &mut id_allocator,
+                    ProxyDnsRequestError::new(
+                        ProxyDnsRequestStage::Cleanup,
+                        ProxyDnsRequestFailure::Network,
+                        "proxied DNS UDP stream reset after an interrupted send; framing or codec state may have advanced",
+                    ),
+                );
+                reset_proxy_dns_udp_executor(&mut executor, deadline, &metrics).await;
+            }
+        }
         expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);
-        if receiver.is_closed() && pending.is_empty() {
+        if requests_done && pending.is_empty() && active.is_none() {
             break;
         }
-        let deadline = next_proxy_dns_udp_deadline(&mut deadlines, &pending);
+        let pending_deadline = next_proxy_dns_udp_deadline(&mut deadlines, &pending);
+        let deadline = match (pending_deadline, active.as_ref().map(|send| send.deadline)) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        };
         let event = tokio::select! {
             biased;
             _ = &mut stop => ResidentProxyDnsUdpActorEvent::Stop,
-            response = wait_proxy_dns_udp_response(&mut executor, !pending.is_empty()) => {
-                ResidentProxyDnsUdpActorEvent::Response(response)
-            }
-            _ = cancellation_notify.notified(), if !pending.is_empty() => {
-                ResidentProxyDnsUdpActorEvent::Cancelled
-            }
-            request = receiver.recv(), if pending.len() < pending_limit => {
-                ResidentProxyDnsUdpActorEvent::Request(request)
-            }
+            _ = cancellation_notify.notified(), if !pending.is_empty() => ResidentProxyDnsUdpActorEvent::Cancelled,
             _ = wait_proxy_dns_udp_deadline(deadline) => ResidentProxyDnsUdpActorEvent::Deadline,
+            // Every received packet leaves this select before re-entering it,
+            // so a blocked writer never owns the receiver or its decoder.
+            response = wait_proxy_dns_udp_response(&mut executor, !pending.is_empty()) => ResidentProxyDnsUdpActorEvent::Response(response),
+            completed = wait_proxy_dns_send(&mut active) => ResidentProxyDnsUdpActorEvent::Sent(completed),
+            request = receiver.recv(), if !requests_done && active.is_none() && pending.len() < pending_limit => ResidentProxyDnsUdpActorEvent::Request(request),
         };
         match event {
             ResidentProxyDnsUdpActorEvent::Stop => {
                 receiver.close();
+                if let Some(send) = active.take() {
+                    send.cancel(&mut executor).await;
+                }
                 let failed = fail_proxy_dns_udp_requests(
                     &mut pending,
                     &mut deadlines,
@@ -283,42 +369,189 @@ async fn run_proxy_dns_udp_actor(
                 break;
             }
             ResidentProxyDnsUdpActorEvent::Request(Some(request)) => {
-                let request_deadline = request.context.deadline();
-                if let Err(err) = handle_proxy_dns_udp_request(
+                let Some(prepared) = prepare_proxy_dns_udp_request(
                     &binding,
                     original_dst,
                     request,
-                    &mut pending,
-                    &mut deadlines,
+                    &pending,
                     &mut id_allocator,
                     &mut next_generation,
-                    &mut executor,
                     &runtime_config,
                     &metrics,
-                    hysteria2_owner_registry.as_ref(),
-                    tuic_owner_registry.as_ref(),
-                    juicity_owner_registry.as_ref(),
-                    anytls_owner_registry.as_ref(),
-                )
-                .await
+                ) else {
+                    continue;
+                };
+                let mut transaction = prepared.transaction;
+                let id = transaction.upstream_id;
+                let generation = transaction.generation;
+                let deadline = transaction.context.deadline();
+                let opening = executor.is_none();
+                if opening {
+                    executor = Some(Box::new(
+                        UdpSessionExecutor::new_proxy_packet_with_optional_transport_owner(
+                            binding.clone(),
+                            hysteria2_owner_registry.clone(),
+                            tuic_owner_registry.clone(),
+                            juicity_owner_registry.clone(),
+                            anytls_owner_registry.clone(),
+                        ),
+                    ));
+                    metrics.proxy_dns_udp_executor_opened();
+                } else {
+                    metrics.proxy_dns_udp_executor_reused();
+                }
+                let selected = executor.as_mut().expect("initialized proxy DNS executor");
+                selected.set_owner_acquisition_deadline(dae_runtime_control::AbsoluteDeadline::at(
+                    deadline.into_std(),
+                ));
+                let operation =
+                    match prepare_send(selected, &binding, original_dst, &prepared.payload) {
+                        Ok(Some(send)) => ProxyDnsSendOperation::Packet(send),
+                        Ok(None) => {
+                            // No established transport: this operation owns the
+                            // executor during connect/handshake and is stop-aware.
+                            let opening_executor =
+                                Arc::new(tokio::sync::Mutex::new(executor.take()));
+                            let selected = Arc::clone(&opening_executor);
+                            let binding = binding.clone();
+                            let payload = prepared.payload;
+                            ProxyDnsSendOperation::Opening {
+                                executor: opening_executor,
+                                future: Box::pin(async move {
+                                    let mut selected = selected.lock().await;
+                                    selected
+                                        .as_mut()
+                                        .expect("opening executor")
+                                        .execute_proxy_packet(&binding, original_dst, &payload)
+                                        .await
+                                }),
+                            }
+                        }
+                        Err(error) => {
+                            id_allocator.release(id);
+                            transaction.deliver(
+                                Err(ProxyDnsRequestError::new(
+                                    ProxyDnsRequestStage::Send,
+                                    ProxyDnsRequestFailure::Protocol,
+                                    error,
+                                )),
+                                ProxyDnsRequestRelease::Completed,
+                            );
+                            // Stream preparation can advance an encryption nonce;
+                            // retain the conservative reset boundary for that case.
+                            if selected.dns_send_preparation_requires_reset() {
+                                fail_proxy_dns_udp_requests(
+                                    &mut pending,
+                                    &mut deadlines,
+                                    &mut id_allocator,
+                                    ProxyDnsRequestError::new(
+                                        ProxyDnsRequestStage::Cleanup,
+                                        ProxyDnsRequestFailure::Network,
+                                        "proxied DNS UDP stream preparation failed",
+                                    ),
+                                );
+                                reset_proxy_dns_udp_executor(&mut executor, deadline, &metrics)
+                                    .await;
+                            }
+                            continue;
+                        }
+                    };
+                active = Some(ActiveProxyDnsSend {
+                    id,
+                    generation,
+                    deadline,
+                    stage: if opening {
+                        ProxyDnsRequestStage::Connect
+                    } else {
+                        ProxyDnsRequestStage::Send
+                    },
+                    response_delivered: false,
+                    permit: transaction.bytes.take_payload_permit(),
+                    operation,
+                });
+                pending.insert(id, transaction);
+                insert_proxy_dns_udp_deadline(
+                    &mut deadlines,
+                    PendingProxyDnsDeadline {
+                        deadline,
+                        generation,
+                        id,
+                    },
+                );
+            }
+            ResidentProxyDnsUdpActorEvent::Request(None) => requests_done = true,
+            ResidentProxyDnsUdpActorEvent::Sent(completed) => {
+                let mut send = active.take().expect("completed active send");
+                let (result, reset, response) = match completed {
+                    ProxyDnsSendCompletion::Packet(mut completed) => {
+                        executor
+                            .as_mut()
+                            .expect("packet executor")
+                            .finish_dns_send(&mut completed);
+                        (completed.result, completed.reset_session, None)
+                    }
+                    ProxyDnsSendCompletion::Opened((selected, result)) => {
+                        executor = Some(selected);
+                        match result {
+                            Ok((_, response)) => (Ok(()), false, Some(response)),
+                            Err(error) => (Err(error), true, None),
+                        }
+                    }
+                };
+                if let Some(request) = pending.get_mut(&send.id) {
+                    request.bytes.restore_payload_permit(send.permit.take());
+                }
+                let send_failed = result.is_err();
+                if let Err(error) = result
+                    && let Some(request) = pending.remove(&send.id)
                 {
-                    let shared_error = ProxyDnsRequestError::new(
-                        ProxyDnsRequestStage::Cleanup,
-                        ProxyDnsRequestFailure::Network,
-                        format!("proxied DNS UDP executor reset after request failure: {err}"),
+                    id_allocator.release(send.id);
+                    request.deliver(
+                        Err(ProxyDnsRequestError::new(
+                            send.stage,
+                            ProxyDnsRequestFailure::Network,
+                            error,
+                        )),
+                        ProxyDnsRequestRelease::Completed,
                     );
+                }
+                let response_error =
+                    if let Some(response) = response.filter(|response| response.reply_forwarded) {
+                        handle_proxy_dns_udp_response(
+                            &mut pending,
+                            &mut id_allocator,
+                            original_dst,
+                            response,
+                            &metrics,
+                            &runtime_config.payload_admission,
+                        )
+                        .err()
+                    } else {
+                        None
+                    };
+                // Keep older UDP replies on their original socket. Once no
+                // request depends on it, a failed sender may reopen normally
+                // and retry address candidates on the next request.
+                if reset || response_error.is_some() || (send_failed && pending.is_empty()) {
                     fail_proxy_dns_udp_requests(
                         &mut pending,
                         &mut deadlines,
                         &mut id_allocator,
-                        shared_error,
+                        response_error.unwrap_or_else(|| {
+                            ProxyDnsRequestError::new(
+                                ProxyDnsRequestStage::Cleanup,
+                                ProxyDnsRequestFailure::Network,
+                                "proxied DNS UDP shared session failed during send",
+                            )
+                        }),
                     );
-                    reset_proxy_dns_udp_executor(&mut executor, request_deadline, &metrics).await;
-                }
-            }
-            ResidentProxyDnsUdpActorEvent::Request(None) => {
-                if pending.is_empty() {
-                    break;
+                    drop(send);
+                    reset_proxy_dns_udp_executor(
+                        &mut executor,
+                        time::Instant::now() + runtime_config.attempt_timeout,
+                        &metrics,
+                    )
+                    .await;
                 }
             }
             ResidentProxyDnsUdpActorEvent::Response(Ok(Some((_, response)))) => {
@@ -330,29 +563,30 @@ async fn run_proxy_dns_udp_actor(
                     &metrics,
                     &runtime_config.payload_admission,
                 ) {
-                    let reset_deadline = pending
-                        .values()
-                        .map(|request| request.context.deadline())
-                        .min()
-                        .unwrap_or_else(time::Instant::now);
+                    if let Some(send) = active.take() {
+                        send.cancel(&mut executor).await;
+                    }
                     fail_proxy_dns_udp_requests(
                         &mut pending,
                         &mut deadlines,
                         &mut id_allocator,
                         error,
                     );
-                    reset_proxy_dns_udp_executor(&mut executor, reset_deadline, &metrics).await;
+                    reset_proxy_dns_udp_executor(
+                        &mut executor,
+                        time::Instant::now() + runtime_config.attempt_timeout,
+                        &metrics,
+                    )
+                    .await;
+                } else {
+                    mark_send_response_delivered(&mut active, &pending);
                 }
             }
-            ResidentProxyDnsUdpActorEvent::Response(Ok(None)) => {
-                tokio::task::yield_now().await;
-            }
-            ResidentProxyDnsUdpActorEvent::Response(Err(err)) => {
-                let reset_deadline = pending
-                    .values()
-                    .map(|request| request.context.deadline())
-                    .min()
-                    .unwrap_or_else(time::Instant::now);
+            ResidentProxyDnsUdpActorEvent::Response(Ok(None)) => tokio::task::yield_now().await,
+            ResidentProxyDnsUdpActorEvent::Response(Err(error)) => {
+                if let Some(send) = active.take() {
+                    send.cancel(&mut executor).await;
+                }
                 fail_proxy_dns_udp_requests(
                     &mut pending,
                     &mut deadlines,
@@ -360,21 +594,22 @@ async fn run_proxy_dns_udp_actor(
                     ProxyDnsRequestError::new(
                         ProxyDnsRequestStage::Read,
                         ProxyDnsRequestFailure::Network,
-                        format!("receive proxied DNS UDP response: {err}"),
+                        format!("receive proxied DNS UDP response: {error}"),
                     ),
                 );
-                reset_proxy_dns_udp_executor(&mut executor, reset_deadline, &metrics).await;
+                reset_proxy_dns_udp_executor(
+                    &mut executor,
+                    time::Instant::now() + runtime_config.attempt_timeout,
+                    &metrics,
+                )
+                .await;
             }
-            ResidentProxyDnsUdpActorEvent::Cancelled => {
-                cancel_abandoned_proxy_dns_udp_requests(
-                    &mut pending,
-                    &mut deadlines,
-                    &mut id_allocator,
-                );
-            }
-            ResidentProxyDnsUdpActorEvent::Deadline => {
-                expire_proxy_dns_udp_requests(&mut pending, &mut deadlines, &mut id_allocator);
-            }
+            ResidentProxyDnsUdpActorEvent::Cancelled => cancel_abandoned_proxy_dns_udp_requests(
+                &mut pending,
+                &mut deadlines,
+                &mut id_allocator,
+            ),
+            ResidentProxyDnsUdpActorEvent::Deadline => {}
         }
     }
     if let Some(mut executor) = executor {

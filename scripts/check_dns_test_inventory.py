@@ -7,12 +7,17 @@ import sys
 
 SUITES = {
     "dae-dns": "name::tests::",
+    "dae-resident-udp": "udp::shared_io::tests::",
     "dae-resident-dataplane": "dns_runtime_tests::",
     "dae-resident-dns": "runtime::transport::udp_multiplex::tests::",
 }
 
 
 CRITICAL_TESTS = {
+    "dae-resident-udp": [
+        "udp::shared_io::tests::partial_stream_send_allows_receiving_but_requires_session_reset_on_cancel",
+        "udp::vmess_session::fixed_target_tests::owned_dns_sends_preserve_packet_boundaries_without_returned_scratch",
+    ],
     "dae-dns": [
         "hot_path::tests::truncated_responses_never_produce_cache_or_route_owner_plans",
         "name::tests::all_question_and_answer_parsers_reject_overlong_names",
@@ -36,6 +41,16 @@ CRITICAL_TESTS = {
         "clock::tests::wall_clock_steps_do_not_change_fixed_original_ttls_or_reload_deadlines",
     ],
     "dae-resident-dataplane": [
+        "udp::proxy_dns_forwarder::tests::backpressure::pending_response_completes_while_another_send_is_backpressured",
+        "udp::proxy_dns_forwarder::tests::backpressure::cancelling_a_pending_request_progresses_during_send_backpressure",
+        "udp::proxy_dns_forwarder::tests::backpressure::pending_deadline_progresses_during_send_backpressure",
+        "udp::proxy_dns_forwarder::tests::backpressure::cancelling_a_datagram_send_preserves_other_pending_and_socket",
+        "udp::proxy_dns_forwarder::tests::backpressure::datagram_send_deadline_preserves_other_pending_and_socket",
+        "udp::proxy_dns_forwarder::tests::backpressure::local_datagram_send_error_preserves_other_pending_and_socket",
+        "udp::proxy_dns_forwarder::tests::backpressure::failed_datagram_sender_reopens_after_older_pending_drains",
+        "udp::proxy_dns_forwarder::tests::backpressure::shared_session_send_failure_resets_other_pending",
+        "udp::proxy_dns_forwarder::tests::backpressure::shutdown_interrupts_send_backpressure_and_releases_all_budgets",
+        "udp::proxy_dns_forwarder::tests::backpressure::shutdown_interrupts_first_connection_handshake",
         "udp::proxy_dns_forwarder::tests::request_local_oversize_send_failure_preserves_an_existing_pending_response",
         "dns_runtime_tests::plan::resident_dns_ipversion_prefer_preserves_non_preferred_cached_response",
     ],
@@ -56,7 +71,7 @@ def main():
     for package, prefix in SUITES.items():
         command = ["cargo", "test", "--locked", "--profile", args.profile,
                    "-p", package, "--lib", "--no-run", "--message-format=json"]
-        if package != "dae-dns":
+        if package in {"dae-resident-dns", "dae-resident-dataplane"}:
             command.extend(["--features", "dns-runtime-tests"])
         binaries = []
         with subprocess.Popen(command, stdout=subprocess.PIPE, text=True) as process:
