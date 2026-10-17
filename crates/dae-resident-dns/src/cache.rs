@@ -72,6 +72,7 @@ struct ResidentDnsStoredCacheEntry {
 pub struct ResidentDnsResponseCacheKey {
     base: DnsCacheKey,
     scope: ResidentDnsResponseCacheScope,
+    reuse: Option<dae_dns::DnsRequestReuse>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -90,13 +91,23 @@ pub enum ResidentDnsResponseCacheScope {
 
 impl ResidentDnsResponseCacheKey {
     pub fn new(base: DnsCacheKey, scope: ResidentDnsResponseCacheScope) -> Self {
-        Self { base, scope }
+        Self {
+            base,
+            scope,
+            reuse: Some(dae_dns::DnsRequestReuse::default()),
+        }
+    }
+
+    pub fn with_request(mut self, request: &DnsPacketView<'_>) -> Self {
+        self.reuse = dae_dns::DnsRequestReuse::from_request(request);
+        self
     }
 
     pub fn with_base(&self, base: DnsCacheKey) -> Self {
         Self {
             base,
             scope: self.scope.clone(),
+            reuse: self.reuse.clone(),
         }
     }
 
@@ -104,6 +115,7 @@ impl ResidentDnsResponseCacheKey {
         Self {
             base: base.clone(),
             scope: ResidentDnsResponseCacheScope::Reject,
+            reuse: None,
         }
     }
 }
@@ -278,28 +290,35 @@ impl ResidentDnsRuntimeCache {
         key: ResidentDnsResponseCacheKey,
     ) -> Result<ResidentDnsFlightPermit<'_>, String> {
         let mut inflight = self.lock_flights();
-        let (state, role) = match inflight.get(&key) {
-            Some(state) => {
-                state
-                    .followers
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |followers| {
-                        (followers < self.flight_follower_limit).then_some(followers + 1)
-                    })
-                    .map_err(|_| {
-                        format!(
-                            "resident DNS flight follower limit reached: limit={}",
-                            self.flight_follower_limit
-                        )
-                    })?;
-                (Arc::clone(state), ResidentDnsFlightRole::Follower)
-            }
-            None => {
-                let state = Arc::new(ResidentDnsFlightState::new());
-                if inflight.len() >= self.flight_entry_limit {
-                    (state, ResidentDnsFlightRole::DetachedLeader)
-                } else {
-                    inflight.insert(key.clone(), Arc::clone(&state));
-                    (state, ResidentDnsFlightRole::Leader)
+        let (state, role) = if key.reuse.is_none() {
+            (
+                Arc::new(ResidentDnsFlightState::new()),
+                ResidentDnsFlightRole::DetachedLeader,
+            )
+        } else {
+            match inflight.get(&key) {
+                Some(state) => {
+                    state
+                        .followers
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |followers| {
+                            (followers < self.flight_follower_limit).then_some(followers + 1)
+                        })
+                        .map_err(|_| {
+                            format!(
+                                "resident DNS flight follower limit reached: limit={}",
+                                self.flight_follower_limit
+                            )
+                        })?;
+                    (Arc::clone(state), ResidentDnsFlightRole::Follower)
+                }
+                None => {
+                    let state = Arc::new(ResidentDnsFlightState::new());
+                    if inflight.len() >= self.flight_entry_limit {
+                        (state, ResidentDnsFlightRole::DetachedLeader)
+                    } else {
+                        inflight.insert(key.clone(), Arc::clone(&state));
+                        (state, ResidentDnsFlightRole::Leader)
+                    }
                 }
             }
         };
@@ -355,6 +374,9 @@ impl ResidentDnsRuntimeCache {
         out: &mut Vec<u8>,
     ) -> Result<bool, String> {
         out.clear();
+        if key.reuse.is_none() || key.reuse != dae_dns::DnsRequestReuse::from_request(request) {
+            return Ok(false);
+        }
         let now_unix = unix_now();
         // The hit linearizes while the entry is valid under the lock. Readers
         // own only an Arc snapshot; packet restoration and UDP fitting do not
@@ -367,6 +389,10 @@ impl ResidentDnsRuntimeCache {
             return Ok(false);
         };
         if entry.fill_packed_response_into(request.id(), out).is_none() {
+            return Ok(false);
+        }
+        if dae_dns::restore_dns_response_for_request(request, out).is_err() {
+            out.clear();
             return Ok(false);
         }
         if udp_limit {
@@ -401,7 +427,9 @@ impl ResidentDnsRuntimeCache {
         key: ResidentDnsResponseCacheKey,
         mut entry: DnsCacheEntry,
     ) -> Result<(), String> {
-        if entry.packed_response.len() > DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES {
+        if key.reuse.is_none()
+            || entry.packed_response.len() > DNS_RUNTIME_CACHE_MAX_PACKED_RESPONSE_BYTES
+        {
             return Ok(());
         }
         self.sweep_all_if_due(now_unix);

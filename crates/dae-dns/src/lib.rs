@@ -9,6 +9,8 @@ mod name;
 pub use name::{encode_dns_name_into, scan_dns_name};
 pub mod netutils;
 pub mod resolve;
+mod reuse;
+pub use reuse::{DnsRequestReuse, restore_dns_response_for_request};
 pub mod routing;
 pub mod upstream;
 

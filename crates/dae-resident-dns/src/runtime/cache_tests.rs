@@ -589,3 +589,114 @@ fn escaped_labels_stay_separate_in_cache_flights_reload_and_owner_removal() {
     assert_eq!(restored.remove_base_key(&base).unwrap().len(), 1);
     assert_eq!(restored.entry_count().unwrap(), 1);
 }
+
+#[tokio::test]
+async fn tc_udp_then_tcp_and_edns_retry_reach_the_upstream() {
+    let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = tcp.local_addr().unwrap();
+    let udp = tokio::net::UdpSocket::bind(address).await.unwrap();
+    let udp_server = tokio::spawn(async move {
+        let mut packet = [0; 512];
+        for _ in 0..2 {
+            let (n, peer) = udp.recv_from(&mut packet).await.unwrap();
+            let mut response = a_response_for_query(&packet[..n], [203, 0, 113, 1]);
+            response[2] |= 2;
+            udp.send_to(&response, peer).await.unwrap();
+        }
+    });
+    let tcp_server = tokio::spawn(async move {
+        let (mut stream, _) = tcp.accept().await.unwrap();
+        let n = stream.read_u16().await.unwrap() as usize;
+        let mut query = vec![0; n];
+        stream.read_exact(&mut query).await.unwrap();
+        let response = a_response_for_query(&query, [203, 0, 113, 2]);
+        stream.write_u16(response.len() as u16).await.unwrap();
+        stream.write_all(&response).await.unwrap();
+    });
+    let plan = ResidentDnsPlan::asis(0);
+    let first = handle_resident_dns_udp_async(&plan, address, QUERY)
+        .await
+        .unwrap();
+    assert_ne!(first[2] & 2, 0);
+    assert_eq!(plan.cache.entry_count().unwrap(), 0);
+    let second = handle_resident_dns_tcp_async(&plan, address, QUERY)
+        .await
+        .unwrap();
+    assert_eq!(second.last(), Some(&2));
+    let mut edns = QUERY.to_vec();
+    edns[11] = 1;
+    edns.extend([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0]);
+    let third = handle_resident_dns_udp_async(&plan, address, &edns)
+        .await
+        .unwrap();
+    assert_ne!(third[2] & 2, 0);
+    time::timeout(Duration::from_secs(2), udp_server)
+        .await
+        .unwrap()
+        .unwrap();
+    time::timeout(Duration::from_secs(2), tcp_server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cache_and_flight_share_only_compatible_requests_and_restore_case() {
+    let cache = ResidentDnsRuntimeCache::default();
+    let view = DnsPacketView::parse(QUERY).unwrap();
+    let key = test_asis_cache_key(&view).with_request(&view);
+    let plan =
+        build_response_cache_plan_from_packet(unix_now(), &a_response([203, 0, 113, 5]), None)
+            .unwrap()
+            .unwrap();
+    cache
+        .insert_response(unix_now(), key.clone(), plan.entry)
+        .unwrap();
+    let mut leader = cache.begin_flight(key.clone()).unwrap();
+    let mut mixed = QUERY.to_vec();
+    mixed[0] = 0xab;
+    mixed[13] = b'E';
+    let mixed_view = DnsPacketView::parse(&mixed).unwrap();
+    let follower = cache
+        .begin_flight(key.clone().with_request(&mixed_view))
+        .unwrap();
+    assert!(!follower.is_leader());
+    let mut hit = Vec::new();
+    assert!(
+        cache
+            .lookup_response_into(&key, &mixed_view, false, &mut hit)
+            .unwrap()
+    );
+    assert_eq!(&hit[12..view.answer_offset()], &mixed[12..]);
+    leader.publish(Ok(&a_response([203, 0, 113, 5]))).unwrap();
+    let mut shared = follower
+        .wait(
+            ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+            mixed_view.id(),
+        )
+        .await
+        .unwrap();
+    dae_dns::restore_dns_response_for_request(&mixed_view, &mut shared).unwrap();
+    assert_eq!(&shared[..2], &mixed[..2]);
+    assert_eq!(&shared[12..view.answer_offset()], &mixed[12..]);
+    for flags in [0, 0x0110, 0x0120, 0x0130] {
+        let mut changed = QUERY.to_vec();
+        changed[2..4].copy_from_slice(&u16::to_be_bytes(flags));
+        let request = DnsPacketView::parse(&changed).unwrap();
+        let other = key.clone().with_request(&request);
+        assert!(
+            !cache
+                .lookup_response_into(&other, &request, false, &mut hit)
+                .unwrap()
+        );
+    }
+    let mut option = QUERY.to_vec();
+    option[11] = 1;
+    option.extend([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 4, 0, 10, 0, 0]);
+    let request = DnsPacketView::parse(&option).unwrap();
+    let bypass = key.with_request(&request);
+    let first = cache.begin_flight(bypass.clone()).unwrap();
+    let second = cache.begin_flight(bypass).unwrap();
+    assert!(first.is_leader() && second.is_leader());
+    assert_eq!(cache.inflight_len(), 0);
+}

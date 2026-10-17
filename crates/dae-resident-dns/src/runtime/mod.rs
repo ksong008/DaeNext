@@ -787,7 +787,10 @@ async fn handle_resident_dns_request_without_preference(
     let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
     let mut flight = plan.cache.begin_flight(cache_key.clone())?;
     if !flight.is_leader() {
-        return flight.wait(context, request.id()).await;
+        let mut response = flight.wait(context, request.id()).await?;
+        dae_dns::restore_dns_response_for_request(request, &mut response)
+            .map_err(|e| format!("restore shared DNS response: {e}"))?;
+        return Ok(response);
     }
     let result = match action {
         ResidentDnsRequestAction::AsIs => {
@@ -882,7 +885,9 @@ async fn handle_resident_dns_request_without_preference_trace(
     let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
     let mut flight = plan.cache.begin_flight(cache_key.clone())?;
     if !flight.is_leader() {
-        let response = flight.wait(context, request.id()).await?;
+        let mut response = flight.wait(context, request.id()).await?;
+        dae_dns::restore_dns_response_for_request(request, &mut response)
+            .map_err(|e| format!("restore shared DNS response: {e}"))?;
         trace.add_cache_elapsed(cache_started);
         trace.cache = DNS_TRACE_CACHE_LOCKED_HIT.to_owned();
         trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
@@ -1013,7 +1018,7 @@ fn dns_response_cache_key_for_request_action(
             path: Arc::clone(&upstream.path),
         },
     };
-    Ok(ResidentDnsResponseCacheKey::new(base, scope))
+    Ok(ResidentDnsResponseCacheKey::new(base, scope).with_request(request))
 }
 
 fn dns_response_has_any_ip(response: &[u8]) -> Result<bool, String> {

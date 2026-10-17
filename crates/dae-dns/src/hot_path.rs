@@ -49,6 +49,10 @@ pub fn restore_cached_response_for_packet_question(
         return Ok(None);
     };
     entry.fill_packed_response_into(request.id(), out);
+    if crate::restore_dns_response_for_request(&request, out).is_err() {
+        out.clear();
+        return Ok(None);
+    }
     if out.is_empty() {
         return Ok(None);
     }

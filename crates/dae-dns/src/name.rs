@@ -12,7 +12,7 @@ pub fn scan_dns_name(
     for label in labels.by_ref() {
         label?;
     }
-    Ok(labels.consumed.expect("a completed name has an end"))
+    labels.consumed.ok_or(DnsError::InvalidDnsName)
 }
 
 #[derive(Clone, Debug)]

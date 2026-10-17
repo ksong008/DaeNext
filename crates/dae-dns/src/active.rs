@@ -89,23 +89,8 @@ pub fn build_active_dns_a_response(
 }
 
 fn dns_question_end(packet: &[u8]) -> Result<usize, String> {
-    let mut offset = 12;
-    loop {
-        if offset >= packet.len() {
-            return Err("DNS question name exceeded packet".to_owned());
-        }
-        let len = packet[offset] as usize;
-        offset += 1;
-        if len == 0 {
-            break;
-        }
-        if len & 0xc0 != 0 {
-            return Err(
-                "compressed DNS question names are not accepted in active DNS query".to_owned(),
-            );
-        }
-        offset += len;
-    }
+    let offset = crate::scan_dns_name(packet, 12, packet.len(), false)
+        .map_err(|error| format!("invalid active DNS question: {error}"))?;
     if offset + 4 > packet.len() {
         return Err("DNS question missing qtype/qclass".to_owned());
     }

@@ -21,6 +21,7 @@ fn prepare(
 
 fn query(name: &str) -> Vec<u8> {
     let mut packet = vec![0; 12];
+    packet[2] = 1;
     packet[5] = 1;
     for label in name.trim_end_matches('.').split('.') {
         packet.push(label.len() as u8);
@@ -38,8 +39,12 @@ fn newer_shorter_ttl_response_supersedes_old_plan_and_its_cache_publication() {
     let name = "race.example.test";
     let mut old = response_plan(name, "192.0.2.1", now + 500);
     let mut new = response_plan(name, "192.0.2.2", now + 100);
-    old.entry.packed_response = vec![0, 0, 1];
-    new.entry.packed_response = vec![0, 0, 2];
+    old.entry.packed_response =
+        dae_dns::build_active_dns_a_response(&query(name), "192.0.2.1".parse().unwrap(), 500)
+            .unwrap();
+    new.entry.packed_response =
+        dae_dns::build_active_dns_a_response(&query(name), "192.0.2.2".parse().unwrap(), 100)
+            .unwrap();
     let (old_plan, old_revision) = prepare(&routing, &old);
     let (new_plan, new_revision) = prepare(&routing, &new);
     let key = crate::ResidentDnsResponseCacheKey::new(
@@ -82,7 +87,7 @@ fn newer_shorter_ttl_response_supersedes_old_plan_and_its_cache_publication() {
             .lookup_response_into(&key, &request, false, &mut cached)
             .unwrap()
     );
-    assert_eq!(cached[2], 2);
+    assert_eq!(cached.last(), Some(&2));
     let state = routing.state.lock().unwrap();
     let entry = state
         .cache
