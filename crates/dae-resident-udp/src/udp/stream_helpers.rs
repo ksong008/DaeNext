@@ -43,15 +43,22 @@ pub(super) async fn socks5_udp_relay_addr_candidates_async(
     .map_err(|err| err.to_string())
 }
 
-pub(super) async fn write_async_tls_plain_all(
-    client: &mut AsyncResidentTlsClient,
+pub(super) async fn write_async_tls_plain_all<T: tokio::io::AsyncWrite + Unpin>(
+    client: &mut T,
     payload: &[u8],
     label: &str,
 ) -> Result<(), String> {
-    time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        client.write_plain_all(payload, label),
-    )
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        use tokio::io::AsyncWriteExt;
+        client
+            .write_all(payload)
+            .await
+            .map_err(|error| format!("{label}: {error}"))?;
+        client
+            .flush()
+            .await
+            .map_err(|error| format!("flush {label}: {error}"))
+    })
     .await
     .map_err(|_| format!("{label} timeout"))?
 }

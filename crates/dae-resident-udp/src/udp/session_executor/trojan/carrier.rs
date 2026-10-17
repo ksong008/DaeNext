@@ -1,4 +1,5 @@
 use super::*;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TrojanUdpCarrierKind {
@@ -33,23 +34,23 @@ impl TrojanUdpCarrierKind {
 
 pub(super) enum TrojanUdpCarrier {
     Tls {
-        client: AsyncResidentTlsClient,
+        client: UdpSharedIo<AsyncResidentTlsClient>,
         read_buffer: Vec<u8>,
         tls_underlay: &'static str,
     },
     WebSocket {
-        client: AsyncResidentTlsClient,
+        client: UdpSharedIo<AsyncResidentTlsClient>,
         state: AsyncWebSocketPayloadState,
         read_buffer: Vec<u8>,
         tls_underlay: &'static str,
     },
     HttpUpgrade {
-        client: AsyncResidentTlsClient,
+        client: UdpSharedIo<AsyncResidentTlsClient>,
         read_buffer: Vec<u8>,
         tls_underlay: &'static str,
     },
     Grpc {
-        send_stream: h2::SendStream<Bytes>,
+        send_stream: Arc<tokio::sync::Mutex<h2::SendStream<Bytes>>>,
         response: GrpcH2Response,
         response_buf: GrpcHunkReadBuffer,
         _carrier_lease: H2CarrierLease,
@@ -76,7 +77,7 @@ impl TrojanUdpCarrier {
                 )
                 .await?;
                 Ok(Self::Tls {
-                    client,
+                    client: client.into(),
                     read_buffer: Vec::new(),
                     tls_underlay,
                 })
@@ -99,7 +100,7 @@ impl TrojanUdpCarrier {
                     .inject_leftover(ws_leftover)
                     .map_err(|err| format!("Trojan WebSocket UDP: {err}"))?;
                 Ok(Self::WebSocket {
-                    client,
+                    client: client.into(),
                     state,
                     read_buffer: Vec::new(),
                     tls_underlay,
@@ -125,7 +126,7 @@ impl TrojanUdpCarrier {
                 )
                 .await?;
                 Ok(Self::HttpUpgrade {
-                    client,
+                    client: client.into(),
                     read_buffer: Vec::new(),
                     tls_underlay,
                 })
@@ -135,7 +136,7 @@ impl TrojanUdpCarrier {
                     open_grpc_h2_stream(binding, initial_packet).await?;
                 let tls_underlay = carrier_lease.tls_underlay();
                 Ok(Self::Grpc {
-                    send_stream,
+                    send_stream: Arc::new(tokio::sync::Mutex::new(send_stream)),
                     response,
                     response_buf: GrpcHunkReadBuffer::default(),
                     _carrier_lease: carrier_lease,
@@ -143,6 +144,30 @@ impl TrojanUdpCarrier {
                 })
             }
         }
+    }
+
+    pub(super) fn begin_dns_send(
+        &mut self,
+        mut packet: Vec<u8>,
+    ) -> Result<ProxyDnsUdpSend, String> {
+        Ok(match self {
+            Self::Tls { client, .. } => ProxyDnsUdpSend::stream(client.share()?, packet, true),
+            Self::WebSocket { client, .. } => {
+                packet = websocket_client_binary_frame_with_random_mask(&packet)
+                    .map_err(|error| format!("frame DNS UDP WebSocket packet: {error}"))?;
+                ProxyDnsUdpSend::stream(client.share()?, packet, true)
+            }
+            Self::HttpUpgrade { client, .. } => {
+                ProxyDnsUdpSend::stream(client.share()?, packet, true)
+            }
+            Self::Grpc { send_stream, .. } => {
+                let send_stream = Arc::clone(send_stream);
+
+                ProxyDnsUdpSend::new(true, async move {
+                    send_grpc_hunk(&mut *send_stream.lock().await, &packet, false).await
+                })
+            }
+        })
     }
 
     pub(super) async fn write_packet(&mut self, payload: &[u8]) -> Result<(), String> {
@@ -157,7 +182,9 @@ impl TrojanUdpCarrier {
                 write_async_tls_plain_all(client, payload, "write Trojan HTTPUpgrade UDP packet")
                     .await
             }
-            Self::Grpc { send_stream, .. } => send_grpc_hunk(send_stream, payload, false).await,
+            Self::Grpc { send_stream, .. } => {
+                send_grpc_hunk(&mut *send_stream.lock().await, payload, false).await
+            }
         }
     }
 
@@ -285,23 +312,33 @@ impl TrojanUdpCarrier {
         match self {
             Self::Tls { client, .. }
             | Self::WebSocket { client, .. }
-            | Self::HttpUpgrade { client, .. } => client.shutdown().await,
+            | Self::HttpUpgrade { client, .. } => {
+                let _ = client.shutdown().await;
+            }
             Self::Grpc { send_stream, .. } => {
-                let _ = send_grpc_hunk(send_stream, &[], true).await;
+                let _ = send_grpc_hunk(&mut *send_stream.lock().await, &[], true).await;
             }
         }
     }
 }
 
 async fn write_websocket_packet(
-    client: &mut AsyncResidentTlsClient,
+    client: &mut (impl tokio::io::AsyncWrite + Unpin),
     payload: &[u8],
     label: &str,
 ) -> Result<(), String> {
-    time::timeout(
-        RESIDENT_UDP_RESPONSE_TIMEOUT,
-        write_websocket_binary_frame_over_resident_tls_async(client, payload, label),
-    )
+    time::timeout(RESIDENT_UDP_RESPONSE_TIMEOUT, async {
+        let frame = websocket_client_binary_frame_with_random_mask(payload)
+            .map_err(|error| format!("{label}: {error}"))?;
+        client
+            .write_all(&frame)
+            .await
+            .map_err(|error| format!("{label}: {error}"))?;
+        client
+            .flush()
+            .await
+            .map_err(|error| format!("flush {label}: {error}"))
+    })
     .await
     .map_err(|_| format!("{label} timeout"))?
 }

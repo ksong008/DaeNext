@@ -201,6 +201,8 @@ mod connect_udp;
 mod datagram;
 mod datagram_batch;
 mod dispatch;
+mod dns_send;
+pub use self::dns_send::{ProxyDnsUdpSend, ProxyDnsUdpSendCompletion};
 mod selection;
 #[cfg(any(test, feature = "test-support"))]
 mod test_support;

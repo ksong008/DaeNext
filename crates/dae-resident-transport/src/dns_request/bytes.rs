@@ -58,7 +58,7 @@ impl ProxyDnsQueuedRequestBytes {
         self.metrics
             .proxy_dns_udp_pending_metadata_added(metadata_bytes);
         ProxyDnsPendingRequestBytes {
-            _permit: permit,
+            _permit: Some(permit),
             _metadata_permit: metadata_permit,
             metrics: Arc::clone(&self.metrics),
             bytes: self.bytes,
@@ -94,7 +94,7 @@ impl Drop for ProxyDnsQueuedRequestBytes {
 }
 
 pub struct ProxyDnsPendingRequestBytes {
-    _permit: ResidentUdpPayloadPermit,
+    _permit: Option<ResidentUdpPayloadPermit>,
     _metadata_permit: ResidentUdpPayloadPermit,
     metrics: Arc<ResidentDataplaneMetrics>,
     bytes: usize,
@@ -110,6 +110,16 @@ enum ProxyDnsPendingDropReason {
 }
 
 impl ProxyDnsPendingRequestBytes {
+    /// Transfer the payload reservation to an independent send until its wire
+    /// buffer is released, even if the response/cancellation removes pending.
+    pub fn take_payload_permit(&mut self) -> Option<ResidentUdpPayloadPermit> {
+        self._permit.take()
+    }
+
+    pub fn restore_payload_permit(&mut self, permit: Option<ResidentUdpPayloadPermit>) {
+        self._permit = permit;
+    }
+
     #[cfg(test)]
     pub(crate) fn bytes(&self) -> usize {
         self.bytes

@@ -58,6 +58,19 @@ impl VlessStandardUdpOverStreamSession {
         }
     }
 
+    pub(super) fn begin_dns_send(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        let Some(underlay) = self.underlay.as_mut() else {
+            return Ok(None);
+        };
+        let packet = vless_udp_length_frame(payload)?;
+        let send = underlay.begin_dns_send(packet)?;
+        self.seq = self.seq.saturating_add(1);
+        Ok(Some(send))
+    }
+
     pub(super) async fn exchange(
         &mut self,
         binding: &ResidentProxyBinding,

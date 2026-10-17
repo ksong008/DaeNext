@@ -19,62 +19,62 @@ pub(super) enum VlessStandardUdpWrapperKind {
 
 pub(super) enum VlessStandardUdpUnderlay {
     PlainTcp {
-        stream: tokio::net::TcpStream,
+        stream: UdpSharedIo<tokio::net::TcpStream>,
     },
     TlsTcp {
-        client: AsyncResidentTlsClient,
+        client: UdpSharedIo<AsyncResidentTlsClient>,
         tls_underlay: &'static str,
     },
     EncryptedPlainTcp {
-        stream: VlessEncryptedStream<tokio::net::TcpStream>,
+        stream: UdpSharedIo<VlessEncryptedStream<tokio::net::TcpStream>>,
     },
     EncryptedTlsTcp {
-        client: VlessEncryptedStream<AsyncResidentTlsClient>,
+        client: UdpSharedIo<VlessEncryptedStream<AsyncResidentTlsClient>>,
         tls_underlay: &'static str,
     },
     WebSocketPlain {
-        stream: tokio::net::TcpStream,
+        stream: UdpSharedIo<tokio::net::TcpStream>,
         state: AsyncWebSocketPayloadState,
     },
     WebSocketTls {
-        client: AsyncResidentTlsClient,
+        client: UdpSharedIo<AsyncResidentTlsClient>,
         state: AsyncWebSocketPayloadState,
         tls_underlay: &'static str,
     },
     EncryptedWebSocketPlain {
-        stream: VlessEncryptedStream<SpawnedLogicalStream>,
+        stream: UdpSharedIo<VlessEncryptedStream<SpawnedLogicalStream>>,
     },
     EncryptedWebSocketTls {
-        stream: VlessEncryptedStream<SpawnedLogicalStream>,
+        stream: UdpSharedIo<VlessEncryptedStream<SpawnedLogicalStream>>,
         tls_underlay: &'static str,
     },
     HttpUpgradePlain {
-        stream: Box<dyn AsyncReadWrite + Unpin + Send>,
+        stream: UdpSharedIo<Box<dyn AsyncReadWrite + Unpin + Send>>,
     },
     HttpUpgradeTls {
-        client: Box<dyn AsyncReadWrite + Unpin + Send>,
+        client: UdpSharedIo<Box<dyn AsyncReadWrite + Unpin + Send>>,
         tls_underlay: &'static str,
     },
     EncryptedHttpUpgradePlain {
-        stream: VlessEncryptedStream<Box<dyn AsyncReadWrite + Unpin + Send>>,
+        stream: UdpSharedIo<VlessEncryptedStream<Box<dyn AsyncReadWrite + Unpin + Send>>>,
     },
     EncryptedHttpUpgradeTls {
-        client: VlessEncryptedStream<Box<dyn AsyncReadWrite + Unpin + Send>>,
+        client: UdpSharedIo<VlessEncryptedStream<Box<dyn AsyncReadWrite + Unpin + Send>>>,
         tls_underlay: &'static str,
     },
     GrpcTls {
-        send_stream: h2::SendStream<Bytes>,
+        send_stream: Arc<tokio::sync::Mutex<h2::SendStream<Bytes>>>,
         response: GrpcH2Response,
         _carrier_lease: H2CarrierLease,
         response_buf: GrpcHunkReadBuffer,
         tls_underlay: &'static str,
     },
     EncryptedGrpcTls {
-        stream: VlessEncryptedStream<SpawnedLogicalStream>,
+        stream: UdpSharedIo<VlessEncryptedStream<SpawnedLogicalStream>>,
         tls_underlay: &'static str,
     },
     H2Tls {
-        send_stream: h2::SendStream<Bytes>,
+        send_stream: Arc<tokio::sync::Mutex<h2::SendStream<Bytes>>>,
         recv_stream: h2::RecvStream,
         _carrier_lease: H2CarrierLease,
         tls_underlay: &'static str,
@@ -101,7 +101,9 @@ impl VlessStandardUdpUnderlay {
                         "write VLESS encrypted plain UDP-over-stream first packet",
                     )
                     .await?;
-                    Ok(Self::EncryptedPlainTcp { stream })
+                    Ok(Self::EncryptedPlainTcp {
+                        stream: stream.into(),
+                    })
                 } else {
                     write_vless_stream_bytes(
                         &mut stream,
@@ -109,7 +111,9 @@ impl VlessStandardUdpUnderlay {
                         "write VLESS plain UDP-over-stream first packet",
                     )
                     .await?;
-                    Ok(Self::PlainTcp { stream })
+                    Ok(Self::PlainTcp {
+                        stream: stream.into(),
+                    })
                 }
             }
             VlessStandardUdpWrapperKind::TlsTcp => {
@@ -127,7 +131,7 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::EncryptedTlsTcp {
-                        client,
+                        client: client.into(),
                         tls_underlay,
                     })
                 } else {
@@ -138,7 +142,7 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::TlsTcp {
-                        client,
+                        client: client.into(),
                         tls_underlay,
                     })
                 }
@@ -165,7 +169,9 @@ impl VlessStandardUdpUnderlay {
                         "write VLESS encrypted WebSocket UDP first packet",
                     )
                     .await?;
-                    Ok(Self::EncryptedWebSocketPlain { stream: encrypted })
+                    Ok(Self::EncryptedWebSocketPlain {
+                        stream: encrypted.into(),
+                    })
                 } else {
                     let mut state = AsyncWebSocketPayloadState::default();
                     state.inject_leftover(ws_leftover)?;
@@ -175,7 +181,10 @@ impl VlessStandardUdpUnderlay {
                         "write VLESS WebSocket UDP first packet",
                     )
                     .await?;
-                    Ok(Self::WebSocketPlain { stream, state })
+                    Ok(Self::WebSocketPlain {
+                        stream: stream.into(),
+                        state,
+                    })
                 }
             }
             VlessStandardUdpWrapperKind::WebSocketTls => {
@@ -203,7 +212,7 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::EncryptedWebSocketTls {
-                        stream: encrypted,
+                        stream: encrypted.into(),
                         tls_underlay,
                     })
                 } else {
@@ -216,7 +225,7 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::WebSocketTls {
-                        client,
+                        client: client.into(),
                         state,
                         tls_underlay,
                     })
@@ -245,7 +254,9 @@ impl VlessStandardUdpUnderlay {
                         "write VLESS encrypted HTTPUpgrade UDP first packet",
                     )
                     .await?;
-                    Ok(Self::EncryptedHttpUpgradePlain { stream: encrypted })
+                    Ok(Self::EncryptedHttpUpgradePlain {
+                        stream: encrypted.into(),
+                    })
                 } else {
                     write_vless_stream_bytes(
                         &mut stream,
@@ -254,7 +265,7 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::HttpUpgradePlain {
-                        stream: Box::new(stream) as Box<dyn AsyncReadWrite + Unpin + Send>,
+                        stream: (Box::new(stream) as Box<dyn AsyncReadWrite + Unpin + Send>).into(),
                     })
                 }
             }
@@ -286,7 +297,7 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::EncryptedHttpUpgradeTls {
-                        client: encrypted,
+                        client: encrypted.into(),
                         tls_underlay,
                     })
                 } else {
@@ -297,7 +308,7 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::HttpUpgradeTls {
-                        client: Box::new(client) as Box<dyn AsyncReadWrite + Unpin + Send>,
+                        client: (Box::new(client) as Box<dyn AsyncReadWrite + Unpin + Send>).into(),
                         tls_underlay,
                     })
                 }
@@ -326,13 +337,13 @@ impl VlessStandardUdpUnderlay {
                     )
                     .await?;
                     Ok(Self::EncryptedGrpcTls {
-                        stream: encrypted,
+                        stream: encrypted.into(),
                         tls_underlay,
                     })
                 } else {
                     let grpc_mode = response.grpc_mode();
                     Ok(Self::GrpcTls {
-                        send_stream,
+                        send_stream: Arc::new(tokio::sync::Mutex::new(send_stream)),
                         response,
                         _carrier_lease: carrier_lease,
                         response_buf: GrpcHunkReadBuffer::with_mode(grpc_mode),
@@ -345,13 +356,85 @@ impl VlessStandardUdpUnderlay {
                     open_h2_body_stream(binding, initial_packet, "VLESS H2 UDP").await?;
                 let tls_underlay = carrier_lease.tls_underlay();
                 Ok(Self::H2Tls {
-                    send_stream,
+                    send_stream: Arc::new(tokio::sync::Mutex::new(send_stream)),
                     recv_stream,
                     _carrier_lease: carrier_lease,
                     tls_underlay,
                 })
             }
         }
+    }
+
+    pub(super) fn begin_dns_send(
+        &mut self,
+        mut packet: Vec<u8>,
+    ) -> Result<ProxyDnsUdpSend, String> {
+        Ok(match self {
+            Self::PlainTcp { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, false)
+            }
+            Self::TlsTcp { client, .. } => ProxyDnsUdpSend::stream(client.share()?, packet, false),
+            Self::EncryptedPlainTcp { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, false)
+            }
+            Self::EncryptedTlsTcp { client, .. } => {
+                ProxyDnsUdpSend::stream(client.share()?, packet, false)
+            }
+            Self::WebSocketPlain { stream, .. } => {
+                packet = websocket_client_binary_frame_with_random_mask(&packet)
+                    .map_err(|error| format!("frame DNS UDP WebSocket packet: {error}"))?;
+                ProxyDnsUdpSend::stream(stream.share()?, packet, false)
+            }
+            Self::WebSocketTls { client, .. } => {
+                packet = websocket_client_binary_frame_with_random_mask(&packet)
+                    .map_err(|error| format!("frame DNS UDP WebSocket packet: {error}"))?;
+                ProxyDnsUdpSend::stream(client.share()?, packet, false)
+            }
+            Self::EncryptedWebSocketPlain { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, false)
+            }
+            Self::EncryptedWebSocketTls { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, false)
+            }
+            Self::HttpUpgradePlain { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, false)
+            }
+            Self::HttpUpgradeTls { client, .. } => {
+                ProxyDnsUdpSend::stream(client.share()?, packet, false)
+            }
+            Self::EncryptedHttpUpgradePlain { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, false)
+            }
+            Self::EncryptedHttpUpgradeTls { client, .. } => {
+                ProxyDnsUdpSend::stream(client.share()?, packet, false)
+            }
+            Self::EncryptedGrpcTls { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, false)
+            }
+            Self::GrpcTls {
+                send_stream,
+                response,
+                ..
+            } => {
+                let send_stream = Arc::clone(send_stream);
+                let mode = response.grpc_mode();
+                ProxyDnsUdpSend::new(true, async move {
+                    send_grpc_data(&mut *send_stream.lock().await, &packet, false, mode).await
+                })
+            }
+            Self::H2Tls { send_stream, .. } => {
+                let send_stream = Arc::clone(send_stream);
+                ProxyDnsUdpSend::new(true, async move {
+                    send_h2_data_with_context(
+                        &mut *send_stream.lock().await,
+                        Bytes::from(packet),
+                        false,
+                        "DNS UDP H2",
+                    )
+                    .await
+                })
+            }
+        })
     }
 
     pub(super) async fn write_packet(&mut self, payload: &[u8]) -> Result<(), String> {
@@ -436,14 +519,22 @@ impl VlessStandardUdpUnderlay {
                 send_stream,
                 response,
                 ..
-            } => send_grpc_data(send_stream, payload, false, response.grpc_mode()).await,
+            } => {
+                send_grpc_data(
+                    &mut *send_stream.lock().await,
+                    payload,
+                    false,
+                    response.grpc_mode(),
+                )
+                .await
+            }
             Self::EncryptedGrpcTls { stream, .. } => {
                 write_vless_stream_bytes(stream, payload, "write VLESS encrypted gRPC UDP packet")
                     .await
             }
             Self::H2Tls { send_stream, .. } => {
                 send_h2_data_with_context(
-                    send_stream,
+                    &mut *send_stream.lock().await,
                     Bytes::copy_from_slice(payload),
                     false,
                     "VLESS H2 UDP",
@@ -557,7 +648,7 @@ impl VlessStandardUdpUnderlay {
                 let _ = stream.shutdown().await;
             }
             Self::TlsTcp { client, .. } | Self::WebSocketTls { client, .. } => {
-                client.shutdown().await;
+                let _ = client.shutdown().await;
             }
             Self::HttpUpgradeTls { client, .. } => {
                 let _ = client.shutdown().await;
@@ -588,11 +679,22 @@ impl VlessStandardUdpUnderlay {
                 response,
                 ..
             } => {
-                let _ = send_grpc_data(send_stream, &[], true, response.grpc_mode()).await;
+                let _ = send_grpc_data(
+                    &mut *send_stream.lock().await,
+                    &[],
+                    true,
+                    response.grpc_mode(),
+                )
+                .await;
             }
             Self::H2Tls { send_stream, .. } => {
-                let _ = send_h2_data_with_context(send_stream, Bytes::new(), true, "VLESS H2 UDP")
-                    .await;
+                let _ = send_h2_data_with_context(
+                    &mut *send_stream.lock().await,
+                    Bytes::new(),
+                    true,
+                    "VLESS H2 UDP",
+                )
+                .await;
             }
         }
     }
@@ -610,13 +712,13 @@ async fn read_vless_standard_stream_underlay(
                 Pin::new(stream).poll_read(cx, &mut read_buf)
             }
             VlessStandardUdpUnderlay::HttpUpgradePlain { stream } => {
-                Pin::new(stream.as_mut()).poll_read(cx, &mut read_buf)
+                Pin::new(stream).poll_read(cx, &mut read_buf)
             }
             VlessStandardUdpUnderlay::TlsTcp { client, .. } => {
                 Pin::new(client).poll_read(cx, &mut read_buf)
             }
             VlessStandardUdpUnderlay::HttpUpgradeTls { client, .. } => {
-                Pin::new(client.as_mut()).poll_read(cx, &mut read_buf)
+                Pin::new(client).poll_read(cx, &mut read_buf)
             }
             VlessStandardUdpUnderlay::EncryptedPlainTcp { stream } => {
                 Pin::new(stream).poll_read(cx, &mut read_buf)

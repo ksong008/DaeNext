@@ -3,7 +3,7 @@ use tokio::io::AsyncWriteExt;
 pub(in crate::udp) struct AnyTlsPacketStreamSession {
     binding: ResidentProxyBinding,
     owner_registry: Option<AnyTlsOwnerRegistryHandle>,
-    logical: Option<AnyTlsLogicalStreamLease>,
+    logical: Option<UdpSharedIo<AnyTlsLogicalStreamLease>>,
     owner_deadline: Option<dae_runtime_control::AbsoluteDeadline>,
     tls_underlay: Option<&'static str>,
     response_plaintext: Vec<u8>,
@@ -28,6 +28,22 @@ impl AnyTlsPacketStreamSession {
 
     pub(super) fn set_owner_deadline(&mut self, deadline: dae_runtime_control::AbsoluteDeadline) {
         self.owner_deadline = Some(deadline);
+    }
+
+    pub(super) fn begin_dns_send(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        let Some(logical) = self.logical.as_mut() else {
+            return Ok(None);
+        };
+        let packet = anytls_link::packet_next_write(payload)
+            .map_err(|error| format!("build AnyTLS UDP packet: {error}"))?;
+        Ok(Some(ProxyDnsUdpSend::stream(
+            logical.share()?,
+            packet,
+            false,
+        )))
     }
 
     pub(super) async fn exchange(
@@ -63,7 +79,7 @@ impl AnyTlsPacketStreamSession {
                 )
                 .await?;
             self.tls_underlay = Some(logical.tls_underlay());
-            self.logical = Some(logical);
+            self.logical = Some(logical.into());
         }
         if !opening_logical_stream {
             let packet = anytls_link::packet_next_write(payload)
@@ -204,9 +220,9 @@ pub async fn exercise_anytls_udp_stream_session(
         .ok_or_else(|| "AnyTLS UDP test logical lease is unavailable".to_owned())?;
     let report = AnyTlsUdpTestExchange {
         payload,
-        sid: logical.sid(),
-        physical_instance_id: logical.physical_instance_id(),
-        reused: logical.reused(),
+        sid: logical.inspect(|io| io.sid())?,
+        physical_instance_id: logical.inspect(|io| io.physical_instance_id())?,
+        reused: logical.inspect(|io| io.reused())?,
     };
     session.shutdown().await;
     Ok(report)

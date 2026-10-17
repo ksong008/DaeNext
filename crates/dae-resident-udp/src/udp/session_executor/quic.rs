@@ -32,7 +32,7 @@ pub(in crate::udp) struct Hysteria2QuicDatagramSession {
     session_id: u32,
     response_identity: ProtocolIdentityCache<4>,
     fragments: QuicUdpFragmentBuffer,
-    packet_ids: QuicUdpPacketIdAllocator,
+    packet_ids: Arc<tokio::sync::Mutex<QuicUdpPacketIdAllocator>>,
     resources: QuicUdpDatagramResourceProfile,
     fixed_target: UdpSessionFixedTarget,
     wire_target: String,
@@ -53,7 +53,9 @@ impl Hysteria2QuicDatagramSession {
             session_id: 0,
             response_identity: ProtocolIdentityCache::default(),
             fragments: QuicUdpFragmentBuffer::new(resources, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH),
-            packet_ids: QuicUdpPacketIdAllocator::new(resources),
+            packet_ids: Arc::new(tokio::sync::Mutex::new(QuicUdpPacketIdAllocator::new(
+                resources,
+            ))),
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
             wire_target: String::new(),
@@ -72,7 +74,9 @@ impl Hysteria2QuicDatagramSession {
             session_id: 0,
             response_identity: ProtocolIdentityCache::default(),
             fragments: QuicUdpFragmentBuffer::new(resources, HYSTERIA2_MAX_UDP_PAYLOAD_LENGTH),
-            packet_ids: QuicUdpPacketIdAllocator::new(resources),
+            packet_ids: Arc::new(tokio::sync::Mutex::new(QuicUdpPacketIdAllocator::new(
+                resources,
+            ))),
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
             wire_target: String::new(),
@@ -84,6 +88,41 @@ impl Hysteria2QuicDatagramSession {
         if self.udp_session.is_none() {
             self.owner_deadline = Some(deadline);
         }
+    }
+
+    pub(super) fn begin_dns_send(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        let Some(session) = self.udp_session.as_ref() else {
+            return Ok(None);
+        };
+        let connection = session.connection().clone();
+        let session_id = self.session_id;
+        let target = self.wire_target.clone();
+        let ids = Arc::clone(&self.packet_ids);
+        let resources = self.resources;
+        let payload = payload.to_vec();
+        Ok(Some(ProxyDnsUdpSend {
+            reset_on_cancel: false,
+            future: Box::pin(async move {
+                let result = send_hysteria2_udp_payload(
+                    &connection,
+                    session_id,
+                    &target,
+                    &payload,
+                    &mut *ids.lock().await,
+                    resources,
+                )
+                .await
+                .map(|_| ());
+                ProxyDnsUdpSendCompletion {
+                    reset_session: connection.close_reason().is_some(),
+                    result,
+                    scratch: None,
+                }
+            }),
+        }))
     }
 
     pub(super) async fn exchange(
@@ -111,7 +150,7 @@ impl Hysteria2QuicDatagramSession {
             self.session_id,
             &self.wire_target,
             payload,
-            &mut self.packet_ids,
+            &mut *self.packet_ids.lock().await,
             self.resources,
         )
         .await?;
@@ -124,7 +163,9 @@ impl Hysteria2QuicDatagramSession {
 
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
         self.fragments.expire();
-        self.packet_ids.expire();
+        if let Ok(mut ids) = self.packet_ids.try_lock() {
+            ids.expire();
+        }
         let response = match self.udp_session.as_mut() {
             Some(session) => session.try_receive()?,
             None => return Ok(None),
@@ -142,11 +183,16 @@ impl Hysteria2QuicDatagramSession {
             .ok_or_else(|| "Hysteria2 UDP session lease is not initialized".to_owned())?;
         let expiration = earliest_expiration(
             self.fragments.next_expiration(),
-            self.packet_ids.next_expiration(),
+            self.packet_ids
+                .try_lock()
+                .ok()
+                .and_then(|ids| ids.next_expiration()),
         );
         let Some(response) = udp_session.receive_until(expiration).await? else {
             self.fragments.expire();
-            self.packet_ids.expire();
+            if let Ok(mut ids) = self.packet_ids.try_lock() {
+                ids.expire();
+            }
             return Ok(None);
         };
         self.decode_response(response)
@@ -250,7 +296,7 @@ impl Hysteria2QuicDatagramSession {
         self.udp_session = None;
         self.session_id = 0;
         self.fragments.clear();
-        self.packet_ids.clear();
+        self.packet_ids.lock().await.clear();
         self.fixed_target.clear();
         self.wire_target.clear();
     }
@@ -265,7 +311,7 @@ pub(in crate::udp) struct TuicQuicPacketSession {
     response_identity: ProtocolIdentityCache<2>,
     fragments: QuicUdpFragmentBuffer,
     fragment_sources: std::collections::BTreeMap<u16, SocketAddr>,
-    packet_ids: QuicUdpPacketIdAllocator,
+    packet_ids: Arc<tokio::sync::Mutex<QuicUdpPacketIdAllocator>>,
     resources: QuicUdpDatagramResourceProfile,
     fixed_target: UdpSessionFixedTarget,
     udp_relay_mode: TuicUdpRelayMode,
@@ -289,7 +335,9 @@ impl TuicQuicPacketSession {
             response_identity: ProtocolIdentityCache::default(),
             fragments: QuicUdpFragmentBuffer::new(resources, u16::MAX as usize),
             fragment_sources: std::collections::BTreeMap::new(),
-            packet_ids: QuicUdpPacketIdAllocator::new(resources),
+            packet_ids: Arc::new(tokio::sync::Mutex::new(QuicUdpPacketIdAllocator::new(
+                resources,
+            ))),
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
             udp_relay_mode,
@@ -310,7 +358,9 @@ impl TuicQuicPacketSession {
             response_identity: ProtocolIdentityCache::default(),
             fragments: QuicUdpFragmentBuffer::new(resources, u16::MAX as usize),
             fragment_sources: std::collections::BTreeMap::new(),
-            packet_ids: QuicUdpPacketIdAllocator::new(resources),
+            packet_ids: Arc::new(tokio::sync::Mutex::new(QuicUdpPacketIdAllocator::new(
+                resources,
+            ))),
             resources,
             fixed_target: UdpSessionFixedTarget::default(),
             udp_relay_mode: TuicUdpRelayMode::Native,
@@ -323,6 +373,62 @@ impl TuicQuicPacketSession {
         if self.udp_association.is_none() {
             self.owner_deadline = Some(deadline);
         }
+    }
+
+    pub(super) fn begin_dns_send(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        let Some(association) = self.udp_association.as_ref() else {
+            return Ok(None);
+        };
+        let connection = association.connection().clone();
+        let assoc_id = self.assoc_id;
+        let target = self.wire_target.clone();
+        let ids = Arc::clone(&self.packet_ids);
+        let resources = self.resources;
+        let mode = self.udp_relay_mode;
+        let deadline = self.owner_deadline.take().unwrap_or_else(|| {
+            dae_runtime_control::AbsoluteDeadline::from_now(
+                Instant::now(),
+                RESIDENT_UDP_RESPONSE_TIMEOUT,
+            )
+        });
+        let payload = payload.to_vec();
+        Ok(Some(ProxyDnsUdpSend {
+            reset_on_cancel: false,
+            future: Box::pin(async move {
+                let result = match mode {
+                    TuicUdpRelayMode::Native => send_tuic_udp_payload(
+                        &connection,
+                        assoc_id,
+                        0,
+                        &target,
+                        &payload,
+                        &mut *ids.lock().await,
+                        resources,
+                    )
+                    .await
+                    .map(|_| ()),
+                    TuicUdpRelayMode::Quic => {
+                        send_tuic_udp_stream_payload(
+                            &connection,
+                            assoc_id,
+                            0,
+                            &target,
+                            &payload,
+                            deadline,
+                        )
+                        .await
+                    }
+                };
+                ProxyDnsUdpSendCompletion {
+                    reset_session: connection.close_reason().is_some(),
+                    result,
+                    scratch: None,
+                }
+            }),
+        }))
     }
 
     pub(super) async fn exchange(
@@ -362,7 +468,7 @@ impl TuicQuicPacketSession {
                     packet_id,
                     &self.wire_target,
                     payload,
-                    &mut self.packet_ids,
+                    &mut *self.packet_ids.lock().await,
                     self.resources,
                 )
                 .await?;
@@ -389,7 +495,9 @@ impl TuicQuicPacketSession {
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
         self.fragments.expire();
         self.prune_fragment_sources();
-        self.packet_ids.expire();
+        if let Ok(mut ids) = self.packet_ids.try_lock() {
+            ids.expire();
+        }
         let response = {
             let association = match self.udp_association.as_mut() {
                 Some(association) => association,
@@ -410,12 +518,17 @@ impl TuicQuicPacketSession {
             .ok_or_else(|| "TUIC UDP association is not initialized".to_owned())?;
         let expiration = earliest_expiration(
             self.fragments.next_expiration(),
-            self.packet_ids.next_expiration(),
+            self.packet_ids
+                .try_lock()
+                .ok()
+                .and_then(|ids| ids.next_expiration()),
         );
         let Some(response) = udp_association.receive_until(expiration).await? else {
             self.fragments.expire();
             self.prune_fragment_sources();
-            self.packet_ids.expire();
+            if let Ok(mut ids) = self.packet_ids.try_lock() {
+                ids.expire();
+            }
             return Ok(None);
         };
         self.decode_response(response)
@@ -572,7 +685,7 @@ impl TuicQuicPacketSession {
         self.assoc_id = 0;
         self.fragments.clear();
         self.fragment_sources.clear();
-        self.packet_ids.clear();
+        self.packet_ids.lock().await.clear();
         self.fixed_target.clear();
         self.wire_target.clear();
     }

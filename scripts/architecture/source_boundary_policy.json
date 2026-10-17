@@ -58,7 +58,7 @@
       "tests": 35021
     },
     "dae-resident-transport": {
-      "production": 35887,
+      "production": 35888,
       "tests": 7922
     },
     "dae-resident-tcp": {
@@ -66,7 +66,7 @@
       "tests": 850
     },
     "dae-resident-udp": {
-      "production": 12946,
+      "production": 13815,
       "tests": 2404
     },
     "dae-resident-dns": {
@@ -87,5 +87,6 @@
       "tests": 3356
     }
   },
-  "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged."
+  "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged.",
+  "dns_send_scheduling_rationale": "2026-10-17: account for owned DNS sends, per-poll IO sharing, the buffer handoff regression, and payload ownership transfer; only measured resident UDP and transport overages are adjusted."
 }

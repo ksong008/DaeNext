@@ -3,7 +3,7 @@ use dae_outbound_stream::vless::VlessEncryptedStream;
 use tokio::io::AsyncWriteExt;
 
 async fn write_vless_encrypted_xhttp_bytes(
-    stream: &mut VlessEncryptedStream<SpawnedLogicalStream>,
+    stream: &mut (impl tokio::io::AsyncWrite + Unpin),
     payload: &[u8],
     label: &str,
 ) -> Result<(), String> {
@@ -23,8 +23,8 @@ async fn write_vless_encrypted_xhttp_bytes(
 
 #[derive(Default)]
 pub(in crate::udp) struct VlessXudpStreamSession {
-    client: Option<AsyncResidentTlsClient>,
-    encrypted: Option<VlessEncryptedStream<AsyncResidentTlsClient>>,
+    client: Option<UdpSharedIo<AsyncResidentTlsClient>>,
+    encrypted: Option<UdpSharedIo<VlessEncryptedStream<AsyncResidentTlsClient>>>,
     key: Option<[u8; 16]>,
     uuid_sent: bool,
     response_header_seen: bool,
@@ -37,6 +37,42 @@ pub(in crate::udp) struct VlessXudpStreamSession {
 }
 
 impl VlessXudpStreamSession {
+    pub(super) fn begin_dns_send(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        if self.client.is_none() && self.encrypted.is_none() {
+            return Ok(None);
+        }
+        let key = self
+            .key
+            .ok_or_else(|| "VLESS XUDP key missing".to_owned())?;
+        let frame = xudp_keep_frame(payload)?;
+        let block = vision_padding_block(
+            &frame,
+            VISION_COMMAND_CONTINUE,
+            key,
+            &mut self.uuid_sent,
+            false,
+        );
+        if let Some(encrypted) = self.encrypted.as_mut() {
+            Ok(Some(ProxyDnsUdpSend::stream(
+                encrypted.share()?,
+                block,
+                false,
+            )))
+        } else {
+            Ok(Some(ProxyDnsUdpSend::stream(
+                self.client
+                    .as_mut()
+                    .ok_or_else(|| "VLESS XUDP client missing".to_owned())?
+                    .share()?,
+                block,
+                false,
+            )))
+        }
+    }
+
     pub(super) async fn exchange(
         &mut self,
         binding: &ResidentProxyBinding,
@@ -89,7 +125,7 @@ impl VlessXudpStreamSession {
                     "write VLESS encrypted XUDP session first packet",
                 )
                 .await?;
-                self.encrypted = Some(encrypted);
+                self.encrypted = Some(encrypted.into());
             } else {
                 write_async_tls_plain_all(
                     &mut client,
@@ -97,7 +133,7 @@ impl VlessXudpStreamSession {
                     "write VLESS XUDP session first packet",
                 )
                 .await?;
-                self.client = Some(client);
+                self.client = Some(client.into());
             }
         } else {
             let frame = xudp_keep_frame(payload)?;
@@ -248,7 +284,7 @@ impl VlessXudpStreamSession {
             let _ = encrypted.shutdown().await;
         }
         if let Some(client) = self.client.as_mut() {
-            client.shutdown().await;
+            let _ = client.shutdown().await;
         }
         self.client.take();
         self.encrypted.take();
@@ -257,7 +293,7 @@ impl VlessXudpStreamSession {
 }
 
 async fn write_vless_xudp_encrypted_bytes(
-    stream: &mut VlessEncryptedStream<AsyncResidentTlsClient>,
+    stream: &mut (impl tokio::io::AsyncWrite + Unpin),
     payload: &[u8],
     label: &str,
 ) -> Result<(), String> {
@@ -275,13 +311,68 @@ async fn write_vless_xudp_encrypted_bytes(
     .map_err(|_| format!("{label} timeout"))?
 }
 
+struct DnsXhttpUpload {
+    packet_upload: Option<XhttpUploadClient>,
+    pipeline: Option<XhttpPacketUpPipeline>,
+    stream_upload: Option<XhttpStreamUploadClient>,
+    session_id: Option<String>,
+    seq: u64,
+}
+
+impl DnsXhttpUpload {
+    async fn send(&mut self, packet: Bytes) -> Result<(), String> {
+        if let Some(upload) = self.packet_upload.as_mut() {
+            self.pipeline
+                .as_mut()
+                .ok_or_else(|| "DNS xHTTP pipeline missing".to_owned())?
+                .send(
+                    upload,
+                    self.session_id
+                        .as_deref()
+                        .ok_or_else(|| "DNS xHTTP session id missing".to_owned())?,
+                    &mut self.seq,
+                    packet,
+                )
+                .await
+        } else if let Some(upload) = self.stream_upload.as_mut() {
+            send_xhttp_stream_data(upload, packet, false).await?;
+            self.seq = self.seq.saturating_add(1);
+            Ok(())
+        } else {
+            Err("DNS xHTTP upload missing".to_owned())
+        }
+    }
+
+    async fn wait_completion(shared: &Arc<tokio::sync::Mutex<Self>>) -> Result<(), String> {
+        let mut upload = shared.lock().await;
+        if let Some(pipeline) = upload.pipeline.as_mut()
+            && pipeline.has_in_flight()
+        {
+            return pipeline.wait_one().await.map(|_| ());
+        }
+        drop(upload);
+        std::future::pending().await
+    }
+
+    async fn shutdown(&mut self) {
+        self.pipeline.take();
+        if let Some(upload) = self.packet_upload.take() {
+            close_xhttp_upload_client(upload).await;
+        }
+        if let Some(upload) = self.stream_upload.take() {
+            close_xhttp_stream_upload_client(upload).await;
+        }
+    }
+}
+
 #[derive(Default)]
 pub(in crate::udp) struct VlessXhttpH2UdpSession {
+    dns_upload: Option<Arc<tokio::sync::Mutex<DnsXhttpUpload>>>,
     packet_upload: Option<XhttpUploadClient>,
     packet_pipeline: Option<XhttpPacketUpPipeline>,
     stream_upload: Option<XhttpStreamUploadClient>,
     download: Option<XhttpDownloadClient>,
-    encrypted: Option<VlessEncryptedStream<SpawnedLogicalStream>>,
+    encrypted: Option<UdpSharedIo<VlessEncryptedStream<SpawnedLogicalStream>>>,
     session_id: Option<String>,
     seq: u64,
     response_header_seen: bool,
@@ -294,6 +385,37 @@ pub(in crate::udp) struct VlessXhttpH2UdpSession {
 }
 
 impl VlessXhttpH2UdpSession {
+    pub(super) fn begin_dns_send(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        if !self.is_open() {
+            return Ok(None);
+        }
+        let packet = vless_udp_length_frame(payload)?;
+        if let Some(encrypted) = self.encrypted.as_mut() {
+            self.seq = self.seq.saturating_add(1);
+            return Ok(Some(ProxyDnsUdpSend::stream(
+                encrypted.share()?,
+                packet,
+                false,
+            )));
+        }
+        let shared = self.dns_upload.get_or_insert_with(|| {
+            Arc::new(tokio::sync::Mutex::new(DnsXhttpUpload {
+                packet_upload: self.packet_upload.take(),
+                pipeline: self.packet_pipeline.take(),
+                stream_upload: self.stream_upload.take(),
+                session_id: self.session_id.take(),
+                seq: self.seq,
+            }))
+        });
+        let shared = Arc::clone(shared);
+        Ok(Some(ProxyDnsUdpSend::new(true, async move {
+            shared.lock().await.send(Bytes::from(packet)).await
+        })))
+    }
+
     pub(super) async fn exchange(
         &mut self,
         binding: &ResidentProxyBinding,
@@ -338,6 +460,7 @@ impl VlessXhttpH2UdpSession {
 
     fn is_open(&self) -> bool {
         self.encrypted.is_some()
+            || self.dns_upload.is_some()
             || (self.download.is_some()
                 && (self.packet_upload.is_some() || self.stream_upload.is_some()))
     }
@@ -369,7 +492,7 @@ impl VlessXhttpH2UdpSession {
                         "write VLESS encrypted xHTTP UDP first packet",
                     )
                     .await?;
-                    self.encrypted = Some(encrypted);
+                    self.encrypted = Some(encrypted.into());
                     self.seq = 1;
                     Ok(())
                 } else {
@@ -401,7 +524,7 @@ impl VlessXhttpH2UdpSession {
                         "write VLESS encrypted xHTTP UDP first packet",
                     )
                     .await?;
-                    self.encrypted = Some(encrypted);
+                    self.encrypted = Some(encrypted.into());
                     self.upload_underlay = Some(upload_underlay);
                     self.upload_http_version = Some(upload_http_version);
                     self.xhttp_mode = Some(proxy.xhttp_mode);
@@ -512,7 +635,29 @@ impl VlessXhttpH2UdpSession {
         if self.download.is_none() && mode.waits_for_readiness() {
             return std::future::pending().await;
         }
-        let data = if mode.waits_for_readiness() {
+        let data = if let Some(shared) = self.dns_upload.as_ref() {
+            if mode.waits_for_readiness() {
+                loop {
+                    let Some(download) = self.download.as_mut() else {
+                        return std::future::pending().await;
+                    };
+                    tokio::select! {
+                        completion = DnsXhttpUpload::wait_completion(shared) => { completion?; }
+                        data = read_xhttp_download_data(download) => break data?,
+                    }
+                }
+            } else {
+                if let Ok(mut upload) = shared.try_lock()
+                    && let Some(pipeline) = upload.pipeline.as_mut()
+                {
+                    pipeline.poll_ready()?;
+                }
+                let Some(download) = self.download.as_mut() else {
+                    return Ok(None);
+                };
+                poll_xhttp_download_data(download).await?
+            }
+        } else if mode.waits_for_readiness() {
             loop {
                 let completion_in_flight = self
                     .packet_pipeline
@@ -563,6 +708,9 @@ impl VlessXhttpH2UdpSession {
     }
 
     pub(super) async fn shutdown(&mut self) {
+        if let Some(shared) = self.dns_upload.take() {
+            shared.lock().await.shutdown().await;
+        }
         if let Some(mut encrypted) = self.encrypted.take() {
             let _ = encrypted.shutdown().await;
         }
@@ -709,6 +857,13 @@ pub(in crate::udp) struct VlessXhttpH3UdpSession {
 }
 
 impl VlessXhttpH3UdpSession {
+    pub(super) fn begin_dns_send(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        self.inner.begin_dns_send(payload)
+    }
+
     pub(super) async fn exchange(
         &mut self,
         binding: &ResidentProxyBinding,

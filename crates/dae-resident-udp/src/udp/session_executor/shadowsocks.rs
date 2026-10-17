@@ -33,6 +33,36 @@ impl ShadowsocksAeadDatagramSession {
         }
     }
 
+    pub(super) fn begin_dns_send(
+        &mut self,
+        original_dst: SocketAddr,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        if !self.relay.is_open() {
+            return Ok(None);
+        }
+        let codec = self.codec.as_ref().map_err(Clone::clone)?;
+        if codec.salt_len() != self.salt_len || self.salt_len > 32 {
+            return Err("invalid Shadowsocks UDP session salt length".to_owned());
+        }
+        let mut salt_buffer = [0_u8; 32];
+        let salt = &mut salt_buffer[..self.salt_len];
+        self.random_pool
+            .fill(salt)
+            .map_err(|error| format!("generate Shadowsocks UDP wire randomness: {error}"))?;
+        let target = shadowsocks_udp_target(original_dst);
+        codec
+            .encode_packet_into(salt, &target, payload, &mut self.request)
+            .map_err(|err| format!("encode Shadowsocks UDP packet: {err}"))?;
+        Ok(self
+            .relay
+            .begin_dns_send(std::mem::take(&mut self.request), true))
+    }
+
+    pub(super) fn restore_dns_send_buffer(&mut self, buffer: Vec<u8>) {
+        self.request = buffer;
+    }
+
     pub(super) async fn exchange(
         &mut self,
         binding: &ResidentProxyBinding,
@@ -145,6 +175,55 @@ impl Shadowsocks2022DatagramSession {
             self.replay_metrics,
         );
         self.runtime_metrics = Some(metrics);
+    }
+
+    pub(super) fn begin_dns_send(
+        &mut self,
+        original_dst: SocketAddr,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        if !self.relay.is_open() {
+            return Ok(None);
+        }
+        if self.codec.is_none() {
+            let mut session_id = [0_u8; 8];
+            self.random_pool
+                .fill(&mut session_id)
+                .map_err(|error| format!("generate Shadowsocks UDP wire randomness: {error}"))?;
+            self.codec = Some(
+                Ss2022UdpCodec::new(&self.cipher, &self.password, session_id)
+                    .map_err(|err| format!("create Shadowsocks 2022 UDP codec: {err}"))?,
+            );
+        }
+        let codec = self
+            .codec
+            .as_mut()
+            .ok_or_else(|| "Shadowsocks 2022 UDP codec is not initialized".to_owned())?;
+        if self.packet_nonce_len > 32 {
+            return Err(format!(
+                "Shadowsocks 2022 UDP packet nonce length {} exceeds the stack nonce capacity",
+                self.packet_nonce_len
+            ));
+        }
+        let mut packet_nonce = [0_u8; 32];
+        if self.packet_nonce_len > 0 {
+            self.random_pool
+                .fill(&mut packet_nonce[..self.packet_nonce_len])
+                .map_err(|error| format!("generate Shadowsocks UDP wire randomness: {error}"))?;
+        }
+        let request = codec
+            .encode_client_packet(
+                &original_dst.to_string(),
+                payload,
+                ss2022_udp_unix_timestamp_now(),
+                if self.packet_nonce_len > 0 {
+                    Some(&packet_nonce[..self.packet_nonce_len])
+                } else {
+                    None
+                },
+            )
+            .map_err(|err| format!("encode Shadowsocks 2022 UDP packet: {err}"))?;
+        Ok(self.relay.begin_dns_send(request.wire, false))
     }
 
     pub(super) async fn exchange(

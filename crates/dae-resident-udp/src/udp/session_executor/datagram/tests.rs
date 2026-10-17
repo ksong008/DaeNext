@@ -53,7 +53,7 @@ async fn immediate_send_failure_moves_to_later_candidate_once() {
     let available = listener.local_addr().unwrap();
     let incompatible = SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), available.port());
     let mut relay = DatagramRelay {
-        socket: Some(open_test_sender()),
+        socket: Some(open_test_sender().into()),
         remote_candidates: vec![incompatible, available],
         selected_index: 0,
         ..DatagramRelay::default()
@@ -79,7 +79,7 @@ async fn successful_first_candidate_does_not_emit_duplicate_datagram() {
         .await
         .unwrap();
     let mut relay = DatagramRelay {
-        socket: Some(open_test_sender()),
+        socket: Some(open_test_sender().into()),
         remote_candidates: vec![first.local_addr().unwrap(), second.local_addr().unwrap()],
         selected_index: 0,
         ..DatagramRelay::default()
@@ -109,7 +109,7 @@ async fn awaited_response_blocks_until_the_socket_is_readable() {
     let relay_socket = open_test_sender();
     let relay_addr = relay_socket.local_addr().unwrap();
     let mut relay = DatagramRelay {
-        socket: Some(relay_socket),
+        socket: Some(relay_socket.into()),
         remote_candidates: vec![upstream.local_addr().unwrap()],
         selected_index: 0,
         ..DatagramRelay::default()
@@ -143,7 +143,7 @@ async fn response_buffer_does_not_truncate_legal_udp_datagrams() {
     let relay_socket = open_test_sender();
     let relay_addr = relay_socket.local_addr().unwrap();
     let mut relay = DatagramRelay {
-        socket: Some(relay_socket),
+        socket: Some(relay_socket.into()),
         remote_candidates: vec![upstream.local_addr().unwrap()],
         ..DatagramRelay::default()
     };
@@ -172,7 +172,7 @@ async fn zero_length_response_remains_a_valid_datagram() {
     let relay_socket = open_test_sender();
     let relay_addr = relay_socket.local_addr().unwrap();
     let mut relay = DatagramRelay {
-        socket: Some(relay_socket),
+        socket: Some(relay_socket.into()),
         remote_candidates: vec![upstream.local_addr().unwrap()],
         ..DatagramRelay::default()
     };
@@ -198,7 +198,7 @@ async fn would_block_receive_clears_stale_tokio_readiness() {
     let relay_socket = open_test_sender();
     let relay_addr = relay_socket.local_addr().unwrap();
     let mut relay = DatagramRelay {
-        socket: Some(relay_socket),
+        socket: Some(relay_socket.into()),
         remote_candidates: vec![upstream.local_addr().unwrap()],
         ..DatagramRelay::default()
     };
@@ -249,7 +249,7 @@ async fn reclaimed_response_buffer_stays_released_until_socket_is_readable() {
     let relay_socket = open_test_sender();
     let relay_addr = relay_socket.local_addr().unwrap();
     let mut relay = DatagramRelay {
-        socket: Some(relay_socket),
+        socket: Some(relay_socket.into()),
         remote_candidates: vec![upstream.local_addr().unwrap()],
         response_buf: vec![0_u8; UDP_DATAGRAM_RESPONSE_CAPACITY],
         ..DatagramRelay::default()

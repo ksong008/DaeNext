@@ -42,6 +42,26 @@ impl TrojanUdpStreamSession {
         }
     }
 
+    pub(super) fn begin_dns_send(
+        &mut self,
+        target: SocketAddr,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        let Some(carrier) = self.carrier.as_mut() else {
+            return Ok(None);
+        };
+        let target = dae_outbound_core::socks5::Socks5Address::from(target);
+        trojan_packet::udp_packet_into(&target, payload, &mut self.request)
+            .map_err(|error| format!("build Trojan UDP packet: {error}"))?;
+        carrier
+            .begin_dns_send(std::mem::take(&mut self.request))
+            .map(Some)
+    }
+
+    pub(super) fn restore_dns_send_buffer(&mut self, buffer: Vec<u8>) {
+        self.request = buffer;
+    }
+
     pub(super) async fn exchange(
         &mut self,
         binding: &ResidentProxyBinding,

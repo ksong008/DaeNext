@@ -9,7 +9,7 @@ use dae_resident_transport::try_socket_addr_candidates;
 pub(super) struct DatagramRelay {
     pub(super) batch: Option<Vec<PooledBuffer>>,
     pub(super) batch_limit: usize,
-    pub(super) socket: Option<tokio::net::UdpSocket>,
+    pub(super) socket: Option<Arc<tokio::net::UdpSocket>>,
     pub(super) remote_candidates: Vec<SocketAddr>,
     pub(super) selected_index: usize,
     response_buf: Vec<u8>,
@@ -18,6 +18,26 @@ pub(super) struct DatagramRelay {
 }
 
 impl DatagramRelay {
+    pub(super) fn begin_dns_send(&self, packet: Vec<u8>, recycle: bool) -> Option<ProxyDnsUdpSend> {
+        let socket = Arc::clone(self.socket.as_ref()?);
+        let remote = *self.remote_candidates.get(self.selected_index)?;
+        Some(ProxyDnsUdpSend {
+            reset_on_cancel: false,
+            future: Box::pin(async move {
+                let result = socket
+                    .send_to(&packet, remote)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| format!("send DNS UDP datagram: {error}"));
+                ProxyDnsUdpSendCompletion {
+                    result,
+                    reset_session: false,
+                    scratch: recycle.then_some(packet),
+                }
+            }),
+        })
+    }
+
     pub(super) async fn send(
         &mut self,
         binding: &ResidentProxyBinding,
@@ -99,7 +119,7 @@ impl DatagramRelay {
                         .ok_or_else(|| {
                             format!("{label} UDP relay selected an unknown address candidate")
                         })?;
-                self.socket = Some(socket);
+                self.socket = Some(Arc::new(socket));
                 Ok(())
             }
         }
@@ -248,7 +268,7 @@ impl DatagramRelay {
                 .ok_or_else(|| {
                     format!("{label} UDP relay selected an unknown address candidate")
                 })?;
-        self.socket = Some(socket);
+        self.socket = Some(Arc::new(socket));
         Ok(())
     }
 }

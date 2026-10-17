@@ -8,6 +8,19 @@ pub(in crate::udp) struct Socks5UdpAssociateSession {
 }
 
 impl Socks5UdpAssociateSession {
+    pub(super) fn begin_dns_send(
+        &mut self,
+        target: SocketAddr,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        if self.control.is_none() || !self.relay.is_open() {
+            return Ok(None);
+        }
+        let packet = udp_packet::wrap_socket_addr(target, payload)
+            .map_err(|error| format!("wrap SOCKS5 UDP packet: {error}"))?;
+        Ok(self.relay.begin_dns_send(packet, false))
+    }
+
     pub(super) async fn exchange(
         &mut self,
         binding: &ResidentProxyBinding,

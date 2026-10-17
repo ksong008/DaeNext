@@ -152,6 +152,35 @@ impl VmessAeadUdpOverTcpSession {
         Ok(self.pending_response_result())
     }
 
+    pub(super) fn begin_dns_send(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        let Some(underlay) = self.underlay.as_mut() else {
+            return Ok(None);
+        };
+        // Some carriers consume the owned frame without returning scratch.
+        // Recreate its header space before sealing the next packet.
+        self.upload_buffer.resize(self.upload_payload_offset, 0);
+        self.upload_buffer.extend_from_slice(payload);
+        let len = self
+            .upload
+            .as_mut()
+            .ok_or_else(|| "VMess UDP upload codec missing".to_owned())?
+            .seal_owned_chunk_in_place(&mut self.upload_buffer, 0, payload.len())
+            .map_err(|error| format!("seal VMess UDP packet: {error}"))?;
+        self.upload_buffer.truncate(len);
+        // Sealing advances the nonce even if the first write would block, so
+        // cancellation must invalidate this stream rather than reuse its codec.
+        underlay
+            .begin_dns_send(std::mem::take(&mut self.upload_buffer))
+            .map(Some)
+    }
+
+    pub(super) fn restore_dns_send_buffer(&mut self, buffer: Vec<u8>) {
+        self.upload_buffer = buffer;
+    }
+
     async fn exchange_next(&mut self, payload: &[u8]) -> Result<UdpExchangeResult, String> {
         self.upload_buffer.truncate(self.upload_payload_offset);
         self.upload_buffer.extend_from_slice(payload);
@@ -284,7 +313,9 @@ async fn open_vmess_underlay(
                 "write VMess AEAD UDP-over-TCP session first packet",
             )
             .await?;
-            Ok(VmessAeadUdpUnderlay::PlainTcp { stream })
+            Ok(VmessAeadUdpUnderlay::PlainTcp {
+                stream: stream.into(),
+            })
         }
         VmessAeadUdpWrapperKind::TlsTcp => {
             let mut client =
@@ -297,7 +328,7 @@ async fn open_vmess_underlay(
             )
             .await?;
             Ok(VmessAeadUdpUnderlay::TlsTcp {
-                client,
+                client: client.into(),
                 tls_underlay,
             })
         }
@@ -312,7 +343,9 @@ async fn open_vmess_underlay(
                 "write VMess TCP HTTP header UDP first packet",
             )
             .await?;
-            Ok(VmessAeadUdpUnderlay::TcpHttpHeaderPlain { stream })
+            Ok(VmessAeadUdpUnderlay::TcpHttpHeaderPlain {
+                stream: stream.into(),
+            })
         }
         VmessAeadUdpWrapperKind::TcpHttpHeaderTls => {
             let client = open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
@@ -327,7 +360,7 @@ async fn open_vmess_underlay(
             )
             .await?;
             Ok(VmessAeadUdpUnderlay::TcpHttpHeaderTls {
-                client,
+                client: client.into(),
                 tls_underlay,
             })
         }
@@ -348,7 +381,10 @@ async fn open_vmess_underlay(
                 "write VMess WebSocket UDP first packet",
             )
             .await?;
-            Ok(VmessAeadUdpUnderlay::WebSocketPlain { stream, state })
+            Ok(VmessAeadUdpUnderlay::WebSocketPlain {
+                stream: stream.into(),
+                state,
+            })
         }
         VmessAeadUdpWrapperKind::WebSocketTls => {
             let mut client =
@@ -370,7 +406,7 @@ async fn open_vmess_underlay(
             )
             .await?;
             Ok(VmessAeadUdpUnderlay::WebSocketTls {
-                client,
+                client: client.into(),
                 state,
                 tls_underlay,
             })
@@ -391,7 +427,9 @@ async fn open_vmess_underlay(
                 "write VMess HTTPUpgrade UDP first packet",
             )
             .await?;
-            Ok(VmessAeadUdpUnderlay::HttpUpgradePlain { stream })
+            Ok(VmessAeadUdpUnderlay::HttpUpgradePlain {
+                stream: stream.into(),
+            })
         }
         VmessAeadUdpWrapperKind::HttpUpgradeTls => {
             let mut client =
@@ -412,7 +450,7 @@ async fn open_vmess_underlay(
             )
             .await?;
             Ok(VmessAeadUdpUnderlay::HttpUpgradeTls {
-                client,
+                client: client.into(),
                 tls_underlay,
             })
         }
@@ -422,7 +460,7 @@ async fn open_vmess_underlay(
             let tls_underlay = carrier_lease.tls_underlay();
             let grpc_mode = response.grpc_mode();
             Ok(VmessAeadUdpUnderlay::GrpcTls {
-                send_stream,
+                send_stream: Arc::new(tokio::sync::Mutex::new(send_stream)),
                 grpc_mode,
                 response: Some(response),
                 _carrier_lease: carrier_lease,
@@ -502,37 +540,37 @@ async fn read_vmess_underlay_plaintext(
 
 enum VmessAeadUdpUnderlay {
     PlainTcp {
-        stream: tokio::net::TcpStream,
+        stream: UdpSharedIo<tokio::net::TcpStream>,
     },
     TlsTcp {
-        client: AsyncResidentTlsClient,
+        client: UdpSharedIo<AsyncResidentTlsClient>,
         tls_underlay: &'static str,
     },
     TcpHttpHeaderPlain {
-        stream: VmessHttpHeaderStream<tokio::net::TcpStream>,
+        stream: UdpSharedIo<VmessHttpHeaderStream<tokio::net::TcpStream>>,
     },
     TcpHttpHeaderTls {
-        client: VmessHttpHeaderStream<AsyncResidentTlsClient>,
+        client: UdpSharedIo<VmessHttpHeaderStream<AsyncResidentTlsClient>>,
         tls_underlay: &'static str,
     },
     WebSocketPlain {
-        stream: tokio::net::TcpStream,
+        stream: UdpSharedIo<tokio::net::TcpStream>,
         state: AsyncWebSocketPayloadState,
     },
     WebSocketTls {
-        client: AsyncResidentTlsClient,
+        client: UdpSharedIo<AsyncResidentTlsClient>,
         state: AsyncWebSocketPayloadState,
         tls_underlay: &'static str,
     },
     HttpUpgradePlain {
-        stream: AsyncPrefixedStream<tokio::net::TcpStream>,
+        stream: UdpSharedIo<AsyncPrefixedStream<tokio::net::TcpStream>>,
     },
     HttpUpgradeTls {
-        client: AsyncPrefixedStream<AsyncResidentTlsClient>,
+        client: UdpSharedIo<AsyncPrefixedStream<AsyncResidentTlsClient>>,
         tls_underlay: &'static str,
     },
     GrpcTls {
-        send_stream: h2::SendStream<Bytes>,
+        send_stream: Arc<tokio::sync::Mutex<h2::SendStream<Bytes>>>,
         grpc_mode: GrpcMode,
         response: Option<GrpcH2Response>,
         _carrier_lease: H2CarrierLease,
@@ -543,6 +581,49 @@ enum VmessAeadUdpUnderlay {
 }
 
 impl VmessAeadUdpUnderlay {
+    pub(super) fn begin_dns_send(
+        &mut self,
+        mut packet: Vec<u8>,
+    ) -> Result<ProxyDnsUdpSend, String> {
+        Ok(match self {
+            Self::PlainTcp { stream, .. } => ProxyDnsUdpSend::stream(stream.share()?, packet, true),
+            Self::TlsTcp { client, .. } => ProxyDnsUdpSend::stream(client.share()?, packet, true),
+            Self::TcpHttpHeaderPlain { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, true)
+            }
+            Self::TcpHttpHeaderTls { client, .. } => {
+                ProxyDnsUdpSend::stream(client.share()?, packet, true)
+            }
+            Self::WebSocketPlain { stream, .. } => {
+                packet = websocket_client_binary_frame_with_random_mask(&packet)
+                    .map_err(|error| format!("frame DNS UDP WebSocket packet: {error}"))?;
+                ProxyDnsUdpSend::stream(stream.share()?, packet, true)
+            }
+            Self::WebSocketTls { client, .. } => {
+                packet = websocket_client_binary_frame_with_random_mask(&packet)
+                    .map_err(|error| format!("frame DNS UDP WebSocket packet: {error}"))?;
+                ProxyDnsUdpSend::stream(client.share()?, packet, true)
+            }
+            Self::HttpUpgradePlain { stream, .. } => {
+                ProxyDnsUdpSend::stream(stream.share()?, packet, true)
+            }
+            Self::HttpUpgradeTls { client, .. } => {
+                ProxyDnsUdpSend::stream(client.share()?, packet, true)
+            }
+            Self::GrpcTls {
+                send_stream,
+                grpc_mode,
+                ..
+            } => {
+                let send_stream = Arc::clone(send_stream);
+                let mode = *grpc_mode;
+                ProxyDnsUdpSend::new(true, async move {
+                    send_grpc_data(&mut *send_stream.lock().await, &packet, false, mode).await
+                })
+            }
+        })
+    }
+
     fn is_grpc(&self) -> bool {
         matches!(self, Self::GrpcTls { .. })
     }
@@ -605,7 +686,7 @@ impl VmessAeadUdpUnderlay {
                 let _ = stream.shutdown().await;
             }
             Self::TlsTcp { client, .. } | Self::WebSocketTls { client, .. } => {
-                client.shutdown().await;
+                let _ = client.shutdown().await;
             }
             Self::HttpUpgradeTls { client, .. } => {
                 let _ = client.shutdown().await;
@@ -620,7 +701,7 @@ impl VmessAeadUdpUnderlay {
                 response_reader,
                 ..
             } => {
-                let _ = send_grpc_data(send_stream, &[], true, *grpc_mode).await;
+                let _ = send_grpc_data(&mut *send_stream.lock().await, &[], true, *grpc_mode).await;
                 response_rx.take();
                 if let Some(reader) = response_reader.take() {
                     reader.abort();
@@ -692,7 +773,7 @@ async fn write_vmess_wrapped_bytes(
             send_stream,
             grpc_mode,
             ..
-        } => send_grpc_data(send_stream, payload, false, *grpc_mode).await,
+        } => send_grpc_data(&mut *send_stream.lock().await, payload, false, *grpc_mode).await,
     }
 }
 
@@ -1088,5 +1169,47 @@ mod fixed_target_tests {
             response.validate_fixed_target(response.fixed_target_expectation(target)),
             UdpFixedTargetValidation::Validated
         );
+    }
+
+    #[tokio::test]
+    async fn owned_dns_sends_preserve_packet_boundaries_without_returned_scratch() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, accepted) = tokio::join!(
+            tokio::net::TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept(),
+        );
+        let (mut server, _) = accepted.unwrap();
+        let id = "00000000-0000-0000-0000-000000000001";
+        let start = vmess::aead_udp_over_tcp_client_session_start_with_security(
+            id,
+            "192.0.2.1:53",
+            &[],
+            vmess::VMessBodySecurity::None,
+        )
+        .unwrap();
+        let mut session =
+            VmessAeadUdpOverTcpSession::plain(id.to_owned(), vmess::VMessBodySecurity::None);
+        session.upload_buffer = start.upload.new_owned_chunk_buffer(0);
+        session.upload_payload_offset = session.upload_buffer.len();
+        session.upload = Some(start.upload);
+        session.underlay = Some(VmessAeadUdpUnderlay::PlainTcp {
+            stream: client.unwrap().into(),
+        });
+        for payload in [
+            b"first".as_slice(),
+            b"second-packet".as_slice(),
+            b"third".as_slice(),
+        ] {
+            let send = session.begin_dns_send(payload).unwrap().unwrap();
+            let done = send.future.await;
+            assert!(done.result.is_ok());
+            let packet = done.scratch.unwrap();
+            let mut received = vec![0; packet.len()];
+            server.read_exact(&mut received).await.unwrap();
+            assert_eq!(received, packet);
+            assert_eq!(&received[2..2 + payload.len()], payload);
+            // Consume the frame without returning scratch, as gRPC does.
+            drop(packet);
+        }
     }
 }

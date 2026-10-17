@@ -95,7 +95,9 @@ pub use self::descriptors::{
     resident_udp_proxy_handler_name, udp_packet_semantics_for_destination,
     udp_probe_packet_session_value,
 };
+mod shared_io;
 mod stream_helpers;
+use self::shared_io::UdpSharedIo;
 use self::stream_helpers::*;
 mod stream_read;
 use self::stream_read::*;
