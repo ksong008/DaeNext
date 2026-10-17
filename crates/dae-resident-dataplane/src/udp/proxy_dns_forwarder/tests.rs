@@ -703,3 +703,78 @@ fn dns_query(id: u16, domain: &str) -> Vec<u8> {
     query.extend_from_slice(&1_u16.to_be_bytes());
     query
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_local_oversize_send_failure_preserves_an_existing_pending_response() {
+    let upstream = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let address = upstream.local_addr().unwrap();
+    let (ready, received) = tokio::sync::oneshot::channel();
+    let (release, wait) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let mut packet = vec![0; 65535];
+        let (n, peer) = upstream.recv_from(&mut packet).await.unwrap();
+        let request = decode_udp_packet(TEST_CIPHER, TEST_PASSWORD, &packet[..n]).unwrap();
+        let response = dns_a_response_for_query(&request.payload, [192, 0, 2, 1]);
+        let wire = encode_udp_packet(
+            TEST_CIPHER,
+            TEST_PASSWORD,
+            &[0x71; 16],
+            &request.target,
+            &response,
+        )
+        .unwrap();
+        ready.send(()).unwrap();
+        wait.await.unwrap();
+        upstream.send_to(&wire, peer).await.unwrap();
+    });
+    let mut runtime = ResidentDnsUdpRuntimeConfig::standalone();
+    runtime.attempts = 1;
+    runtime.actor_worker_threads = 1;
+    let admission = runtime.payload_admission.clone();
+    let metrics = Arc::new(ResidentDataplaneMetrics::default());
+    let executor = Arc::new(ResidentDnsUdpActorExecutor::new(
+        runtime.clone(),
+        Arc::clone(&metrics),
+    ));
+    let forwarder = Arc::new(
+        ResidentProxyDnsUdpForwarder::new(
+            Arc::new(proxy_plan(address)),
+            "127.0.0.1:53".parse().unwrap(),
+            runtime,
+            Arc::clone(&metrics),
+            Arc::clone(&executor),
+        )
+        .unwrap(),
+    );
+    let first_forwarder = Arc::clone(&forwarder);
+    let first = tokio::spawn(async move {
+        first_forwarder
+            .exchange(&dns_query(1, "first.example"))
+            .await
+    });
+    received.await.unwrap();
+    let mut large = dns_query(2, "large.example");
+    large[11] = 1;
+    let data_len = 65500 - large.len() - 11;
+    large.extend([0, 0, 16, 0, 1, 0, 0, 0, 1]);
+    large.extend((data_len as u16).to_be_bytes());
+    large.resize(65500, 0);
+    let second = forwarder.exchange(&large).await;
+    assert!(second.is_err());
+    release.send(()).unwrap();
+    let response = time::timeout(Duration::from_secs(1), first)
+        .await
+        .unwrap()
+        .unwrap();
+    server.await.unwrap();
+    assert!(
+        response.is_ok(),
+        "pending A was failed by B: {response:?}; metrics={}",
+        metrics.snapshot()
+    );
+    assert_eq!(metrics.snapshot()["proxyDnsUdpExecutorsReset"], 0);
+    let deadline = time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+    assert_eq!(forwarder.shutdown(deadline).await["status"], "pass");
+    assert_eq!(executor.shutdown(deadline).await["status"], "pass");
+    assert_eq!(admission.current(), 0);
+}
