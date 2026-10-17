@@ -64,9 +64,6 @@ where
         .await
         .map_err(|err| format!("read DNS TCP response length: {err}"))?;
     let len = u16::from_be_bytes(len) as usize;
-    if len > DNS_TCP_MESSAGE_READ_LIMIT {
-        return Err(format!("DNS TCP response length {len} exceeds read limit"));
-    }
     let mut response = vec![0_u8; len];
     stream
         .read_exact(&mut response)

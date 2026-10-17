@@ -218,7 +218,7 @@ pub async fn forward_dns_udp_to_routed_target_async(
                 .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote)))
         }
     };
-    record_dns_transport_trace(ResidentDnsTransportTraceInput {
+    record_dns_transport_trace(|| ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
         scheme: upstream.scheme.as_str(),
         target: remote,
@@ -480,7 +480,7 @@ pub async fn forward_dns_tcp_to_routed_target_async(
                 .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote)))
         }
     };
-    record_dns_transport_trace(ResidentDnsTransportTraceInput {
+    record_dns_transport_trace(|| ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
         scheme: upstream.scheme.as_str(),
         target: remote,

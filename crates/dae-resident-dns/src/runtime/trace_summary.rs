@@ -191,29 +191,61 @@ where
         .await
 }
 
-pub fn record_dns_transport_trace(input: ResidentDnsTransportTraceInput) {
-    let attempt = ResidentDnsTransportTrace {
-        upstream: input.upstream,
-        scheme: input.scheme,
-        target: input.target.to_string(),
-        target_family: if input.target.is_ipv6() {
-            DNS_TRANSPORT_TARGET_FAMILY_IPV6
-        } else {
-            DNS_TRANSPORT_TARGET_FAMILY_IPV4
-        },
-        l4proto: input.l4proto.as_str(),
-        route: input.route,
-        elapsed_ms: elapsed_ms(input.started_at),
-        outcome: if input.error.is_some() {
-            DNS_TRANSPORT_OUTCOME_ERROR
-        } else {
-            DNS_TRANSPORT_OUTCOME_SUCCESS
-        },
-        error: input.error,
-    };
-    let _ = DNS_TRANSPORT_TRACE.try_with(|trace| trace.borrow_mut().push(attempt));
+pub fn record_dns_transport_trace(input: impl FnOnce() -> ResidentDnsTransportTraceInput) {
+    let _ = DNS_TRANSPORT_TRACE.try_with(|trace| {
+        let input = input();
+        let attempt = ResidentDnsTransportTrace {
+            upstream: input.upstream,
+            scheme: input.scheme,
+            target: input.target.to_string(),
+            target_family: if input.target.is_ipv6() {
+                DNS_TRANSPORT_TARGET_FAMILY_IPV6
+            } else {
+                DNS_TRANSPORT_TARGET_FAMILY_IPV4
+            },
+            l4proto: input.l4proto.as_str(),
+            route: input.route,
+            elapsed_ms: elapsed_ms(input.started_at),
+            outcome: if input.error.is_some() {
+                DNS_TRANSPORT_OUTCOME_ERROR
+            } else {
+                DNS_TRANSPORT_OUTCOME_SUCCESS
+            },
+            error: input.error,
+        };
+        trace.borrow_mut().push(attempt);
+    });
 }
 
 fn elapsed_ms(started_at: Instant) -> u64 {
     started_at.elapsed().as_millis().min(u64::MAX as u128) as u64
+}
+
+#[cfg(test)]
+mod lazy_tests {
+    use super::*;
+    #[tokio::test]
+    async fn transport_trace_constructs_details_only_inside_a_trace_scope() {
+        let calls = std::cell::Cell::new(0);
+        let input = || {
+            calls.set(calls.get() + 1);
+            ResidentDnsTransportTraceInput {
+                upstream: "fixture".to_owned(),
+                scheme: "udp",
+                target: "127.0.0.1:53".parse().unwrap(),
+                l4proto: L4Proto::Udp,
+                route: DNS_TRANSPORT_ROUTE_DIRECT,
+                started_at: Instant::now(),
+                error: None,
+            }
+        };
+        record_dns_transport_trace(input);
+        assert_eq!(calls.get(), 0);
+        let (_, attempts) = capture_dns_transport_trace_async(async {
+            record_dns_transport_trace(input);
+        })
+        .await;
+        assert_eq!(calls.get(), 1);
+        assert_eq!(attempts.len(), 1);
+    }
 }

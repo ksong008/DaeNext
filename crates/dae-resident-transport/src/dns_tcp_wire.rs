@@ -4,7 +4,6 @@ use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const DNS_TCP_FRAME_READ_CHUNK_SIZE: usize = 32 * 1024;
-const DNS_TCP_MESSAGE_READ_LIMIT: usize = u16::MAX as usize;
 
 #[derive(Default)]
 pub struct DnsTcpFrameReader {
@@ -21,9 +20,6 @@ impl DnsTcpFrameReader {
                 let len = u16::from_be_bytes([self.buffered[0], self.buffered[1]]) as usize;
                 if len == 0 {
                     return Err("DNS TCP frame has empty payload".to_owned());
-                }
-                if len > DNS_TCP_MESSAGE_READ_LIMIT {
-                    return Err(format!("DNS TCP frame length {len} exceeds read limit"));
                 }
                 let frame_len = 2 + len;
                 if self.buffered.len() >= frame_len {

@@ -438,7 +438,11 @@ impl ResidentDnsRuntimeCache {
         if !state.entries.contains_key(&key) {
             evict_entries(&mut state, now_unix, self.shard_limit(&key.base));
         }
-        entry.route_owner_key = key.base.to_string();
+        if !dae_dns::parse_dns_cache_key_view(&entry.route_owner_key)
+            .is_some_and(|owner| key.base.matches_view(owner))
+        {
+            entry.route_owner_key = key.base.to_string();
+        }
         insert_cache_entry(&mut state, key, entry);
         Ok(())
     }

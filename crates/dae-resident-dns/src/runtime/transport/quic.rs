@@ -396,7 +396,7 @@ async fn forward_dns_quic_to_routed_target_async(
                 .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(target)))
         }
     };
-    record_dns_transport_trace(ResidentDnsTransportTraceInput {
+    record_dns_transport_trace(|| ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
         scheme: upstream.scheme.as_str(),
         target,

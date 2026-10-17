@@ -111,7 +111,7 @@ async fn forward_dns_tls_to_routed_target_async(
         .await
         .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote))),
     };
-    record_dns_transport_trace(ResidentDnsTransportTraceInput {
+    record_dns_transport_trace(|| ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
         scheme: upstream.scheme.as_str(),
         target: remote,
@@ -357,7 +357,7 @@ async fn forward_dns_https_to_routed_target_async(
         .await
         .map_err(|error| ResidentDnsTransportError::proxy(error.with_context(remote))),
     };
-    record_dns_transport_trace(ResidentDnsTransportTraceInput {
+    record_dns_transport_trace(|| ResidentDnsTransportTraceInput {
         upstream: upstream.tag.clone(),
         scheme: upstream.scheme.as_str(),
         target: remote,
