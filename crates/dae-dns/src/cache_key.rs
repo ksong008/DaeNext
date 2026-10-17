@@ -154,10 +154,10 @@ pub fn canonical_name_lowercase(name: &str) -> String {
     let trimmed = name.trim();
     if needs_presentation_normalization(trimmed) {
         let mut wire = Vec::new();
-        if crate::encode_dns_name_into(&mut wire, trimmed).is_ok() {
-            if let Ok(canonical) = crate::name::canonical_wire_name(&wire) {
-                return canonical;
-            }
+        if crate::encode_dns_name_into(&mut wire, trimmed).is_ok()
+            && let Ok(canonical) = crate::name::canonical_wire_name(&wire)
+        {
+            return canonical;
         }
     }
     let needs_dot = !trimmed.ends_with('.');
