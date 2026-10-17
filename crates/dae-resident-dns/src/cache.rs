@@ -570,10 +570,10 @@ fn evict_entries(
         };
         if state
             .entries
-            .get(&deadline.key)
+            .get(deadline.key.as_ref())
             .is_some_and(|stored| stored.deadline == deadline)
         {
-            state.entries.remove(&deadline.key);
+            state.entries.remove(deadline.key.as_ref());
             state.stats.remove_callback_total += 1;
         }
     }
@@ -592,10 +592,10 @@ fn remove_expired_entries(state: &mut ResidentDnsRuntimeCacheState, now_unix: i6
     while let Some(deadline) = state.deadlines.pop_expired(now_unix) {
         if state
             .entries
-            .get(&deadline.key)
+            .get(deadline.key.as_ref())
             .is_some_and(|stored| stored.deadline == deadline)
         {
-            state.entries.remove(&deadline.key);
+            state.entries.remove(deadline.key.as_ref());
             removed += 1;
         }
     }

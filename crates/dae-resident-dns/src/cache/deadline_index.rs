@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use super::ResidentDnsResponseCacheKey;
 
@@ -6,7 +6,7 @@ use super::ResidentDnsResponseCacheKey;
 pub(super) struct ResidentDnsCacheDeadline {
     pub(super) expires_at: i64,
     generation: u64,
-    pub(super) key: ResidentDnsResponseCacheKey,
+    pub(super) key: Arc<ResidentDnsResponseCacheKey>,
 }
 
 #[derive(Debug, Default)]
@@ -25,7 +25,7 @@ impl ResidentDnsCacheDeadlineIndex {
         let deadline = ResidentDnsCacheDeadline {
             expires_at,
             generation: self.next_generation,
-            key,
+            key: Arc::new(key),
         };
         self.entries.insert(deadline.clone());
         deadline
