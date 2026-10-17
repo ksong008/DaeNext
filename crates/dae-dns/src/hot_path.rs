@@ -1,3 +1,6 @@
+mod negative;
+pub use negative::cap_dns_response_ttls;
+
 use std::net::IpAddr;
 
 use crate::cache::{DnsCacheEntry, DnsCacheStore, effective_deadline_from_ttl};
@@ -13,7 +16,6 @@ const DNS_RCODE_MASK: u16 = 0x000f;
 const DNS_RCODE_SUCCESS: u16 = 0;
 const DNS_QTYPE_A: u16 = 1;
 const DNS_QTYPE_AAAA: u16 = 28;
-const DNS_EMPTY_SUCCESS_CACHE_TTL_SECS: i64 = 30;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DnsPacketCacheHit {
@@ -53,6 +55,11 @@ pub fn restore_cached_response_for_packet_question(
         out.clear();
         return Ok(None);
     }
+    let remaining = entry
+        .lookup_deadline(ignore_fixed_ttl)
+        .saturating_sub(now_unix)
+        .clamp(0, i64::from(u32::MAX)) as u32;
+    cap_dns_response_ttls(out, remaining)?;
     if out.is_empty() {
         return Ok(None);
     }
@@ -70,12 +77,15 @@ pub fn build_response_cache_plan_from_packet(
     let flags = read_u16(response_packet, 2)?;
     if flags & DNS_FLAG_RESPONSE == 0
         || flags & DNS_FLAG_TRUNCATED != 0
-        || flags & DNS_RCODE_MASK != DNS_RCODE_SUCCESS
+        || !matches!(flags & DNS_RCODE_MASK, DNS_RCODE_SUCCESS | 3)
     {
         return Ok(None);
     }
 
     let response = DnsPacketView::parse(response_packet)?;
+    if response.question_count() != 1 {
+        return Ok(None);
+    }
     let Some(question) = response.questions().next() else {
         return Ok(None);
     };
@@ -84,25 +94,15 @@ pub fn build_response_cache_plan_from_packet(
     if cache_host.parse::<IpAddr>().is_ok() {
         return Ok(None);
     }
-    if response.answer_count() == 0 {
-        return build_empty_success_response_cache_plan(
-            now_unix,
-            response_packet,
-            &response,
-            question.qtype(),
-            question.qclass(),
-            qname,
-            fixed_domain_ttl,
-        );
-    }
-
     let mut min_ttl = None;
     let mut ips = Vec::new();
     let mut has_any_ip = false;
     let mut answer_count = 0_usize;
+    let mut terminal_answer = false;
     for answer in response.answers() {
         let answer = answer?;
         answer_count += 1;
+        terminal_answer |= answer.qtype() == question.qtype();
         min_ttl = Some(min_ttl.map_or(answer.ttl(), |ttl: u32| ttl.min(answer.ttl())));
         if let Some(ip) = answer.ip() {
             has_any_ip = true;
@@ -110,6 +110,40 @@ pub fn build_response_cache_plan_from_packet(
                 ips.push(ip);
             }
         }
+    }
+    let is_negative = flags & DNS_RCODE_MASK == 3 || !terminal_answer;
+    let terminal = if is_negative {
+        let Some(terminal) = negative::terminal_name(&response, &qname)? else {
+            return Ok(None);
+        };
+        terminal
+    } else {
+        qname.clone()
+    };
+    let (negative_ttl, extended_error) = negative::section_cache_metadata(&response, &terminal)?;
+    if extended_error {
+        return Ok(None);
+    }
+    if is_negative {
+        if has_any_ip {
+            return Ok(None);
+        }
+        let Some(ttl) = negative_ttl else {
+            return Ok(None);
+        };
+        let ttl = min_ttl.map_or(ttl, |answer_ttl: u32| answer_ttl.min(ttl));
+        let fixed = fixed_domain_ttl.map(|fixed| fixed.max(0).min(i64::from(ttl)));
+        if ttl == 0 || fixed == Some(0) {
+            return Ok(None);
+        }
+        return build_negative_response_cache_plan(
+            now_unix,
+            response_packet,
+            &response,
+            qname,
+            ttl,
+            fixed,
+        );
     }
     let Some(min_ttl) = min_ttl else {
         return Ok(None);
@@ -137,20 +171,23 @@ pub fn build_response_cache_plan_from_packet(
     }))
 }
 
-fn build_empty_success_response_cache_plan(
+fn build_negative_response_cache_plan(
     now_unix: i64,
     response_packet: &[u8],
     response: &DnsPacketView<'_>,
-    qtype: u16,
-    qclass: u16,
     qname: String,
+    min_ttl: u32,
     fixed_domain_ttl: Option<i64>,
 ) -> Result<Option<DnsResponseCachePlan>, DnsError> {
-    let packed_response = normalized_packed_response(response_packet, response, false)?;
-    let min_ttl = DNS_EMPTY_SUCCESS_CACHE_TTL_SECS as u32;
+    let mut packed_response = normalized_packed_response(response_packet, response, false)?;
+    cap_dns_response_ttls(&mut packed_response, min_ttl)?;
     let (deadline_unix, original_deadline_unix) =
-        effective_deadline_from_ttl(now_unix, DNS_EMPTY_SUCCESS_CACHE_TTL_SECS, fixed_domain_ttl);
-    let key = DnsCacheKey::new(&qname, qtype, qclass);
+        effective_deadline_from_ttl(now_unix, i64::from(min_ttl), fixed_domain_ttl);
+    let question = response
+        .questions()
+        .next()
+        .ok_or(DnsError::InvalidDnsName)?;
+    let key = DnsCacheKey::new(&qname, question.qtype(), question.qclass());
     let mut entry = DnsCacheEntry::new(deadline_unix, original_deadline_unix);
     entry.route_owner_key = key.to_string();
     entry.packed_response = packed_response;
@@ -159,7 +196,7 @@ fn build_empty_success_response_cache_plan(
         entry,
         key,
         min_ttl,
-        answer_count: 0,
+        answer_count: response.answer_count(),
         client_ttl_zeroed: false,
     }))
 }
@@ -308,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn response_cache_plan_skips_non_success_and_caches_empty_success_packets() {
+    fn response_cache_plan_skips_errors_and_empty_success_without_soa() {
         let mut request = QUERY.to_vec();
         request[2] = 0x01;
         request[3] = 0x00;
@@ -330,38 +367,10 @@ mod tests {
         empty[6] = 0;
         empty[7] = 0;
         empty.truncate(DNS_HEADER_LEN + QUERY.len() - DNS_HEADER_LEN);
-        let plan = build_response_cache_plan_from_packet(NOW, &empty, None)
-            .unwrap()
-            .expect("empty success cache plan");
-        assert_eq!(plan.key, DnsCacheKey::new("example.com.", 1, 1));
-        assert_eq!(plan.min_ttl, DNS_EMPTY_SUCCESS_CACHE_TTL_SECS as u32);
-        assert_eq!(
-            plan.entry.deadline_unix,
-            NOW + DNS_EMPTY_SUCCESS_CACHE_TTL_SECS
+        assert!(
+            build_response_cache_plan_from_packet(NOW, &empty, None)
+                .unwrap()
+                .is_none()
         );
-        assert_eq!(
-            plan.entry.original_deadline_unix,
-            NOW + DNS_EMPTY_SUCCESS_CACHE_TTL_SECS
-        );
-        assert_eq!(plan.answer_count, 0);
-        assert_eq!(plan.ip_count, 0);
-        assert!(!plan.entry.has_any_ip);
-
-        let mut store = DnsCacheStore::new(8);
-        store.insert_without_route_owner_key(NOW, plan.key, plan.entry);
-        let mut restored = Vec::new();
-        let hit = restore_cached_response_for_packet_question(
-            &mut store,
-            NOW,
-            QUERY,
-            false,
-            &mut restored,
-        )
-        .unwrap()
-        .expect("empty success cache hit");
-        assert_eq!(hit.request_id, 0x1234);
-        assert_eq!(&restored[0..2], &[0x12, 0x34]);
-        let restored_view = DnsPacketView::parse(&restored).unwrap();
-        assert_eq!(restored_view.answer_count(), 0);
     }
 }

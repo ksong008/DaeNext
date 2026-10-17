@@ -395,6 +395,12 @@ impl ResidentDnsRuntimeCache {
             out.clear();
             return Ok(false);
         }
+        let remaining = entry
+            .lookup_deadline(ignore_fixed_ttl)
+            .saturating_sub(now_unix)
+            .clamp(0, i64::from(u32::MAX)) as u32;
+        dae_dns::cap_dns_response_ttls(out, remaining)
+            .map_err(|e| format!("age cached DNS TTLs: {e}"))?;
         if udp_limit {
             let response = std::mem::take(out);
             *out = crate::udp_response::fit_dns_response_to_udp_request(request.packet(), response)

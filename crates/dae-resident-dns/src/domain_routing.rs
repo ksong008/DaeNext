@@ -208,6 +208,21 @@ impl ResidentDnsDomainRouting {
             return Ok(false);
         }
         let Some(plan) = plan else {
+            // An accepted negative or now-unmatched response supersedes stale IP ownership.
+            let mut state = self.lock_state()?;
+            if let Some(entry) = state.cache.shared_entry(&revision.key) {
+                let mut owner = state.take_owner(&_mutation);
+                drop(state);
+                let result = self.apply_event(
+                    &mut owner,
+                    DomainRoutingDnsEvent::remove(&entry.route_owner_key),
+                );
+                state = self.lock_state()?;
+                state.restore_owner(owner, &_mutation);
+                result.map_err(|e| format!("remove superseded DNS owner: {e}"))?;
+                state.cache.discard(&revision.key);
+            }
+            drop(state);
             revision.committed()?;
             publish_response()?;
             return Ok(true);

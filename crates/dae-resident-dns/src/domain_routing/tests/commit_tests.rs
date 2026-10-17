@@ -319,3 +319,21 @@ fn response_cache_poison_loses_live_responses_but_preserves_routing_until_origin
     assert_eq!(state.owner.tracker().owner_count(), 0);
     assert_eq!(state.owner.tracker().ip_count(), 0);
 }
+
+#[test]
+fn accepted_negative_response_removes_previously_committed_ip_owner() {
+    let routing = matching_domain_routing();
+    let mut response = response_plan("negative.example.test", "192.0.2.1", unix_now() + 300);
+    routing.record_accepted_response(&response).unwrap();
+    assert_eq!(
+        routing.state.lock().unwrap().owner.tracker().owner_count(),
+        1
+    );
+    response.entry.ips.clear();
+    response.entry.has_any_ip = false;
+    response.ip_count = 0;
+    routing.record_accepted_response(&response).unwrap();
+    let state = routing.state.lock().unwrap();
+    assert_eq!(state.owner.tracker().owner_count(), 0);
+    assert!(state.cache.is_empty());
+}

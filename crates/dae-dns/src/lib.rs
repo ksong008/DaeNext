@@ -42,7 +42,7 @@ pub use doh::{
 pub use error::{DnsError, DnsValidationError};
 pub use hot_path::{
     DnsPacketCacheHit, DnsResponseCachePlan, build_response_cache_plan_from_packet,
-    cache_plan_question, restore_cached_response_for_packet_question,
+    cache_plan_question, cap_dns_response_ttls, restore_cached_response_for_packet_question,
 };
 pub use message::{
     DnsAnswer, DnsMessage, DnsPacketAnswerIter, DnsPacketAnswerView, DnsPacketNameView,
