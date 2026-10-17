@@ -139,6 +139,7 @@ pub fn doh_request_target(path: &str, dns_query: Option<&str>) -> String {
     }
 }
 
+#[cfg(all(test, feature = "dns-runtime-tests"))]
 pub async fn read_to_end_capped_async<S>(stream: &mut S, limit: usize) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + Unpin,
@@ -170,11 +171,35 @@ pub async fn read_http1_response_message_capped_async<S>(
 where
     S: AsyncRead + Unpin,
 {
+    read_http1_response_inner(stream, limit, false).await
+}
+
+pub async fn read_doh_http1_close_response_async<S>(stream: &mut S) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + Unpin,
+{
+    read_http1_response_inner(stream, DNS_DOH_HTTP_READ_LIMIT, true).await
+}
+
+async fn read_http1_response_inner<S>(
+    stream: &mut S,
+    limit: usize,
+    allow_close: bool,
+) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + Unpin,
+{
     let mut raw = Vec::new();
     let mut buf = [0_u8; 8192];
     let header_end = loop {
         if let Some(header_end) = find_http_header_end(&raw) {
+            if header_end + 4 > DNS_DOH_HEADER_READ_LIMIT {
+                return Err("DoH headers exceed read limit".to_owned());
+            }
             break header_end;
+        }
+        if raw.len() > DNS_DOH_HEADER_READ_LIMIT {
+            return Err("DoH headers exceed read limit".to_owned());
         }
         let read = stream
             .read(&mut buf)
@@ -232,7 +257,28 @@ where
             Ok(raw)
         }
         Http1ResponseBodyBoundary::CloseDelimited => {
-            Err("HTTP response has no reusable body boundary".to_owned())
+            if !allow_close {
+                return Err("HTTP response has no reusable body boundary".to_owned());
+            }
+            loop {
+                if raw.len().saturating_sub(body_start) > DNS_DOH_RESPONSE_READ_LIMIT {
+                    return Err("decoded DoH body exceeds DNS wire limit".to_owned());
+                }
+                let read = match stream.read(&mut buf).await {
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => 0,
+                    Err(e) => return Err(format!("read DoH response body: {e}")),
+                };
+                if read == 0 {
+                    return Ok(raw);
+                }
+                if raw.len().saturating_sub(body_start).saturating_add(read)
+                    > DNS_DOH_RESPONSE_READ_LIMIT
+                {
+                    return Err("decoded DoH body exceeds DNS wire limit".to_owned());
+                }
+                append_http_response_bytes(&mut raw, &buf[..read], limit)?;
+            }
         }
     }
 }
@@ -264,17 +310,27 @@ fn http1_response_body_boundary(headers: &[u8]) -> Result<Http1ResponseBodyBound
         let value = value.trim();
         match name.as_str() {
             "content-length" => {
-                content_length = Some(
-                    value
-                        .parse::<usize>()
-                        .map_err(|err| format!("parse HTTP content-length: {err}"))?,
-                );
+                let length = value
+                    .parse::<usize>()
+                    .map_err(|err| format!("parse HTTP content-length: {err}"))?;
+                if length > DNS_DOH_RESPONSE_READ_LIMIT {
+                    return Err("DoH content-length exceeds DNS wire limit".to_owned());
+                }
+                if content_length
+                    .replace(length)
+                    .is_some_and(|old| old != length)
+                {
+                    return Err("conflicting DoH content-length headers".to_owned());
+                }
             }
             "transfer-encoding" if value.to_ascii_lowercase().contains("chunked") => {
                 chunked = true;
             }
             _ => {}
         }
+    }
+    if chunked && content_length.is_some() {
+        return Err("DoH response has both transfer-encoding and content-length".to_owned());
     }
     if chunked {
         Ok(Http1ResponseBodyBoundary::Chunked)
@@ -287,54 +343,41 @@ fn http1_response_body_boundary(headers: &[u8]) -> Result<Http1ResponseBodyBound
 
 pub fn parse_doh_http_response(request: &[u8], raw: &[u8]) -> Result<Vec<u8>, String> {
     let header_end = find_http_header_end(raw).ok_or("DoH response has no header end")?;
+    if header_end + 4 > DNS_DOH_HEADER_READ_LIMIT {
+        return Err("DoH headers exceed read limit".to_owned());
+    }
     let headers = &raw[..header_end];
-    let mut body = raw[header_end + 4..].to_vec();
-    let header_text = std::str::from_utf8(headers)
-        .map_err(|err| format!("DoH response headers are not UTF-8: {err}"))?;
+    let header_text =
+        std::str::from_utf8(headers).map_err(|e| format!("invalid DoH headers: {e}"))?;
     let mut lines = header_text.split("\r\n");
-    let status = lines
-        .next()
-        .ok_or_else(|| "DoH response has no status line".to_owned())?;
+    let status = lines.next().ok_or("DoH response has no status line")?;
     let status_code = status
         .split_whitespace()
         .nth(1)
-        .ok_or_else(|| format!("DoH response status line is malformed: {status}"))?
+        .ok_or("malformed DoH status")?
         .parse::<u16>()
-        .map_err(|err| format!("parse DoH response status code: {err}"))?;
-    let mut content_type = Vec::new();
-    let mut chunked = false;
-    let mut content_length = None;
-    for line in lines {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        let name = name.trim().to_ascii_lowercase();
-        let value = value.trim();
-        match name.as_str() {
-            "content-type" => content_type = value.as_bytes().to_vec(),
-            "content-length" => {
-                content_length = Some(
-                    value
-                        .parse::<usize>()
-                        .map_err(|err| format!("parse DoH content-length: {err}"))?,
-                );
+        .map_err(|e| format!("invalid DoH status: {e}"))?;
+    let content_type = lines
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.trim())
+        .unwrap_or("");
+    validate_doh_response(status_code, status, content_type.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let encoded = &raw[header_end + 4..];
+    let body = match http1_response_body_boundary(headers)? {
+        Http1ResponseBodyBoundary::Chunked => decode_http_chunked_body(encoded)?,
+        Http1ResponseBodyBoundary::ContentLength(length) => encoded
+            .get(..length)
+            .ok_or("DoH body shorter than content-length")?
+            .to_vec(),
+        Http1ResponseBodyBoundary::CloseDelimited => {
+            if encoded.len() > DNS_DOH_RESPONSE_READ_LIMIT {
+                return Err("decoded DoH body exceeds DNS wire limit".to_owned());
             }
-            "transfer-encoding" if value.to_ascii_lowercase().contains("chunked") => chunked = true,
-            _ => {}
+            encoded.to_vec()
         }
-    }
-    validate_doh_response(status_code, status, &content_type).map_err(|err| err.to_string())?;
-    if chunked {
-        body = decode_http_chunked_body(&body)?;
-    } else if let Some(len) = content_length {
-        if body.len() < len {
-            return Err(format!(
-                "DoH response body shorter than content-length: {} < {len}",
-                body.len()
-            ));
-        }
-        body.truncate(len);
-    }
+    };
     restore_dns_response_id(request, &body)
 }
 
@@ -443,5 +486,77 @@ mod tests {
         let mut expected = response_prefix.to_vec();
         expected.extend_from_slice(trailers);
         assert_eq!(response, expected);
+    }
+}
+
+#[cfg(all(test, feature = "dns-runtime-tests"))]
+mod doh_limit_tests {
+    use super::*;
+    fn response(size: usize, chunked: bool) -> Vec<u8> {
+        let mut raw =
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nX-Padding: ".to_vec();
+        raw.extend(vec![b'x'; 8192]);
+        if chunked {
+            raw.extend_from_slice(b"\r\nTransfer-Encoding: chunked\r\n\r\n");
+            for n in [size / 2, size - size / 2] {
+                raw.extend(format!("{n:x}\r\n").as_bytes());
+                raw.extend(vec![0; n]);
+                raw.extend_from_slice(b"\r\n");
+            }
+            raw.extend_from_slice(b"0\r\n\r\n");
+        } else {
+            raw.extend(format!("\r\nContent-Length: {size}\r\n\r\n").as_bytes());
+            raw.extend(vec![0; size]);
+        }
+        raw
+    }
+    #[tokio::test]
+    async fn doh_http1_limits_decoded_body_separately_from_headers_and_chunks() {
+        for size in [65535, 65536] {
+            for chunked in [false, true] {
+                let raw = response(size, chunked);
+                assert_eq!(
+                    parse_doh_http_response(&[0x12, 0x34], &raw).is_ok(),
+                    size == 65535
+                );
+                let mut source = raw.as_slice();
+                assert_eq!(
+                    read_http1_response_message_capped_async(&mut source, DNS_DOH_HTTP_READ_LIMIT)
+                        .await
+                        .is_ok(),
+                    size == 65535
+                );
+                let mut source = raw.as_slice();
+                assert_eq!(
+                    read_doh_http1_close_response_async(&mut source)
+                        .await
+                        .is_ok(),
+                    size == 65535
+                );
+            }
+        }
+        for headers in [
+            "Content-Length: 65536",
+            "Content-Length: 2\r\nContent-Length: 3",
+            "Content-Length: 2\r\nTransfer-Encoding: chunked",
+        ] {
+            let raw = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n{headers}\r\n\r\n"
+            );
+            let mut source = raw.as_bytes();
+            assert!(
+                read_doh_http1_close_response_async(&mut source)
+                    .await
+                    .is_err()
+            );
+        }
+        let prefix = b"HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n\r\n";
+        let mut raw = prefix.to_vec();
+        raw.extend(vec![0; 65536]);
+        assert!(
+            read_doh_http1_close_response_async(&mut raw.as_slice())
+                .await
+                .is_err()
+        );
     }
 }

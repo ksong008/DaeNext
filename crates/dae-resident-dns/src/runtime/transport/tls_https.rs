@@ -8,7 +8,8 @@ use super::route::{
 use super::wire::{
     doh_request_target, forward_dns_framed_stream_with_reader_async,
     http1_doh_keep_alive_request_bytes, http1_doh_request_bytes, parse_doh_http_response,
-    read_http1_response_message_capped_async, read_to_end_capped_async, restore_dns_response_id,
+    read_doh_http1_close_response_async, read_http1_response_message_capped_async,
+    restore_dns_response_id,
 };
 use boring::ssl::SslContext;
 use dae_outbound_quic::system_ca::{SystemCaIdentity, system_ca_snapshot};
@@ -693,6 +694,9 @@ async fn forward_dns_https_over_h2_async(
                 ));
             }
             out.extend_from_slice(&chunk);
+            body.flow_control()
+                .release_capacity(chunk.len())
+                .map_err(|error| format!("release DoH HTTP/2 receive capacity: {error}"))?;
         }
         restore_dns_response_id(payload, &out)
     })
@@ -727,8 +731,7 @@ async fn forward_dns_https_over_reusable_stream_async(
         tls.flush()
             .await
             .map_err(|err| format!("flush DoH request: {err}"))?;
-        let raw =
-            read_http1_response_message_capped_async(tls, DNS_DOH_RESPONSE_READ_LIMIT).await?;
+        let raw = read_http1_response_message_capped_async(tls, DNS_DOH_HTTP_READ_LIMIT).await?;
         parse_doh_http_response(payload, &raw)
     })
     .await
@@ -781,6 +784,55 @@ mod tests {
         assert_eq!(&second.unwrap()[0..2], &0x2222_u16.to_be_bytes());
         server.await.unwrap();
         client_driver.abort();
+    }
+
+    #[tokio::test]
+    async fn doh_h2_bounds_decoded_body_across_data_frames() {
+        for length in [65535, 65536] {
+            let (client_io, server_io) = tokio::io::duplex(128 * 1024);
+            let (mut sender, connection) = h2::client::handshake(client_io).await.unwrap();
+            let driver = tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            let query = build_dns_query_packet(7, "limit.example", 1).unwrap();
+            let mut body = dns_a_response_for_query(&dns_data_with_zero_id(&query), [192, 0, 2, 1]);
+            body[11] = 1;
+            let rdata_len = length - body.len() - 11;
+            body.extend([0, 0, 16, 0, 1, 0, 0, 0, 1]);
+            body.extend((rdata_len as u16).to_be_bytes());
+            body.resize(length, 0);
+            let server = tokio::spawn(async move {
+                let mut connection = h2::server::handshake(server_io).await.unwrap();
+                let (_, mut respond) = connection.accept().await.unwrap().unwrap();
+                let headers = http::Response::builder()
+                    .status(200)
+                    .header(http::header::CONTENT_TYPE, DOH_MEDIA_TYPE)
+                    .body(())
+                    .unwrap();
+                respond
+                    .send_response(headers, false)
+                    .unwrap()
+                    .send_data(Bytes::from(body), true)
+                    .unwrap();
+                let _ =
+                    time::timeout(std::time::Duration::from_millis(100), connection.accept()).await;
+            });
+            let result = forward_dns_https_over_h2_async(
+                &h2_test_upstream(),
+                &query,
+                &mut sender,
+                ProxyDnsRequestContext::from_timeout(std::time::Duration::from_secs(2)),
+            )
+            .await;
+            if length == 65535 {
+                assert_eq!(result.unwrap().len(), length);
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.contains("exceeds read limit"), "{error}");
+            }
+            server.await.unwrap();
+            driver.abort();
+        }
     }
 
     fn send_h2_doh_response(

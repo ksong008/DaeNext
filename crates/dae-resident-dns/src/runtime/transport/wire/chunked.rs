@@ -49,6 +49,11 @@ pub fn decode_http_chunked_body_with_consumed(
         if size == 0 {
             return consume_trailers(raw, offset, out);
         }
+        if out.len().saturating_add(size) > super::DNS_DOH_RESPONSE_READ_LIMIT {
+            return Err(HttpChunkedDecodeError::Invalid(
+                "decoded DoH body exceeds DNS wire limit".to_owned(),
+            ));
+        }
         let end = offset.checked_add(size).ok_or_else(|| {
             HttpChunkedDecodeError::Invalid("chunked DoH body size overflow".to_owned())
         })?;

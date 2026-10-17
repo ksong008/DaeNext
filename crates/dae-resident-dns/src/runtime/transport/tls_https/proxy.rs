@@ -106,7 +106,7 @@ async fn forward_proxy_dns_https(
         .run(
             ProxyDnsRequestStage::Read,
             ProxyDnsRequestFailure::Network,
-            read_to_end_capped_async(&mut tls, DNS_DOH_RESPONSE_READ_LIMIT),
+            read_doh_http1_close_response_async(&mut tls),
         )
         .await?;
     parse_doh_http_response(payload, &raw).map_err(|error| {
