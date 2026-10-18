@@ -100,6 +100,7 @@ impl NativeEbpfRuntimeState {
                 "cgroup_path": path_string(&report.cgroup_path),
                 "program_name": report.program_name,
                 "program_id": report.program_id,
+            "link_metadata": super::capability::link_metadata_json(&report.link_metadata),
                 "program_tag": report.program_tag,
                 "section": report.section,
                 "attach_type": report.attach_type,

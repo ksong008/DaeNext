@@ -16,3 +16,18 @@ pub(super) fn probe_report_json(report: &dae_ebpf_support::AyaUserspaceLoadRepor
         })
     })
 }
+
+// Supplemental metadata never controls link deletion or backend selection.
+pub(super) fn link_metadata_json(
+    report: &dae_ebpf_support::aya_loader::AyaLinkMetadataReport,
+) -> Value {
+    json!({
+        "diagnosticOnly": true,
+        "links": report.links.iter().map(|link| json!({
+            "id": link.id,
+            "programId": link.program_id,
+            "type": link.link_type,
+        })).collect::<Vec<_>>(),
+        "errors": report.errors,
+    })
+}

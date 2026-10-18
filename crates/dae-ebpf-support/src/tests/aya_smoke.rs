@@ -395,6 +395,21 @@ pub(super) fn run_aya_host_veth_attach_detach_smoke(
     assert!(peer_report.loaded);
     assert!(peer_report.attached);
     assert!(peer_report.detached);
+    if backend == AttachBackend::Tcx {
+        for report in [&host_report, &peer_report] {
+            assert!(
+                report.link_metadata.errors.is_empty(),
+                "{:?}",
+                report.link_metadata.errors
+            );
+            assert_eq!(report.link_metadata.links.len(), 1);
+            assert_eq!(
+                Some(report.link_metadata.links[0].program_id),
+                report.program_id
+            );
+            assert_eq!(report.link_metadata.links[0].link_type, "Tcx");
+        }
+    }
     Ok(())
 }
 

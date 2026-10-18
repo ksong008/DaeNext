@@ -127,3 +127,70 @@ fn aya_lpm_template_load_reuses_pin_and_cleans_failed_transaction_is_env_gated()
         "failed load leaked pins"
     );
 }
+
+#[test]
+fn aya_link_metadata_excludes_foreign_programs_and_tracks_lifecycle_is_env_gated() {
+    if std::env::var_os("DAE_RUN_AYA_CGROUP_ATTACH_SMOKE").is_none() {
+        return;
+    }
+    let object = PathBuf::from(
+        std::env::var_os("DAE_TEST_NATIVE_BPF_OBJECT").expect("native BPF object required"),
+    );
+    let root = crate::default_bpffs_mount()
+        .unwrap()
+        .join(format!("dae-link-evidence-test-{}", std::process::id()));
+    let cgroup = crate::detect_cgroup2_mount()
+        .unwrap()
+        .join(format!("dae-link-evidence-test-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&cgroup).unwrap();
+    struct Cleanup(PathBuf, PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir(&self.1);
+        }
+    }
+    let _cleanup = Cleanup(root.clone(), cgroup.clone());
+    let load = |name: &str| {
+        let pin = root.join(name);
+        fs::create_dir(&pin).unwrap();
+        let mut options = AyaUserspaceLoaderOptions::new(&object);
+        options.map_pin_path = Some(&pin);
+        load_aya_userspace_object(options).unwrap()
+    };
+    let mut foreign = load("foreign");
+    let mut owned = load("owned");
+    let attach = |loaded: &mut AyaUserspaceLoadedObject| {
+        crate::dae_cgroup_attach_matrix()
+            .iter()
+            .map(|line| load_attach_aya_cgroup_program(loaded, line, &cgroup).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let foreign_reports = attach(&mut foreign);
+    let owned_reports = attach(&mut owned);
+    for report in &owned_reports {
+        assert!(report.link_metadata.errors.is_empty());
+        assert_eq!(report.link_metadata.links.len(), 1);
+        assert_eq!(report.link_metadata.links[0].program_id, report.program_id);
+        assert!(
+            !foreign_reports
+                .iter()
+                .any(|other| other.program_id == report.program_id)
+        );
+    }
+    drop(owned);
+    for report in &owned_reports {
+        assert!(query_aya_program_links(report.program_id).links.is_empty());
+    }
+    for report in &foreign_reports {
+        assert_eq!(
+            query_aya_program_links(report.program_id),
+            report.link_metadata
+        );
+    }
+    drop(foreign);
+    for report in &foreign_reports {
+        assert!(query_aya_program_links(report.program_id).links.is_empty());
+    }
+}

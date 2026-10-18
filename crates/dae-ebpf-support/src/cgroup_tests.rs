@@ -148,6 +148,16 @@ fn aya_cgroup_attach_detach_smoke_is_env_gated() {
         assert_eq!(report.program_name, line.program_name);
         assert_eq!(report.section, line.section);
         assert_eq!(report.program_kind, line.aya_program_kind);
+        if report.attach_mode == CGROUP_ATTACH_MODE_BPF_LINK_MULTI {
+            assert!(
+                report.link_metadata.errors.is_empty(),
+                "{:?}",
+                report.link_metadata.errors
+            );
+            assert_eq!(report.link_metadata.links.len(), 1);
+            assert_eq!(report.link_metadata.links[0].program_id, report.program_id);
+            assert_eq!(report.link_metadata.links[0].link_type, "Cgroup");
+        }
         assert_ne!(report.attach_mode, "single");
         assert!(
             report.attach_mode == CGROUP_ATTACH_MODE_BPF_LINK_MULTI

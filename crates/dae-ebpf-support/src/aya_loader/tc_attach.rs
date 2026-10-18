@@ -268,6 +268,11 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
 
     Ok((
         AyaTcAttachDetachReport {
+            link_metadata: if backend == AttachBackend::Tcx {
+                query_aya_program_links(program_info.id())
+            } else {
+                AyaLinkMetadataReport::default()
+            },
             requested_backend,
             backend,
             backend_switch_used: backend_switch_error.is_some(),
@@ -372,6 +377,7 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
         AttachBackend::TcCommand => unreachable!(),
     };
 
+    let mut link_metadata = AyaLinkMetadataReport::default();
     let link_path = if attach_result.backend == AttachBackend::Tcx {
         let link = classifier
             .take_link(attach_result.link_id)
@@ -379,6 +385,7 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
         let fd_link: FdLink = link
             .try_into()
             .map_err(|err| format!("tcx sched classifier link is not an fd link: {err:?}"))?;
+        link_metadata = describe_aya_fd_link(&fd_link);
         let link_path = options.link_root.join("link");
         let tmp_path = options.link_root.join("link.tmp");
         remove_existing_pin(&tmp_path)?;
@@ -408,6 +415,7 @@ pub(super) fn attach_pin_aya_sched_classifier_in_current_netns(
     };
 
     Ok(PinnedTcAttachReport {
+        link_metadata,
         requested_backend: options.requested_backend,
         backend: attach_result.backend,
         backend_switch_used: attach_result.backend_switch_used,

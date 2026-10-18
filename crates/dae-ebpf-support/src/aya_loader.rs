@@ -55,3 +55,6 @@ mod object_contract_tests;
 
 mod capability_probe;
 pub use self::capability_probe::*;
+
+mod link_metadata;
+pub use self::link_metadata::*;

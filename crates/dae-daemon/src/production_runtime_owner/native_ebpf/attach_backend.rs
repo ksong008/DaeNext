@@ -137,6 +137,7 @@ impl NativeEbpfRuntimeState {
             "backend_switch_used": report.backend_switch_used,
             "backend_switch_error": report.backend_switch_error,
             "program_id": report.program_id,
+            "link_metadata": super::capability::link_metadata_json(&report.link_metadata),
             "program_tag": report.program_tag,
             "program_name": report.program_name,
             "iface": report.iface,

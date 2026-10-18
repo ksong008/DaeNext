@@ -277,6 +277,7 @@ pub struct AyaTcAttachDetachReport {
     pub attached: bool,
     pub detached: bool,
     pub link_lifetime_owned_by_backend: bool,
+    pub link_metadata: AyaLinkMetadataReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -314,6 +315,7 @@ pub struct PinnedTcAttachReport {
     pub link_path: Option<PathBuf>,
     pub tc_filter_persistent: bool,
     pub clsact_added_or_present: bool,
+    pub link_metadata: AyaLinkMetadataReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -331,6 +333,7 @@ pub struct AyaCgroupAttachDetachReport {
     pub attached: bool,
     pub detached: bool,
     pub link_lifetime_owned_by_backend: bool,
+    pub link_metadata: AyaLinkMetadataReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
