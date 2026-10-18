@@ -18,6 +18,7 @@ use dae_resident_core::{LogicalGenerationId, PhysicalRuntimeId};
 
 use super::unix_now;
 
+mod dispatch;
 mod maintenance;
 mod reload;
 mod revision;
@@ -41,6 +42,9 @@ pub struct ResidentDnsDomainRouting {
     fence: Arc<ResidentDomainRoutingMapOwner>,
     routing_matcher: RoutingMatcher,
     mutation: Mutex<()>,
+    // FIFO admission bounds blocking submissions to one per generation and
+    // gives foreground commits a turn between maintenance batches.
+    dispatch: Arc<tokio::sync::Mutex<()>>,
     response_revisions: Arc<revision::ResponseRevisions>,
     state: Mutex<ResidentDnsDomainRoutingState>,
     maintenance: maintenance::ResidentDnsDomainRoutingMaintenanceSignal,
@@ -137,6 +141,7 @@ impl ResidentDnsDomainRouting {
             fence,
             routing_matcher,
             mutation: Mutex::new(()),
+            dispatch: Arc::new(tokio::sync::Mutex::new(())),
             response_revisions: Arc::new(revision::ResponseRevisions::default()),
             state: Mutex::new(ResidentDnsDomainRoutingState {
                 owner: DomainRoutingOwner::default(),
@@ -165,20 +170,23 @@ impl ResidentDnsDomainRouting {
         publish_response: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
         let revision = self.response_revisions.begin(&cache_plan.key)?;
-        let now_unix = unix_now();
-        self.sweep_expired_until(now_unix)?;
-        let plan = {
-            let mut state = self.lock_state()?;
-            build_resident_dns_domain_routing_update_plan(
-                &self.routing_matcher,
-                &mut state.domain_bitmap,
-                cache_plan,
-            )?
-        };
+        let plan = self.prepare_response(cache_plan)?;
         if self.commit_response(plan, &revision, publish_response)? {
             self.maintenance.notify_deadline_changed();
         }
         Ok(())
+    }
+
+    fn prepare_response(
+        &self,
+        cache_plan: &DnsResponseCachePlan,
+    ) -> Result<Option<ResidentDnsDomainRoutingUpdatePlan>, String> {
+        let mut state = self.lock_state()?;
+        build_resident_dns_domain_routing_update_plan(
+            &self.routing_matcher,
+            &mut state.domain_bitmap,
+            cache_plan,
+        )
     }
 
     fn lock_state(
@@ -201,9 +209,19 @@ impl ResidentDnsDomainRouting {
         revision: &revision::ResponseRevision,
         publish_response: impl FnOnce() -> Result<(), String>,
     ) -> Result<bool, String> {
+        let mutation = self.lock_mutation()?;
+        self.commit_response_locked(plan, revision, publish_response, &mutation)
+    }
+
+    fn commit_response_locked(
+        &self,
+        plan: Option<ResidentDnsDomainRoutingUpdatePlan>,
+        revision: &revision::ResponseRevision,
+        publish_response: impl FnOnce() -> Result<(), String>,
+        _mutation: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<bool, String> {
         // Serialize writers, but keep committed cache state available while BPF
         // executes. The generation fence still surrounds every map transaction.
-        let _mutation = self.lock_mutation()?;
         if !revision.can_commit()? {
             return Ok(false);
         }
@@ -211,14 +229,14 @@ impl ResidentDnsDomainRouting {
             // An accepted negative or now-unmatched response supersedes stale IP ownership.
             let mut state = self.lock_state()?;
             if let Some(entry) = state.cache.shared_entry(&revision.key) {
-                let mut owner = state.take_owner(&_mutation);
+                let mut owner = state.take_owner(_mutation);
                 drop(state);
                 let result = self.apply_event(
                     &mut owner,
                     DomainRoutingDnsEvent::remove(&entry.route_owner_key),
                 );
                 state = self.lock_state()?;
-                state.restore_owner(owner, &_mutation);
+                state.restore_owner(owner, _mutation);
                 result.map_err(|e| format!("remove superseded DNS owner: {e}"))?;
                 state.cache.discard(&revision.key);
             }
@@ -239,7 +257,7 @@ impl ResidentDnsDomainRouting {
             .cache
             .capacity_eviction_key_for_insert(&plan.key)
             .and_then(|key| state.cache.shared_entry(&key));
-        let mut owner = state.take_owner(&_mutation);
+        let mut owner = state.take_owner(_mutation);
         drop(state);
         let removes = evicted
             .iter()
@@ -252,7 +270,7 @@ impl ResidentDnsDomainRouting {
         );
         let result = self.apply_events(&mut owner, removes.chain(std::iter::once(update)));
         let mut state = self.lock_state()?;
-        state.restore_owner(owner, &_mutation);
+        state.restore_owner(owner, _mutation);
         result.map_err(|error| format!("apply resident DNS domain routing response: {error}"))?;
         state
             .cache
@@ -264,8 +282,6 @@ impl ResidentDnsDomainRouting {
     }
 
     pub fn cache_entry_count(&self) -> Result<usize, String> {
-        let now_unix = unix_now();
-        self.sweep_expired_until(now_unix)?;
         let state = self
             .state
             .lock()
@@ -293,15 +309,24 @@ impl ResidentDnsDomainRouting {
             question.qtype(),
             question.qclass(),
         );
-        let _mutation = self.lock_mutation()?;
+        let mutation = self.lock_mutation()?;
+        self.remove_key_locked(&key, remove_response, &mutation)
+    }
+
+    fn remove_key_locked(
+        &self,
+        key: &DnsCacheKey,
+        remove_response: impl FnOnce() -> Result<(), String>,
+        _mutation: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), String> {
         let mut state = self.lock_state()?;
-        let Some(entry) = state.cache.shared_entry(&key) else {
+        let Some(entry) = state.cache.shared_entry(key) else {
             drop(state);
-            self.response_revisions.invalidate(&key)?;
+            self.response_revisions.invalidate(key)?;
             remove_response()?;
             return Ok(());
         };
-        let mut owner = state.take_owner(&_mutation);
+        let mut owner = state.take_owner(_mutation);
         drop(state);
         let result = if entry.route_owner_key.is_empty() {
             Ok(())
@@ -312,11 +337,11 @@ impl ResidentDnsDomainRouting {
             )
         };
         let mut state = self.lock_state()?;
-        state.restore_owner(owner, &_mutation);
+        state.restore_owner(owner, _mutation);
         result.map_err(|e| format!("remove resident DNS domain routing owner: {e}"))?;
-        self.response_revisions.invalidate(&key)?;
+        self.response_revisions.invalidate(key)?;
         drop(entry);
-        state.cache.discard(&key);
+        state.cache.discard(key);
         drop(state);
         remove_response()?;
         self.maintenance.notify_deadline_changed();

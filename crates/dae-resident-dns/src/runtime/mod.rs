@@ -572,6 +572,7 @@ fn parse_i64_base0(raw: &str) -> Result<i64, String> {
     Ok(if negative { -parsed } else { parsed })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn record_accepted_dns_response(
     plan: &ResidentDnsPlan,
     cache_key: &ResidentDnsResponseCacheKey,
@@ -603,16 +604,55 @@ pub fn record_accepted_dns_response(
     Ok(())
 }
 
-fn remove_dns_response_cache_for_request(
+async fn record_accepted_dns_response_async(
+    plan: &ResidentDnsPlan,
+    cache_key: &ResidentDnsResponseCacheKey,
+    response: &[u8],
+    context: ProxyDnsRequestContext,
+) -> Result<(), String> {
+    let now_unix = unix_now();
+    let fixed_domain_ttl = fixed_domain_ttl_for_response(plan, response)?;
+    let Some(cache_plan) =
+        build_response_cache_plan_from_packet(now_unix, response, fixed_domain_ttl)
+            .map_err(|err| format!("build resident DNS response cache plan: {err}"))?
+    else {
+        return Ok(());
+    };
+    if let Some(domain_routing) = plan.domain_routing.as_ref() {
+        let cache = Arc::clone(&plan.cache);
+        let key = cache_key.with_base(cache_plan.key.clone());
+        let entry = cache_plan.entry.clone();
+        domain_routing
+            .record_accepted_response_async(cache_plan, context, move || {
+                cache.insert_response(now_unix, key, entry)
+            })
+            .await?;
+    } else {
+        plan.cache.insert_response(
+            now_unix,
+            cache_key.with_base(cache_plan.key),
+            cache_plan.entry,
+        )?;
+    }
+    Ok(())
+}
+
+async fn remove_dns_response_cache_for_request(
     plan: &ResidentDnsPlan,
     request: &DnsPacketView<'_>,
+    context: ProxyDnsRequestContext,
 ) -> Result<(), String> {
     let key = dns_cache_key_for_request(request)?;
-    let remove_response = || plan.cache.discard_base_key(&key).map(|_| ());
     if let Some(domain_routing) = plan.domain_routing.as_ref() {
-        domain_routing.remove_request_with(request, remove_response)?;
+        let cache = Arc::clone(&plan.cache);
+        let remove_key = key.clone();
+        domain_routing
+            .remove_key_async(key, context, move || {
+                cache.discard_base_key(&remove_key).map(|_| ())
+            })
+            .await?;
     } else {
-        remove_response()?;
+        plan.cache.discard_base_key(&key)?;
     }
     Ok(())
 }
@@ -760,8 +800,9 @@ async fn handle_resident_dns_request_without_preference(
     asis_transport: Option<ResidentDnsAsisTransport>,
 ) -> Result<Vec<u8>, String> {
     let action = select_request_action(plan, request)?;
+    let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
     if matches!(action, ResidentDnsRequestAction::Reject) {
-        remove_dns_response_cache_for_request(plan, request)?;
+        remove_dns_response_cache_for_request(plan, request, context).await?;
         return build_reject_response(payload, request);
     }
     if let ResidentDnsRequestAction::AsIs = action
@@ -780,7 +821,6 @@ async fn handle_resident_dns_request_without_preference(
     if cache_hit {
         return Ok(cached_response);
     }
-    let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
     let mut flight = plan.cache.begin_flight(cache_key.clone())?;
     if !flight.is_leader() {
         let mut response = flight.wait(context, request.id()).await?;
@@ -810,7 +850,8 @@ async fn handle_resident_dns_request_without_preference(
             )?;
             match response_action {
                 ResidentDnsResponseAction::Accept => {
-                    record_accepted_dns_response(plan, &cache_key, &response)?;
+                    record_accepted_dns_response_async(plan, &cache_key, &response, context)
+                        .await?;
                     Ok(response)
                 }
                 ResidentDnsResponseAction::Reject => build_reject_response(payload, request),
@@ -851,8 +892,9 @@ async fn handle_resident_dns_request_without_preference_trace(
     let action = select_request_action(plan, request)?;
     trace.set_request_action(&action);
     trace.add_routing_elapsed(routing_started);
+    let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
     if matches!(action, ResidentDnsRequestAction::Reject) {
-        remove_dns_response_cache_for_request(plan, request)?;
+        remove_dns_response_cache_for_request(plan, request, context).await?;
         trace.cache = DNS_TRACE_CACHE_BYPASS.to_owned();
         trace.response_routing = DNS_TRACE_ROUTING_REJECT.to_owned();
         let response = build_reject_response(payload, request)?;
@@ -878,7 +920,6 @@ async fn handle_resident_dns_request_without_preference_trace(
         trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
         return Ok(trace.finish(cached_response, DNS_TRACE_REASON_CACHE_HIT));
     }
-    let context = ProxyDnsRequestContext::from_timeout(RESIDENT_UDP_RESPONSE_TIMEOUT);
     let mut flight = plan.cache.begin_flight(cache_key.clone())?;
     if !flight.is_leader() {
         let mut response = flight.wait(context, request.id()).await?;
@@ -917,7 +958,8 @@ async fn handle_resident_dns_request_without_preference_trace(
             trace.add_routing_elapsed(routing_started);
             match response_action {
                 ResidentDnsResponseAction::Accept => {
-                    record_accepted_dns_response(plan, &cache_key, &response)?;
+                    record_accepted_dns_response_async(plan, &cache_key, &response, context)
+                        .await?;
                     trace.response_routing = DNS_TRACE_ROUTING_ACCEPT.to_owned();
                     Ok(trace.finish(response, DNS_TRACE_REASON_ASIS_ACCEPTED))
                 }
@@ -1074,7 +1116,7 @@ async fn resolve_dns_response_routing(
         let response_action = select_response_action(plan, request, &response, &upstream)?;
         match response_action {
             ResidentDnsResponseAction::Accept => {
-                record_accepted_dns_response(plan, cache_key, &response)?;
+                record_accepted_dns_response_async(plan, cache_key, &response, context).await?;
                 return Ok(response);
             }
             ResidentDnsResponseAction::Reject => {
@@ -1119,7 +1161,7 @@ async fn resolve_dns_response_routing_trace(
         trace.add_routing_elapsed(routing_started);
         match response_action {
             ResidentDnsResponseAction::Accept => {
-                record_accepted_dns_response(plan, cache_key, &response)?;
+                record_accepted_dns_response_async(plan, cache_key, &response, context).await?;
                 trace.response_routing = DNS_TRACE_ROUTING_ACCEPT.to_owned();
                 return Ok(trace.finish(response, DNS_TRACE_REASON_UPSTREAM_ACCEPTED));
             }

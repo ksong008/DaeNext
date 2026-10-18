@@ -128,6 +128,9 @@ impl ResidentDnsDomainRouting {
     }
 
     fn sweep_expired(&self) -> Result<(), String> {
+        // This function runs on the maintenance OS thread. FIFO admission is
+        // shared with async commits; release it after each bounded batch.
+        let _admission = self.dispatch.blocking_lock();
         self.sweep_expired_batch(unix_now())
     }
 }

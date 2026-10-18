@@ -140,7 +140,10 @@ fn expired_batches_release_state_lock_between_transactions() {
     let domain_routing = Arc::new(domain_routing);
     let worker = {
         let domain_routing = Arc::clone(&domain_routing);
-        std::thread::spawn(move || domain_routing.cache_entry_count().unwrap())
+        std::thread::spawn(move || {
+            domain_routing.sweep_expired_until(unix_now()).unwrap();
+            domain_routing.cache_entry_count().unwrap()
+        })
     };
     let started = Instant::now();
     while APPLIED_BATCHES.load(Ordering::SeqCst) == 0 {
