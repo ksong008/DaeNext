@@ -28,6 +28,11 @@ CRITICAL_TESTS = {
         "hot_path::negative::tests::negative_cache_uses_soa_ttl_and_minimum_and_fixed_ttl_only_shortens",
     ],
     "dae-resident-dns": [
+        "domain_routing::tests::dispatch_tests::accepting_response_and_reading_metrics_leave_expiry_to_maintenance",
+        "domain_routing::tests::dispatch_tests::slow_maintenance_keeps_runtime_and_metrics_responsive_and_yields_to_commits",
+        "domain_routing::tests::dispatch_tests::admission_timeout_and_cancellation_do_not_commit_or_leak_a_slot",
+        "domain_routing::tests::dispatch_tests::reject_invalidates_an_accepted_response_waiting_for_admission",
+        "domain_routing::tests::dispatch_tests::timed_out_blocking_job_keeps_admission_until_it_exits_without_publishing",
         "runtime::cache_tests::tc_udp_then_tcp_and_edns_retry_reach_the_upstream",
         "runtime::cache_tests::cache_and_flight_share_only_compatible_requests_and_restore_case",
         "runtime::cache_tests::escaped_labels_stay_separate_in_cache_flights_reload_and_owner_removal",

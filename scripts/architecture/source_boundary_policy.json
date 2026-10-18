@@ -71,7 +71,7 @@
     },
     "dae-resident-dns": {
       "production": 20904,
-      "tests": 3291
+      "tests": 3621
     }
   },
   "counting": "production means non-test-named Rust LOC, including inline tests, comments and blanks; overlapping subtrees are not summed",
@@ -88,5 +88,6 @@
     }
   },
   "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged.",
-  "dns_send_scheduling_rationale": "2026-10-17: account for owned DNS send operations and per-poll IO sharing in resident UDP, payload ownership transfer in transport, and controlled backpressure/external protocol regressions in dataplane; only measured overages are adjusted, without extra growth allowance."
+  "dns_send_scheduling_rationale": "2026-10-17: account for owned DNS send operations and per-poll IO sharing in resident UDP, payload ownership transfer in transport, and controlled backpressure/external protocol regressions in dataplane; only measured overages are adjusted, without extra growth allowance.",
+  "dns_domain_routing_dispatch_rationale": "2026-10-18: account only for domain-routing expiry, FIFO admission, worker progress, cancellation and queued-commit regression tests; production limits unchanged, no extra growth allowance."
 }

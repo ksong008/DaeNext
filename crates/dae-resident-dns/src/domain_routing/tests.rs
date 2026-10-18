@@ -1,6 +1,7 @@
 use super::*;
 
 mod commit_tests;
+mod dispatch_tests;
 
 #[test]
 fn expired_response_cannot_install_a_routing_owner() {
