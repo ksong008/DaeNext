@@ -570,7 +570,8 @@ pub(super) fn attach_loaded_aya_sched_classifier(
         AttachBackend::TcNetlink => (
             TcAttachOptions::Netlink(NlOptions {
                 priority: spec.priority,
-                handle: spec.handle,
+                handle: spec.handle.into(),
+                classid: None,
             }),
             None,
             None,

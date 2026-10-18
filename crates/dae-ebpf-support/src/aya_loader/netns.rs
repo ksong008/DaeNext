@@ -75,14 +75,48 @@ pub(super) fn setns(fd: i32) -> io::Result<()> {
 }
 
 pub(super) fn add_clsact_or_accept_existing(iface: &str) -> Result<(), String> {
-    match tc::qdisc_add_clsact(iface) {
-        Ok(()) => Ok(()),
-        Err(err)
+    accept_existing_clsact(iface, tc::qdisc_add_clsact(iface))
+}
+
+fn accept_existing_clsact(
+    iface: &str,
+    result: Result<(), aya::programs::TcError>,
+) -> Result<(), String> {
+    match result {
+        Ok(()) | Err(aya::programs::TcError::AlreadyAttached) => Ok(()),
+        Err(aya::programs::TcError::IoError(ref err))
             if err.kind() == io::ErrorKind::AlreadyExists
                 || err.raw_os_error() == Some(libc::EEXIST) =>
         {
             Ok(())
         }
+        Err(aya::programs::TcError::NetlinkError(ref err))
+            if err.raw_os_error() == Some(libc::EEXIST) =>
+        {
+            Ok(())
+        }
         Err(err) => Err(format!("aya tc clsact qdisc add failed on {iface}: {err}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aya::programs::TcError;
+
+    #[test]
+    fn clsact_accepts_existing_but_preserves_other_failures() {
+        assert!(accept_existing_clsact("test0", Ok(())).is_ok());
+        assert!(accept_existing_clsact("test0", Err(TcError::AlreadyAttached)).is_ok());
+        for errno in [libc::EEXIST, libc::EPERM, libc::ENODEV] {
+            let result = accept_existing_clsact(
+                "test0",
+                Err(TcError::IoError(io::Error::from_raw_os_error(errno))),
+            );
+            assert_eq!(result.is_ok(), errno == libc::EEXIST);
+            if let Err(error) = result {
+                assert!(error.contains("test0"));
+            }
+        }
     }
 }

@@ -4,11 +4,11 @@ use aya_ebpf::{
     bindings::{
         bpf_map_def,
         bpf_map_type::{
-            BPF_MAP_TYPE_ARRAY, BPF_MAP_TYPE_ARRAY_OF_MAPS, BPF_MAP_TYPE_HASH,
-            BPF_MAP_TYPE_LPM_TRIE, BPF_MAP_TYPE_LRU_HASH, BPF_MAP_TYPE_PERCPU_ARRAY,
-            BPF_MAP_TYPE_SOCKMAP,
+            BPF_MAP_TYPE_ARRAY, BPF_MAP_TYPE_HASH, BPF_MAP_TYPE_LPM_TRIE, BPF_MAP_TYPE_LRU_HASH,
+            BPF_MAP_TYPE_PERCPU_ARRAY, BPF_MAP_TYPE_SOCKMAP,
         },
     },
+    btf_maps::{ArrayOfMaps, LpmTrie},
     macros::{btf_map, map},
 };
 
@@ -139,15 +139,13 @@ static UNUSED_LPM_TYPE: RawMap = RawMap::new(
     PIN_NONE,
 );
 
-#[map(name = "lpm_array_map")]
-static LPM_ARRAY_MAP: RawMap = RawMap::new(
-    BPF_MAP_TYPE_ARRAY_OF_MAPS,
-    size_of::<u32>(),
-    size_of::<u32>(),
-    MAX_LPM_NUM,
-    0,
-    PIN_BY_NAME,
-);
+// Aya must see the inner template before it can create or reuse the outer map.
+// Keep the raw lookup path below; this definition only describes the map ABI.
+#[btf_map(name = "lpm_array_map")]
+static LPM_ARRAY_MAP: ArrayOfMaps<
+    LpmTrie<[u32; 4], u32, { MAX_LPM_SIZE as usize }>,
+    { MAX_LPM_NUM as usize },
+> = ArrayOfMaps::new();
 
 #[map(name = "routing_map")]
 static ROUTING_MAP: RawMap = RawMap::new(
@@ -260,7 +258,7 @@ pub(crate) fn routing_map_ptr() -> *mut c_void {
 
 #[inline(always)]
 pub(crate) fn lpm_array_map_ptr() -> *mut c_void {
-    map_ptr(&LPM_ARRAY_MAP)
+    ptr::addr_of!(LPM_ARRAY_MAP).cast_mut().cast::<c_void>()
 }
 
 #[inline(always)]

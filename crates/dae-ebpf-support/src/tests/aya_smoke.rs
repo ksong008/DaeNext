@@ -423,6 +423,10 @@ pub(super) fn tcx_optional_attach_unsupported(err: &str) -> bool {
 
 #[cfg(feature = "aya-loader")]
 pub(super) fn build_aya_compatible_bpf_object(root: &std::path::Path, output: &std::path::Path) {
+    if let Some(object) = std::env::var_os("DAE_TEST_NATIVE_BPF_OBJECT") {
+        std::fs::copy(&object, output).expect("copy explicitly supplied native BPF test object");
+        return;
+    }
     let workspace_root = root;
     let target_dir = std::env::temp_dir().join(format!(
         "dae-ebpf-support-test-target-{}",

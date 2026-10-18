@@ -15,5 +15,6 @@ dae-ebpf-abi.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+aya-obj = "0.3.0"
 dae-golden.workspace = true
 serde_json.workspace = true

@@ -65,6 +65,7 @@ fn load_aya_userspace_object_from_source(
     source: AyaUserspaceLoadSource<'_>,
     options: LoadCommonOptions<'_>,
 ) -> Result<AyaUserspaceLoadedObject, String> {
+    let mut pin_transaction = LoadPinTransaction::new(options.map_pin_path);
     let map_in_map_pins = if options.prepin_lpm_array_map {
         let map_pin_path = options
             .map_pin_path
@@ -104,13 +105,16 @@ fn load_aya_userspace_object_from_source(
         loader.allow_unsupported_maps();
     }
     if let Some(map_pin_path) = options.map_pin_path {
-        loader.map_pin_path(map_pin_path);
+        loader.default_map_pin_directory(map_pin_path);
+        // BTF map definitions do not request by-name pinning. Give the outer
+        // map an explicit path so precreated and generation maps are reused.
+        loader.map_pin_path(LPM_ARRAY_MAP_NAME, map_pin_path.join(LPM_ARRAY_MAP_NAME));
     }
     if let Some(param) = options.param.as_ref() {
-        loader.set_global("PARAM", param, true);
+        loader.override_global("PARAM", param, true);
     }
     for (map_name, max_entries) in options.max_entries_overrides {
-        loader.set_max_entries(map_name, *max_entries);
+        loader.map_max_entries(map_name, *max_entries);
     }
 
     let ebpf = match source {
@@ -161,6 +165,7 @@ fn load_aya_userspace_object_from_source(
             .join("; ");
         return Err(format!("aya userspace object map spec mismatch: {summary}"));
     }
+    pin_transaction.commit();
     Ok(AyaUserspaceLoadedObject { ebpf, report })
 }
 
@@ -193,6 +198,15 @@ fn loaded_map_spec(name: &str, map: &Map) -> Result<AyaLoadedMapSpec, String> {
 fn map_data_and_support(map: &Map) -> (&MapData, bool) {
     match map {
         Map::Array(data)
+        | Map::ArrayOfMaps(data)
+        | Map::CgroupArray(data)
+        | Map::CgroupStorage(data)
+        | Map::CgrpStorage(data)
+        | Map::HashOfMaps(data)
+        | Map::InodeStorage(data)
+        | Map::PerCpuCgroupStorage(data)
+        | Map::ReusePortSockArray(data)
+        | Map::SkStorage(data)
         | Map::BloomFilter(data)
         | Map::CpuMap(data)
         | Map::DevMap(data)

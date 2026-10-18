@@ -8,6 +8,7 @@ pub const MAX_DOMAIN_ROUTING_NUM: u32 = 65_536;
 
 #[unsafe(no_mangle)]
 #[used]
+#[unsafe(link_section = ".rodata")]
 pub static PARAM: BpfDaeParam = BpfDaeParam::zeroed();
 
 #[inline(always)]

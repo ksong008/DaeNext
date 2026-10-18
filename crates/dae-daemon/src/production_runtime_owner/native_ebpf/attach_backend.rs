@@ -330,7 +330,7 @@ fn load_embedded_native_object(
             allow_unsupported_maps: true,
             allowed_unsupported_map_names: dae_ebpf_support::DEFAULT_ALLOWED_UNSUPPORTED_MAP_NAMES,
             max_entries_overrides: map_profile.max_entries_overrides(),
-            prepin_lpm_array_map: true,
+            prepin_lpm_array_map: false,
             target_btf_required,
         },
     )

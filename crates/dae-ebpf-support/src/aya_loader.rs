@@ -39,6 +39,7 @@ pub use self::cgroup_preflight::*;
 mod netns;
 use self::netns::*;
 mod lpm_pinning;
+use self::lpm_pinning::LoadPinTransaction;
 pub use self::lpm_pinning::*;
 mod target_btf;
 pub use self::target_btf::*;
@@ -48,3 +49,6 @@ mod common_helpers;
 use self::common_helpers::*;
 mod map_metrics;
 pub use self::map_metrics::*;
+
+#[cfg(test)]
+mod object_contract_tests;

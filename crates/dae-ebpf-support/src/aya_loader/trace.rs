@@ -21,8 +21,8 @@ pub fn load_pin_aya_trace_object(
         ip_version: options.ip_version,
         pad: 0,
     };
-    loader.set_global("tracing_cfg", &trace_config, true);
-    loader.set_max_entries("events", options.ringbuf_size);
+    loader.override_global("tracing_cfg", &trace_config, true);
+    loader.map_max_entries("events", options.ringbuf_size);
 
     let mut ebpf = loader
         .load_file(options.object)
@@ -96,8 +96,8 @@ pub fn attach_ringbuf_smoke_aya_trace_object(
         ip_version: options.ip_version,
         pad: 0,
     };
-    loader.set_global("tracing_cfg", &trace_config, true);
-    loader.set_max_entries("events", options.ringbuf_size);
+    loader.override_global("tracing_cfg", &trace_config, true);
+    loader.map_max_entries("events", options.ringbuf_size);
 
     let mut ebpf = loader
         .load_file(options.object)

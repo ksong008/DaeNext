@@ -37,6 +37,7 @@ run_step "product adapter boundary checker tests" python3 scripts/architecture/t
 run_step "production dependency surface" scripts/check_production_deps.sh --all-features
 run_step "production feature checker tests" python3 scripts/architecture/test_check_release_features.py
 run_step "independent default product check" cargo check -p dae-daemon --bin daed "${cargo_profile_args[@]}"
+run_step "native BPF object contracts" scripts/check_native_bpf_objects.sh
 run_step "workspace check" cargo check --workspace --all-targets "${cargo_profile_args[@]}"
 run_step "workspace library tests" cargo test --workspace --lib "${cargo_profile_args[@]}" -- --test-threads=1
 run_step "isolated QUIC library tests" cargo test -p dae-outbound-quic --lib "${cargo_profile_args[@]}" -- --test-threads=1

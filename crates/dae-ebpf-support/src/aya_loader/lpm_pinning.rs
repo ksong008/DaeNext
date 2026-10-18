@@ -2,9 +2,6 @@ use super::*;
 pub fn prepin_lpm_array_map(pin_root: &Path) -> io::Result<AyaMapInMapPinReport> {
     fs::create_dir_all(pin_root)?;
     let pin_path = pin_root.join(LPM_ARRAY_MAP_NAME);
-    if pin_path.exists() {
-        fs::remove_file(&pin_path)?;
-    }
     let inner_max_entries = map_catalog()
         .iter()
         .find(|spec| spec.name == UNUSED_LPM_TYPE_NAME)
@@ -17,6 +14,29 @@ pub fn prepin_lpm_array_map(pin_root: &Path) -> io::Result<AyaMapInMapPinReport>
         .find(|spec| spec.name == LPM_ARRAY_MAP_NAME)
         .map(|spec| spec.max_entries)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "lpm_array_map catalog missing"))?;
+    let report = AyaMapInMapPinReport {
+        outer_map_name: LPM_ARRAY_MAP_NAME,
+        inner_template_name: UNUSED_LPM_TYPE_NAME,
+        pin_path: pin_path.clone(),
+        outer_max_entries,
+        inner_max_entries,
+    };
+    if pin_path.exists() {
+        let map = MapData::from_pin(&pin_path).map_err(io::Error::other)?;
+        let info = map.info().map_err(io::Error::other)?;
+        if info.map_type().map_err(io::Error::other)? != MapType::ArrayOfMaps
+            || info.key_size() != 4
+            || info.value_size() != 4
+            || info.max_entries() != outer_max_entries
+            || info.map_flags() != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "existing LPM outer map does not match catalog",
+            ));
+        }
+        return Ok(report);
+    }
     let inner = create_bpf_map(CreateBpfMapSpec {
         name: UNUSED_LPM_TYPE_NAME,
         map_type: BPF_MAP_TYPE_LPM_TRIE,
@@ -36,13 +56,7 @@ pub fn prepin_lpm_array_map(pin_root: &Path) -> io::Result<AyaMapInMapPinReport>
         inner_map_fd: inner.as_raw_fd(),
     })?;
     pin_obj(outer.as_raw_fd(), &pin_path)?;
-    Ok(AyaMapInMapPinReport {
-        outer_map_name: LPM_ARRAY_MAP_NAME,
-        inner_template_name: UNUSED_LPM_TYPE_NAME,
-        pin_path,
-        outer_max_entries,
-        inner_max_entries,
-    })
+    Ok(report)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -138,4 +152,44 @@ pub(super) struct BpfObjAttr {
     pub(super) pathname: u64,
     pub(super) bpf_fd: u32,
     pub(super) file_flags: u32,
+}
+
+// Loading is a transaction within the caller-owned generation pin directory.
+// Existing pins survive failures; only newly created catalog pins are removed.
+pub(super) struct LoadPinTransaction {
+    new_paths: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl LoadPinTransaction {
+    pub(super) fn new(root: Option<&Path>) -> Self {
+        let new_paths = root
+            .into_iter()
+            .flat_map(|root| {
+                pinned_reuse_maps()
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(LPM_ARRAY_MAP_NAME))
+                    .map(move |name| root.join(name))
+            })
+            .filter(|path| !path.exists())
+            .collect();
+        Self {
+            new_paths,
+            committed: false,
+        }
+    }
+    pub(super) fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for LoadPinTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            for path in &self.new_paths {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
 }

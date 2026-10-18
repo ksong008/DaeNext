@@ -189,6 +189,6 @@ fn trace_skb_arg(ctx: *mut c_void, skb_arg_position: u8) -> i32 {
     event.meta.pc = unsafe { bpf_get_func_ip(ctx) };
     event.meta.skb = skb_addr;
     event.meta.second_param = probe.arg::<usize>(1).unwrap_or_default() as u64;
-    let _ = EVENTS.output(&event, 0);
+    let _ = EVENTS.output::<TraceEvent>(&event, 0);
     0
 }
