@@ -52,3 +52,6 @@ pub use self::map_metrics::*;
 
 #[cfg(test)]
 mod object_contract_tests;
+
+mod capability_probe;
+pub use self::capability_probe::*;

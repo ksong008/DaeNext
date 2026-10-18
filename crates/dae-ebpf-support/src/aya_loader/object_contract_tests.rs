@@ -57,6 +57,17 @@ fn aya_lpm_template_load_reuses_pin_and_cleans_failed_transaction_is_env_gated()
     let loaded =
         load_aya_userspace_object(options.clone()).expect("create outer map from BTF template");
     assert!(loaded.report.unsupported_map_names.is_empty());
+    let probes = loaded
+        .report
+        .capability_probe
+        .expect("startup capability evidence");
+    assert_eq!(probes.entries.len(), 26);
+    eprintln!(
+        "capability probes: {} entries in {}us: {:?}",
+        probes.entries.len(),
+        probes.elapsed_micros,
+        probes.entries
+    );
     let id = MapData::from_pin(root.join(LPM_ARRAY_MAP_NAME))
         .unwrap()
         .info()
@@ -71,6 +82,10 @@ fn aya_lpm_template_load_reuses_pin_and_cleans_failed_transaction_is_env_gated()
             .unwrap()
             .id(),
         id
+    );
+    assert!(
+        std::ptr::eq(probes, reloaded.report.capability_probe.unwrap()),
+        "reload must reuse the probe snapshot"
     );
     drop(reloaded);
     let report = prepin_lpm_array_map(&root).expect("reuse pre-existing map without replacement");

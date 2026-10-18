@@ -132,7 +132,7 @@ fn load_aya_userspace_object_from_source(
         .map(|(name, _)| name.to_owned())
         .collect::<Vec<_>>();
     let object_identity = source.report_identity();
-    let report = aya_userspace_load_report(
+    let mut report = aya_userspace_load_report(
         &object_identity,
         options.param.is_some(),
         options.map_pin_path,
@@ -165,6 +165,7 @@ fn load_aya_userspace_object_from_source(
             .join("; ");
         return Err(format!("aya userspace object map spec mismatch: {summary}"));
     }
+    report.capability_probe = Some(cached_aya_capability_probes());
     pin_transaction.commit();
     Ok(AyaUserspaceLoadedObject { ebpf, report })
 }

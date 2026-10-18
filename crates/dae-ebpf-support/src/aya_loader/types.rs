@@ -97,6 +97,7 @@ pub struct AyaUserspaceLoadReport {
     pub external_ebpf_object_required: bool,
     pub command_attach_backend_required: bool,
     pub target_btf: AyaTargetBtfReport,
+    pub capability_probe: Option<&'static AyaCapabilityProbeReport>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

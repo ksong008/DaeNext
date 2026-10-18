@@ -54,3 +54,6 @@ mod attach_specs;
 mod tests;
 #[cfg(feature = "native-ebpf")]
 use self::attach_specs::*;
+
+#[cfg(feature = "native-ebpf")]
+mod capability;

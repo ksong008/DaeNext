@@ -71,6 +71,7 @@ pub fn aya_userspace_load_report(
         external_ebpf_object_required: false,
         command_attach_backend_required: false,
         target_btf,
+        capability_probe: None,
     }
 }
 

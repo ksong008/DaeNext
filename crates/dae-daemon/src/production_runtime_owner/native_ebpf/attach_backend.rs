@@ -189,8 +189,10 @@ impl NativeEbpfRuntimeState {
                     EMBEDDED_NATIVE_OBJECT_IDENTITY
                 )
             })?;
-            let (loaded, pname_report) =
+            let (loaded, mut pname_report) =
                 load_native_object_with_pname_fallback(&input, &runtime_pin_root)?;
+            pname_report["kernelCapabilityProbes"] =
+                super::capability::probe_report_json(&loaded.report);
             self.loaded_map_ids = collect_loaded_map_ids(&before_map_ids)?;
             self.pin_root = Some(runtime_pin_root);
             self.pname_report = Some(pname_report);
