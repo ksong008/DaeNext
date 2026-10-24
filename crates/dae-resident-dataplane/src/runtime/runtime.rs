@@ -217,7 +217,12 @@ impl ResidentDataplaneRuntime {
         built.generation.dns.activate_domain_routing_generation()?;
         let next_id = built.generation.token().logical();
         let next_token = built.generation.token();
-        let previous = self.coordinator.publish(next_token, built.generation);
+        let next_limit = built.generation.tcp_runtime_config.connection_limit();
+        let previous = self
+            .coordinator
+            .publish_with(next_token, built.generation, || {
+                self.owner.tcp_admission().set_limit(next_limit);
+            });
         let previous_id = previous.id;
         self.generation_drain.retire(previous);
         Ok(json!({
@@ -229,7 +234,7 @@ impl ResidentDataplaneRuntime {
             "listenerReused": true,
             "sharedRuntimeReused": true,
             "bpfOwnerReused": true,
-            "tcpAdmission": "generation-pinned-at-accept",
+            "tcpAdmission": "active-generation-at-admission-commit",
             "udpAdmission": "generation-pinned-for-session-idle-window",
             "dnsAdmission": "generation-pinned-per-request-or-connection",
         }))
@@ -253,7 +258,12 @@ impl ResidentDataplaneRuntime {
         self.generation_drain.reactivate(generation.id)?;
         generation.dns.activate_domain_routing_generation()?;
         let restored_id = generation.id;
-        let displaced = self.coordinator.publish(generation.token(), generation);
+        let restored_limit = generation.tcp_runtime_config.connection_limit();
+        let displaced = self
+            .coordinator
+            .publish_with(generation.token(), generation, || {
+                self.owner.tcp_admission().set_limit(restored_limit);
+            });
         let displaced_id = displaced.id;
         self.generation_drain.retire(displaced);
         self.generation_drain.finalize_retirement(displaced_id);

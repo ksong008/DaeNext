@@ -8,7 +8,10 @@ mod task;
 mod thread_shutdown;
 mod thread_task;
 
-pub use cleanup_inventory::{ResidentRuntimeCleanupInventory, ResidentRuntimeCleanupReporter};
+pub use cleanup_inventory::{
+    ResidentConcurrentCleanupReporter, ResidentRuntimeCleanupInventory,
+    ResidentRuntimeCleanupReporter,
+};
 pub use executor::{
     ResidentRuntimeAllocatorHooks, ResidentRuntimeExecutor, ResidentRuntimeExecutorConfig,
 };

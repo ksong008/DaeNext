@@ -19,6 +19,8 @@ pub(super) fn shutdown_resident_runtime_workloads(
 ) -> ResidentRuntimeWorkloadShutdown {
     let started = Instant::now();
     let deadline = started.checked_add(grace).unwrap_or(started);
+    owner.tcp_admission.close();
+    owner.tcp_flows.stop_all();
     owner.workload_stop.store(true, Ordering::Release);
     let mut workload_tasks = take_resident_async_runtime_tasks(
         &mut owner.async_tasks,
@@ -225,9 +227,15 @@ pub(super) fn shutdown_resident_runtime_owner(
             && vless_mux_owners["ownerStateBytesLowerBound"].as_u64() == Some(0)
             && vless_mux_owners["shutdownTimedOut"].as_bool() == Some(false));
     let shutdown_elapsed_ns = elapsed_nanos(started);
+    let tcp_socket_budget = owner.tcp_admission.snapshot();
+    let tcp_flow_registry = owner.tcp_flows.snapshot();
+    let tcp_leases_released = tcp_socket_budget["used"].as_u64() == Some(0)
+        && tcp_socket_budget["waiters"].as_u64() == Some(0)
+        && tcp_flow_registry["active"].as_u64() == Some(0);
     let shutdown_safe = detached_worker_threads == 0
         && pending_async_tasks == 0
         && active_tcp == 0
+        && tcp_leases_released
         && active_udp == 0
         && legacy_udp_active == 0
         && udp_payload_released
@@ -285,6 +293,7 @@ pub(super) fn shutdown_resident_runtime_owner(
         "pending_async_tasks": pending_async_tasks,
         "resource_release": {
             "activeTcpConnections": active_tcp == 0,
+            "tcpFlowLeases": tcp_leases_released,
             "activeUdpSessions": active_udp == 0 && legacy_udp_active == 0,
             "udpPayload": udp_payload_released,
             "hysteria2Owners": hysteria2_owners_released,
@@ -318,6 +327,8 @@ pub(super) fn shutdown_resident_runtime_owner(
             "pending": transport_async_shutdown.pending.len(),
         },
         "active_tcp_connections_at_shutdown": active_tcp,
+        "tcpSocketBudget": tcp_socket_budget,
+        "tcpFlowRegistry": tcp_flow_registry,
         "active_udp_sessions_at_shutdown": active_udp,
         "udp_sessions_active_at_shutdown": legacy_udp_active,
         "udp_payload_admission": udp_payload_admission,

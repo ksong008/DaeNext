@@ -20,7 +20,7 @@ use crate::UdpIngressMetricObservation;
 
 use super::super::plan::resident_data_udp_network_type;
 use super::super::{
-    ActiveGenerationSlot, ResidentDataplaneGeneration, ResidentGenerationDrainControl,
+    ResidentDataplaneGeneration, ResidentGenerationDrainControl, ResidentRuntimeCoordinator,
 };
 use super::*;
 
@@ -359,14 +359,35 @@ impl ResidentUdpGenerationRuntime {
     }
 }
 
+fn admit_new_udp_generation(
+    coordinator: &ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
+) -> Option<Arc<ResidentDataplaneGeneration>> {
+    for _ in 0..2 {
+        let (publication, candidate) = coordinator.load_versioned();
+        let admitted = coordinator
+            .with_current(publication, candidate.token(), &candidate, |generation| {
+                generation
+                    .drain_control
+                    .with_admission(|| Arc::clone(&candidate))
+            })
+            .flatten();
+        if admitted.is_some() {
+            return admitted;
+        }
+        candidate.metrics.udp_generation_snapshot_reselected();
+    }
+    None
+}
+
 pub(super) async fn run_resident_udp_session_manager_async(
     socket: UdpSocket,
-    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
+    coordinator: ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     active_sessions: Arc<AtomicUsize>,
 ) -> Value {
+    let active_generation = coordinator.active_generation_slot();
     let mut publication = active_generation.subscribe_publication();
     let maintenance_notify = Arc::new(tokio::sync::Notify::new());
     let initial_generation = active_generation.load();
@@ -525,8 +546,10 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 || json!({"event": "udp_recvmmsg_fallback", "reason": reason}),
                             );
                         }
+                        drop(active);
                         let batch_now = Instant::now();
                         for mut packet in ingress_packets.drain(..) {
+                            let active = active_generation.load();
                             let now = batch_now;
                             let pin_key = packet.original_dst.map(|original_dst| UdpGenerationPinKey {
                                 peer: packet.peer,
@@ -559,6 +582,10 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 let generation = generations
                                     .get_mut(&generation_id)
                                     .expect("eligible UDP generation runtime is installed");
+                                if generation.drain_control.udp_stop_is_requested() {
+                                    active.metrics.udp_generation_admission_rejected();
+                                    continue;
+                                }
                                 let runtime_config = &generation.runtime_config;
                                 let session_idle_timeout = runtime_config.session_idle_timeout;
                                 let proxy_session_idle_timeout =
@@ -606,6 +633,10 @@ pub(super) async fn run_resident_udp_session_manager_async(
                                 continue;
                             }
 
+                            let Some(active) = admit_new_udp_generation(&coordinator) else {
+                                active.metrics.udp_generation_admission_rejected();
+                                continue;
+                            };
                             let generation_id = active.id.get();
                             generations.entry(generation_id).or_insert_with(|| {
                                 ResidentUdpGenerationRuntime::start(
@@ -620,6 +651,10 @@ pub(super) async fn run_resident_udp_session_manager_async(
                             let generation = generations
                                 .get_mut(&generation_id)
                                 .expect("selected UDP generation runtime is installed");
+                            if generation.drain_control.udp_stop_is_requested() {
+                                active.metrics.udp_generation_admission_rejected();
+                                continue;
+                            }
                             let runtime_config = &generation.runtime_config;
                             let session_idle_timeout = runtime_config.session_idle_timeout;
                             let proxy_session_idle_timeout =
@@ -790,7 +825,6 @@ pub(super) async fn run_resident_udp_session_manager_async(
         active_sessions,
         retired_shutdown_failures,
         retired_component_shutdown_failures,
-        queued_payload_released,
     );
     let forced_cleanup_count =
         retired_shutdown_forced.saturating_add(retired_component_shutdown_forced);
@@ -815,6 +849,9 @@ pub(super) async fn run_resident_udp_session_manager_async(
         "sessionAdmission": session_admission.snapshot(),
         "queuedPayloadAdmission": queued_payload_admission,
         "queuedPayloadReleased": queued_payload_released,
+        // DNS consumer owners share this budget and join independently. The
+        // physical runtime checks zero bytes after all consumers have joined.
+        "queuedPayloadReleaseCheck": "physical-runtime-after-consumer-joins",
         "retiredGenerationShutdowns": retired_shutdown_count,
         "retiredGenerationShutdownFailures": retired_shutdown_failures,
         "retiredGenerationShutdownForced": retired_shutdown_forced,

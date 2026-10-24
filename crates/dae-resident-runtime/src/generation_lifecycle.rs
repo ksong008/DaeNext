@@ -47,6 +47,7 @@ impl Drop for ResidentGenerationLifetime {
 pub struct ResidentGenerationDrainControl {
     id: LogicalGenerationId,
     lifecycle: ResidentGenerationLifecycle,
+    admission_gate: Mutex<()>,
     workload_stop: SharedResidentStopSignal,
     flow_stop: SharedResidentStopSignal,
     udp_stop: SharedResidentStopSignal,
@@ -77,6 +78,7 @@ impl ResidentGenerationDrainControl {
         Arc::new(Self {
             id,
             lifecycle: ResidentGenerationLifecycle::default(),
+            admission_gate: Mutex::new(()),
             workload_stop,
             flow_stop: ResidentStopSignal::shared(),
             udp_stop: ResidentStopSignal::shared(),
@@ -93,6 +95,10 @@ impl ResidentGenerationDrainControl {
 
     #[inline]
     pub fn activate(&self) -> Result<(), String> {
+        let _admission = self
+            .admission_gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         self.lifecycle.activate().map_err(str::to_owned)
     }
 
@@ -101,13 +107,31 @@ impl ResidentGenerationDrainControl {
         self.lifecycle.admission_is_open()
     }
 
+    /// Linearization boundary for a single new work reservation. Never await or
+    /// perform network/map I/O inside the callback.
+    pub fn with_admission<R>(&self, reserve: impl FnOnce() -> R) -> Option<R> {
+        let _admission = self
+            .admission_gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.admission_is_open().then(reserve)
+    }
+
     #[inline]
     pub fn close_admission(&self) {
+        let _admission = self
+            .admission_gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         self.lifecycle.close_admission();
     }
 
     #[inline]
     pub fn reopen_admission(&self) -> Result<(), String> {
+        let _admission = self
+            .admission_gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         self.lifecycle.reopen_admission().map_err(str::to_owned)
     }
 
@@ -158,6 +182,10 @@ impl ResidentGenerationDrainControl {
 
     #[inline]
     pub fn retire_workloads(&self) {
+        let _admission = self
+            .admission_gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         self.lifecycle.request_stop();
         self.workload_stop.store(true, Ordering::Release);
         self.notify_udp_maintenance();
@@ -258,5 +286,31 @@ mod tests {
             .expect("generation stop must wake active flows");
         assert!(control.flow_stop_is_requested());
         assert!(control.udp_stop_is_requested());
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    #[test]
+    fn close_and_force_stop_fence_new_work_but_reactivation_restores_admission() {
+        let control = ResidentGenerationDrainControl::new(
+            LogicalGenerationId::new(1),
+            ResidentStopSignal::shared(),
+        );
+        control.activate().unwrap();
+        assert_eq!(control.with_admission(|| 1), Some(1));
+        control.close_admission();
+        assert_eq!(
+            control.with_admission(|| panic!("closed admission")),
+            None::<()>
+        );
+        control.reopen_admission().unwrap();
+        assert_eq!(control.with_admission(|| 2), Some(2));
+        control.request_force_stop();
+        assert_eq!(
+            control.with_admission(|| panic!("stopped admission")),
+            None::<()>
+        );
     }
 }

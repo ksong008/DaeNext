@@ -217,7 +217,7 @@ pub(super) async fn run_resident_dns_bind_listener_async(
                         tcp_listener,
                         configured.clone(),
                         local_addr,
-                        active_generation,
+                        coordinator,
                         Arc::clone(&stop),
                         event_file.clone(),
                         Arc::clone(&event_lock),
@@ -598,7 +598,7 @@ async fn run_resident_dns_tcp_bind_listener_async(
     listener: TokioTcpListener,
     configured: String,
     local_addr: SocketAddr,
-    active_generation: ActiveGenerationSlot<ResidentDataplaneGeneration>,
+    coordinator: ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
@@ -678,30 +678,46 @@ async fn run_resident_dns_tcp_bind_listener_async(
         if !waited {
             admission_wait_active = false;
         }
-        let generation = active_generation.load();
+        let mut committed = None;
+        for _ in 0..2 {
+            let (publication, generation) = coordinator.load_versioned();
+            if let Some(result) = tcp::try_commit_tcp_flow(
+                &coordinator,
+                publication,
+                &generation,
+                "dns-tcp-bind",
+                &mut None,
+            ) {
+                committed = result.ok().map(|lease| (generation, lease));
+                break;
+            }
+        }
+        let Some((generation, lease)) = committed else {
+            continue;
+        };
+        let dns_resources = generation.dns_resources.clone();
         let dns = Arc::clone(&generation.dns);
         let metrics = Arc::clone(&generation.metrics);
-        let flow_stop = generation.drain_control.flow_stop_handle();
+        let flow_stop = lease.stop_handle();
         drop(generation);
         let task_event_file = event_file.clone();
         let task_event_lock = Arc::clone(&event_lock);
         let query_semaphore = Arc::clone(&query_semaphore);
         tasks.spawn(async move {
-            let _ = run_until_resident_stop(
-                &flow_stop,
-                handle_resident_dns_tcp_bind_connection_async(
-                    stream,
-                    peer,
-                    local_addr,
-                    dns,
-                    metrics,
-                    Arc::clone(&flow_stop),
-                    query_semaphore,
-                    task_event_file,
-                    task_event_lock,
-                    resources,
-                    permit,
-                ),
+            let _lease = lease;
+            let _dns_resources = dns_resources;
+            handle_resident_dns_tcp_bind_connection_async(
+                stream,
+                peer,
+                local_addr,
+                dns,
+                metrics,
+                flow_stop,
+                query_semaphore,
+                task_event_file,
+                task_event_lock,
+                resources,
+                permit,
             )
             .await;
         });
@@ -740,7 +756,7 @@ async fn handle_resident_dns_tcp_bind_connection_async(
     let (mut reader, writer) = stream.into_split();
     let (response_tx, response_rx) =
         tokio::sync::mpsc::channel(resources.bind_tcp_queries_per_connection());
-    let mut writer_task = tokio::spawn(run_resident_dns_tcp_bind_writer_async(
+    let writer_task = run_resident_dns_tcp_bind_writer_async(
         writer,
         response_rx,
         peer,
@@ -748,7 +764,8 @@ async fn handle_resident_dns_tcp_bind_connection_async(
         Arc::clone(&metrics),
         event_file.clone(),
         Arc::clone(&event_lock),
-    ));
+    );
+    tokio::pin!(writer_task);
     let mut tasks = tokio::task::JoinSet::new();
     let mut accepting = true;
     let mut abort_pending = false;
@@ -769,7 +786,7 @@ async fn handle_resident_dns_tcp_bind_connection_async(
             writer_result = &mut writer_task => {
                 writer_finished = true;
                 abort_pending = true;
-                if let Ok(Err(error)) = writer_result {
+                if let Err(error) = writer_result {
                     append_event(
                         &event_file,
                         &event_lock,
@@ -871,10 +888,6 @@ async fn handle_resident_dns_tcp_bind_connection_async(
     drop(response_tx);
     if !writer_finished {
         let _ = time::timeout(DNS_BIND_TCP_IO_TIMEOUT, &mut writer_task).await;
-        if !writer_task.is_finished() {
-            writer_task.abort();
-            let _ = writer_task.await;
-        }
     }
 }
 
@@ -1189,6 +1202,8 @@ fn parse_resident_dns_bind_endpoint(bind: &str) -> Result<Option<ResidentDnsBind
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "dns-runtime-tests")]
+    include!("dns_listener/flight_tests.rs");
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;

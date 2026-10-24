@@ -38,7 +38,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
             "flowStackBytes": initial_generation.tcp_runtime_config.worker_stack_bytes,
             "flowStackScope": "resident shared data-plane runtime OS threads; not Tokio task stacks",
             "runtime": initial_generation.tcp_runtime_config.json(),
-            "generationAdmission": "active-generation-read-once-at-accept",
+            "generationAdmission": "active-generation-at-admission-commit",
     });
     append_tcp_execution_fields(&mut event, "async-accept-direct");
     event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
@@ -127,88 +127,25 @@ pub(crate) async fn resident_tcp_accept_loop_async(
         };
         match accepted {
             Ok((stream, peer)) => {
-                let (accepted_publication, accepted_generation) =
-                    active_generation.load_versioned();
-                let (generation, permit) = if accepted_publication == reserved_publication
-                    && generation_gate.is_active(reserved_generation.token())
-                {
-                    (reserved_generation, permit)
-                } else {
-                    drop(permit);
-                    let mut accepted_publication = accepted_publication;
-                    let mut accepted_generation = accepted_generation;
-                    let (generation, permit) = loop {
-                        if !accepted_generation.admission_is_open() {
-                            tokio::select! {
-                                _ = stop_listener.cancelled() => break 'accept,
-                                _ = publication_listener.changed() => {
-                                    let (latest_publication, latest_generation) =
-                                        active_generation.load_versioned();
-                                    accepted_publication = latest_publication;
-                                    accepted_generation = latest_generation;
-                                    continue;
-                                }
-                                completed = flows.join_next(), if !flows.is_empty() => {
-                                    if let Some(completed) = completed {
-                                        record_resident_task_completion(&mut flow_shutdown, completed);
-                                    }
-                                    continue;
-                                }
-                            }
-                        }
-                        tokio::select! {
-                            _ = stop_listener.cancelled() => break 'accept,
-                            _ = publication_listener.changed() => {
-                                let (latest_publication, latest_generation) =
-                                    active_generation.load_versioned();
-                                if latest_publication != accepted_publication {
-                                    accepted_publication = latest_publication;
-                                    accepted_generation = latest_generation;
-                                }
-                            }
-                            completed = flows.join_next(), if !flows.is_empty() => {
-                                if let Some(completed) = completed {
-                                    record_resident_task_completion(&mut flow_shutdown, completed);
-                                }
-                            }
-                            permit = accepted_generation.tcp_admission.acquire() => match permit {
-                                Ok(permit) => {
-                                    let (latest_publication, latest_generation) =
-                                        active_generation.load_versioned();
-                                    if latest_publication != accepted_publication
-                                        || !accepted_generation.admission_is_open()
-                                        || !generation_gate.is_active(accepted_generation.token())
-                                    {
-                                        drop(permit);
-                                        accepted_publication = latest_publication;
-                                        accepted_generation = latest_generation;
-                                        continue;
-                                    }
-                                    break (accepted_generation, permit);
-                                }
-                                Err(err) => {
-                                    let (latest_publication, latest_generation) =
-                                        active_generation.load_versioned();
-                                    if latest_publication != accepted_publication {
-                                        accepted_publication = latest_publication;
-                                        accepted_generation = latest_generation;
-                                        continue;
-                                    }
-                                    append_event(
-                                        &event_file,
-                                        &event_lock,
-                                        json!({
-                                            "event": "tcp_admission_failed",
-                                            "generation": accepted_generation.reload_generation,
-                                            "error": err,
-                                        }),
-                                    );
-                                    break 'accept;
-                                }
-                            }
-                        }
-                    };
-                    (generation, permit)
+                let mut permit = Some(permit);
+                let mut committed = None;
+                for _ in 0..2 {
+                    let (publication, generation) = coordinator.load_versioned();
+                    if let Some(result) = try_commit_tcp_flow(
+                        &coordinator,
+                        publication,
+                        &generation,
+                        "tcp",
+                        &mut permit,
+                    ) {
+                        committed = result.ok().map(|lease| (generation, lease));
+                        break;
+                    }
+                }
+                let Some((generation, lease)) = committed else {
+                    // No flow was committed. Dropping this accepted socket and
+                    // reservation cannot affect any previously admitted flow.
+                    continue;
                 };
                 spawn_async_tcp_flow(
                     &mut flows,
@@ -217,7 +154,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
                     generation,
                     event_file.clone(),
                     Arc::clone(&event_lock),
-                    permit,
+                    lease,
                 );
             }
             Err(err) => {
@@ -280,16 +217,15 @@ fn spawn_async_tcp_flow(
     generation: Arc<ResidentDataplaneGeneration>,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
-    permit: tokio::sync::OwnedSemaphorePermit,
+    lease: super::flow_registry::ResidentTcpFlowLease,
 ) {
     let peer = resident_tcp_accepted_endpoint(peer);
-    let admission = generation.tcp_admission.clone();
     let router = Arc::clone(&generation.tcp_router);
     let metrics = Arc::clone(&generation.metrics);
-    let flow_stop = generation.drain_control.flow_stop_handle();
+    let flow_stop = lease.stop_handle();
     drop(generation);
     flows.spawn(async move {
-        let _admission = admission.admitted(permit);
+        let _lease = lease;
         let Some(outcome) = run_until_resident_stop(
             &flow_stop,
             handle_tcp_connection_async_or_handoff(
@@ -316,6 +252,27 @@ fn spawn_async_tcp_flow(
             ),
         }
     });
+}
+
+pub(crate) fn try_commit_tcp_flow(
+    coordinator: &ResidentRuntimeCoordinator<ResidentDataplaneGeneration>,
+    publication: PublicationEpoch,
+    generation: &Arc<ResidentDataplaneGeneration>,
+    kind: &'static str,
+    permit: &mut Option<super::admission::ResidentTcpPermit>,
+) -> Option<Result<super::flow_registry::ResidentTcpFlowLease, String>> {
+    coordinator
+        .with_current(publication, generation.token(), generation, |current| {
+            current.drain_control.with_admission(|| {
+                let admission = permit
+                    .take()
+                    .map(|permit| current.tcp_admission.admitted(permit));
+                current
+                    .tcp_flows
+                    .register(current.id.get(), kind, admission)
+            })
+        })
+        .flatten()
 }
 
 #[cfg(test)]

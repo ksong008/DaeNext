@@ -18,12 +18,8 @@ pub(super) fn udp_manager_cleanup_passed(
     active_sessions: usize,
     retired_generation_failures: u64,
     retired_component_failures: u64,
-    queued_payload_released: bool,
 ) -> bool {
-    active_sessions == 0
-        && retired_generation_failures == 0
-        && retired_component_failures == 0
-        && queued_payload_released
+    active_sessions == 0 && retired_generation_failures == 0 && retired_component_failures == 0
 }
 
 pub(super) fn udp_cleanup_completion<'a>(

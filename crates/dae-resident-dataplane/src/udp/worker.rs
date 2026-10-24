@@ -15,10 +15,9 @@ pub(crate) async fn resident_udp_loop_async(
     event_lock: Arc<Mutex<()>>,
     active_sessions: Arc<AtomicUsize>,
 ) -> Value {
-    let active_generation = coordinator.active_generation_slot();
     run_resident_udp_session_manager_async(
         socket,
-        active_generation,
+        coordinator,
         stop,
         event_file,
         event_lock,

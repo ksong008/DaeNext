@@ -205,11 +205,15 @@ pub(super) fn build_resident_dataplane_generation(
         }),
     };
     let dns_reload_handle = dns.reload_handle();
+    let (dns_resources, dns_resource_owner) = dns.resource_owner(owner.stop_handle())?;
     let tcp_router = Arc::new(ResidentTcpRouter::new(
         plan::ResidentTcpProxyGroupSelector::shared(Arc::clone(&proxy_groups)),
         routing_tuple_map_id,
         routing_matcher.clone(),
-        tcp::ResidentTcpDnsResolverPort::shared(dns::ResidentDnsResolver::new(Arc::clone(&dns))),
+        tcp::ResidentTcpDnsResolverPort::shared(
+            dns::ResidentDnsResolver::new(Arc::clone(&dns))
+                .with_resource_lease(dns_resources.clone()),
+        ),
         tcp_dial_mode,
         sniffing_timeout,
         so_mark_from_dae,
@@ -250,7 +254,8 @@ pub(super) fn build_resident_dataplane_generation(
         routing_matcher,
         tcp_dial_mode,
         so_mark_from_dae,
-        dns::ResidentDnsDispatcher::new(Arc::clone(&dns)),
+        dns::ResidentDnsDispatcher::new(Arc::clone(&dns))
+            .with_resource_lease(dns_resources.clone()),
         udp_runtime_config.clone(),
         health_resuscitation,
         owner.hysteria2_owner_registry(),
@@ -258,20 +263,31 @@ pub(super) fn build_resident_dataplane_generation(
         owner.juicity_owner_registry(),
         owner.anytls_owner_registry(),
     )?;
-    if let Some(task) = dns.take_target_refresh_owner_task(Arc::clone(&generation_stop))? {
-        owner.spawn_generation_async_task("dns-target-refresh-owner", "dns-target-refresh", task);
-    }
+    let dns_event_file = owner.event_file();
+    let dns_event_lock = owner.event_lock();
+    let dns_cleanup = owner.concurrent_cleanup_reporter("dns-resources");
+    owner.spawn_async_task("dns-resource-owner", "dns-resource-lifetime", async move {
+        let report = dns_resource_owner.await;
+        dns_cleanup.finish(&report);
+        append_event(
+            &dns_event_file,
+            &dns_event_lock,
+            json!({
+                "event": "dns_resources_stopped", "generation": generation_id,
+                "cleanup": report,
+            }),
+        );
+    });
     let generation = Arc::new(ResidentDataplaneGeneration {
         _lifetime: ResidentDataplaneGenerationLifetime::register(),
         id: generation_id,
         reload_generation: physical_runtime_id,
         tcp_router,
-        tcp_admission: tcp::ResidentTcpAdmission::new(
-            tcp_runtime_config.connection_limit(),
-            Arc::clone(&metrics),
-        ),
+        tcp_admission: owner.tcp_admission(),
+        tcp_flows: owner.tcp_flows(),
         tcp_runtime_config,
         dns: Arc::clone(&dns),
+        dns_resources,
         udp: udp_generation_plan,
         drain_control: generation_drain_control,
         metrics,

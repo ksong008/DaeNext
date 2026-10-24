@@ -85,6 +85,37 @@ fn resident_runtime_shutdown_reports_retained_queued_payload_bytes() {
 }
 
 #[test]
+fn resident_runtime_checks_shared_payload_after_all_consumer_owners_join() {
+    let mut owner = test_owner(3_001, "resident-runtime-shared-payload-test");
+    let retained = owner.udp_payload_admission.try_acquire(382).unwrap();
+    let admission = owner.udp_payload_admission.clone();
+    let reporter = owner.cleanup_reporter("udp-session-manager");
+    let stop = owner.stop_handle();
+    let (finished, consumer) = tokio::sync::oneshot::channel();
+    owner.spawn_async_task("udp-manager", "runtime-lifecycle-test", async move {
+        stop.listener().cancelled().await;
+        assert_eq!(admission.current(), 382);
+        reporter.finish(json!({
+            "status": "pass",
+            "queuedPayloadReleased": false,
+            "queuedPayloadReleaseCheck": "physical-runtime-after-consumer-joins",
+        }));
+        finished.send(()).unwrap();
+    });
+    owner.spawn_async_task("dns-consumer", "runtime-lifecycle-test", async move {
+        consumer.await.unwrap();
+        drop(retained);
+    });
+
+    let evidence = owner.shutdown_with_grace(Duration::from_secs(1));
+
+    assert_eq!(evidence["status"], "pass");
+    assert_eq!(evidence["udp_payload_admission"]["currentBytes"], 0);
+    assert_eq!(evidence["resource_release"]["udpPayload"], true);
+    assert_eq!(evidence["resource_release"]["ownedCleanup"], true);
+}
+
+#[test]
 fn resident_runtime_shutdown_joins_cooperative_shared_tasks() {
     let mut owner = test_owner(4, "resident-runtime-owner-async-join-test");
     let stop = owner.stop_handle();

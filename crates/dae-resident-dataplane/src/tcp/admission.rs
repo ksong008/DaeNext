@@ -1,45 +1,196 @@
 use super::*;
+use std::collections::VecDeque;
+use tokio::sync::oneshot;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentTcpAdmission {
-    permits: Arc<Semaphore>,
+    budget: Arc<Mutex<Budget>>,
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
+#[derive(Debug)]
+struct Budget {
+    used: usize,
+    limit: usize,
+    closed: bool,
+    next_waiter: u64,
+    waiters: VecDeque<(u64, oneshot::Sender<ResidentTcpPermit>)>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ResidentTcpPermit {
+    budget: Option<Arc<Mutex<Budget>>>,
+}
+
+type Grants = Vec<(oneshot::Sender<ResidentTcpPermit>, ResidentTcpPermit)>;
+
 pub(crate) struct ResidentTcpAdmissionGuard {
-    _permit: OwnedSemaphorePermit,
+    _permit: ResidentTcpPermit,
     metrics: Arc<ResidentDataplaneMetrics>,
+}
+
+struct Waiter {
+    id: u64,
+    budget: Arc<Mutex<Budget>>,
+}
+
+fn grant(budget: &Arc<Mutex<Budget>>, state: &mut Budget) -> Grants {
+    let mut grants = Vec::new();
+    while !state.closed && state.used < state.limit {
+        let Some((_, sender)) = state.waiters.pop_front() else {
+            break;
+        };
+        if sender.is_closed() {
+            continue;
+        }
+        state.used += 1;
+        grants.push((
+            sender,
+            ResidentTcpPermit {
+                budget: Some(Arc::clone(budget)),
+            },
+        ));
+    }
+    grants
+}
+
+fn notify_grants(budget: &Arc<Mutex<Budget>>, mut grants: Grants) {
+    // A receiver may disappear between grant and notification. Return all such
+    // reservations in batches, outside the lock and without recursive Drop.
+    loop {
+        let mut cancelled = 0;
+        for (sender, permit) in grants {
+            if let Err(mut permit) = sender.send(permit) {
+                permit.budget.take();
+                cancelled += 1;
+            }
+        }
+        if cancelled == 0 {
+            break;
+        }
+        let mut state = budget.lock().unwrap_or_else(|error| error.into_inner());
+        state.used -= cancelled;
+        grants = grant(budget, &mut state);
+    }
+}
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        let grants = {
+            let mut state = self
+                .budget
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.waiters.retain(|(id, _)| *id != self.id);
+            grant(&self.budget, &mut state)
+        };
+        notify_grants(&self.budget, grants);
+    }
+}
+
+impl Drop for ResidentTcpPermit {
+    fn drop(&mut self) {
+        let Some(budget) = self.budget.take() else {
+            return;
+        };
+        let grants = {
+            let mut state = budget.lock().unwrap_or_else(|error| error.into_inner());
+            state.used -= 1;
+            grant(&budget, &mut state)
+        };
+        notify_grants(&budget, grants);
+    }
 }
 
 impl ResidentTcpAdmission {
     pub(crate) fn new(limit: usize, metrics: Arc<ResidentDataplaneMetrics>) -> Self {
         Self {
-            permits: Arc::new(Semaphore::new(limit.max(1))),
+            budget: Arc::new(Mutex::new(Budget {
+                used: 0,
+                limit: limit.max(1),
+                closed: false,
+                next_waiter: 0,
+                waiters: VecDeque::new(),
+            })),
             metrics,
         }
     }
 
-    pub(crate) async fn acquire(&self) -> Result<OwnedSemaphorePermit, String> {
-        if self.permits.available_permits() == 0 {
+    pub(crate) async fn acquire(&self) -> Result<ResidentTcpPermit, String> {
+        let (receiver, waiter) = {
+            let mut state = self
+                .budget
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if state.closed {
+                return Err("resident TCP admission is closed".to_owned());
+            }
+            if state.used < state.limit && state.waiters.is_empty() {
+                state.used += 1;
+                return Ok(ResidentTcpPermit {
+                    budget: Some(Arc::clone(&self.budget)),
+                });
+            }
+            if state.waiters.len() >= state.limit {
+                return Err("resident TCP admission waiter limit reached".to_owned());
+            }
             self.metrics.tcp_admission_waited();
-        }
-        Arc::clone(&self.permits)
-            .acquire_owned()
+            let (sender, receiver) = oneshot::channel();
+            state.next_waiter = state.next_waiter.wrapping_add(1);
+            let id = state.next_waiter;
+            state.waiters.push_back((id, sender));
+            (
+                receiver,
+                Waiter {
+                    id,
+                    budget: Arc::clone(&self.budget),
+                },
+            )
+        };
+        let result = receiver
             .await
-            .map_err(|_| "resident TCP admission semaphore closed".to_owned())
+            .map_err(|_| "resident TCP admission is closed".to_owned());
+        drop(waiter);
+        result
     }
 
-    pub(crate) fn admitted(&self, permit: OwnedSemaphorePermit) -> ResidentTcpAdmissionGuard {
-        ResidentTcpAdmissionGuard::new(permit, Arc::clone(&self.metrics))
+    pub(crate) fn set_limit(&self, limit: usize) {
+        let grants = {
+            let mut state = self
+                .budget
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.limit = limit.max(1);
+            grant(&self.budget, &mut state)
+        };
+        notify_grants(&self.budget, grants);
     }
-}
 
-impl ResidentTcpAdmissionGuard {
-    fn new(permit: OwnedSemaphorePermit, metrics: Arc<ResidentDataplaneMetrics>) -> Self {
-        metrics.tcp_admitted();
-        Self {
+    pub(crate) fn close(&self) {
+        let waiters = {
+            let mut state = self
+                .budget
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.closed = true;
+            std::mem::take(&mut state.waiters)
+        };
+        drop(waiters);
+    }
+
+    pub(crate) fn snapshot(&self) -> serde_json::Value {
+        let state = self
+            .budget
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        json!({ "used": state.used, "limit": state.limit, "waiters": state.waiters.len(), "closed": state.closed, "scope": "physical-runtime-client-sockets" })
+    }
+
+    pub(crate) fn admitted(&self, permit: ResidentTcpPermit) -> ResidentTcpAdmissionGuard {
+        self.metrics.tcp_admitted();
+        ResidentTcpAdmissionGuard {
             _permit: permit,
-            metrics,
+            metrics: Arc::clone(&self.metrics),
         }
     }
 }
@@ -111,3 +262,7 @@ mod tests {
         assert_eq!(metrics.snapshot()["tcpAdmissionActive"], 0);
     }
 }
+
+#[cfg(test)]
+#[path = "admission_tests.rs"]
+mod dynamic_tests;

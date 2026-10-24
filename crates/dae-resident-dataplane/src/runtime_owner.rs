@@ -76,6 +76,8 @@ pub(crate) struct ResidentRuntimeOwner {
     metrics: Arc<ResidentDataplaneMetrics>,
     udp_sessions_active: Arc<AtomicUsize>,
     udp_payload_admission: ResidentUdpPayloadAdmission,
+    tcp_admission: tcp::ResidentTcpAdmission,
+    tcp_flows: tcp::ResidentTcpFlowRegistry,
     resource_config: ResidentRuntimeResourceConfig,
     event_writer: ResidentEventWriterRuntime,
     cleanup_inventory: ResidentRuntimeCleanupInventory,
@@ -153,6 +155,11 @@ impl ResidentRuntimeOwner {
             resource_config.event_queue_depth.value(),
         );
         Ok(Self {
+            tcp_flows: tcp::ResidentTcpFlowRegistry::default(),
+            tcp_admission: tcp::ResidentTcpAdmission::new(
+                resource_config.tcp_connection_limit.value(),
+                Arc::clone(&metrics),
+            ),
             workload_stop: ResidentStopSignal::shared(),
             transport_stop: ResidentStopSignal::shared(),
             tasks: Vec::new(),
@@ -380,6 +387,14 @@ impl ResidentRuntimeOwner {
         Arc::clone(&self.event_lock)
     }
 
+    pub(crate) fn tcp_flows(&self) -> tcp::ResidentTcpFlowRegistry {
+        self.tcp_flows.clone()
+    }
+
+    pub(crate) fn tcp_admission(&self) -> tcp::ResidentTcpAdmission {
+        self.tcp_admission.clone()
+    }
+
     pub(crate) fn metrics(&self) -> Arc<ResidentDataplaneMetrics> {
         Arc::clone(&self.metrics)
     }
@@ -395,6 +410,8 @@ impl ResidentRuntimeOwner {
                 self.resource_config.tcp_flow_stack_bytes.value(),
             ));
         ResidentRuntimeOwnerReadHandle {
+            tcp_admission: self.tcp_admission.clone(),
+            tcp_flows: self.tcp_flows.clone(),
             metrics: Arc::clone(&self.metrics),
             reload_generation: self.reload_generation,
             runtime_owner: Arc::new(self.runtime_owner_value()),
@@ -419,6 +436,13 @@ impl ResidentRuntimeOwner {
 
     pub(crate) fn cleanup_reporter(&self, owner: &'static str) -> ResidentRuntimeCleanupReporter {
         self.cleanup_inventory.reporter(owner)
+    }
+
+    pub(crate) fn concurrent_cleanup_reporter(
+        &self,
+        owner: &'static str,
+    ) -> dae_resident_runtime::ResidentConcurrentCleanupReporter {
+        self.cleanup_inventory.concurrent_reporter(owner)
     }
 
     pub(crate) fn udp_sessions_active(&self) -> Arc<AtomicUsize> {
@@ -535,9 +559,35 @@ impl ResidentRuntimeOwner {
             }
         }
         self.tasks = pending_threads;
-        self.async_tasks.retain(|task| {
-            task.role != ResidentRuntimeTaskRole::Generation || !task.handle.is_finished()
-        });
+        let mut finished = Vec::new();
+        let mut pending = Vec::new();
+        for task in std::mem::take(&mut self.async_tasks) {
+            if (task.role == ResidentRuntimeTaskRole::Generation
+                || task.name == "dns-resource-owner")
+                && task.handle.is_finished()
+            {
+                finished.push(task);
+            } else {
+                pending.push(task);
+            }
+        }
+        self.async_tasks = pending;
+        if !finished.is_empty() {
+            let joined = self.data_plane_executor.join_tasks(
+                finished,
+                Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+            );
+            append_event(
+                &self.event_file,
+                &self.event_lock,
+                json!({
+                    "event": "retired_resource_tasks_joined", "joined": joined.joined,
+                    "cancelled": joined.cancelled, "panicked": joined.panicked,
+                    "timedOut": joined.timed_out, "tasks": joined.results,
+                }),
+            );
+            self.async_tasks.extend(joined.pending);
+        }
     }
 
     #[cfg(test)]

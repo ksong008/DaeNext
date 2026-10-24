@@ -58,9 +58,42 @@ impl<T> GenerationCoordinator<T> {
         self.generation_gate.is_active(token)
     }
 
+    /// Revalidate a versioned snapshot under the publication gate. Callbacks
+    /// reserve work only; do not await or access external resources here.
+    pub fn with_current<R>(
+        &self,
+        publication: PublicationEpoch,
+        token: GenerationToken,
+        expected: &Arc<T>,
+        reserve: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        let _gate = self.generation_gate.acquire_write(token)?;
+        let (current_publication, current) = self.active_generation.load_versioned();
+        if current_publication != publication || !Arc::ptr_eq(expected, &current) {
+            return None;
+        }
+        Some(reserve(&current))
+    }
+
     pub fn publish(&self, token: GenerationToken, generation: Arc<T>) -> Arc<T> {
         self.generation_gate
             .publish(token, &self.active_generation, generation)
+    }
+
+    pub fn publish_with(
+        &self,
+        token: GenerationToken,
+        generation: Arc<T>,
+        commit: impl FnOnce(),
+    ) -> Arc<T> {
+        self.generation_gate
+            .switch(token, || {
+                commit();
+                Ok::<_, std::convert::Infallible>(
+                    self.active_generation.publish_unchecked(generation),
+                )
+            })
+            .unwrap_or_else(|error| match error {})
     }
 
     pub fn clear(&self) -> Option<Arc<T>> {
@@ -120,5 +153,42 @@ mod tests {
 
         assert!(coordinator.load_versioned().0 > initial);
         assert!(publication.has_changed().unwrap_or(false));
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use crate::{LogicalGenerationId, PhysicalRuntimeId};
+
+    #[test]
+    fn a_batch_snapshot_cannot_admit_after_publication_or_aba() {
+        let token =
+            |id| GenerationToken::new(PhysicalRuntimeId::new(1), LogicalGenerationId::new(id));
+        let first = Arc::new(1_u64);
+        let coordinator = GenerationCoordinator::with_gate(
+            ActiveGenerationSlot::new(Arc::clone(&first)),
+            Arc::new(GenerationGate::new(Some(token(1)))),
+        );
+        let (epoch, active) = coordinator.load_versioned();
+        assert_eq!(
+            coordinator.with_current(epoch, token(1), &active, |id| *id),
+            Some(1)
+        );
+        coordinator.publish(token(2), Arc::new(2));
+        assert_eq!(
+            coordinator.with_current(epoch, token(1), &active, |id| *id),
+            None
+        );
+        let (new_epoch, current) = coordinator.load_versioned();
+        assert_eq!(
+            coordinator.with_current(new_epoch, token(2), &current, |id| *id),
+            Some(2)
+        );
+        coordinator.publish(token(1), first);
+        assert_eq!(
+            coordinator.with_current(epoch, token(1), &active, |id| *id),
+            None
+        );
     }
 }

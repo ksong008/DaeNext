@@ -117,6 +117,9 @@ use self::generation::{
 #[path = "runtime/generation_builder.rs"]
 mod generation_builder;
 use self::generation_builder::*;
+#[cfg(test)]
+#[path = "runtime/generation_tests.rs"]
+pub(crate) mod generation_tests;
 pub(crate) use dae_resident_runtime::{
     ResidentDrainControl, ResidentDrainableGeneration, ResidentGenerationDrain,
     ResidentGenerationDrainHooks, ResidentGenerationDrainPolicy, ResidentRuntimeCleanupInventory,

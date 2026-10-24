@@ -5,6 +5,20 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Debug, Default)]
 pub struct ResidentRuntimeCleanupInventory {
     reports: Arc<Mutex<BTreeMap<&'static str, Value>>>,
+    concurrent: Arc<Mutex<BTreeMap<&'static str, ConcurrentCleanup>>>,
+}
+
+#[derive(Debug, Default)]
+struct ConcurrentCleanup {
+    active: usize,
+    completed: u64,
+    failed: u64,
+}
+
+pub struct ResidentConcurrentCleanupReporter {
+    owner: &'static str,
+    groups: Arc<Mutex<BTreeMap<&'static str, ConcurrentCleanup>>>,
+    finished: bool,
 }
 
 pub struct ResidentRuntimeCleanupReporter {
@@ -14,6 +28,20 @@ pub struct ResidentRuntimeCleanupReporter {
 }
 
 impl ResidentRuntimeCleanupInventory {
+    /// Aggregate concurrent resource owners without storing one entry per reload.
+    pub fn concurrent_reporter(&self, owner: &'static str) -> ResidentConcurrentCleanupReporter {
+        self.concurrent
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(owner)
+            .or_default()
+            .active += 1;
+        ResidentConcurrentCleanupReporter {
+            owner,
+            groups: Arc::clone(&self.concurrent),
+            finished: false,
+        }
+    }
     pub fn reporter(&self, owner: &'static str) -> ResidentRuntimeCleanupReporter {
         if let Ok(mut reports) = self.reports.lock() {
             reports.insert(owner, json!({"status": "pending"}));
@@ -26,7 +54,7 @@ impl ResidentRuntimeCleanupInventory {
     }
 
     pub fn snapshot(&self) -> Value {
-        let reports = self
+        let mut reports = self
             .reports
             .lock()
             .map(|reports| reports.clone())
@@ -36,6 +64,17 @@ impl ResidentRuntimeCleanupInventory {
                     json!({"status": "fail", "error": "cleanup inventory lock poisoned"}),
                 )])
             });
+        for (owner, group) in self
+            .concurrent
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+        {
+            reports.insert(owner, json!({
+                "status": if group.active == 0 && group.failed == 0 { "pass" } else { "fail" },
+                "active": group.active, "completedTotal": group.completed, "failedTotal": group.failed,
+            }));
+        }
         let passed = reports
             .values()
             .all(|report| report["status"].as_str() == Some("pass"));
@@ -62,6 +101,29 @@ impl ResidentRuntimeCleanupInventory {
             "completionMode": completion_mode,
             "owners": reports,
         })
+    }
+}
+
+impl ResidentConcurrentCleanupReporter {
+    pub fn finish(mut self, report: &Value) {
+        self.complete(report["status"].as_str() == Some("pass"));
+    }
+
+    fn complete(&mut self, passed: bool) {
+        let mut groups = self.groups.lock().unwrap_or_else(|p| p.into_inner());
+        let group = groups.entry(self.owner).or_default();
+        group.active -= 1;
+        group.completed += 1;
+        group.failed += u64::from(!passed);
+        self.finished = true;
+    }
+}
+
+impl Drop for ResidentConcurrentCleanupReporter {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.complete(false);
+        }
     }
 }
 
@@ -94,6 +156,28 @@ impl Drop for ResidentRuntimeCleanupReporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_cleanup_preserves_pending_and_failure_evidence_without_per_generation_keys() {
+        let inventory = ResidentRuntimeCleanupInventory::default();
+        let first = inventory.concurrent_reporter("dns");
+        let second = inventory.concurrent_reporter("dns");
+        first.finish(&json!({"status":"pass"}));
+        assert_eq!(inventory.snapshot()["owners"]["dns"]["active"], 1);
+        assert_eq!(inventory.snapshot()["status"], "fail");
+        drop(second);
+        for _ in 0..32 {
+            inventory
+                .concurrent_reporter("dns")
+                .finish(&json!({"status":"pass"}));
+        }
+        let report = inventory.snapshot();
+        assert_eq!(report["owners"].as_object().unwrap().len(), 1);
+        assert_eq!(report["owners"]["dns"]["active"], 0);
+        assert_eq!(report["owners"]["dns"]["completedTotal"], 34);
+        assert_eq!(report["owners"]["dns"]["failedTotal"], 1);
+        assert_eq!(report["status"], "fail");
+    }
 
     #[test]
     fn pending_and_dropped_reporters_fail_the_inventory() {

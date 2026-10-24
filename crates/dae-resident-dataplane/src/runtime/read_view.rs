@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct ResidentRuntimeOwnerReadHandle {
+    pub(super) tcp_admission: tcp::ResidentTcpAdmission,
+    pub(super) tcp_flows: tcp::ResidentTcpFlowRegistry,
     pub(super) metrics: Arc<ResidentDataplaneMetrics>,
     pub(super) reload_generation: u64,
     pub(super) runtime_owner: Arc<Value>,
@@ -22,6 +24,8 @@ pub(super) struct ResidentRuntimeOwnerReadHandle {
 impl ResidentRuntimeOwnerReadHandle {
     pub(super) fn metrics_snapshot(&self) -> Value {
         let mut snapshot = self.metrics.snapshot();
+        snapshot["tcpFlowRegistry"] = self.tcp_flows.snapshot();
+        snapshot["tcpSocketBudget"] = self.tcp_admission.snapshot();
         snapshot["reloadGeneration"] = json!(self.reload_generation);
         snapshot["runtimeOwner"] = self.runtime_owner.as_ref().clone();
         snapshot["packetSessionManager"] = self.packet_session_manager.as_ref().clone();

@@ -45,7 +45,6 @@ use tokio::io::AsyncWriteExt;
 #[cfg(test)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time;
 
 use super::ResidentDnsResolver;
@@ -150,3 +149,6 @@ pub(crate) use self::admission::ResidentTcpAdmission;
 
 #[cfg(test)]
 mod tests;
+
+mod flow_registry;
+pub(crate) use flow_registry::ResidentTcpFlowRegistry;

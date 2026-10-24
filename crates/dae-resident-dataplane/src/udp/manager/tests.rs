@@ -8,6 +8,72 @@ use crate::plan::{RESIDENT_CONTROL_PLANE_SO_MARK, ResidentXhttpSettingsPlan};
 
 use super::*;
 
+impl ResidentUdpGenerationPlan {
+    pub(crate) fn for_generation_test(
+        plan: &crate::plan::ResidentDataplanePlan,
+        groups: SharedResidentProxyGroupMap,
+        matcher: RoutingMatcher,
+        dns: ResidentDnsDispatcher,
+        runtime_config: ResidentUdpRuntimeConfig,
+    ) -> Self {
+        Self {
+            router: Arc::new(
+                ResidentUdpRouter::from_parts(
+                    groups,
+                    plan.default_outbound.unwrap(),
+                    1,
+                    None,
+                    matcher,
+                    plan.tcp_dial_mode,
+                    0,
+                )
+                .unwrap(),
+            ),
+            dns,
+            runtime_config,
+            hysteria2_owner_registry: None,
+            tuic_owner_registry: None,
+            juicity_owner_registry: None,
+            anytls_owner_registry: None,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn udp_new_work_reselects_between_batch_packets_and_rejects_stopped_active() {
+    let mut fixture = crate::generation_tests::Fixture::new();
+    let first = admit_new_udp_generation(&fixture.coordinator).unwrap();
+    let (published, ready) = tokio::sync::oneshot::channel();
+    let second = fixture.next();
+    let expected = second.id;
+    let coordinator = fixture.coordinator.clone();
+    let publisher = tokio::spawn(async move {
+        coordinator.publish(second.token(), second);
+        published.send(()).unwrap();
+    });
+    ready.await.unwrap();
+    // This is the same per-packet reservation used by the manager; retaining
+    // the first packet's Arc does not grant subsequent keys its generation.
+    let next = admit_new_udp_generation(&fixture.coordinator).unwrap();
+    assert_ne!(first.id, expected);
+    assert_eq!(next.id, expected);
+    first.drain_control.close_admission();
+    assert_eq!(
+        admit_new_udp_generation(&fixture.coordinator).unwrap().id,
+        expected
+    );
+    next.request_stop();
+    assert!(admit_new_udp_generation(&fixture.coordinator).is_none());
+    assert!(
+        next.metrics.snapshot()["udpGenerationSnapshotReselected"]
+            .as_u64()
+            .unwrap()
+            >= 2
+    );
+    publisher.await.unwrap();
+    assert_eq!(fixture.owner.shutdown()["status"], "pass");
+}
+
 #[test]
 fn pinned_udp_route_stays_within_its_inline_storage_budget() {
     // The existing 64-bit layout is 248 bytes. Keep the deliberate inline
@@ -41,19 +107,18 @@ fn per_generation_cleanup_does_not_fail_on_shared_payload_owned_elsewhere() {
 
     assert_eq!(payload_admission.current(), 262);
     assert!(udp_generation_cleanup_passed(&passed, &passed, &passed));
-    assert!(!udp_manager_cleanup_passed(0, 0, 0, false));
+    assert!(udp_manager_cleanup_passed(0, 0, 0));
 
     drop(retained_by_another_generation);
     assert_eq!(payload_admission.current(), 0);
-    assert!(udp_manager_cleanup_passed(0, 0, 0, true));
+    assert!(udp_manager_cleanup_passed(0, 0, 0));
 }
 
 #[test]
 fn final_udp_manager_cleanup_rejects_real_owner_failures() {
-    assert!(!udp_manager_cleanup_passed(1, 0, 0, true));
-    assert!(!udp_manager_cleanup_passed(0, 1, 0, true));
-    assert!(!udp_manager_cleanup_passed(0, 0, 1, true));
-    assert!(!udp_manager_cleanup_passed(0, 0, 0, false));
+    assert!(!udp_manager_cleanup_passed(1, 0, 0));
+    assert!(!udp_manager_cleanup_passed(0, 1, 0));
+    assert!(!udp_manager_cleanup_passed(0, 0, 1));
 }
 
 #[test]
