@@ -277,7 +277,9 @@ async fn dispatch_proxy_packet(
             }
             UdpSessionSend::Closed(returned) => {
                 managed = returned;
-                retire_proxy_session(&key, sessions, retired_sessions);
+                if !retire_proxy_session(&key, sessions, retired_sessions) {
+                    break;
+                }
                 if attempt == 0 {
                     context.metrics.udp_session_stale_recreated();
                 }
@@ -395,7 +397,9 @@ async fn dispatch_direct_packet(
             }
             UdpSessionSend::Closed(returned) => {
                 managed = returned;
-                retire_direct_session(&key, sessions, retired_sessions);
+                if !retire_direct_session(&key, sessions, retired_sessions) {
+                    break;
+                }
                 if attempt == 0 {
                     context.metrics.udp_session_stale_recreated();
                 }
@@ -606,24 +610,36 @@ fn retire_proxy_session(
     key: &UdpSessionKey,
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
     retired_sessions: &mut UdpSessionReaper,
-) {
-    if let Some(entry) = sessions.remove(key) {
-        retired_sessions
-            .retire(entry.session.handle)
-            .expect("UDP session reaper capacity is reserved before packet dispatch");
+) -> bool {
+    if !retired_sessions.has_capacity() {
+        return false;
     }
+    if let Some(mut entry) = sessions.remove(key)
+        && let Err(handle) = retired_sessions.retire(entry.session.handle)
+    {
+        entry.session.handle = handle;
+        sessions.insert(key.clone(), entry);
+        return false;
+    }
+    true
 }
 
 fn retire_direct_session(
     key: &UdpDirectSessionKey,
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
     retired_sessions: &mut UdpSessionReaper,
-) {
-    if let Some(entry) = sessions.remove(key) {
-        retired_sessions
-            .retire(entry.session.handle)
-            .expect("UDP session reaper capacity is reserved before packet dispatch");
+) -> bool {
+    if !retired_sessions.has_capacity() {
+        return false;
     }
+    if let Some(mut entry) = sessions.remove(key)
+        && let Err(handle) = retired_sessions.retire(entry.session.handle)
+    {
+        entry.session.handle = handle;
+        sessions.insert(key.clone(), entry);
+        return false;
+    }
+    true
 }
 
 fn reconcile_finished_proxy_sessions(
@@ -636,10 +652,8 @@ fn reconcile_finished_proxy_sessions(
         .map(|(key, _)| key.clone())
         .collect();
     for key in finished {
-        if let Some(entry) = sessions.remove(&key)
-            && let Err(handle) = retired_sessions.retire(entry.session.handle)
-        {
-            drop(handle);
+        if !retire_proxy_session(&key, sessions, retired_sessions) {
+            break;
         }
     }
 }
@@ -654,10 +668,8 @@ fn reconcile_finished_direct_sessions(
         .map(|(key, _)| key.clone())
         .collect();
     for key in finished {
-        if let Some(entry) = sessions.remove(&key)
-            && let Err(handle) = retired_sessions.retire(entry.session.handle)
-        {
-            drop(handle);
+        if !retire_direct_session(&key, sessions, retired_sessions) {
+            break;
         }
     }
 }
@@ -716,3 +728,7 @@ mod tests {
         drop(second);
     }
 }
+
+#[cfg(test)]
+#[path = "retirement_tests.rs"]
+mod retirement_tests;

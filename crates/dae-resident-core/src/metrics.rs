@@ -112,6 +112,10 @@ pub struct ResidentDataplaneMetrics {
     udp_response_validated: AtomicU64,
     udp_response_compatibility_unverified: AtomicU64,
     udp_response_dropped: AtomicU64,
+    udp_session_queued_dropped: AtomicU64,
+    udp_generation_snapshot_reselected: AtomicU64,
+    udp_generation_admission_rejected: AtomicU64,
+    udp_session_queued_dropped_bytes: AtomicU64,
     udp_response_dropped_bytes: AtomicU64,
     ss2022_replay_active_windows_current: AtomicU64,
     ss2022_replay_quarantined_sessions_current: AtomicU64,
@@ -633,6 +637,23 @@ impl ResidentDataplaneMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn udp_generation_snapshot_reselected(&self) {
+        self.udp_generation_snapshot_reselected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn udp_generation_admission_rejected(&self) {
+        self.udp_generation_admission_rejected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn udp_session_queued_dropped(&self, bytes: usize) {
+        self.udp_session_queued_dropped
+            .fetch_add(1, Ordering::Relaxed);
+        self.udp_session_queued_dropped_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
     pub fn udp_response_dropped(&self, bytes: usize) {
         self.udp_response_dropped.fetch_add(1, Ordering::Relaxed);
         self.udp_response_dropped_bytes
@@ -827,6 +848,20 @@ impl ResidentDataplaneMetrics {
             "udpReplySocketIdleEvicted": self.udp_reply_socket_idle_evicted.load(Ordering::Relaxed),
             "udpReplyFailed": self.udp_reply_failed.load(Ordering::Relaxed),
         });
+        snapshot["udpGenerationSnapshotReselected"] = json!(
+            self.udp_generation_snapshot_reselected
+                .load(Ordering::Relaxed)
+        );
+        snapshot["udpGenerationAdmissionRejected"] = json!(
+            self.udp_generation_admission_rejected
+                .load(Ordering::Relaxed)
+        );
+        snapshot["udpSessionQueuedDropped"] =
+            json!(self.udp_session_queued_dropped.load(Ordering::Relaxed));
+        snapshot["udpSessionQueuedDroppedBytes"] = json!(
+            self.udp_session_queued_dropped_bytes
+                .load(Ordering::Relaxed)
+        );
         snapshot["udpResponsePackets"] = json!(self.udp_response_packets.load(Ordering::Relaxed));
         snapshot["udpDispatchQueuedCurrent"] =
             json!(self.udp_work_count(ResidentUdpWorkStage::Dispatch));

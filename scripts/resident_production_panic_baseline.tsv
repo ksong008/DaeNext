@@ -9,7 +9,6 @@ crates/dae-resident-dataplane/src/runtime_owner/manual_probe_execution.rs	1	Inte
 crates/dae-resident-dataplane/src/transport/mod.rs	2	InternalInvariant	Validated resource profiles use nonzero QUIC limits.
 crates/dae-resident-dataplane/src/udp/manager.rs	3	InternalInvariant	Selected generation and pin entries remain installed during one actor turn.
 crates/dae-resident-dataplane/src/udp/manager/router.rs	1	InternalInvariant	Plan validation installs the default outbound group.
-crates/dae-resident-dataplane/src/udp/manager/session_shards/worker.rs	4	InternalInvariant	Session insertion and reserved reaper capacity are actor-local invariants.
 crates/dae-resident-dataplane/src/udp/manager/sniff.rs	2	InternalInvariant	Sniffer removal follows a successful same-turn lookup.
 crates/dae-resident-model/src/executable_graph.rs	4	InternalInvariant	Static identity namespaces and digest widths are fixed.
 crates/dae-resident-model/src/model.rs	1	InternalInvariant	Validated proxy plans contain their selected binding.

@@ -19,6 +19,34 @@ pub struct ManagedUdpPacket {
     pub dscp: u8,
 }
 
+pub(super) struct UdpQueuedPacketGuard<'a> {
+    metrics: &'a ResidentDataplaneMetrics,
+    bytes: usize,
+    completed: bool,
+}
+
+impl<'a> UdpQueuedPacketGuard<'a> {
+    pub(super) fn new(metrics: &'a ResidentDataplaneMetrics, bytes: usize) -> Self {
+        Self {
+            metrics,
+            bytes,
+            completed: false,
+        }
+    }
+
+    pub(super) fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for UdpQueuedPacketGuard<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.metrics.udp_session_queued_dropped(self.bytes);
+        }
+    }
+}
+
 pub struct UdpSessionEntry {
     pub sender: mpsc::Sender<ManagedUdpPacket>,
     pub handle: JoinHandle<()>,
@@ -125,9 +153,14 @@ async fn run_udp_session_actor(
     'session: loop {
         // Invalid/partial responses must not starve the deadline through the
         // biased receive branch when the upstream stays continuously readable.
-        if time::Instant::now() >= last_activity + idle_timeout {
-            stop_reason = "idle-timeout".to_owned();
-            break;
+        if time::Instant::now() >= last_activity + idle_timeout && receiver.is_empty() {
+            receiver.close();
+            if receiver.is_empty() {
+                stop_reason = "idle-timeout".to_owned();
+                break;
+            }
+            // An enqueue won the idle/close race. Drain that accepted work;
+            // the sealed channel prevents any later packet joining this actor.
         }
         let response_buffer_deadline = executor.as_ref().and_then(|executor| {
             executor.response_buffer_reclaim_deadline(context.response_buffer_idle_timeout)
@@ -175,8 +208,15 @@ async fn run_udp_session_actor(
                 let batch_limit = context.outbound_batch_limit();
                 let can_batch = executor.as_mut().is_some_and(|executor| executor.begin_datagram_batch(batch_limit));
                 let batch = if can_batch { context.collect_outbound_batch(managed, &mut receiver) } else { vec![managed] };
+                // Dequeued batch members remain accepted queued work until
+                // their exchange result is recorded. Cancellation must also
+                // account for members no longer present in the receiver.
+                let batch = batch.into_iter().map(|managed| {
+                    let guard = UdpQueuedPacketGuard::new(&context.metrics, managed.packet.payload.len());
+                    (managed, guard)
+                }).collect::<Vec<_>>();
                 let mut completed = Vec::with_capacity(batch.len());
-                for mut managed in batch {
+                for (mut managed, queued) in batch {
                     let mut work = managed.work.take();
                     if let Some(work) = work.as_mut() { work.transition(ResidentUdpWorkStage::Processing); }
                     last_activity = time::Instant::now();
@@ -212,7 +252,7 @@ async fn run_udp_session_actor(
                         false,
                     ),
                 };
-                    completed.push((managed, work, exchange, execute_timed_out));
+                    completed.push((managed, work, exchange, execute_timed_out, queued));
                     if execute_timed_out { break; }
                 }
                 let sent = if can_batch {
@@ -227,14 +267,14 @@ async fn run_udp_session_actor(
                 let mut sent = match sent {
                     Ok(sent) => sent.into_iter(),
                     Err(_) => {
-                        for (_, _, exchange, timed_out) in &mut completed {
+                        for (_, _, exchange, timed_out, _) in &mut completed {
                             if exchange.is_ok() { *exchange = Err("UDP outbound batch send timed out".to_owned()); }
                             *timed_out = true;
                         }
                         Vec::new().into_iter()
                     }
                 };
-                for (managed, _work, mut exchange, execute_timed_out) in completed {
+                for (managed, _work, mut exchange, execute_timed_out, mut queued) in completed {
                     if can_batch && exchange.is_ok() && let Some(Err(error)) = sent.next() {
                         exchange = Err(error);
                     }
@@ -265,6 +305,7 @@ async fn run_udp_session_actor(
                         &mut last_activity,
                     ) => {}
                 }
+                queued.complete();
                 if execute_timed_out {
                     stop_reason = "execute-timeout".to_owned();
                     break 'session;
@@ -314,19 +355,29 @@ async fn run_udp_session_actor(
                 }
             }
             _ = &mut idle_timer => {
-                if time::Instant::now() < last_activity + idle_timeout {
+                if time::Instant::now() < last_activity + idle_timeout || !receiver.is_empty() {
                     idle_timer.as_mut().reset(last_activity + idle_timeout);
                     continue;
                 }
+                receiver.close();
+                if !receiver.is_empty() { continue; }
                 stop_reason = "idle-timeout".to_owned();
                 break;
             }
         }
     }
 
-    if let Some(mut executor) = executor {
-        let _ = time::timeout(RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE, executor.shutdown()).await;
-    }
+    let queued_dropped = finish_udp_actor_queue(
+        &mut receiver,
+        &context.metrics,
+        |packet| packet.packet.payload.len(),
+        async {
+            if let Some(mut executor) = executor {
+                executor.shutdown().await;
+            }
+        },
+    )
+    .await;
     append_event_with_metadata(
         &context.event_file,
         &context.event_lock,
@@ -336,10 +387,38 @@ async fn run_udp_session_actor(
                 "event": ResidentEventKind::UdpSessionStopped.name(),
                 "reason": stop_reason,
                 "packet_count": packets,
+                "queued_dropped": queued_dropped,
                 "packetSession": packet_session,
             })
         },
     );
+}
+
+pub(super) async fn finish_udp_actor_queue<T>(
+    receiver: &mut mpsc::Receiver<T>,
+    metrics: &ResidentDataplaneMetrics,
+    payload_len: impl Fn(&T) -> usize,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> usize {
+    let dropped = close_udp_actor_queue(receiver, metrics, payload_len);
+    let _ = time::timeout(RESIDENT_RUNTIME_FORCED_TASK_JOIN_GRACE, shutdown).await;
+    dropped
+}
+
+pub(super) fn close_udp_actor_queue<T>(
+    receiver: &mut mpsc::Receiver<T>,
+    metrics: &ResidentDataplaneMetrics,
+    payload_len: impl Fn(&T) -> usize,
+) -> usize {
+    // Seal before any awaited shutdown; successful earlier enqueue is not a
+    // claim of delivery. Release all queued payload/work leases explicitly.
+    receiver.close();
+    let mut dropped = 0;
+    while let Ok(packet) = receiver.try_recv() {
+        metrics.udp_session_queued_dropped(payload_len(&packet));
+        dropped += 1;
+    }
+    dropped
 }
 
 pub(super) struct UdpManagedSessionGuard {
@@ -384,3 +463,7 @@ mod layout_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "session_actor/close_tests.rs"]
+mod close_tests;

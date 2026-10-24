@@ -55,7 +55,7 @@
     },
     "dae-resident-dataplane": {
       "production": 33363,
-      "tests": 35681
+      "tests": 35769
     },
     "dae-resident-transport": {
       "production": 35888,
@@ -66,8 +66,8 @@
       "tests": 850
     },
     "dae-resident-udp": {
-      "production": 13815,
-      "tests": 2404
+      "production": 13912,
+      "tests": 2465
     },
     "dae-resident-dns": {
       "production": 20904,

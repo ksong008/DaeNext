@@ -165,9 +165,14 @@ async fn run_udp_direct_session_actor(
     tokio::pin!(idle_timer);
     let mut stop_listener = context.actor_stop.listener();
     'session: loop {
-        if time::Instant::now() >= last_activity + idle_timeout {
-            stop_reason = "idle-timeout".to_owned();
-            break;
+        if time::Instant::now() >= last_activity + idle_timeout && receiver.is_empty() {
+            receiver.close();
+            if receiver.is_empty() {
+                stop_reason = "idle-timeout".to_owned();
+                break;
+            }
+            // An enqueue won the idle/close race. Drain that accepted work;
+            // the sealed channel prevents any later packet joining this actor.
         }
         idle_timer.as_mut().reset(last_activity + idle_timeout);
         tokio::select! {
@@ -215,9 +220,10 @@ async fn run_udp_direct_session_actor(
                 let batch: Vec<_> = batch.into_iter().map(|mut packet| {
                     let mut work = packet.work.take();
                     if let Some(work) = work.as_mut() { work.transition(ResidentUdpWorkStage::Processing); }
-                    (packet, work)
+                    let queued = super::session_actor::UdpQueuedPacketGuard::new(&context.metrics, packet.packet.payload.len());
+                    (packet, work, queued)
                 }).collect();
-                let datagrams: Vec<_> = batch.iter().map(|(managed, _)| UdpSendMessage {
+                let datagrams: Vec<_> = batch.iter().map(|(managed, _, _)| UdpSendMessage {
                     payload: &managed.packet.payload, peer: Some(managed.original_dst),
                 }).collect();
                 let Some(session_ref) = session.as_ref() else { stop_reason = "direct-session-missing".to_owned(); break 'session; };
@@ -228,12 +234,13 @@ async fn run_udp_direct_session_actor(
                 };
                 let timed_out = send_results.is_err();
                 let send_results = send_results.unwrap_or_else(|_| (0..batch.len()).map(|_| Err("direct UDP batch send timed out".to_owned())).collect());
-                for ((managed, _work), result) in batch.into_iter().zip(send_results) {
+                for ((managed, _work, mut queued), result) in batch.into_iter().zip(send_results) {
                     match result {
                         Ok(()) => context.metrics.add_upload(managed.packet.payload.len()),
                         Err(error) => append_udp_direct_exchange_failed(&context, &key, managed.original_dst,
                             managed.packet.payload.len(), Some(managed.dscp), error),
                     }
+                    queued.complete();
                 }
                 if timed_out { stop_reason = "execute-timeout".to_owned(); break 'session; }
                 if let Some(session) = session.as_mut() {
@@ -272,9 +279,11 @@ async fn run_udp_direct_session_actor(
                 }
             }
             _ = &mut idle_timer => {
-                if time::Instant::now() < last_activity + idle_timeout {
+                if time::Instant::now() < last_activity + idle_timeout || !receiver.is_empty() {
                     continue;
                 }
+                receiver.close();
+                if !receiver.is_empty() { continue; }
                 stop_reason = "idle-timeout".to_owned();
                 break;
             }
@@ -292,6 +301,10 @@ async fn run_udp_direct_session_actor(
         }
     }
 
+    let queued_dropped =
+        super::session_actor::close_udp_actor_queue(&mut receiver, &context.metrics, |packet| {
+            packet.packet.payload.len()
+        });
     append_event_with_metadata(
         &context.event_file,
         &context.event_lock,
@@ -301,6 +314,7 @@ async fn run_udp_direct_session_actor(
                 "event": ResidentEventKind::UdpSessionStopped.name(),
                 "reason": stop_reason,
                 "packet_count": packets,
+                "queued_dropped": queued_dropped,
                 "packetSession": key.to_value(),
             })
         },
