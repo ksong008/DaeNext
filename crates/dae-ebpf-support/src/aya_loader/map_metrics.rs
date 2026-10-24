@@ -114,6 +114,56 @@ fn sum_tproxy_metrics<'a>(
             total.redirect_restore_store_failure_total = total
                 .redirect_restore_store_failure_total
                 .saturating_add(value.redirect_restore_store_failure_total);
+            total.redirect_track_update_failure_total = total
+                .redirect_track_update_failure_total
+                .saturating_add(value.redirect_track_update_failure_total);
+            total.redirect_peer_lookup_miss_total = total
+                .redirect_peer_lookup_miss_total
+                .saturating_add(value.redirect_peer_lookup_miss_total);
+            total.redirect_peer_abi_mismatch_total = total
+                .redirect_peer_abi_mismatch_total
+                .saturating_add(value.redirect_peer_abi_mismatch_total);
+            total.redirect_return_lookup_miss_total = total
+                .redirect_return_lookup_miss_total
+                .saturating_add(value.redirect_return_lookup_miss_total);
+            total.redirect_return_abi_mismatch_total = total
+                .redirect_return_abi_mismatch_total
+                .saturating_add(value.redirect_return_abi_mismatch_total);
             total
         })
+}
+
+#[cfg(test)]
+mod tproxy_tests {
+    use super::*;
+    #[test]
+    fn all_redirect_counters_are_summed_per_cpu_with_saturation() {
+        let value = BpfTproxyMetrics {
+            sk_assign_failure_total: 1,
+            redirect_prep_store_failure_total: 2,
+            redirect_restore_store_failure_total: 3,
+            redirect_track_update_failure_total: 4,
+            redirect_peer_lookup_miss_total: 5,
+            redirect_peer_abi_mismatch_total: 6,
+            redirect_return_lookup_miss_total: 7,
+            redirect_return_abi_mismatch_total: 8,
+        };
+        let total = sum_tproxy_metrics([&value, &value]);
+        assert_eq!(total.sk_assign_failure_total, 2);
+        assert_eq!(total.redirect_prep_store_failure_total, 4);
+        assert_eq!(total.redirect_restore_store_failure_total, 6);
+        assert_eq!(total.redirect_track_update_failure_total, 8);
+        assert_eq!(total.redirect_peer_lookup_miss_total, 10);
+        assert_eq!(total.redirect_peer_abi_mismatch_total, 12);
+        assert_eq!(total.redirect_return_lookup_miss_total, 14);
+        assert_eq!(total.redirect_return_abi_mismatch_total, 16);
+        let maximum = BpfTproxyMetrics {
+            redirect_peer_lookup_miss_total: u64::MAX,
+            ..Default::default()
+        };
+        assert_eq!(
+            sum_tproxy_metrics([&maximum, &value]).redirect_peer_lookup_miss_total,
+            u64::MAX
+        );
+    }
 }

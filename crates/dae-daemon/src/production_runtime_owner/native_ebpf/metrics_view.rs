@@ -27,6 +27,11 @@ impl NativeEbpfRuntimeReadHandle {
                         "skAssignFailureTotal": metrics.sk_assign_failure_total,
                         "redirectPrepStoreFailureTotal": metrics.redirect_prep_store_failure_total,
                         "redirectRestoreStoreFailureTotal": metrics.redirect_restore_store_failure_total,
+                        "redirectTrackUpdateFailureTotal": metrics.redirect_track_update_failure_total,
+                        "redirectPeerLookupMissTotal": metrics.redirect_peer_lookup_miss_total,
+                        "redirectPeerAbiMismatchTotal": metrics.redirect_peer_abi_mismatch_total,
+                        "redirectReturnLookupMissTotal": metrics.redirect_return_lookup_miss_total,
+                        "redirectReturnAbiMismatchTotal": metrics.redirect_return_abi_mismatch_total,
                     }),
                     Err(error) => json!({
                         "status": "error",

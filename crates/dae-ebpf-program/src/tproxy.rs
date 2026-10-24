@@ -33,6 +33,12 @@ const METRIC_SK_ASSIGN_FAILURE: u32 = 0;
 const METRIC_REDIRECT_PREP_STORE_FAILURE: u32 = 1;
 const METRIC_REDIRECT_RESTORE_STORE_FAILURE: u32 = 2;
 
+const METRIC_REDIRECT_TRACK_UPDATE_FAILURE: u32 = 3;
+const METRIC_REDIRECT_PEER_LOOKUP_MISS: u32 = 4;
+const METRIC_REDIRECT_PEER_ABI_MISMATCH: u32 = 5;
+const METRIC_REDIRECT_RETURN_LOOKUP_MISS: u32 = 6;
+const METRIC_REDIRECT_RETURN_ABI_MISMATCH: u32 = 7;
+
 // tproxy failure counters live in the per-CPU `tproxy_metrics` map.  They make
 // helper failures observable (sk_assign / skb_store_bytes). Store failures
 // are counted and dropped fail-closed; sk_assign retains its prior packet
@@ -59,6 +65,21 @@ fn increment_tproxy_metric(metric: u32) {
             }
             METRIC_REDIRECT_RESTORE_STORE_FAILURE => {
                 ptr::addr_of_mut!((*metrics).redirect_restore_store_failure_total)
+            }
+            METRIC_REDIRECT_TRACK_UPDATE_FAILURE => {
+                ptr::addr_of_mut!((*metrics).redirect_track_update_failure_total)
+            }
+            METRIC_REDIRECT_PEER_LOOKUP_MISS => {
+                ptr::addr_of_mut!((*metrics).redirect_peer_lookup_miss_total)
+            }
+            METRIC_REDIRECT_PEER_ABI_MISMATCH => {
+                ptr::addr_of_mut!((*metrics).redirect_peer_abi_mismatch_total)
+            }
+            METRIC_REDIRECT_RETURN_LOOKUP_MISS => {
+                ptr::addr_of_mut!((*metrics).redirect_return_lookup_miss_total)
+            }
+            METRIC_REDIRECT_RETURN_ABI_MISMATCH => {
+                ptr::addr_of_mut!((*metrics).redirect_return_abi_mismatch_total)
             }
             _ => return,
         }
@@ -270,6 +291,7 @@ unsafe fn prep_redirect_to_control_plane(
             BPF_ANY,
         ) != 0
         {
+            increment_tproxy_metric(METRIC_REDIRECT_TRACK_UPDATE_FAILURE);
             return false;
         }
     }
@@ -324,7 +346,12 @@ pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {
         )
     }
     .cast::<BpfRedirectEntry>();
-    if entry.is_null() || unsafe { (*entry).abi_version } != REDIRECT_TRACK_ABI_VERSION {
+    if entry.is_null() {
+        increment_tproxy_metric(METRIC_REDIRECT_PEER_LOOKUP_MISS);
+        return TC_ACT_SHOT;
+    }
+    if unsafe { (*entry).abi_version } != REDIRECT_TRACK_ABI_VERSION {
+        increment_tproxy_metric(METRIC_REDIRECT_PEER_ABI_MISMATCH);
         return TC_ACT_SHOT;
     }
 
@@ -362,7 +389,12 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
         )
     }
     .cast::<BpfRedirectEntry>();
-    if entry.is_null() || unsafe { (*entry).abi_version } != REDIRECT_TRACK_ABI_VERSION {
+    if entry.is_null() {
+        increment_tproxy_metric(METRIC_REDIRECT_RETURN_LOOKUP_MISS);
+        return TC_ACT_OK;
+    }
+    if unsafe { (*entry).abi_version } != REDIRECT_TRACK_ABI_VERSION {
+        increment_tproxy_metric(METRIC_REDIRECT_RETURN_ABI_MISMATCH);
         return TC_ACT_OK;
     }
 

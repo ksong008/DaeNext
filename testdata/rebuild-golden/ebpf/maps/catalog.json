@@ -89,7 +89,7 @@
       "name": "tproxy_metrics",
       "pinning": "PinNone",
       "type": "PerCpuArray",
-      "value_size": 24
+      "value_size": 64
     },
     {
       "flags": 0,

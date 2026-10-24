@@ -242,6 +242,16 @@ pub struct BpfTproxyMetrics {
     /// `bpf_skb_store_bytes` failed while restoring the original MACs on the
     /// dae0 ingress return path. The packet is dropped fail-closed.
     pub redirect_restore_store_failure_total: u64,
+    /// Redirect tracking update failed; preparation returns SHOT.
+    pub redirect_track_update_failure_total: u64,
+    /// Peer ingress had no tracking entry; returns SHOT, cause unspecified.
+    pub redirect_peer_lookup_miss_total: u64,
+    /// Peer ingress tracking entry had an incompatible ABI; returns SHOT.
+    pub redirect_peer_abi_mismatch_total: u64,
+    /// Return ingress had no tracking entry; retains the existing OK action.
+    pub redirect_return_lookup_miss_total: u64,
+    /// Return ingress tracking ABI was incompatible; retains the OK action.
+    pub redirect_return_abi_mismatch_total: u64,
 }
 
 #[repr(C)]
@@ -424,7 +434,27 @@ mod tests {
         assert_eq!(align_of::<BpfTimerOpaque>(), 8);
         assert_eq!(size_of::<BpfUdpConnState>(), 24);
         assert_eq!(offset_of!(BpfUdpConnState, timer), 8);
-        assert_eq!(size_of::<BpfTproxyMetrics>(), 24);
+        assert_eq!(size_of::<BpfTproxyMetrics>(), 64);
         assert_eq!(align_of::<BpfTproxyMetrics>(), 8);
+        assert_eq!(
+            core::mem::offset_of!(BpfTproxyMetrics, redirect_track_update_failure_total),
+            24
+        );
+        assert_eq!(
+            core::mem::offset_of!(BpfTproxyMetrics, redirect_peer_lookup_miss_total),
+            32
+        );
+        assert_eq!(
+            core::mem::offset_of!(BpfTproxyMetrics, redirect_peer_abi_mismatch_total),
+            40
+        );
+        assert_eq!(
+            core::mem::offset_of!(BpfTproxyMetrics, redirect_return_lookup_miss_total),
+            48
+        );
+        assert_eq!(
+            core::mem::offset_of!(BpfTproxyMetrics, redirect_return_abi_mismatch_total),
+            56
+        );
     }
 }
