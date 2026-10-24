@@ -636,6 +636,7 @@ pub struct ResidentDnsTcpForwarder {
     pub connection_limit: usize,
     pub request_limit: usize,
     pub connections: AsyncMutex<Vec<ResidentDnsTcpMultiplexConnection>>,
+    pub task_failures: std::sync::atomic::AtomicUsize,
     pub open_lock: AsyncMutex<()>,
     pub closing: std::sync::atomic::AtomicBool,
 }
@@ -657,6 +658,15 @@ pub struct ResidentDnsTcpMultiplexConnection {
     pub task: tokio::task::JoinHandle<Result<(), String>>,
 }
 
+impl Drop for ResidentDnsTcpForwarder {
+    fn drop(&mut self) {
+        for connection in self.connections.get_mut() {
+            connection.handle.close();
+            connection.task.abort();
+        }
+    }
+}
+
 pub struct ResidentDnsTlsForwarder {
     pub owner_observation: Arc<ResidentDnsTransportOwnerObservation>,
     pub upstream: ResidentDnsUpstream,
@@ -674,14 +684,33 @@ pub struct ResidentDnsHttpsForwarder {
     pub http1_idle: AsyncMutex<Vec<ResidentDnsTlsStream>>,
     pub http1_permits: Semaphore,
     pub h2_permits: Semaphore,
-    pub h2: AsyncMutex<Option<ResidentDnsH2Forwarder>>,
+    pub h2: AsyncMutex<ResidentDnsH2State>,
     pub h2_open_lock: AsyncMutex<()>,
     pub h2_recovery: Mutex<ResidentDnsH2Recovery>,
 }
 
+#[derive(Default)]
+pub struct ResidentDnsH2State {
+    pub current: Option<Arc<ResidentDnsH2Forwarder>>,
+    // Own every physical driver until it has actually been joined, including
+    // retired connections whose accepted streams are still running.
+    pub drivers: tokio::task::JoinSet<Result<(), h2::Error>>,
+    pub driver_failures: usize,
+}
+
 pub struct ResidentDnsH2Forwarder {
     pub sender: h2::client::SendRequest<Bytes>,
-    pub driver_task: tokio::task::JoinHandle<()>,
+    pub driver_abort: tokio::task::AbortHandle,
+}
+
+impl ResidentDnsH2State {
+    pub fn reap(&mut self) {
+        while let Some(result) = self.drivers.try_join_next() {
+            if matches!(&result, Ok(Err(_))) || result.is_err_and(|error| !error.is_cancelled()) {
+                self.driver_failures += 1;
+            }
+        }
+    }
 }
 
 pub struct ResidentDnsH3Forwarder {
@@ -753,7 +782,7 @@ impl Drop for ResidentDnsH3Forwarder {
 
 impl Drop for ResidentDnsH2Forwarder {
     fn drop(&mut self) {
-        self.driver_task.abort();
+        self.driver_abort.abort();
     }
 }
 

@@ -457,6 +457,7 @@ impl ResidentDnsForwarderCache {
                     connection_limit: self.resources.tcp_connections_per_route(),
                     request_limit: self.resources.tcp_requests_per_connection(),
                     connections: AsyncMutex::new(Vec::new()),
+                    task_failures: std::sync::atomic::AtomicUsize::new(0),
                     open_lock: AsyncMutex::new(()),
                     closing: std::sync::atomic::AtomicBool::new(false),
                 }))
@@ -536,7 +537,7 @@ impl ResidentDnsForwarderCache {
                     http1_idle: AsyncMutex::new(Vec::new()),
                     http1_permits: Semaphore::new(DNS_STREAM_POOL_MAX_STREAMS),
                     h2_permits: Semaphore::new(DNS_MULTIPLEX_MAX_CONCURRENT_STREAMS),
-                    h2: AsyncMutex::new(None),
+                    h2: AsyncMutex::new(Default::default()),
                     h2_open_lock: AsyncMutex::new(()),
                     h2_recovery: Mutex::new(ResidentDnsH2Recovery::default()),
                 }))
@@ -758,40 +759,55 @@ async fn shutdown_dns_forwarder_entry(
     }
 }
 
-async fn shutdown_dns_tcp_forwarder(
+pub(super) async fn shutdown_dns_tcp_forwarder(
     forwarder: Arc<ResidentDnsTcpForwarder>,
     deadline: time::Instant,
 ) -> Value {
     forwarder
         .closing
         .store(true, std::sync::atomic::Ordering::Release);
-    let (connections_locked, mut connections) =
-        match time::timeout_at(deadline, forwarder.connections.lock()).await {
-            Ok(mut connections) => (true, std::mem::take(&mut *connections)),
-            Err(_) => (false, Vec::new()),
-        };
-    for connection in &connections {
-        connection.handle.close();
-    }
-    let connection_count = connections.len();
-    let mut connections_joined = 0_usize;
-    for connection in &mut connections {
-        if time::timeout_at(deadline, &mut connection.task)
-            .await
-            .is_ok()
-        {
-            connections_joined += 1;
-        } else {
-            connection.task.abort();
-            let _ = (&mut connection.task).await;
+    // Closing is published before taking the install/reap lock. Keep all
+    // handles here even if the shutdown future itself is cancelled.
+    let mut connection_count = 0;
+    let mut connections_joined = 0;
+    let connections_locked = match time::timeout_at(deadline, forwarder.connections.lock()).await {
+        Ok(mut connections) => {
+            connection_count = connections.len();
+            for connection in connections.iter() {
+                connection.handle.close();
+            }
+            while let Some(connection) = connections.last_mut() {
+                match time::timeout_at(deadline, &mut connection.task).await {
+                    Ok(result) => {
+                        if matches!(result, Ok(Err(_)))
+                            || result.is_err_and(|error| !error.is_cancelled())
+                        {
+                            forwarder
+                                .task_failures
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        connections.pop();
+                        connections_joined += 1;
+                    }
+                    Err(_) => {
+                        for connection in connections.iter() {
+                            connection.task.abort();
+                        }
+                        break;
+                    }
+                }
+            }
+            true
         }
-    }
+        Err(_) => false,
+    };
     json!({
         "status": if connections_locked && connections_joined == connection_count { "pass" } else { "fail" },
         "transport": "tcp",
         "connectionsLocked": connections_locked,
         "connections": connection_count,
         "connectionsJoined": connections_joined,
+        "connectionFailures": forwarder.task_failures.load(std::sync::atomic::Ordering::Relaxed),
     })
 }
 
@@ -831,17 +847,23 @@ pub async fn shutdown_dns_https_forwarder(
         }
         Err(_) => false,
     };
-    let (h2_lock_acquired, h2) = match time::timeout_at(deadline, forwarder.h2.lock()).await {
-        Ok(mut h2) => (true, h2.take()),
-        Err(_) => (false, None),
-    };
-    let mut h2_driver_joined = h2.is_none();
-    if let Some(mut h2) = h2 {
-        h2.driver_task.abort();
-        h2_driver_joined = time::timeout_at(deadline, &mut h2.driver_task)
-            .await
-            .is_ok();
-    }
+    let (h2_lock_acquired, h2_driver_joined, h2_driver_failures) =
+        match time::timeout_at(deadline, forwarder.h2.lock()).await {
+            Ok(mut h2) => {
+                h2.current.take();
+                h2.drivers.abort_all();
+                while !h2.drivers.is_empty() {
+                    match time::timeout_at(deadline, h2.drivers.join_next()).await {
+                        Ok(Some(Ok(Err(_)))) => h2.driver_failures += 1,
+                        Ok(Some(Err(error))) if !error.is_cancelled() => h2.driver_failures += 1,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+                (true, h2.drivers.is_empty(), h2.driver_failures)
+            }
+            Err(_) => (false, false, 0),
+        };
     let http1_released = wait_for_dns_forwarder_permits(
         &forwarder.http1_permits,
         DNS_STREAM_POOL_MAX_STREAMS,
@@ -871,6 +893,7 @@ pub async fn shutdown_dns_https_forwarder(
         "h2StreamsReleased": h2_released,
         "h2LockAcquired": h2_lock_acquired,
         "h2DriverJoined": h2_driver_joined,
+        "h2DriverFailures": h2_driver_failures,
     })
 }
 

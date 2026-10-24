@@ -32,6 +32,7 @@ enum ResidentDnsTcpMultiplexCommand {
 }
 
 struct ResidentDnsTcpMultiplexRequest {
+    reservation: ResidentDnsTcpReservationGuard,
     token: u64,
     payload: Vec<u8>,
     deadline: time::Instant,
@@ -39,6 +40,7 @@ struct ResidentDnsTcpMultiplexRequest {
 }
 
 struct ResidentDnsTcpPendingRequest {
+    _reservation: ResidentDnsTcpReservationGuard,
     token: u64,
     original_id: u16,
     generation: u64,
@@ -67,7 +69,6 @@ struct ResidentDnsTcpCancellationGuard {
 struct ResidentDnsTcpReservationGuard {
     lifecycle: Arc<ResidentDnsTcpMultiplexLifecycle>,
     active: Arc<AtomicUsize>,
-    armed: bool,
 }
 
 impl Drop for ResidentDnsTcpCancellationGuard {
@@ -86,9 +87,7 @@ impl Drop for ResidentDnsTcpCancellationGuard {
 
 impl Drop for ResidentDnsTcpReservationGuard {
     fn drop(&mut self) {
-        if self.armed {
-            release_resident_dns_tcp_slot(self.lifecycle.as_ref(), self.active.as_ref());
-        }
+        release_resident_dns_tcp_slot(self.lifecycle.as_ref(), self.active.as_ref());
     }
 }
 
@@ -140,10 +139,9 @@ impl ResidentDnsTcpMultiplexHandle {
             ));
         }
         self.reserve_slot()?;
-        let mut reservation = ResidentDnsTcpReservationGuard {
+        let reservation = ResidentDnsTcpReservationGuard {
             lifecycle: Arc::clone(&self.lifecycle),
             active: Arc::clone(&self.active),
-            armed: true,
         };
         let token = self.next_token.fetch_add(1, Ordering::Relaxed);
         let (response, response_receiver) = tokio::sync::oneshot::channel();
@@ -159,6 +157,7 @@ impl ResidentDnsTcpMultiplexHandle {
                 ProxyDnsRequestFailure::Capacity,
                 self.commands.send(ResidentDnsTcpMultiplexCommand::Request(
                     ResidentDnsTcpMultiplexRequest {
+                        reservation,
                         token,
                         payload: payload.to_vec(),
                         deadline: context.deadline(),
@@ -167,7 +166,6 @@ impl ResidentDnsTcpMultiplexHandle {
                 )),
             )
             .await?;
-        reservation.armed = false;
         cancellation.armed = true;
         let result = context
             .run(
@@ -205,6 +203,9 @@ impl ResidentDnsTcpMultiplexHandle {
         context: ProxyDnsRequestContext,
     ) -> Result<(), ProxyDnsRequestError> {
         loop {
+            let notified = self.lifecycle.capacity_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             context.ensure(ProxyDnsRequestStage::Queued)?;
             if self.is_closed() {
                 return Err(ProxyDnsRequestError::new(
@@ -213,10 +214,6 @@ impl ResidentDnsTcpMultiplexHandle {
                     "DNS TCP multiplex connection closed while waiting for capacity",
                 ));
             }
-            if self.has_capacity() {
-                return Ok(());
-            }
-            let notified = self.lifecycle.capacity_notify.notified();
             if self.has_capacity() {
                 return Ok(());
             }
@@ -256,6 +253,16 @@ impl ResidentDnsTcpMultiplexRegistration {
     }
 }
 
+impl Drop for ResidentDnsTcpMultiplexRegistration {
+    fn drop(&mut self) {
+        self.lifecycle.closing.store(true, Ordering::Release);
+        self.lifecycle.notify.notify_waiters();
+        self.lifecycle.capacity_notify.notify_waiters();
+        self.commands.close();
+        while self.commands.try_recv().is_ok() {}
+    }
+}
+
 async fn run_resident_dns_tcp_multiplex_actor(
     reader: tokio::net::tcp::OwnedReadHalf,
     writer: tokio::net::tcp::OwnedWriteHalf,
@@ -264,23 +271,28 @@ async fn run_resident_dns_tcp_multiplex_actor(
     // Framed reads use read_exact internally and are not cancellation-safe. Keep the
     // socket in one reader task and pass only complete frames through a bounded queue.
     let (responses, mut response_receiver) = tokio::sync::mpsc::channel(registration.capacity);
-    let reader_task = tokio::spawn(run_resident_dns_tcp_reader(reader, responses));
+    let reader_task = run_resident_dns_tcp_reader(reader, responses);
+    tokio::pin!(reader_task);
+    let mut reader_finished = false;
     let (writes, write_receiver) = tokio::sync::mpsc::channel(registration.capacity);
-    let mut writer_task = tokio::spawn(run_resident_dns_tcp_writer(writer, write_receiver));
+    let writer_task = run_resident_dns_tcp_writer(writer, write_receiver);
+    tokio::pin!(writer_task);
     let mut pending = HashMap::<u16, ResidentDnsTcpPendingRequest>::new();
     let mut tokens = HashMap::<u64, u16>::new();
     let mut deadlines = BinaryHeap::<Reverse<(time::Instant, u16, u64)>>::new();
     let mut allocator =
         super::udp_multiplex::DnsRequestIdAllocator::new(RESIDENT_UDP_RESPONSE_TIMEOUT);
     let mut generation = 0_u64;
-    let mut writer_finished = false;
     let result = loop {
+        let notified = registration.lifecycle.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         if registration.lifecycle.closing.load(Ordering::Acquire) {
             break Ok(());
         }
         let next_deadline = deadlines.peek().map(|entry| entry.0.0);
         tokio::select! {
-            _ = registration.lifecycle.notify.notified() => {
+            _ = &mut notified => {
                 discard_cancelled_resident_dns_tcp_requests(
                     &mut pending,
                     &mut tokens,
@@ -290,12 +302,13 @@ async fn run_resident_dns_tcp_multiplex_actor(
                 );
             }
             writer_result = &mut writer_task => {
-                writer_finished = true;
                 break match writer_result {
-                    Ok(Ok(())) => Err("DNS TCP multiplex writer stopped".to_owned()),
-                    Ok(Err(error)) => Err(error),
-                    Err(error) => Err(format!("join DNS TCP multiplex writer: {error}")),
+                    Ok(()) => Err("DNS TCP multiplex writer stopped".to_owned()),
+                    Err(error) => Err(error),
                 };
+            }
+            _ = &mut reader_task, if !reader_finished => {
+                reader_finished = true;
             }
             response = response_receiver.recv() => {
                 match response {
@@ -377,17 +390,9 @@ async fn run_resident_dns_tcp_multiplex_actor(
         .store(true, Ordering::Release);
     registration.lifecycle.notify.notify_waiters();
     response_receiver.close();
-    if !reader_task.is_finished() {
-        reader_task.abort();
-    }
-    let _ = reader_task.await;
     drop(writes);
-    if !writer_finished && !writer_task.is_finished() {
-        writer_task.abort();
-    }
-    if !writer_finished {
-        let _ = writer_task.await;
-    }
+    // Reader and writer are owned futures, so cancelling this actor drops both
+    // socket halves directly; there are no detached child JoinHandles.
     fail_all_resident_dns_tcp_requests(
         &mut pending,
         &mut tokens,
@@ -440,18 +445,16 @@ fn admit_resident_dns_tcp_request(
     tokens: &mut HashMap<u64, u16>,
     deadlines: &mut BinaryHeap<Reverse<(time::Instant, u16, u64)>>,
     allocator: &mut super::udp_multiplex::DnsRequestIdAllocator,
-    lifecycle: &ResidentDnsTcpMultiplexLifecycle,
-    active_count: &AtomicUsize,
+    _lifecycle: &ResidentDnsTcpMultiplexLifecycle,
+    _active_count: &AtomicUsize,
 ) {
     if request.response.is_closed() {
-        release_resident_dns_tcp_slot(lifecycle, active_count);
         return;
     }
     if request.deadline <= time::Instant::now() {
         let _ = request.response.send(Err(ProxyDnsRequestError::deadline(
             ProxyDnsRequestStage::Pending,
         )));
-        release_resident_dns_tcp_slot(lifecycle, active_count);
         return;
     }
     let mut payload = request.payload;
@@ -463,7 +466,6 @@ fn admit_resident_dns_tcp_request(
                 ProxyDnsRequestFailure::Protocol,
                 error,
             )));
-            release_resident_dns_tcp_slot(lifecycle, active_count);
             return;
         }
     };
@@ -475,7 +477,6 @@ fn admit_resident_dns_tcp_request(
                 ProxyDnsRequestFailure::Capacity,
                 error,
             )));
-            release_resident_dns_tcp_slot(lifecycle, active_count);
             return;
         }
     };
@@ -487,7 +488,6 @@ fn admit_resident_dns_tcp_request(
             ProxyDnsRequestFailure::Protocol,
             format!("parse DNS TCP multiplex request: {error}"),
         )));
-        release_resident_dns_tcp_slot(lifecycle, active_count);
         return;
     }
     if let Err(error) = writes.try_send(ResidentDnsTcpWrite {
@@ -503,7 +503,6 @@ fn admit_resident_dns_tcp_request(
             failure,
             "DNS TCP multiplex writer queue is unavailable",
         )));
-        release_resident_dns_tcp_slot(lifecycle, active_count);
         return;
     }
     deadlines.push(Reverse((request.deadline, id, generation)));
@@ -511,6 +510,7 @@ fn admit_resident_dns_tcp_request(
     pending.insert(
         id,
         ResidentDnsTcpPendingRequest {
+            _reservation: request.reservation,
             token: request.token,
             original_id,
             generation,
@@ -525,8 +525,8 @@ fn discard_cancelled_resident_dns_tcp_requests(
     pending: &mut HashMap<u16, ResidentDnsTcpPendingRequest>,
     tokens: &mut HashMap<u64, u16>,
     allocator: &mut super::udp_multiplex::DnsRequestIdAllocator,
-    lifecycle: &ResidentDnsTcpMultiplexLifecycle,
-    active_count: &AtomicUsize,
+    _lifecycle: &ResidentDnsTcpMultiplexLifecycle,
+    _active_count: &AtomicUsize,
 ) {
     let cancelled = pending
         .iter()
@@ -538,7 +538,6 @@ fn discard_cancelled_resident_dns_tcp_requests(
         };
         tokens.remove(&request.token);
         allocator.release(id);
-        release_resident_dns_tcp_slot(lifecycle, active_count);
     }
 }
 
@@ -559,8 +558,8 @@ fn dispatch_resident_dns_tcp_response(
     pending: &mut HashMap<u16, ResidentDnsTcpPendingRequest>,
     tokens: &mut HashMap<u64, u16>,
     allocator: &mut super::udp_multiplex::DnsRequestIdAllocator,
-    lifecycle: &ResidentDnsTcpMultiplexLifecycle,
-    active_count: &AtomicUsize,
+    _lifecycle: &ResidentDnsTcpMultiplexLifecycle,
+    _active_count: &AtomicUsize,
 ) {
     let Ok(id) = dns_packet_id(&response) else {
         return;
@@ -570,7 +569,6 @@ fn dispatch_resident_dns_tcp_response(
     };
     tokens.remove(&request.token);
     allocator.release(id);
-    release_resident_dns_tcp_slot(lifecycle, active_count);
     let result = validate_resident_dns_tcp_response(&request, &response).map(|()| {
         response[0..2].copy_from_slice(&request.original_id.to_be_bytes());
         response
@@ -611,15 +609,14 @@ fn cancel_resident_dns_tcp_request(
     pending: &mut HashMap<u16, ResidentDnsTcpPendingRequest>,
     tokens: &mut HashMap<u64, u16>,
     allocator: &mut super::udp_multiplex::DnsRequestIdAllocator,
-    lifecycle: &ResidentDnsTcpMultiplexLifecycle,
-    active_count: &AtomicUsize,
+    _lifecycle: &ResidentDnsTcpMultiplexLifecycle,
+    _active_count: &AtomicUsize,
 ) {
     let Some(id) = tokens.remove(&token) else {
         return;
     };
     if pending.remove(&id).is_some() {
         allocator.release(id);
-        release_resident_dns_tcp_slot(lifecycle, active_count);
     }
 }
 
@@ -629,8 +626,8 @@ fn expire_resident_dns_tcp_requests(
     pending: &mut HashMap<u16, ResidentDnsTcpPendingRequest>,
     tokens: &mut HashMap<u64, u16>,
     allocator: &mut super::udp_multiplex::DnsRequestIdAllocator,
-    lifecycle: &ResidentDnsTcpMultiplexLifecycle,
-    active_count: &AtomicUsize,
+    _lifecycle: &ResidentDnsTcpMultiplexLifecycle,
+    _active_count: &AtomicUsize,
 ) {
     while deadlines.peek().is_some_and(|deadline| deadline.0.0 <= now) {
         let Some(Reverse((_, id, generation))) = deadlines.pop() else {
@@ -647,7 +644,6 @@ fn expire_resident_dns_tcp_requests(
         };
         tokens.remove(&request.token);
         allocator.release(id);
-        release_resident_dns_tcp_slot(lifecycle, active_count);
         let _ = request.response.send(Err(ProxyDnsRequestError::deadline(
             ProxyDnsRequestStage::Read,
         )));
@@ -658,14 +654,13 @@ fn fail_all_resident_dns_tcp_requests(
     pending: &mut HashMap<u16, ResidentDnsTcpPendingRequest>,
     tokens: &mut HashMap<u64, u16>,
     allocator: &mut super::udp_multiplex::DnsRequestIdAllocator,
-    lifecycle: &ResidentDnsTcpMultiplexLifecycle,
-    active_count: &AtomicUsize,
+    _lifecycle: &ResidentDnsTcpMultiplexLifecycle,
+    _active_count: &AtomicUsize,
     detail: &str,
 ) {
     for (id, request) in pending.drain() {
         tokens.remove(&request.token);
         allocator.release(id);
-        release_resident_dns_tcp_slot(lifecycle, active_count);
         let _ = request.response.send(Err(ProxyDnsRequestError::new(
             ProxyDnsRequestStage::Cleanup,
             ProxyDnsRequestFailure::Network,
@@ -676,8 +671,8 @@ fn fail_all_resident_dns_tcp_requests(
 
 fn fail_queued_resident_dns_tcp_requests(
     commands: &mut tokio::sync::mpsc::Receiver<ResidentDnsTcpMultiplexCommand>,
-    lifecycle: &ResidentDnsTcpMultiplexLifecycle,
-    active_count: &AtomicUsize,
+    _lifecycle: &ResidentDnsTcpMultiplexLifecycle,
+    _active_count: &AtomicUsize,
 ) {
     while let Ok(command) = commands.try_recv() {
         let ResidentDnsTcpMultiplexCommand::Request(request) = command else {
@@ -688,7 +683,6 @@ fn fail_queued_resident_dns_tcp_requests(
             ProxyDnsRequestFailure::Network,
             "DNS TCP multiplex connection stopped before request admission",
         )));
-        release_resident_dns_tcp_slot(lifecycle, active_count);
     }
 }
 

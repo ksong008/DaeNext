@@ -565,10 +565,8 @@ impl ResidentDnsTcpForwarder {
                 .filter(|connection| !connection.handle.is_closed())
                 .count();
             if active_connections < self.connection_limit {
-                let connection = self.open_connection(context).await?;
-                let handle = connection.handle.clone();
-                self.connections.lock().await.push(connection);
-                return Ok(handle);
+                let (handle, actor) = self.open_connection(context).await?;
+                return self.install_connection(handle, actor, context).await;
             }
             let waiting = self.select_connection(false).await.ok_or_else(|| {
                 ProxyDnsRequestError::new(
@@ -582,52 +580,87 @@ impl ResidentDnsTcpForwarder {
         }
     }
 
+    async fn install_connection(
+        &self,
+        handle: ResidentDnsTcpMultiplexHandle,
+        actor: crate::proxy_transport::ResidentDnsProxyFuture<'static, Result<(), String>>,
+        context: ProxyDnsRequestContext,
+    ) -> Result<ResidentDnsTcpMultiplexHandle, ProxyDnsRequestError> {
+        let mut connections = context
+            .run(
+                ProxyDnsRequestStage::OwnerAcquire,
+                ProxyDnsRequestFailure::Cancelled,
+                async { Ok::<_, std::convert::Infallible>(self.connections.lock().await) },
+            )
+            .await?;
+        if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(ProxyDnsRequestError::new(
+                ProxyDnsRequestStage::OwnerAcquire,
+                ProxyDnsRequestFailure::Cancelled,
+                "DNS TCP multiplex forwarder closed during open",
+            ));
+        }
+        let task = tokio::spawn(actor);
+        connections.push(ResidentDnsTcpMultiplexConnection {
+            handle: handle.clone(),
+            task,
+        });
+        Ok(handle)
+    }
+
     async fn open_connection(
         &self,
         context: ProxyDnsRequestContext,
-    ) -> Result<ResidentDnsTcpMultiplexConnection, ProxyDnsRequestError> {
+    ) -> Result<
+        (
+            ResidentDnsTcpMultiplexHandle,
+            crate::proxy_transport::ResidentDnsProxyFuture<'static, Result<(), String>>,
+        ),
+        ProxyDnsRequestError,
+    > {
         let (handle, registration) = ResidentDnsTcpMultiplexHandle::new(self.request_limit);
-        let task = match &self.connection_kind {
-            ResidentDnsTcpConnectionKind::Direct => {
-                let stream = open_dns_tcp_stream_with_context_async(
-                    &self.upstream,
-                    self.target,
-                    self.mark,
-                    context,
-                )
-                .await?;
-                tokio::spawn(registration.run(stream))
-            }
-            ResidentDnsTcpConnectionKind::Proxy { binding, transport } => {
-                let binding = binding.clone();
-                let transport = Arc::clone(transport);
-                let target = self.target.to_string();
-                tokio::spawn(async move {
-                    run_resident_proxy_dns_tcp_connection(
-                        transport.as_ref(),
-                        binding,
-                        target,
-                        true,
-                        Vec::new(),
-                        String::new(),
+        let actor: crate::proxy_transport::ResidentDnsProxyFuture<'static, Result<(), String>> =
+            match &self.connection_kind {
+                ResidentDnsTcpConnectionKind::Direct => {
+                    let stream = open_dns_tcp_stream_with_context_async(
+                        &self.upstream,
+                        self.target,
+                        self.mark,
                         context,
-                        time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
-                        |stream| async move {
-                            registration.run(stream).await.map_err(|error| {
-                                ProxyDnsRequestError::new(
-                                    ProxyDnsRequestStage::Read,
-                                    ProxyDnsRequestFailure::Network,
-                                    error,
-                                )
-                            })
-                        },
                     )
-                    .await
-                    .map_err(|error| error.to_string())
-                })
-            }
-        };
-        Ok(ResidentDnsTcpMultiplexConnection { handle, task })
+                    .await?;
+                    Box::pin(registration.run(stream))
+                }
+                ResidentDnsTcpConnectionKind::Proxy { binding, transport } => {
+                    let binding = binding.clone();
+                    let transport = Arc::clone(transport);
+                    let target = self.target.to_string();
+                    Box::pin(async move {
+                        run_resident_proxy_dns_tcp_connection(
+                            transport.as_ref(),
+                            binding,
+                            target,
+                            true,
+                            Vec::new(),
+                            String::new(),
+                            context,
+                            time::Instant::now() + RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE,
+                            |stream| async move {
+                                registration.run(stream).await.map_err(|error| {
+                                    ProxyDnsRequestError::new(
+                                        ProxyDnsRequestStage::Read,
+                                        ProxyDnsRequestFailure::Network,
+                                        error,
+                                    )
+                                })
+                            },
+                        )
+                        .await
+                        .map_err(|error| error.to_string())
+                    })
+                }
+            };
+        Ok((handle, actor))
     }
 
     async fn select_connection(
@@ -648,27 +681,39 @@ impl ResidentDnsTcpForwarder {
         &self,
         context: ProxyDnsRequestContext,
     ) -> Result<(), ProxyDnsRequestError> {
-        let mut retired = {
-            let mut connections = self.connections.lock().await;
-            let mut active = Vec::with_capacity(connections.len());
-            let mut retired = Vec::new();
-            for connection in std::mem::take(&mut *connections) {
-                if connection.handle.is_closed() {
-                    retired.push(connection);
-                } else {
-                    active.push(connection);
-                }
+        // Keep each handle in the registry across awaits. Cancelling a caller
+        // cannot detach a batch of retired actors or lose their join results.
+        let mut connections = context
+            .run(
+                ProxyDnsRequestStage::Cleanup,
+                ProxyDnsRequestFailure::Cancelled,
+                async { Ok::<_, std::convert::Infallible>(self.connections.lock().await) },
+            )
+            .await?;
+        let mut index = 0;
+        while index < connections.len() {
+            let connection = &mut connections[index];
+            if !connection.handle.is_closed() && !connection.task.is_finished() {
+                index += 1;
+                continue;
             }
-            *connections = active;
-            retired
-        };
-        for connection in &mut retired {
-            if time::timeout_at(context.deadline(), &mut connection.task)
-                .await
-                .is_err()
-            {
-                connection.task.abort();
-                let _ = (&mut connection.task).await;
+            connection.handle.close();
+            match time::timeout_at(context.deadline(), &mut connection.task).await {
+                Ok(result) => {
+                    if matches!(result, Ok(Err(_)))
+                        || result.is_err_and(|error| !error.is_cancelled())
+                    {
+                        self.task_failures
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    connections.swap_remove(index);
+                }
+                Err(_) => {
+                    connection.task.abort();
+                    return Err(ProxyDnsRequestError::deadline(
+                        ProxyDnsRequestStage::Cleanup,
+                    ));
+                }
             }
         }
         Ok(())
@@ -726,3 +771,7 @@ pub async fn forward_dns_tcp_asis_async(
     .await
     .map_err(|_| "DNS TCP asis exchange timeout".to_owned())?
 }
+
+#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[path = "plain/lifecycle_tests.rs"]
+mod lifecycle_tests;

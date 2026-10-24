@@ -186,6 +186,7 @@ fn cache_hit_does_not_construct_a_discarded_forwarder() {
             connection_limit: cache.resources.tcp_connections_per_route(),
             request_limit: cache.resources.tcp_requests_per_connection(),
             connections: AsyncMutex::new(Vec::new()),
+            task_failures: std::sync::atomic::AtomicUsize::new(0),
             open_lock: AsyncMutex::new(()),
             closing: std::sync::atomic::AtomicBool::new(false),
         }))
@@ -601,7 +602,7 @@ async fn https_shutdown_does_not_report_an_h2_lock_timeout_as_joined() {
 
     assert_eq!(report["status"], "fail");
     assert_eq!(report["h2LockAcquired"], false);
-    assert_eq!(report["h2DriverJoined"], true);
+    assert_eq!(report["h2DriverJoined"], false);
     drop(h2_guard);
 }
 

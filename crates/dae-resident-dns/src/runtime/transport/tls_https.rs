@@ -207,28 +207,15 @@ impl ResidentDnsTlsForwarder {
             ))
         });
         if result.is_ok() {
-            return_tls_connection_to_pool(&self.idle, stream).await;
+            return_dns_stream_to_pool(&self.idle, &self.permits, stream).await;
         }
         result
     }
 }
 
-async fn return_tls_connection_to_pool(
-    pool: &AsyncMutex<Vec<ResidentDnsTlsConnection>>,
-    stream: ResidentDnsTlsConnection,
-) {
+async fn return_dns_stream_to_pool<T>(pool: &AsyncMutex<Vec<T>>, permits: &Semaphore, stream: T) {
     let mut idle = pool.lock().await;
-    if idle.len() < DNS_STREAM_POOL_MAX_IDLE {
-        idle.push(stream);
-    }
-}
-
-async fn return_tls_stream_to_pool(
-    pool: &AsyncMutex<Vec<ResidentDnsTlsStream>>,
-    stream: ResidentDnsTlsStream,
-) {
-    let mut idle = pool.lock().await;
-    if idle.len() < DNS_STREAM_POOL_MAX_IDLE {
+    if !permits.is_closed() && idle.len() < DNS_STREAM_POOL_MAX_IDLE {
         idle.push(stream);
     }
 }
@@ -469,7 +456,7 @@ impl ResidentDnsHttpsForwarder {
         })?
         .map_err(ResidentDnsTransportError::message);
         if result.is_ok() {
-            return_tls_stream_to_pool(&self.http1_idle, stream).await;
+            return_dns_stream_to_pool(&self.http1_idle, &self.http1_permits, stream).await;
         }
         result
     }
@@ -482,24 +469,28 @@ impl ResidentDnsHttpsForwarder {
         let _permit = acquire_dns_permit(&self.h2_permits, "DNS HTTPS HTTP/2 stream pool", context)
             .await
             .map_err(ResidentDnsTransportError::message)?;
-        let mut sender = self.h2_sender(context).await?;
-        let result = forward_dns_https_over_h2_async(&self.upstream, payload, &mut sender, context)
-            .await
-            .map_err(ResidentDnsTransportError::message);
-        if result.is_err() {
-            self.invalidate_h2().await;
+        let connection = self.h2_sender(context).await?;
+        let mut sender = connection.sender.clone();
+        let result =
+            forward_dns_https_over_h2_async(&self.upstream, payload, &mut sender, context).await;
+        if result.as_ref().is_err_and(|error| error.is_connection()) {
+            self.invalidate_h2(&connection, context).await;
         }
-        result
+        result.map_err(|error| ResidentDnsTransportError::message(error.to_string()))
     }
 
     async fn h2_sender(
         &self,
         context: ProxyDnsRequestContext,
-    ) -> Result<h2::client::SendRequest<Bytes>, ResidentDnsTransportError> {
+    ) -> Result<Arc<ResidentDnsH2Forwarder>, ResidentDnsTransportError> {
         {
-            let h2 = self.h2.lock().await;
-            if let Some(forwarder) = h2.as_ref() {
-                return Ok(forwarder.sender.clone());
+            let h2 = time::timeout_at(context.deadline(), self.h2.lock())
+                .await
+                .map_err(|_| {
+                    ResidentDnsTransportError::message("DNS HTTPS state lock deadline expired")
+                })?;
+            if let Some(forwarder) = h2.current.as_ref() {
+                return Ok(Arc::clone(forwarder));
             }
         }
         if !self.h2_retry_ready() {
@@ -515,9 +506,13 @@ impl ResidentDnsHttpsForwarder {
                 )
             })?;
         {
-            let h2 = self.h2.lock().await;
-            if let Some(forwarder) = h2.as_ref() {
-                return Ok(forwarder.sender.clone());
+            let h2 = time::timeout_at(context.deadline(), self.h2.lock())
+                .await
+                .map_err(|_| {
+                    ResidentDnsTransportError::message("DNS HTTPS state lock deadline expired")
+                })?;
+            if let Some(forwarder) = h2.current.as_ref() {
+                return Ok(Arc::clone(forwarder));
             }
         }
         if !self.h2_retry_ready() {
@@ -528,13 +523,7 @@ impl ResidentDnsHttpsForwarder {
         match open_dns_https_h2_forwarder_async(&self.upstream, self.target, self.mark, context)
             .await
         {
-            Ok(forwarder) => {
-                let sender = forwarder.sender.clone();
-                self.record_h2_success();
-                let mut h2 = self.h2.lock().await;
-                *h2 = Some(forwarder);
-                Ok(sender)
-            }
+            Ok((sender, driver)) => self.install_h2(sender, driver, context).await,
             Err(err) => {
                 self.record_h2_failure();
                 Err(err)
@@ -542,12 +531,57 @@ impl ResidentDnsHttpsForwarder {
         }
     }
 
-    async fn invalidate_h2(&self) {
-        let _open_guard = self.h2_open_lock.lock().await;
-        let mut h2 = self.h2.lock().await;
-        *h2 = None;
-        drop(h2);
-        self.record_h2_failure();
+    async fn install_h2<F>(
+        &self,
+        sender: h2::client::SendRequest<Bytes>,
+        driver: F,
+        context: ProxyDnsRequestContext,
+    ) -> Result<Arc<ResidentDnsH2Forwarder>, ResidentDnsTransportError>
+    where
+        F: std::future::Future<Output = Result<(), h2::Error>> + Send + 'static,
+    {
+        // Pool shutdown and publication share this lock. A handshake finishing
+        // after close must never install or spawn a driver.
+        let mut h2 = time::timeout_at(context.deadline(), self.h2.lock())
+            .await
+            .map_err(|_| {
+                ResidentDnsTransportError::message("DNS HTTPS install deadline expired")
+            })?;
+        if self.h2_permits.is_closed() {
+            return Err(ResidentDnsTransportError::message(
+                "DNS HTTPS pool is closed",
+            ));
+        }
+        h2.reap();
+        let driver_abort = h2.drivers.spawn(driver);
+        let connection = Arc::new(ResidentDnsH2Forwarder {
+            sender,
+            driver_abort,
+        });
+        h2.current = Some(Arc::clone(&connection));
+        self.record_h2_success();
+        Ok(connection)
+    }
+
+    async fn invalidate_h2(
+        &self,
+        failed: &Arc<ResidentDnsH2Forwarder>,
+        context: ProxyDnsRequestContext,
+    ) {
+        // Failure cleanup must not wait behind a replacement's network handshake.
+        let Ok(mut h2) = time::timeout_at(context.deadline(), self.h2.lock()).await else {
+            return;
+        };
+        if h2
+            .current
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, failed))
+        {
+            h2.current.take();
+            self.record_h2_failure();
+        }
+        // Each in-flight request keeps its physical connection alive. In
+        // particular, GOAWAY must not abort streams already accepted by it.
     }
 
     fn h2_retry_ready(&self) -> bool {
@@ -585,7 +619,13 @@ async fn open_dns_https_h2_forwarder_async(
     target: SocketAddr,
     mark: u32,
     context: ProxyDnsRequestContext,
-) -> Result<ResidentDnsH2Forwarder, ResidentDnsTransportError> {
+) -> Result<
+    (
+        h2::client::SendRequest<Bytes>,
+        h2::client::Connection<ResidentDnsTlsStream, Bytes>,
+    ),
+    ResidentDnsTransportError,
+> {
     let stream = open_dns_tcp_stream_with_context_async(upstream, target, mark, context)
         .await
         .map_err(ResidentDnsTransportError::proxy)?;
@@ -601,13 +641,7 @@ async fn open_dns_https_h2_forwarder_async(
                 upstream.tag, upstream.target.authority
             ))
         })?;
-    let driver_task = tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    Ok(ResidentDnsH2Forwarder {
-        sender,
-        driver_task,
-    })
+    Ok((sender, connection))
 }
 
 async fn open_dns_https_h2_tls_stream_async(
@@ -626,12 +660,46 @@ async fn open_dns_https_h2_tls_stream_async(
     Ok(tls)
 }
 
+#[derive(Debug)]
+struct DnsH2ExchangeError {
+    detail: String,
+    connection: bool,
+}
+
+impl DnsH2ExchangeError {
+    fn transport(context: &str, error: h2::Error) -> Self {
+        Self {
+            detail: format!("{context}: {error}"),
+            connection: error.is_io() || error.is_go_away(),
+        }
+    }
+
+    fn is_connection(&self) -> bool {
+        self.connection
+    }
+}
+
+impl From<String> for DnsH2ExchangeError {
+    fn from(detail: String) -> Self {
+        Self {
+            detail,
+            connection: false,
+        }
+    }
+}
+
+impl std::fmt::Display for DnsH2ExchangeError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str(&self.detail)
+    }
+}
+
 async fn forward_dns_https_over_h2_async(
     upstream: &ResidentDnsUpstream,
     payload: &[u8],
     sender: &mut h2::client::SendRequest<Bytes>,
     context: ProxyDnsRequestContext,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, DnsH2ExchangeError> {
     let doh = build_doh_request(
         &upstream.target.authority,
         &upstream.target.authority,
@@ -660,22 +728,20 @@ async fn forward_dns_https_over_h2_async(
         .body(())
         .map_err(|err| format!("build DoH HTTP/2 request: {err}"))?;
     time::timeout_at(context.deadline(), async {
-        let mut sender = sender
-            .clone()
-            .ready()
-            .await
-            .map_err(|err| format!("wait for DoH HTTP/2 stream capacity: {err}"))?;
+        let mut sender = sender.clone().ready().await.map_err(|err| {
+            DnsH2ExchangeError::transport("wait for DoH HTTP/2 stream capacity", err)
+        })?;
         let (response, mut body_sender) = sender
             .send_request(request, doh.body.is_empty())
-            .map_err(|err| format!("send DoH HTTP/2 request headers: {err}"))?;
+            .map_err(|err| DnsH2ExchangeError::transport("send DoH HTTP/2 request headers", err))?;
         if !doh.body.is_empty() {
             body_sender
                 .send_data(Bytes::copy_from_slice(&doh.body), true)
-                .map_err(|err| format!("send DoH HTTP/2 body: {err}"))?;
+                .map_err(|err| DnsH2ExchangeError::transport("send DoH HTTP/2 body", err))?;
         }
-        let response = response
-            .await
-            .map_err(|err| format!("receive DoH HTTP/2 response headers: {err}"))?;
+        let response = response.await.map_err(|err| {
+            DnsH2ExchangeError::transport("receive DoH HTTP/2 response headers", err)
+        })?;
         validate_doh_content_length(response.headers())?;
         let status = response.status();
         let content_type = response
@@ -688,26 +754,30 @@ async fn forward_dns_https_over_h2_async(
         let mut body = response.into_body();
         let mut out = Vec::new();
         while let Some(chunk) = body.data().await {
-            let chunk = chunk.map_err(|err| format!("receive DoH HTTP/2 response body: {err}"))?;
+            let chunk = chunk.map_err(|err| {
+                DnsH2ExchangeError::transport("receive DoH HTTP/2 response body", err)
+            })?;
             if out.len().saturating_add(chunk.len()) > DNS_DOH_RESPONSE_READ_LIMIT {
                 return Err(format!(
                     "DoH HTTP/2 response exceeds read limit {DNS_DOH_RESPONSE_READ_LIMIT}"
-                ));
+                )
+                .into());
             }
             out.extend_from_slice(&chunk);
             body.flow_control()
                 .release_capacity(chunk.len())
                 .map_err(|error| format!("release DoH HTTP/2 receive capacity: {error}"))?;
         }
-        restore_dns_response_id(payload, &out)
+        restore_dns_response_id(payload, &out).map_err(DnsH2ExchangeError::from)
     })
     .await
-    .map_err(|_| "DNS HTTPS HTTP/2 exchange timeout".to_owned())?
-    .map_err(|err| {
-        format!(
+    .map_err(|_| DnsH2ExchangeError::from("DNS HTTPS HTTP/2 exchange timeout".to_owned()))?
+    .map_err(|mut err| {
+        err.detail = format!(
             "forward DNS over HTTP/2 to upstream {} {}: {err}",
             upstream.tag, upstream.target.authority
-        )
+        );
+        err
     })
 }
 
@@ -746,7 +816,7 @@ async fn forward_dns_https_over_reusable_stream_async(
 }
 
 #[cfg(all(test, feature = "dns-runtime-tests"))]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use dae_resident_core::RESIDENT_IDLE_SLEEP;
 
@@ -817,6 +887,7 @@ mod tests {
         assert!(
             result
                 .unwrap_err()
+                .to_string()
                 .contains("Content-Length exceeds read limit")
         );
         server.abort();
@@ -865,14 +936,14 @@ mod tests {
                 assert_eq!(result.unwrap().len(), length);
             } else {
                 let error = result.unwrap_err();
-                assert!(error.contains("exceeds read limit"), "{error}");
+                assert!(error.to_string().contains("exceeds read limit"), "{error}");
             }
             server.await.unwrap();
             driver.abort();
         }
     }
 
-    fn send_h2_doh_response(
+    pub(super) fn send_h2_doh_response(
         mut respond: h2::server::SendResponse<Bytes>,
         query: &[u8],
         address: [u8; 4],
@@ -887,7 +958,7 @@ mod tests {
         stream.send_data(Bytes::from(response), true).unwrap();
     }
 
-    fn h2_test_upstream() -> ResidentDnsUpstream {
+    pub(crate) fn h2_test_upstream() -> ResidentDnsUpstream {
         ResidentDnsUpstream {
             index: 0,
             tag: "h2-fixture".to_owned(),
@@ -927,3 +998,7 @@ mod tests {
         response
     }
 }
+
+#[cfg(all(test, feature = "dns-runtime-tests"))]
+#[path = "tls_https/h2_lifecycle_tests.rs"]
+mod h2_lifecycle_tests;

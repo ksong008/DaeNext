@@ -103,6 +103,9 @@ impl ResidentDnsTlsStream {
     }
 }
 
+mod flight;
+mod resource_lifetime;
+pub use resource_lifetime::ResidentDnsResourceLease;
 mod reload;
 pub mod routing;
 mod trace_summary;
@@ -241,11 +244,20 @@ pub struct ResidentDnsPlan {
 #[derive(Clone)]
 pub struct ResidentDnsResolver {
     plan: Arc<ResidentDnsPlan>,
+    _resources: Option<ResidentDnsResourceLease>,
 }
 
 impl ResidentDnsResolver {
     pub fn new(plan: Arc<ResidentDnsPlan>) -> Self {
-        Self { plan }
+        Self {
+            plan,
+            _resources: None,
+        }
+    }
+
+    pub fn with_resource_lease(mut self, lease: ResidentDnsResourceLease) -> Self {
+        self._resources = Some(lease);
+        self
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -273,11 +285,20 @@ impl ResidentDnsResolver {
 #[derive(Clone)]
 pub struct ResidentDnsDispatcher {
     plan: Arc<ResidentDnsPlan>,
+    _resources: Option<ResidentDnsResourceLease>,
 }
 
 impl ResidentDnsDispatcher {
     pub fn new(plan: Arc<ResidentDnsPlan>) -> Self {
-        Self { plan }
+        Self {
+            plan,
+            _resources: None,
+        }
+    }
+
+    pub fn with_resource_lease(mut self, lease: ResidentDnsResourceLease) -> Self {
+        self._resources = Some(lease);
+        self
     }
 
     pub fn asis(mark: u32) -> Self {
@@ -293,6 +314,13 @@ impl ResidentDnsDispatcher {
     }
 
     pub async fn shutdown_forwarders(&self, deadline: time::Instant) -> Value {
+        if self._resources.is_some() {
+            return serde_json::json!({
+                "status": "pass", "terminalShutdown": false,
+                "completionMode": "resource-lease-owner",
+                "reason": "dispatcher retirement releases its lease; the tracked owner closes pools after their last user"
+            });
+        }
         self.plan.shutdown_forwarders(deadline).await
     }
 
@@ -821,61 +849,62 @@ async fn handle_resident_dns_request_without_preference(
     if cache_hit {
         return Ok(cached_response);
     }
-    let mut flight = plan.cache.begin_flight(cache_key.clone())?;
-    if !flight.is_leader() {
-        let mut response = flight.wait(context, request.id()).await?;
-        dae_dns::restore_dns_response_for_request(request, &mut response)
-            .map_err(|e| format!("restore shared DNS response: {e}"))?;
-        return Ok(response);
-    }
-    let result = match action {
-        ResidentDnsRequestAction::AsIs => {
-            let asis_transport = asis_transport
-                .ok_or_else(|| "asis DNS transport is unavailable for this request".to_owned())?;
-            let response = forward_dns_asis_async(
-                original_dst,
-                payload,
-                plan.mark,
-                asis_transport,
-                &plan.forwarders,
-                context,
-            )
-            .await?;
-            validate_dns_response_for_request(request, &response, true)?;
-            let response_action = select_response_action_for_upstream(
-                plan,
-                request,
-                &response,
-                DnsRequestOutboundIndex::ASIS,
-            )?;
-            match response_action {
-                ResidentDnsResponseAction::Accept => {
-                    record_accepted_dns_response_async(plan, &cache_key, &response, context)
-                        .await?;
-                    Ok(response)
-                }
-                ResidentDnsResponseAction::Reject => build_reject_response(payload, request),
-                ResidentDnsResponseAction::Upstream(upstream) => {
-                    resolve_dns_response_routing(
-                        plan, payload, request, upstream, &cache_key, context,
-                    )
-                    .await
+    let (mut flight, _) = match flight::acquire(plan, &cache_key, request, context).await? {
+        flight::Acquired::Response { response, .. } => return Ok(response),
+        flight::Acquired::Leader { permit, recovered } => (permit, recovered),
+    };
+    let result = async {
+        match action {
+            ResidentDnsRequestAction::AsIs => {
+                let asis_transport = asis_transport.ok_or_else(|| {
+                    "asis DNS transport is unavailable for this request".to_owned()
+                })?;
+                let response = forward_dns_asis_async(
+                    original_dst,
+                    payload,
+                    plan.mark,
+                    asis_transport,
+                    &plan.forwarders,
+                    context,
+                )
+                .await?;
+                validate_dns_response_for_request(request, &response, true)?;
+                let response_action = select_response_action_for_upstream(
+                    plan,
+                    request,
+                    &response,
+                    DnsRequestOutboundIndex::ASIS,
+                )?;
+                match response_action {
+                    ResidentDnsResponseAction::Accept => {
+                        record_accepted_dns_response_async(plan, &cache_key, &response, context)
+                            .await?;
+                        Ok(response)
+                    }
+                    ResidentDnsResponseAction::Reject => build_reject_response(payload, request),
+                    ResidentDnsResponseAction::Upstream(upstream) => {
+                        resolve_dns_response_routing(
+                            plan, payload, request, upstream, &cache_key, context,
+                        )
+                        .await
+                    }
                 }
             }
+            ResidentDnsRequestAction::Reject => unreachable!("reject handled before cache lookup"),
+            ResidentDnsRequestAction::Upstream(ref upstream) => {
+                resolve_dns_response_routing(
+                    plan,
+                    payload,
+                    request,
+                    upstream.clone(),
+                    &cache_key,
+                    context,
+                )
+                .await
+            }
         }
-        ResidentDnsRequestAction::Reject => unreachable!("reject handled before cache lookup"),
-        ResidentDnsRequestAction::Upstream(ref upstream) => {
-            resolve_dns_response_routing(
-                plan,
-                payload,
-                request,
-                upstream.clone(),
-                &cache_key,
-                context,
-            )
-            .await
-        }
-    };
+    }
+    .await;
     let _ = flight.publish(result.as_ref().map(Vec::as_slice).map_err(String::as_str));
     result
 }
@@ -920,77 +949,100 @@ async fn handle_resident_dns_request_without_preference_trace(
         trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
         return Ok(trace.finish(cached_response, DNS_TRACE_REASON_CACHE_HIT));
     }
-    let mut flight = plan.cache.begin_flight(cache_key.clone())?;
-    if !flight.is_leader() {
-        let mut response = flight.wait(context, request.id()).await?;
-        dae_dns::restore_dns_response_for_request(request, &mut response)
-            .map_err(|e| format!("restore shared DNS response: {e}"))?;
-        trace.add_cache_elapsed(cache_started);
-        trace.cache = DNS_TRACE_CACHE_LOCKED_HIT.to_owned();
-        trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
-        return Ok(trace.finish(response, DNS_TRACE_REASON_CACHE_LOCKED_HIT));
-    }
+    let (mut flight, recovered) = match flight::acquire(plan, &cache_key, request, context).await? {
+        flight::Acquired::Response {
+            response,
+            recovered,
+        } => {
+            trace.add_cache_elapsed(cache_started);
+            trace.cache = if recovered {
+                "cancel-recovered-shared"
+            } else {
+                DNS_TRACE_CACHE_LOCKED_HIT
+            }
+            .to_owned();
+            trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();
+            return Ok(trace.finish(
+                response,
+                if recovered {
+                    "resident DNS shared response after leader cancellation recovery"
+                } else {
+                    DNS_TRACE_REASON_CACHE_LOCKED_HIT
+                },
+            ));
+        }
+        flight::Acquired::Leader { permit, recovered } => (permit, recovered),
+    };
     trace.add_cache_elapsed(cache_started);
-    trace.cache = DNS_TRACE_CACHE_MISS.to_owned();
-    let result = match action {
-        ResidentDnsRequestAction::AsIs => {
-            trace.push_asis_attempt();
-            let asis_transport = asis_transport
-                .ok_or_else(|| "asis DNS transport is unavailable for this request".to_owned())?;
-            let response = forward_dns_asis_async(
-                original_dst,
-                payload,
-                plan.mark,
-                asis_transport,
-                &plan.forwarders,
-                context,
-            )
-            .await?;
-            validate_dns_response_for_request(request, &response, true)?;
-            let routing_started = Instant::now();
-            let response_action = select_response_action_for_upstream(
-                plan,
-                request,
-                &response,
-                DnsRequestOutboundIndex::ASIS,
-            )?;
-            trace.set_response_action(&response_action);
-            trace.add_routing_elapsed(routing_started);
-            match response_action {
-                ResidentDnsResponseAction::Accept => {
-                    record_accepted_dns_response_async(plan, &cache_key, &response, context)
-                        .await?;
-                    trace.response_routing = DNS_TRACE_ROUTING_ACCEPT.to_owned();
-                    Ok(trace.finish(response, DNS_TRACE_REASON_ASIS_ACCEPTED))
-                }
-                ResidentDnsResponseAction::Reject => {
-                    let response = build_reject_response(payload, request)?;
-                    trace.response_routing = DNS_TRACE_ROUTING_REJECT.to_owned();
-                    Ok(trace.finish(response, DNS_TRACE_REASON_ASIS_REJECTED))
-                }
-                ResidentDnsResponseAction::Upstream(upstream) => {
-                    trace.reroutes += 1;
-                    resolve_dns_response_routing_trace(
-                        plan, payload, request, upstream, &cache_key, trace, context,
-                    )
-                    .await
+    trace.cache = if recovered {
+        "cancel-recovered-miss"
+    } else {
+        DNS_TRACE_CACHE_MISS
+    }
+    .to_owned();
+    let result = async {
+        match action {
+            ResidentDnsRequestAction::AsIs => {
+                trace.push_asis_attempt();
+                let asis_transport = asis_transport.ok_or_else(|| {
+                    "asis DNS transport is unavailable for this request".to_owned()
+                })?;
+                let response = forward_dns_asis_async(
+                    original_dst,
+                    payload,
+                    plan.mark,
+                    asis_transport,
+                    &plan.forwarders,
+                    context,
+                )
+                .await?;
+                validate_dns_response_for_request(request, &response, true)?;
+                let routing_started = Instant::now();
+                let response_action = select_response_action_for_upstream(
+                    plan,
+                    request,
+                    &response,
+                    DnsRequestOutboundIndex::ASIS,
+                )?;
+                trace.set_response_action(&response_action);
+                trace.add_routing_elapsed(routing_started);
+                match response_action {
+                    ResidentDnsResponseAction::Accept => {
+                        record_accepted_dns_response_async(plan, &cache_key, &response, context)
+                            .await?;
+                        trace.response_routing = DNS_TRACE_ROUTING_ACCEPT.to_owned();
+                        Ok(trace.finish(response, DNS_TRACE_REASON_ASIS_ACCEPTED))
+                    }
+                    ResidentDnsResponseAction::Reject => {
+                        let response = build_reject_response(payload, request)?;
+                        trace.response_routing = DNS_TRACE_ROUTING_REJECT.to_owned();
+                        Ok(trace.finish(response, DNS_TRACE_REASON_ASIS_REJECTED))
+                    }
+                    ResidentDnsResponseAction::Upstream(upstream) => {
+                        trace.reroutes += 1;
+                        resolve_dns_response_routing_trace(
+                            plan, payload, request, upstream, &cache_key, trace, context,
+                        )
+                        .await
+                    }
                 }
             }
+            ResidentDnsRequestAction::Reject => unreachable!("reject handled before cache lookup"),
+            ResidentDnsRequestAction::Upstream(ref upstream) => {
+                resolve_dns_response_routing_trace(
+                    plan,
+                    payload,
+                    request,
+                    upstream.clone(),
+                    &cache_key,
+                    trace,
+                    context,
+                )
+                .await
+            }
         }
-        ResidentDnsRequestAction::Reject => unreachable!("reject handled before cache lookup"),
-        ResidentDnsRequestAction::Upstream(ref upstream) => {
-            resolve_dns_response_routing_trace(
-                plan,
-                payload,
-                request,
-                upstream.clone(),
-                &cache_key,
-                trace,
-                context,
-            )
-            .await
-        }
-    };
+    }
+    .await;
     let _ = flight.publish(
         result
             .as_ref()

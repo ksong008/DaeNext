@@ -18,8 +18,8 @@ use std::net::SocketAddr;
 use dae_resident_core::{ResidentDnsUdpFuture, ResidentDnsUdpResolver};
 
 pub use cache::{
-    ResidentDnsFlightPermit, ResidentDnsResponseCacheKey, ResidentDnsResponseCacheScope,
-    ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot,
+    ResidentDnsFlightPermit, ResidentDnsFlightWaitError, ResidentDnsResponseCacheKey,
+    ResidentDnsResponseCacheScope, ResidentDnsRuntimeCache, ResidentDnsRuntimeCacheSnapshot,
 };
 pub use domain_routing::{
     ResidentDnsDomainRouting, ResidentDnsDomainRoutingMaintenanceHandle,
@@ -42,10 +42,10 @@ pub use runtime::{
     DNS_TRANSPORT_ROUTE_PROXY, DNS_TRANSPORT_TARGET_FAMILY_IPV4, DNS_TRANSPORT_TARGET_FAMILY_IPV6,
     DnsRequestIdAllocator, ResidentDnsDispatcher, ResidentDnsPlan, ResidentDnsQueryResult,
     ResidentDnsReloadHandle, ResidentDnsReloadSnapshot, ResidentDnsResolver,
-    ResidentDnsTraceSummary, ResidentDnsTransportTrace, ResidentDnsUdpActorCompletion,
-    ResidentDnsUdpActorExecutor, ResidentDnsUdpActorLifecycle, ResidentDnsUdpActorRegistration,
-    ResidentDnsUpstreamRouter, build_resident_dns_plan_with_refresh_interval,
-    handle_resident_dns_local_trace_async,
+    ResidentDnsResourceLease, ResidentDnsTraceSummary, ResidentDnsTransportTrace,
+    ResidentDnsUdpActorCompletion, ResidentDnsUdpActorExecutor, ResidentDnsUdpActorLifecycle,
+    ResidentDnsUdpActorRegistration, ResidentDnsUpstreamRouter,
+    build_resident_dns_plan_with_refresh_interval, handle_resident_dns_local_trace_async,
 };
 pub use udp_response::fit_dns_response_to_udp_request;
 pub use udp_runtime::ResidentDnsUdpRuntimeConfig;

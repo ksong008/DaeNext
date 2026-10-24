@@ -650,11 +650,23 @@ async fn tcp_udp_preserves_the_complete_udp_target_set_during_the_udp_lead() {
 
 #[tokio::test]
 async fn tcp_udp_tcp_response_does_not_wait_for_blackholed_udp() {
-    let tcp = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .await
-        .unwrap();
+    // TCP's ephemeral allocator does not reserve the corresponding UDP port.
+    let mut pair = None;
+    for _ in 0..32 {
+        let tcp = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        match tokio::net::UdpSocket::bind(tcp.local_addr().unwrap()).await {
+            Ok(udp) => {
+                pair = Some((tcp, udp));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) => panic!("bind UDP blackhole: {error}"),
+        }
+    }
+    let (tcp, _udp_blackhole) = pair.expect("no shared TCP/UDP loopback port after 32 attempts");
     let target = tcp.local_addr().unwrap();
-    let _udp_blackhole = tokio::net::UdpSocket::bind(target).await.unwrap();
     let tcp_server = tokio::spawn(async move {
         let (mut stream, _) = tcp.accept().await.unwrap();
         let request_len = stream.read_u16().await.unwrap() as usize;

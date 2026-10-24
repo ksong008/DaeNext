@@ -546,6 +546,7 @@ async fn proxied_dns_tcp_pool_expands_before_waiting_on_a_full_pipeline() {
         connection_limit: 2,
         request_limit: 1,
         connections: AsyncMutex::new(Vec::new()),
+        task_failures: std::sync::atomic::AtomicUsize::new(0),
         open_lock: AsyncMutex::new(()),
         closing: std::sync::atomic::AtomicBool::new(false),
     });
@@ -662,6 +663,7 @@ async fn direct_dns_tcp_pool_expands_before_waiting_on_a_full_connection() {
         connection_limit: 2,
         request_limit: 1,
         connections: AsyncMutex::new(Vec::new()),
+        task_failures: std::sync::atomic::AtomicUsize::new(0),
         open_lock: AsyncMutex::new(()),
         closing: std::sync::atomic::AtomicBool::new(false),
     };

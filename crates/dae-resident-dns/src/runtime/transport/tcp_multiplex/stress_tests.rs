@@ -140,3 +140,91 @@ async fn write_response(stream: &mut TokioTcpStream, request: &[u8]) {
         tokio::task::yield_now().await;
     }
 }
+
+#[tokio::test]
+async fn aborting_tcp_actor_closes_both_halves_and_releases_queued_and_pending_slots() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let stream = TokioTcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (mut peer, _) = listener.accept().await.unwrap();
+    let (handle, registration) = ResidentDnsTcpMultiplexHandle::new(2);
+    let actor = tokio::spawn(registration.run(stream));
+    let query = build_dns_query_packet(9, "abort.example", DNS_QTYPE_A).unwrap();
+    let request = {
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            handle
+                .exchange(
+                    &query,
+                    ProxyDnsRequestContext::from_timeout(Duration::from_secs(5)),
+                )
+                .await
+        })
+    };
+    let _ = read_frame(&mut peer).await;
+    assert_eq!(handle.pending(), 1);
+    actor.abort();
+    assert!(actor.await.unwrap_err().is_cancelled());
+    assert_eq!(handle.pending(), 0);
+    assert!(handle.is_closed());
+    assert!(request.await.unwrap().is_err());
+    let mut byte = [0];
+    assert_eq!(
+        time::timeout(Duration::from_secs(1), peer.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+
+    // A registration never polled by its owner still owns queued reservations.
+    let (handle, registration) = ResidentDnsTcpMultiplexHandle::new(1);
+    let query = build_dns_query_packet(10, "queued.example", DNS_QTYPE_A).unwrap();
+    let exchange = handle.exchange(
+        &query,
+        ProxyDnsRequestContext::from_timeout(Duration::from_secs(1)),
+    );
+    tokio::pin!(exchange);
+    assert!(futures_util::poll!(&mut exchange).is_pending());
+    assert_eq!(handle.pending(), 1);
+    drop(registration);
+    assert!(exchange.await.is_err());
+    assert_eq!(handle.pending(), 0);
+}
+
+#[tokio::test]
+async fn closing_tcp_actor_wakes_capacity_waiters_and_does_not_wait_for_request_deadline() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let stream = TokioTcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (_peer, _) = listener.accept().await.unwrap();
+    let (handle, registration) = ResidentDnsTcpMultiplexHandle::new(1);
+    let query = build_dns_query_packet(11, "capacity.example", DNS_QTYPE_A).unwrap();
+    let exchange = handle.exchange(
+        &query,
+        ProxyDnsRequestContext::from_timeout(Duration::from_secs(10)),
+    );
+    tokio::pin!(exchange);
+    assert!(futures_util::poll!(&mut exchange).is_pending());
+    let wait = handle.wait_for_capacity(ProxyDnsRequestContext::from_timeout(Duration::from_secs(
+        10,
+    )));
+    tokio::pin!(wait);
+    assert!(futures_util::poll!(&mut wait).is_pending());
+    handle.close();
+    assert!(
+        time::timeout(Duration::from_millis(100), wait)
+            .await
+            .unwrap()
+            .is_err()
+    );
+    // close before the actor's first poll must also terminate immediately.
+    time::timeout(Duration::from_millis(100), registration.run(stream))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(exchange.await.is_err());
+    assert_eq!(handle.pending(), 0);
+}

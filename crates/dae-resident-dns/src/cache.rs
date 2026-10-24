@@ -150,6 +150,7 @@ impl ResidentDnsFlightState {
 
 #[derive(Debug)]
 struct ResidentDnsFlightOutcome {
+    leader_terminated: bool,
     result: Result<Arc<[u8]>, Arc<str>>,
     _retained: Option<ResidentDnsFlightRetainedLease>,
 }
@@ -206,6 +207,23 @@ enum ResidentDnsFlightRole {
     Leader,
     DetachedLeader,
     Follower,
+}
+
+#[derive(Debug)]
+pub enum ResidentDnsFlightWaitError {
+    LeaderTerminated,
+    Failed(String),
+}
+
+impl std::fmt::Display for ResidentDnsFlightWaitError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LeaderTerminated => {
+                formatter.write_str("resident DNS flight leader ended before publishing a result")
+            }
+            Self::Failed(error) => formatter.write_str(error),
+        }
+    }
 }
 
 pub struct ResidentDnsFlightPermit<'a> {
@@ -486,6 +504,14 @@ impl ResidentDnsRuntimeCache {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub fn flight_follower_count(&self) -> usize {
+        self.lock_flights()
+            .values()
+            .map(|state| state.followers.load(Ordering::Acquire))
+            .sum()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn inflight_len(&self) -> usize {
         self.inflight
             .lock()
@@ -650,13 +676,31 @@ impl ResidentDnsFlightPermit<'_> {
         context: ProxyDnsRequestContext,
         request_id: u16,
     ) -> Result<Vec<u8>, String> {
+        self.wait_recoverable(context, request_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn wait_recoverable(
+        &self,
+        context: ProxyDnsRequestContext,
+        request_id: u16,
+    ) -> Result<Vec<u8>, ResidentDnsFlightWaitError> {
+        use ResidentDnsFlightWaitError::{Failed, LeaderTerminated};
         if self.is_leader() {
-            return Err("resident DNS flight leader cannot wait for itself".to_owned());
+            return Err(Failed(
+                "resident DNS flight leader cannot wait for itself".to_owned(),
+            ));
         }
         loop {
             let notified = self.state.notify.notified();
-            if let Some(outcome) = self.outcome()? {
-                return restore_flight_response_id(outcome, request_id);
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(outcome) = self.outcome().map_err(Failed)? {
+                if outcome.leader_terminated {
+                    return Err(LeaderTerminated);
+                }
+                return restore_flight_response_id(outcome, request_id).map_err(Failed);
             }
             context
                 .run(
@@ -668,7 +712,7 @@ impl ResidentDnsFlightPermit<'_> {
                     },
                 )
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| Failed(error.to_string()))?;
         }
     }
 
@@ -703,6 +747,7 @@ impl ResidentDnsFlightPermit<'_> {
             ),
         };
         self.publish_outcome(Arc::new(ResidentDnsFlightOutcome {
+            leader_terminated: false,
             result,
             _retained: retained,
         }))
@@ -731,6 +776,7 @@ impl ResidentDnsFlightPermit<'_> {
             }
             *current = if poisoned {
                 Some(Arc::new(ResidentDnsFlightOutcome {
+                    leader_terminated: false,
                     result: Err(Arc::from("resident DNS flight outcome lock poisoned")),
                     _retained: None,
                 }))
@@ -787,6 +833,9 @@ impl Drop for ResidentDnsFlightPermit<'_> {
         if !self.is_leader() || self.published {
             return;
         }
+        // Remove the old identity before waking followers. They may immediately
+        // elect one replacement, and this Drop must never erase that entry.
+        self.remove_registry_entry();
         let mut outcome = self
             .state
             .outcome
@@ -794,6 +843,7 @@ impl Drop for ResidentDnsFlightPermit<'_> {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if outcome.is_none() {
             *outcome = Some(Arc::new(ResidentDnsFlightOutcome {
+                leader_terminated: true,
                 result: Err(Arc::<str>::from(
                     "resident DNS flight leader ended before publishing a result",
                 )),
