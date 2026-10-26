@@ -20,7 +20,7 @@ async fn poisoned_pool_rejects_reuse_and_still_drops_idle_connections() {
     }));
     assert!(pool.take().await.err().unwrap().contains("poisoned"));
     pool.inner.put(TrackedClient(Arc::clone(&dropped)));
-    assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    assert_eq!(dropped.load(Ordering::Relaxed), 2);
     pool.close();
     assert_eq!(dropped.load(Ordering::Relaxed), 2);
     assert!(pool.take().await.is_err());

@@ -52,6 +52,7 @@ udp.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 base64.workspace = true
 dae-outbound = { workspace = true, features = ["test-support"] }
 dae-resident-core = { workspace = true, features = ["test-support"] }
