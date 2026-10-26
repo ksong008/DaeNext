@@ -5,6 +5,8 @@ use std::sync::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+mod maintenance;
+
 const IDLE_TTL: Duration = Duration::from_secs(30);
 
 pub struct XhttpH1UploadPool<T = AsyncResidentTlsClient> {
@@ -16,21 +18,26 @@ pub(super) struct PoolInner<T> {
     idle: Mutex<Vec<(time::Instant, T)>>,
     permits: Arc<Semaphore>,
     closed: AtomicBool,
+    maintenance: Mutex<Option<maintenance::Registration>>,
+}
+
+impl<T: Send + 'static> XhttpH1UploadPool<T> {
+    pub fn new(limit: usize) -> Self {
+        let limit = limit.max(1);
+        let inner = Arc::new(PoolInner {
+            idle: Mutex::new(Vec::new()),
+            permits: Arc::new(Semaphore::new(limit)),
+            closed: AtomicBool::new(false),
+            maintenance: Mutex::new(None),
+        });
+        if tokio::runtime::Handle::try_current().is_ok() {
+            inner.ensure_maintenance();
+        }
+        Self { inner, limit }
+    }
 }
 
 impl<T> XhttpH1UploadPool<T> {
-    pub fn new(limit: usize) -> Self {
-        let limit = limit.max(1);
-        Self {
-            inner: Arc::new(PoolInner {
-                idle: Mutex::new(Vec::new()),
-                permits: Arc::new(Semaphore::new(limit)),
-                closed: AtomicBool::new(false),
-            }),
-            limit,
-        }
-    }
-
     pub fn limit(&self) -> usize {
         self.limit
     }
@@ -38,6 +45,8 @@ impl<T> XhttpH1UploadPool<T> {
     pub fn close(&self) {
         self.inner.closed.store(true, Ordering::Release);
         self.inner.permits.close();
+        let registration = crate::owner_cleanup::cleanup_lock(&self.inner.maintenance).take();
+        drop(registration);
         let idle = std::mem::take(
             &mut *self
                 .inner
@@ -50,11 +59,16 @@ impl<T> XhttpH1UploadPool<T> {
 
     pub(super) async fn take(
         &self,
-    ) -> Result<(Option<T>, Arc<PoolInner<T>>, OwnedSemaphorePermit), String> {
+    ) -> Result<(Option<T>, Arc<PoolInner<T>>, OwnedSemaphorePermit), String>
+    where
+        T: Send + 'static,
+    {
+        self.inner.ensure_maintenance();
         let permit = Arc::clone(&self.inner.permits)
             .acquire_owned()
             .await
             .map_err(|_| "xHTTP H1 upload pool is closed".to_owned())?;
+        self.inner.prune_idle(time::Instant::now());
         let mut idle = self.inner.idle.lock().map_err(|_| {
             self.inner.closed.store(true, Ordering::Release);
             self.inner.permits.close();
@@ -63,7 +77,6 @@ impl<T> XhttpH1UploadPool<T> {
         if self.inner.closed.load(Ordering::Acquire) {
             return Err("xHTTP H1 upload pool is closed".to_owned());
         }
-        idle.retain(|(at, _)| at.elapsed() < IDLE_TTL);
         Ok((
             idle.pop().map(|(_, client)| client),
             Arc::clone(&self.inner),
@@ -78,7 +91,49 @@ impl<T> Drop for XhttpH1UploadPool<T> {
     }
 }
 
+impl<T: Send + 'static> PoolInner<T> {
+    fn ensure_maintenance(self: &Arc<Self>) {
+        let mut registration = crate::owner_cleanup::cleanup_lock(&self.maintenance);
+        if !self.closed.load(Ordering::Acquire)
+            && registration
+                .as_ref()
+                .is_none_or(|entry| !entry.is_running_on(&tokio::runtime::Handle::current()))
+        {
+            // Unregister before registering again, including same-executor
+            // recovery after a task was cancelled during runtime shutdown.
+            registration.take();
+            *registration = Some(maintenance::register(
+                Arc::clone(self) as Arc<dyn maintenance::IdlePool>
+            ));
+        }
+    }
+}
+
+impl<T: Send + 'static> maintenance::IdlePool for PoolInner<T> {
+    fn sweep(&self, now: time::Instant) {
+        self.prune_idle(now);
+    }
+}
+
 impl<T> PoolInner<T> {
+    fn prune_idle(&self, now: time::Instant) {
+        let expired = {
+            let mut idle = crate::owner_cleanup::cleanup_lock(&self.idle);
+            if self.idle.is_poisoned() {
+                self.closed.store(true, Ordering::Release);
+                self.permits.close();
+            }
+            let discard_all = self.closed.load(Ordering::Acquire);
+            idle.extract_if(.., |(at, _)| {
+                discard_all || now.saturating_duration_since(*at) >= IDLE_TTL
+            })
+            .map(|(_, client)| client)
+            .collect::<Vec<_>>()
+        };
+        // Socket teardown must never run under an idle or maintenance-index lock.
+        drop(expired);
+    }
+
     pub(super) fn put(&self, client: T) {
         let mut idle = match self.idle.lock() {
             Ok(idle) => idle,
@@ -90,6 +145,9 @@ impl<T> PoolInner<T> {
         };
         if !self.closed.load(Ordering::Acquire) {
             idle.push((time::Instant::now(), client));
+        } else {
+            drop(idle);
+            drop(client);
         }
     }
 }
@@ -204,3 +262,5 @@ async fn bounded_line<T: AsyncRead + Unpin>(
 
 #[cfg(test)]
 mod poison_tests;
+#[cfg(test)]
+mod ttl_tests;
