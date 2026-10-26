@@ -635,7 +635,8 @@ fn meek_transport_partitions_keys_and_expires_idle_physicals() {
             time::timeout(Duration::from_secs(2), async {
                 loop {
                     let metrics = owner.metrics_snapshot();
-                    if metrics["idlePhysicalConnections"] == 0
+                    if metrics["registeredKeys"] == 0
+                        && metrics["idlePhysicalConnections"] == 0
                         && metrics["activePhysicalConnections"] == 0
                         && metrics["reservedPhysicalConnections"] == 0
                         && metrics["cumulativeIdleExpirations"] == 2
@@ -652,10 +653,16 @@ fn meek_transport_partitions_keys_and_expires_idle_physicals() {
             assert_eq!(expired["reservedPhysicalConnections"], 0);
             assert_eq!(expired["cumulativeIdleExpirations"], 2);
 
+            let recovered_proxy =
+                meek_test_proxy(server.address, generation, "sha256:meek-key-after-expiry");
             assert_eq!(
-                tcp::meek_round_trip_async(&first_proxy, &meek_test_options(b"key-a-3"), b"a3")
-                    .await
-                    .unwrap(),
+                tcp::meek_round_trip_async(
+                    &recovered_proxy,
+                    &meek_test_options(b"key-after-expiry"),
+                    b"a3"
+                )
+                .await
+                .unwrap(),
                 b"a3"
             );
             assert_eq!(server.tcp_connections.load(Ordering::Relaxed), 3);
