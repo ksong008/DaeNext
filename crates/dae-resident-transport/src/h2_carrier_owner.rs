@@ -16,6 +16,7 @@ use tokio::sync::Notify;
 use tokio::time;
 
 use crate::owner_cleanup::cleanup_lock;
+use crate::owner_key::{OwnerKeyPin, OwnerKeyUsage};
 use crate::transport_identity::resident_transport_binding_identity_digest;
 use crate::{
     AsyncResidentTlsClient, async_resident_tls_underlay_name,
@@ -189,13 +190,15 @@ impl Default for H2CarrierManagerState {
 }
 
 struct H2CarrierManager {
+    usage: Arc<OwnerKeyUsage>,
     state: tokio::sync::Mutex<H2CarrierManagerState>,
     changed: Notify,
 }
 
 impl H2CarrierManager {
-    fn new() -> Self {
+    fn new(quiescent: Arc<Notify>) -> Self {
         Self {
+            usage: OwnerKeyUsage::new(quiescent),
             state: tokio::sync::Mutex::new(H2CarrierManagerState::default()),
             changed: Notify::new(),
         }
@@ -209,6 +212,7 @@ struct H2CarrierGenerationOwner {
     runtime_worker_threads: usize,
     uses_shared_data_plane_executor: bool,
     managers: Mutex<HashMap<H2CarrierKey, Arc<H2CarrierManager>>>,
+    quiescent: Arc<Notify>,
     builds: Mutex<HashMap<u64, tokio::task::AbortHandle>>,
     drivers: Mutex<HashMap<u64, tokio::task::AbortHandle>>,
     resources: H2CarrierOwnerResourceProfile,
@@ -314,6 +318,7 @@ impl H2CarrierGenerationOwnerHandle {
 }
 
 pub struct H2CarrierLease {
+    key_pin: OwnerKeyPin,
     sender: h2::client::SendRequest<Bytes>,
     pending_open_admission: Arc<tokio::sync::Semaphore>,
     request_gate: Arc<tokio::sync::Semaphore>,
@@ -366,6 +371,7 @@ impl H2CarrierLease {
         drop(request_permit);
         Ok((
             H2CarrierResponseFuture {
+                _key_pin: self.key_pin.clone(),
                 response: Box::pin(response),
                 pending_open: Some(pending_open),
             },
@@ -394,7 +400,9 @@ impl H2CarrierLease {
         let key = self.key;
         let instance_id = self.instance_id;
         let runtime = owner.runtime.clone();
+        let key_pin = self.key_pin.clone();
         runtime.spawn(async move {
+            let _key_pin = key_pin;
             invalidate_h2_carrier(&owner, key, instance_id).await;
         });
     }
@@ -425,6 +433,7 @@ fn try_acquire_h2_pending_open(
 }
 
 pub struct H2CarrierResponseFuture {
+    _key_pin: OwnerKeyPin,
     response: Pin<Box<h2::client::ResponseFuture>>,
     pending_open: Option<H2PendingOpenPermit>,
 }
@@ -503,6 +512,7 @@ fn try_reserve_h2_physical(
 }
 
 struct H2BuildMetricGuard {
+    key_pin: OwnerKeyPin,
     owner: Arc<H2CarrierGenerationOwner>,
     build_id: u64,
 }
@@ -528,6 +538,7 @@ impl Drop for H2PhysicalMetricGuard {
 }
 
 struct H2DriverInventoryGuard {
+    _key_pin: OwnerKeyPin,
     owner: Arc<H2CarrierGenerationOwner>,
     instance_id: u64,
 }
@@ -568,6 +579,7 @@ pub fn start_h2_carrier_generation_owner(
         runtime_worker_threads,
         uses_shared_data_plane_executor: false,
         managers: Mutex::new(HashMap::new()),
+        quiescent: Arc::new(Notify::new()),
         builds: Mutex::new(HashMap::new()),
         drivers: Mutex::new(HashMap::new()),
         resources: H2CarrierOwnerResourceProfile::selected(),
@@ -582,7 +594,7 @@ pub fn start_h2_carrier_generation_owner(
         .stack_size(thread_stack_bytes)
         .spawn(move || {
             runtime.block_on(async move {
-                stop.listener().cancelled().await;
+                maintain_h2_keys(&thread_owner, &stop).await;
                 thread_owner.closing.store(true, Ordering::Release);
                 unregister_h2_carrier_generation(&thread_owner);
                 cleanup_h2_carrier_owner(&thread_owner).await;
@@ -608,6 +620,7 @@ pub fn start_h2_carrier_generation_owner_on(
         runtime_worker_threads: runtime_worker_threads.max(1),
         uses_shared_data_plane_executor: true,
         managers: Mutex::new(HashMap::new()),
+        quiescent: Arc::new(Notify::new()),
         builds: Mutex::new(HashMap::new()),
         drivers: Mutex::new(HashMap::new()),
         resources: H2CarrierOwnerResourceProfile::selected(),
@@ -618,7 +631,7 @@ pub fn start_h2_carrier_generation_owner_on(
     register_h2_carrier_generation(&owner)?;
     let task_owner = Arc::clone(&owner);
     let task = runtime.spawn(async move {
-        stop.listener().cancelled().await;
+        maintain_h2_keys(&task_owner, &stop).await;
         task_owner.closing.store(true, Ordering::Release);
         unregister_h2_carrier_generation(&task_owner);
         cleanup_h2_carrier_owner(&task_owner).await;
@@ -681,35 +694,63 @@ fn h2_carrier_generation(
     Ok(owner)
 }
 
+// The only registry mutation lock is managers. Pins cover state-lock waits,
+// builds, real drivers (including drain), leases and invalidation callbacks.
+// Pruning never takes an async state/inventory lock or operates on a snapshot.
+fn prune_h2_keys(managers: &mut HashMap<H2CarrierKey, Arc<H2CarrierManager>>) {
+    managers.retain(|_, manager| !manager.usage.is_quiescent());
+}
+
+async fn maintain_h2_keys(owner: &H2CarrierGenerationOwner, stop: &SharedResidentStopSignal) {
+    let mut listener = stop.listener();
+    loop {
+        tokio::select! {
+            _ = listener.cancelled() => return,
+            _ = owner.quiescent.notified() => prune_h2_keys(&mut cleanup_lock(&owner.managers)),
+        }
+    }
+}
+
+fn h2_carrier_manager(
+    owner: &H2CarrierGenerationOwner,
+    key: H2CarrierKey,
+) -> Result<(Arc<H2CarrierManager>, OwnerKeyPin), String> {
+    let mut managers = owner
+        .managers
+        .lock()
+        .map_err(|_| "HTTP/2 carrier owner map lock poisoned".to_owned())?;
+    if owner.closing.load(Ordering::Acquire) {
+        return Err("HTTP/2 carrier owner is closing".to_owned());
+    }
+    if !managers.contains_key(&key) && managers.len() >= owner.resources.owner_limit() {
+        prune_h2_keys(&mut managers);
+    }
+    if let Some(manager) = managers.get(&key) {
+        return Ok((Arc::clone(manager), manager.usage.pin()));
+    }
+    if managers.len() >= owner.resources.owner_limit() {
+        owner
+            .metrics
+            .owner_limit_rejections
+            .fetch_add(1, Ordering::Relaxed);
+        return Err(format!(
+            "HTTP/2 carrier owner budget is full ({})",
+            owner.resources.owner_limit()
+        ));
+    }
+    let manager = Arc::new(H2CarrierManager::new(Arc::clone(&owner.quiescent)));
+    let pin = manager.usage.pin();
+    managers.insert(key, Arc::clone(&manager));
+    Ok((manager, pin))
+}
+
 pub async fn acquire_h2_carrier(
     binding: ResidentProxyBinding,
     deadline: AbsoluteDeadline,
 ) -> Result<H2CarrierLease, String> {
     let key = H2CarrierKey::for_binding(&binding);
     let owner = h2_carrier_generation(key.generation)?;
-    let manager = {
-        let mut managers = owner
-            .managers
-            .lock()
-            .map_err(|_| "HTTP/2 carrier owner map lock poisoned".to_owned())?;
-        if let Some(manager) = managers.get(&key) {
-            Arc::clone(manager)
-        } else {
-            if managers.len() >= owner.resources.owner_limit() {
-                owner
-                    .metrics
-                    .owner_limit_rejections
-                    .fetch_add(1, Ordering::Relaxed);
-                return Err(format!(
-                    "HTTP/2 carrier owner budget is full ({})",
-                    owner.resources.owner_limit()
-                ));
-            }
-            let manager = Arc::new(H2CarrierManager::new());
-            managers.insert(key, Arc::clone(&manager));
-            manager
-        }
-    };
+    let (manager, key_pin) = h2_carrier_manager(&owner, key)?;
     let initial_failure_revision = manager.state.lock().await.failure_revision;
     loop {
         if owner.closing.load(Ordering::Acquire) {
@@ -737,6 +778,7 @@ pub async fn acquire_h2_carrier(
                 }
                 state.instance_acquisitions = state.instance_acquisitions.saturating_add(1);
                 return Ok(H2CarrierLease {
+                    key_pin,
                     sender,
                     pending_open_admission,
                     request_gate,
@@ -755,8 +797,14 @@ pub async fn acquire_h2_carrier(
             }
             if state.opening_build.is_none() {
                 let physical = try_reserve_h2_physical(&owner)?;
-                let (build_id, start) =
-                    spawn_h2_carrier_build(&owner, &manager, binding.clone(), deadline, physical)?;
+                let (build_id, start) = spawn_h2_carrier_build(
+                    &owner,
+                    &manager,
+                    binding.clone(),
+                    deadline,
+                    physical,
+                    key_pin.clone(),
+                )?;
                 state.opening_build = Some(build_id);
                 if start.send(()).is_err() {
                     state.opening_build = None;
@@ -780,6 +828,7 @@ fn spawn_h2_carrier_build(
     binding: ResidentProxyBinding,
     deadline: AbsoluteDeadline,
     physical: H2PhysicalPermit,
+    key_pin: OwnerKeyPin,
 ) -> Result<(u64, tokio::sync::oneshot::Sender<()>), String> {
     let mut builds = owner
         .builds
@@ -803,6 +852,7 @@ fn spawn_h2_carrier_build(
         .cumulative_builds
         .fetch_add(1, Ordering::Relaxed);
     let guard = H2BuildMetricGuard {
+        key_pin,
         owner: Arc::clone(owner),
         build_id,
     };
@@ -810,7 +860,7 @@ fn spawn_h2_carrier_build(
     let build_manager = Arc::clone(manager);
     let (start, start_rx) = tokio::sync::oneshot::channel();
     let task = owner.runtime.spawn(async move {
-        let _guard = guard;
+        let guard = guard;
         if start_rx.await.is_err() {
             return;
         }
@@ -819,8 +869,8 @@ fn spawn_h2_carrier_build(
             build_manager,
             binding,
             deadline,
-            build_id,
             physical,
+            &guard,
         )
         .await;
     });
@@ -840,10 +890,19 @@ async fn complete_h2_carrier_build(
     manager: Arc<H2CarrierManager>,
     binding: ResidentProxyBinding,
     deadline: AbsoluteDeadline,
-    build_id: u64,
     physical: H2PhysicalPermit,
+    guard: &H2BuildMetricGuard,
 ) {
-    let result = build_h2_carrier(&owner, &manager, &binding, deadline, physical).await;
+    let build_id = guard.build_id;
+    let result = build_h2_carrier(
+        &owner,
+        &manager,
+        &binding,
+        deadline,
+        physical,
+        &guard.key_pin,
+    )
+    .await;
     let mut state = manager.state.lock().await;
     if state.opening_build != Some(build_id) {
         drop(state);
@@ -899,6 +958,7 @@ async fn build_h2_carrier(
     binding: &ResidentProxyBinding,
     deadline: AbsoluteDeadline,
     physical: H2PhysicalPermit,
+    key_pin: &OwnerKeyPin,
 ) -> Result<
     (
         u64,
@@ -983,14 +1043,15 @@ async fn build_h2_carrier(
     let completion_owner = Arc::clone(owner);
     let completion_manager = Arc::clone(manager);
     let inventory_guard = H2DriverInventoryGuard {
+        _key_pin: key_pin.clone(),
         owner: Arc::clone(owner),
         instance_id,
     };
     let (driver_start, driver_start_rx) = tokio::sync::oneshot::channel();
     let driver = tokio::spawn(async move {
+        let _inventory_guard = inventory_guard;
         let _physical = physical;
         let _physical_guard = physical_guard;
-        let _inventory_guard = inventory_guard;
         if driver_start_rx.await.is_err() {
             return;
         }
@@ -1097,6 +1158,8 @@ async fn cleanup_h2_carrier_owner(owner: &Arc<H2CarrierGenerationOwner>) {
 }
 
 #[cfg(test)]
+mod key_tests;
+#[cfg(test)]
 mod poison_tests;
 
 #[cfg(test)]
@@ -1176,6 +1239,7 @@ mod tests {
         let request_gate = Arc::new(tokio::sync::Semaphore::new(1));
         let metrics = Arc::new(H2CarrierMetrics::default());
         let lease = H2CarrierLease {
+            key_pin: OwnerKeyUsage::new(Arc::new(Notify::new())).pin(),
             sender,
             pending_open_admission: Arc::clone(&pending_open_admission),
             request_gate: Arc::clone(&request_gate),

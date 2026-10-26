@@ -34,6 +34,7 @@ mod juicity_owner;
 mod logical_stream;
 mod meek_transport_owner;
 mod owner_cleanup;
+mod owner_key;
 mod owner_registries;
 mod pooled_reader;
 mod proxy_handshake;
