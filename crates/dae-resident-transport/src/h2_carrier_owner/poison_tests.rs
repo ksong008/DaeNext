@@ -21,7 +21,7 @@ async fn poisoned_carrier_inventories_still_abort_tasks_and_wake_managers() {
     )
     .unwrap();
     let owner = &handle.owner;
-    let manager = Arc::new(H2CarrierManager::new());
+    let manager = Arc::new(H2CarrierManager::new(Arc::clone(&owner.quiescent)));
     manager.state.lock().await.opening_build = Some(1);
     owner.managers.lock().unwrap().insert(
         H2CarrierKey {
@@ -32,6 +32,7 @@ async fn poisoned_carrier_inventories_still_abort_tasks_and_wake_managers() {
     );
     owner.metrics.active_builds.store(1, Ordering::Relaxed);
     let build_guard = H2BuildMetricGuard {
+        key_pin: manager.usage.pin(),
         owner: Arc::clone(owner),
         build_id: 1,
     };
@@ -45,6 +46,7 @@ async fn poisoned_carrier_inventories_still_abort_tasks_and_wake_managers() {
         metrics: Arc::clone(&owner.metrics),
     };
     let driver_guard = H2DriverInventoryGuard {
+        _key_pin: manager.usage.pin(),
         owner: Arc::clone(owner),
         instance_id: 2,
     };

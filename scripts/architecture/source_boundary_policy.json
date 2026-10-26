@@ -58,8 +58,8 @@
       "tests": 36421
     },
     "dae-resident-transport": {
-      "production": 35888,
-      "tests": 7922
+      "production": 36001,
+      "tests": 8140
     },
     "dae-resident-tcp": {
       "production": 14295,
@@ -90,5 +90,6 @@
   "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged.",
   "dns_send_scheduling_rationale": "2026-10-17: account for owned DNS send operations and per-poll IO sharing in resident UDP, payload ownership transfer in transport, and controlled backpressure/external protocol regressions in dataplane; only measured overages are adjusted, without extra growth allowance.",
   "dns_domain_routing_dispatch_rationale": "2026-10-18: account only for domain-routing expiry, FIFO admission, worker progress, cancellation and queued-commit regression tests; production limits unchanged, no extra growth allowance.",
-  "tcp_udp_lifecycle_regression_rationale": "2026-10-24: account only for measured overages from cancellation/publication, H2 incarnation, pool shutdown, UDP queued-batch accounting and independent TCP lifetime/FIFO-budget regressions. No extra growth allowance; existing production budgets stay unchanged except the resident UDP lifecycle/accounting implementation."
+  "tcp_udp_lifecycle_regression_rationale": "2026-10-24: account only for measured overages from cancellation/publication, H2 incarnation, pool shutdown, UDP queued-batch accounting and independent TCP lifetime/FIFO-budget regressions. No extra growth allowance; existing production budgets stay unchanged except the resident UDP lifecycle/accounting implementation.",
+  "carrier_key_idle_ttl_rationale": "2026-10-26: account only for measured source growth from explicit carrier entry pins, bounded empty-key reclamation, shared weak H1 idle maintenance and their lifecycle/real-transport regression tests; no extra growth allowance."
 }

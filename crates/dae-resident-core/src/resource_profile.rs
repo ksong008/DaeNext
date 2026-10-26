@@ -995,6 +995,12 @@ impl H2CarrierOwnerResourceProfile {
         self.owner_limit
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn with_owner_limit(mut self, owner_limit: usize) -> Self {
+        self.owner_limit = owner_limit;
+        self
+    }
+
     pub const fn physical_connection_limit(self) -> usize {
         self.owner_limit
     }
