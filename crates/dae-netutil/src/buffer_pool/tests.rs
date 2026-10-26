@@ -41,11 +41,9 @@ fn global_pool_respects_capacity_and_retention_bounds() {
         assert!(bin.len() <= PER_CLASS_LIMIT);
         // A bin may hold storage wider than its class; never narrower, and
         // never above the retention ceiling.
-        assert!(
-            bin.iter().all(|buffer| buffer.capacity() >= CLASSES[class]
-                && buffer.capacity() <= MAX_RETAINED_CAPACITY
-                && buffer.is_empty())
-        );
+        assert!(bin.iter().all(|buffer| buffer.capacity() >= CLASSES[class]
+            && buffer.capacity() <= MAX_RETAINED_CAPACITY
+            && buffer.is_empty()));
     }
 }
 
@@ -61,7 +59,13 @@ fn acquisitions_never_undersize() {
             buffer.capacity()
         );
     }
-    for requested in [0, 1, CLASSES[0] - 1, CLASSES[2] + 1, MAX_RETAINED_CAPACITY + 1] {
+    for requested in [
+        0,
+        1,
+        CLASSES[0] - 1,
+        CLASSES[2] + 1,
+        MAX_RETAINED_CAPACITY + 1,
+    ] {
         let buffer = PooledBuffer::with_capacity(requested);
         assert!(
             buffer.capacity() >= requested,
@@ -123,7 +127,10 @@ fn storage_above_the_retention_ceiling_is_rejected() {
     assert_eq!(pool.returns, 1);
     assert_eq!(pool.rejected_oversized, 1);
     assert_eq!(pool.accepted_returns(), 0);
-    assert!(pool.bins.iter().all(Vec::is_empty), "nothing may be retained");
+    assert!(
+        pool.bins.iter().all(Vec::is_empty),
+        "nothing may be retained"
+    );
     assert_eq!(pool.bytes, 0);
 }
 
@@ -153,13 +160,22 @@ fn budget_rejection_is_reported_separately_from_class_full() {
     assert_eq!(pool.rejected_budget, 0, "the budget was never the obstacle");
 
     // Budget: a class whose capacity no longer fits is rejected by the budget.
-    let mut budget_pool = Pool {
-        bytes: IDLE_BUDGET - 1,
-        ..Pool::default()
-    };
+    let mut budget_pool = Pool::default();
+    for _ in 0..PER_CLASS_LIMIT {
+        return_unlocked(&mut budget_pool, Vec::with_capacity(MAX_RETAINED_CAPACITY));
+    }
+    assert_eq!(budget_pool.bytes, IDLE_BUDGET);
+    assert_eq!(
+        budget_pool.bytes,
+        budget_pool.bins.iter().flatten().map(Vec::capacity).sum::<usize>()
+    );
     return_unlocked(&mut budget_pool, Vec::with_capacity(CLASSES[0]));
     assert_eq!(budget_pool.rejected_budget, 1);
     assert_eq!(budget_pool.rejected_class_full, 0);
+    let buffer = take_unlocked(&mut budget_pool, CLASSES.len() - 1).unwrap();
+    assert_eq!(budget_pool.bytes, IDLE_BUDGET - buffer.capacity());
+    return_unlocked(&mut budget_pool, buffer);
+    assert_eq!(budget_pool.bytes, IDLE_BUDGET);
 }
 
 #[test]
@@ -210,4 +226,44 @@ fn stats_snapshot_reports_derived_totals() {
         "every considered return must be classified exactly once"
     );
     assert!(stats.idle_bytes <= IDLE_BUDGET);
+}
+
+#[test]
+fn retention_boundaries_clear_length_and_preserve_capacity() {
+    for capacity in [
+        MAX_RETAINED_CAPACITY - 1,
+        MAX_RETAINED_CAPACITY,
+        MAX_RETAINED_CAPACITY + 1,
+        200_000,
+    ] {
+        let mut pool = Pool::default();
+        let mut buffer = Vec::with_capacity(capacity);
+        buffer.extend_from_slice(b"previous contents");
+        return_unlocked(&mut pool, buffer);
+        if capacity > MAX_RETAINED_CAPACITY {
+            assert_eq!(pool.rejected_oversized, 1);
+            assert_eq!(pool.bytes, 0);
+        } else {
+            let class = CLASSES.iter().rposition(|&size| size <= capacity).unwrap();
+            let buffer = take_unlocked(&mut pool, class).unwrap();
+            assert!(buffer.is_empty());
+            assert_eq!(buffer.capacity(), capacity);
+            assert_eq!(pool.bytes, 0);
+        }
+    }
+}
+
+#[test]
+fn production_acquire_and_drop_bypass_a_held_pool_lock() {
+    // Holding this lock in the calling thread makes a blocking fallback deadlock.
+    // Counter assertions allow unrelated parallel tests to make progress too.
+    let pool = POOL.get_or_init(Mutex::default).lock().unwrap();
+    let acquisitions = CONTENDED_ACQUISITIONS.load(Ordering::Relaxed);
+    let returns = CONTENDED_RETURNS.load(Ordering::Relaxed);
+    let buffer = PooledBuffer::with_capacity(CLASSES[0]);
+    assert!(buffer.capacity() >= CLASSES[0]);
+    drop(buffer);
+    assert!(CONTENDED_ACQUISITIONS.load(Ordering::Relaxed) > acquisitions);
+    assert!(CONTENDED_RETURNS.load(Ordering::Relaxed) > returns);
+    drop(pool);
 }

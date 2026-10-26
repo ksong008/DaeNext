@@ -94,9 +94,7 @@ pub fn pool_stats() -> PooledBufferPoolStats {
         ..PooledBufferPoolStats::default()
     };
     let pool = POOL.get_or_init(Mutex::default);
-    let pool = pool
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let pool = pool.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     stats.acquisitions = pool.acquisitions;
     stats.hits = pool.hits;
     stats.misses = pool.acquisitions.saturating_sub(pool.hits);
