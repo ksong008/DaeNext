@@ -12,4 +12,4 @@ mod buffer_pool;
 mod indexed_cache;
 pub use indexed_cache::IndexedCache;
 pub mod wire_random;
-pub use buffer_pool::PooledBuffer;
+pub use buffer_pool::{PooledBuffer, PooledBufferPoolStats, pool_stats};
