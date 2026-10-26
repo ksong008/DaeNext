@@ -664,7 +664,8 @@ fn vless_mux_owner_enforces_capacity_key_partition_idle_expiry_and_generation_cl
                 time::timeout(Duration::from_secs(3), async {
                     loop {
                         let metrics = owner.metrics_snapshot();
-                        if metrics["activeLogicalStreams"] == 0
+                        if metrics["registeredKeys"] == 0
+                            && metrics["activeLogicalStreams"] == 0
                             && metrics["activePhysicalConnections"] == 0
                             && metrics["reservedPhysicalConnections"] == 0
                             && metrics["cumulativeIdleExpirations"].as_u64().unwrap_or(0) >= 3
@@ -677,6 +678,20 @@ fn vless_mux_owner_enforces_capacity_key_partition_idle_expiry_and_generation_cl
                 .await
                 .unwrap();
 
+                let recovered_proxy = vless_mux_test_proxy(
+                    server.address,
+                    generation,
+                    &format!("sha256:mux-cycle-{cycle}-after-expiry"),
+                );
+                let mut recovered = acquire_vless_mux_logical_stream(
+                    recovered_proxy,
+                    "127.0.0.1:443".to_owned(),
+                    vless_mux_test_deadline(Duration::from_secs(2)),
+                )
+                .await
+                .unwrap();
+                write_and_read_echo(&mut recovered, b"recovered after key expiry").await;
+                drop(recovered);
                 stop_vless_mux_owner(stop, owner_thread).await;
                 assert_vless_mux_owner_released(&owner);
                 server.stop().await;

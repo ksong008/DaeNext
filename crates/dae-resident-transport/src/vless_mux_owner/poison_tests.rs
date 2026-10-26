@@ -22,8 +22,8 @@ async fn poisoned_build_registry_rejects_without_spinning_or_leaking_capacity() 
     let owner = &handle.owner;
     let binding = test_binding(owner.generation.get());
     let key = VlessMuxTransportKey::for_binding(&binding);
-    let pool = vless_mux_pool(owner, key).unwrap();
-    let capacity = try_reserve_vless_mux_physical(owner, &pool).unwrap();
+    let (pool, key_pin) = vless_mux_pool(owner, key).unwrap();
+    let capacity = try_reserve_vless_mux_physical(owner, &pool, &key_pin).unwrap();
     poison(&owner.builds);
     let error = build_vless_mux_physical(
         owner,
@@ -59,8 +59,8 @@ async fn poisoned_mux_inventories_close_existing_physical_and_reap_builds() {
         generation: owner.generation,
         digest: [0; 32],
     };
-    let pool = vless_mux_pool(owner, key).unwrap();
-    let capacity = try_reserve_vless_mux_physical(owner, &pool).unwrap();
+    let (pool, key_pin) = vless_mux_pool(owner, key).unwrap();
+    let capacity = try_reserve_vless_mux_physical(owner, &pool, &key_pin).unwrap();
     let physical = super::tests::selection_test_physical(1, 0, true, false);
     // Share the owner's metric inventory rather than the selection fixture's.
     owner.metrics.physical_opened();
@@ -79,6 +79,7 @@ async fn poisoned_mux_inventories_close_existing_physical_and_reap_builds() {
     pool.physical.lock().unwrap().push(Arc::clone(&physical));
     owner.metrics.active_builds.store(1, Ordering::Relaxed);
     let guard = VlessMuxBuildGuard {
+        _key_pin: key_pin.clone(),
         owner: Arc::clone(owner),
         build_id: 1,
     };
@@ -90,7 +91,7 @@ async fn poisoned_mux_inventories_close_existing_physical_and_reap_builds() {
     poison(&pool.physical);
     poison(&owner.pools);
     poison(&owner.builds);
-    assert!(select_vless_mux_physical(owner, &pool).is_err());
+    assert!(select_vless_mux_physical(owner, &pool, &key_pin).is_err());
     let concurrent_close = {
         let owner = Arc::clone(owner);
         tokio::spawn(async move { cleanup_vless_mux_owner(&owner).await })
@@ -126,8 +127,8 @@ async fn builder_waiting_for_inventory_rechecks_closing_and_releases_capacity() 
     let owner = Arc::clone(&handle.owner);
     let binding = test_binding(owner.generation.get());
     let key = VlessMuxTransportKey::for_binding(&binding);
-    let pool = vless_mux_pool(&owner, key).unwrap();
-    let capacity = try_reserve_vless_mux_physical(&owner, &pool).unwrap();
+    let (pool, key_pin) = vless_mux_pool(&owner, key).unwrap();
+    let capacity = try_reserve_vless_mux_physical(&owner, &pool, &key_pin).unwrap();
     let (locked, ready) = std::sync::mpsc::channel();
     let holder_owner = Arc::clone(&owner);
     let holder = std::thread::spawn(move || {

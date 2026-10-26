@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::owner_cleanup::cleanup_lock;
+use crate::owner_key::{OwnerKeyPin, OwnerKeyUsage};
 
 use bytes::Bytes;
 use dae_outbound_core::vmess::VMessMetadata;
@@ -155,14 +156,16 @@ impl VlessMuxOwnerMetrics {
 }
 
 struct VlessMuxTransportPool {
+    usage: Arc<OwnerKeyUsage>,
     physical: Mutex<Vec<Arc<VlessMuxPhysicalHandle>>>,
     physical_count: AtomicUsize,
     acquisition_gate: tokio::sync::Mutex<()>,
 }
 
 impl VlessMuxTransportPool {
-    fn new() -> Self {
+    fn new(quiescent: Arc<tokio::sync::Notify>) -> Self {
         Self {
+            usage: OwnerKeyUsage::new(quiescent),
             physical: Mutex::new(Vec::new()),
             physical_count: AtomicUsize::new(0),
             acquisition_gate: tokio::sync::Mutex::new(()),
@@ -177,6 +180,7 @@ struct VlessMuxGenerationOwner {
     runtime_worker_threads: usize,
     uses_shared_data_plane_executor: bool,
     pools: Mutex<HashMap<VlessMuxTransportKey, Arc<VlessMuxTransportPool>>>,
+    quiescent: Arc<tokio::sync::Notify>,
     builds: Mutex<HashMap<u64, tokio::task::AbortHandle>>,
     resources: VlessMuxOwnerResourceProfile,
     metrics: Arc<VlessMuxOwnerMetrics>,
@@ -351,7 +355,11 @@ impl VlessMuxPhysicalHandle {
     fn reserve_logical(
         self: &Arc<Self>,
         owner: &Arc<VlessMuxGenerationOwner>,
+        key_pin: &OwnerKeyPin,
     ) -> Option<VlessMuxLogicalPermit> {
+        // Serialize the zero-to-one transition with the final release,
+        // idle expiry and real driver teardown (pool -> idle_since order).
+        let _idle_since = cleanup_lock(&self.idle_since);
         if self.closed.load(Ordering::Acquire) || !self.accepting.load(Ordering::Acquire) {
             return None;
         }
@@ -374,6 +382,7 @@ impl VlessMuxPhysicalHandle {
         let charged_buffer_bytes = owner.resources.logical_buffer_bytes().saturating_mul(2);
         owner.metrics.logical_opened(charged_buffer_bytes);
         Some(VlessMuxLogicalPermit {
+            _key_pin: key_pin.clone(),
             physical: Arc::downgrade(self),
             owner: Arc::downgrade(owner),
             charged_buffer_bytes,
@@ -386,6 +395,7 @@ impl VlessMuxPhysicalHandle {
 }
 
 struct VlessMuxLogicalPermit {
+    _key_pin: OwnerKeyPin,
     physical: Weak<VlessMuxPhysicalHandle>,
     owner: Weak<VlessMuxGenerationOwner>,
     charged_buffer_bytes: usize,
@@ -400,15 +410,22 @@ impl Drop for VlessMuxLogicalPermit {
         let Some(physical) = self.physical.upgrade() else {
             return;
         };
+        let mut idle_since = cleanup_lock(&physical.idle_since);
         let previous = physical.active_logical.fetch_sub(1, Ordering::AcqRel);
         if previous != 1 {
             owner.changed.notify_waiters();
             return;
         }
-        *cleanup_lock(&physical.idle_since) = Instant::now();
-        if !physical.idle.swap(true, Ordering::AcqRel) {
-            owner.metrics.idle_opened();
+        #[cfg(test)]
+        key_tests::after_last_release();
+        // A pending open may outlive its driver; never resurrect its idle gauge.
+        if !physical.closed.load(Ordering::Acquire) {
+            *idle_since = Instant::now();
+            if !physical.idle.swap(true, Ordering::AcqRel) {
+                owner.metrics.idle_opened();
+            }
         }
+        drop(idle_since);
         if !physical.accepting.load(Ordering::Acquire) {
             physical.close();
         }
@@ -419,6 +436,7 @@ impl Drop for VlessMuxLogicalPermit {
 struct VlessMuxPhysicalCapacityGuard {
     owner: Weak<VlessMuxGenerationOwner>,
     pool: Weak<VlessMuxTransportPool>,
+    key_pin: OwnerKeyPin,
 }
 
 impl Drop for VlessMuxPhysicalCapacityGuard {
@@ -444,9 +462,12 @@ struct VlessMuxPhysicalMetricGuard {
 
 impl Drop for VlessMuxPhysicalMetricGuard {
     fn drop(&mut self) {
-        self.physical.closed.store(true, Ordering::Release);
-        if self.physical.idle.swap(false, Ordering::AcqRel) {
-            self.owner.metrics.idle_closed();
+        {
+            let _idle_since = cleanup_lock(&self.physical.idle_since);
+            self.physical.closed.store(true, Ordering::Release);
+            if self.physical.idle.swap(false, Ordering::AcqRel) {
+                self.owner.metrics.idle_closed();
+            }
         }
         self.owner.metrics.physical_closed();
         self.owner.changed.notify_waiters();
@@ -454,6 +475,7 @@ impl Drop for VlessMuxPhysicalMetricGuard {
 }
 
 struct VlessMuxBuildGuard {
+    _key_pin: OwnerKeyPin,
     owner: Arc<VlessMuxGenerationOwner>,
     build_id: u64,
 }
@@ -717,6 +739,7 @@ fn start_vless_mux_generation_owner_with_resources(
         runtime_worker_threads,
         uses_shared_data_plane_executor: false,
         pools: Mutex::new(HashMap::new()),
+        quiescent: Arc::new(tokio::sync::Notify::new()),
         builds: Mutex::new(HashMap::new()),
         resources,
         metrics: Arc::new(VlessMuxOwnerMetrics::default()),
@@ -738,6 +761,7 @@ fn start_vless_mux_generation_owner_with_resources(
                     tokio::select! {
                         _ = stop_listener.cancelled() => break,
                         _ = janitor.tick() => prune_vless_mux_owner(&thread_owner),
+                        _ = thread_owner.quiescent.notified() => prune_empty_vless_mux_keys(&mut cleanup_lock(&thread_owner.pools)),
                     }
                 }
                 thread_owner.closing.store(true, Ordering::Release);
@@ -765,6 +789,7 @@ pub fn start_vless_mux_generation_owner_on(
         runtime_worker_threads: runtime_worker_threads.max(1),
         uses_shared_data_plane_executor: true,
         pools: Mutex::new(HashMap::new()),
+        quiescent: Arc::new(tokio::sync::Notify::new()),
         builds: Mutex::new(HashMap::new()),
         resources: VlessMuxOwnerResourceProfile::selected(),
         metrics: Arc::new(VlessMuxOwnerMetrics::default()),
@@ -782,6 +807,7 @@ pub fn start_vless_mux_generation_owner_on(
             tokio::select! {
                 _ = stop_listener.cancelled() => break,
                 _ = janitor.tick() => prune_vless_mux_owner(&task_owner),
+                _ = task_owner.quiescent.notified() => prune_empty_vless_mux_keys(&mut cleanup_lock(&task_owner.pools)),
             }
         }
         task_owner.closing.store(true, Ordering::Release);
@@ -844,13 +870,19 @@ fn vless_mux_generation(
 fn vless_mux_pool(
     owner: &Arc<VlessMuxGenerationOwner>,
     key: VlessMuxTransportKey,
-) -> Result<Arc<VlessMuxTransportPool>, String> {
+) -> Result<(Arc<VlessMuxTransportPool>, OwnerKeyPin), String> {
     let mut pools = owner
         .pools
         .lock()
         .map_err(|_| "VLESS mux owner map lock poisoned".to_owned())?;
+    if owner.closing.load(Ordering::Acquire) {
+        return Err("VLESS mux owner is closing".to_owned());
+    }
+    if !pools.contains_key(&key) && pools.len() >= owner.resources.owner_limit() {
+        prune_empty_vless_mux_keys(&mut pools);
+    }
     if let Some(pool) = pools.get(&key) {
-        return Ok(Arc::clone(pool));
+        return Ok((Arc::clone(pool), pool.usage.pin()));
     }
     if pools.len() >= owner.resources.owner_limit() {
         owner
@@ -862,9 +894,10 @@ fn vless_mux_pool(
             owner.resources.owner_limit()
         ));
     }
-    let pool = Arc::new(VlessMuxTransportPool::new());
+    let pool = Arc::new(VlessMuxTransportPool::new(Arc::clone(&owner.quiescent)));
+    let pin = pool.usage.pin();
     pools.insert(key, Arc::clone(&pool));
-    Ok(pool)
+    Ok((pool, pin))
 }
 
 pub async fn acquire_vless_mux_logical_stream(
@@ -882,7 +915,7 @@ pub async fn acquire_vless_mux_logical_stream(
         .map_err(|error| format!("build VLESS mux target metadata: {error}"))?;
     let key = VlessMuxTransportKey::for_binding(&binding);
     let owner = vless_mux_generation(key.generation)?;
-    let pool = vless_mux_pool(&owner, key)?;
+    let (pool, key_pin) = vless_mux_pool(&owner, key)?;
     loop {
         let remaining = deadline
             .remaining_at(Instant::now())
@@ -896,18 +929,18 @@ pub async fn acquire_vless_mux_logical_stream(
                 owner.generation.get()
             ));
         }
-        let selected = select_vless_mux_physical(&owner, &pool)?;
+        let selected = select_vless_mux_physical(&owner, &pool, &key_pin)?;
         if let Some((physical, permit)) = selected {
             drop(gate);
             return open_vless_mux_logical(physical, permit, target, deadline).await;
         }
-        let capacity = try_reserve_vless_mux_physical(&owner, &pool);
+        let capacity = try_reserve_vless_mux_physical(&owner, &pool, &key_pin);
         if let Some(capacity) = capacity {
             drop(gate);
             let physical =
                 build_vless_mux_physical(&owner, &pool, binding.clone(), key, deadline, capacity)
                     .await?;
-            let permit = physical.reserve_logical(&owner).ok_or_else(|| {
+            let permit = physical.reserve_logical(&owner, &key_pin).ok_or_else(|| {
                 "new VLESS mux physical rejected its first logical stream".to_owned()
             })?;
             return open_vless_mux_logical(physical, permit, target, deadline).await;
@@ -931,6 +964,7 @@ pub async fn acquire_vless_mux_logical_stream(
 fn select_vless_mux_physical(
     owner: &Arc<VlessMuxGenerationOwner>,
     pool: &Arc<VlessMuxTransportPool>,
+    key_pin: &OwnerKeyPin,
 ) -> Result<Option<(Arc<VlessMuxPhysicalHandle>, VlessMuxLogicalPermit)>, String> {
     let mut physical = pool
         .physical
@@ -945,7 +979,7 @@ fn select_vless_mux_physical(
             return Ok(None);
         };
         let candidate = Arc::clone(candidate);
-        if let Some(permit) = candidate.reserve_logical(owner) {
+        if let Some(permit) = candidate.reserve_logical(owner, key_pin) {
             return Ok(Some((candidate, permit)));
         }
     }
@@ -975,6 +1009,7 @@ fn least_loaded_vless_mux_physical(
 fn try_reserve_vless_mux_physical(
     owner: &Arc<VlessMuxGenerationOwner>,
     pool: &Arc<VlessMuxTransportPool>,
+    key_pin: &OwnerKeyPin,
 ) -> Option<VlessMuxPhysicalCapacityGuard> {
     if pool.physical_count.load(Ordering::Relaxed)
         >= owner.resources.physical_connections_per_owner()
@@ -1007,6 +1042,7 @@ fn try_reserve_vless_mux_physical(
     pool.physical_count.fetch_add(1, Ordering::Relaxed);
     VlessMuxOwnerMetrics::update_high_water(&owner.metrics.high_water_reserved_physical, reserved);
     Some(VlessMuxPhysicalCapacityGuard {
+        key_pin: key_pin.clone(),
         owner: Arc::downgrade(owner),
         pool: Arc::downgrade(pool),
     })
@@ -1040,6 +1076,7 @@ async fn build_vless_mux_physical(
             .cumulative_builds
             .fetch_add(1, Ordering::Relaxed);
         let guard = VlessMuxBuildGuard {
+            _key_pin: capacity.key_pin.clone(),
             owner: Arc::clone(owner),
             build_id,
         };
@@ -1765,6 +1802,16 @@ async fn write_vless_mux_physical_until(
     .map_err(|_| format!("{label}: absolute deadline elapsed"))?
 }
 
+// Every acquirer, logical permit and build/actor capacity guard pins its entry.
+// Closed handles in the physical inventory are not live actors. Checking the
+// currently indexed usage under pools is the final identity/liveness check;
+// snapshots and old actor callbacks never remove registry entries themselves.
+fn prune_empty_vless_mux_keys(
+    pools: &mut HashMap<VlessMuxTransportKey, Arc<VlessMuxTransportPool>>,
+) {
+    pools.retain(|_, pool| !pool.usage.is_quiescent());
+}
+
 fn prune_vless_mux_owner(owner: &Arc<VlessMuxGenerationOwner>) {
     let pools = cleanup_lock(&owner.pools)
         .values()
@@ -1776,13 +1823,15 @@ fn prune_vless_mux_owner(owner: &Arc<VlessMuxGenerationOwner>) {
             let mut physical = cleanup_lock(&pool.physical);
             physical.retain(|candidate| !candidate.closed.load(Ordering::Acquire));
             for candidate in physical.iter() {
-                if !candidate.idle.load(Ordering::Acquire) {
+                let idle_since = cleanup_lock(&candidate.idle_since);
+                if candidate.active_logical.load(Ordering::Acquire) != 0
+                    || !candidate.idle.load(Ordering::Acquire)
+                {
                     continue;
                 }
                 let expired = pool.physical.is_poisoned()
                     || candidate.idle_since.is_poisoned()
-                    || now.saturating_duration_since(*cleanup_lock(&candidate.idle_since))
-                        >= owner.resources.idle_timeout();
+                    || now.saturating_duration_since(*idle_since) >= owner.resources.idle_timeout();
                 if expired {
                     candidate.accepting.store(false, Ordering::Release);
                     candidate.stop.store(true, Ordering::Release);
@@ -1794,6 +1843,7 @@ fn prune_vless_mux_owner(owner: &Arc<VlessMuxGenerationOwner>) {
             }
         }
     }
+    prune_empty_vless_mux_keys(&mut cleanup_lock(&owner.pools));
 }
 
 async fn cleanup_vless_mux_owner(owner: &Arc<VlessMuxGenerationOwner>) {
@@ -1846,6 +1896,8 @@ async fn cleanup_vless_mux_owner(owner: &Arc<VlessMuxGenerationOwner>) {
     cleanup_lock(&owner.pools).clear();
 }
 
+#[cfg(test)]
+mod key_tests;
 #[cfg(test)]
 pub(crate) mod poison_tests;
 
