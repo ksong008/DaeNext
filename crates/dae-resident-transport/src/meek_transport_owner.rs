@@ -6,6 +6,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::owner_cleanup::cleanup_lock;
+use crate::owner_key::{OwnerKeyPin, OwnerKeyUsage};
 
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
 use serde_json::{Value, json};
@@ -120,13 +121,15 @@ impl MeekTransportMetrics {
 }
 
 struct MeekTransportPool {
+    usage: Arc<OwnerKeyUsage>,
     idle: Mutex<VecDeque<MeekIdlePhysical>>,
     physical_count: AtomicUsize,
 }
 
 impl MeekTransportPool {
-    fn new() -> Self {
+    fn new(quiescent: Arc<Notify>) -> Self {
         Self {
+            usage: OwnerKeyUsage::new(quiescent),
             idle: Mutex::new(VecDeque::new()),
             physical_count: AtomicUsize::new(0),
         }
@@ -140,6 +143,7 @@ struct MeekTransportGenerationOwner {
     runtime_worker_threads: usize,
     uses_shared_data_plane_executor: bool,
     pools: Mutex<HashMap<MeekTransportKey, Arc<MeekTransportPool>>>,
+    quiescent: Arc<Notify>,
     builds: Mutex<HashMap<u64, tokio::task::AbortHandle>>,
     resources: MeekTransportResourceProfile,
     metrics: Arc<MeekTransportMetrics>,
@@ -247,6 +251,7 @@ impl Drop for MeekPhysicalPermit {
 struct MeekPhysicalSlot {
     pool: Arc<MeekTransportPool>,
     _permit: MeekPhysicalPermit,
+    key_pin: OwnerKeyPin,
 }
 
 impl Drop for MeekPhysicalSlot {
@@ -273,6 +278,7 @@ struct MeekIdlePhysical {
 }
 
 pub struct MeekTransportLease {
+    _key_pin: OwnerKeyPin,
     physical: Option<MeekPhysicalConnection>,
     pool: Arc<MeekTransportPool>,
     owner: Weak<MeekTransportGenerationOwner>,
@@ -349,6 +355,7 @@ impl Drop for MeekTransportLease {
 }
 
 struct MeekBuildGuard {
+    _key_pin: OwnerKeyPin,
     owner: Arc<MeekTransportGenerationOwner>,
     build_id: u64,
 }
@@ -433,6 +440,7 @@ fn start_meek_transport_generation_owner_with_resources(
         runtime_worker_threads,
         uses_shared_data_plane_executor: false,
         pools: Mutex::new(HashMap::new()),
+        quiescent: Arc::new(Notify::new()),
         builds: Mutex::new(HashMap::new()),
         resources,
         metrics: Arc::new(MeekTransportMetrics::default()),
@@ -454,6 +462,7 @@ fn start_meek_transport_generation_owner_with_resources(
                     tokio::select! {
                         _ = stop_listener.cancelled() => break,
                         _ = janitor.tick() => prune_expired_meek_idle(&thread_owner),
+                        _ = thread_owner.quiescent.notified() => prune_empty_meek_keys(&mut cleanup_lock(&thread_owner.pools)),
                     }
                 }
                 thread_owner.closing.store(true, Ordering::Release);
@@ -487,6 +496,7 @@ pub fn start_meek_transport_generation_owner_on(
         runtime_worker_threads: runtime_worker_threads.max(1),
         uses_shared_data_plane_executor: true,
         pools: Mutex::new(HashMap::new()),
+        quiescent: Arc::new(Notify::new()),
         builds: Mutex::new(HashMap::new()),
         resources: MeekTransportResourceProfile::selected(),
         metrics: Arc::new(MeekTransportMetrics::default()),
@@ -503,6 +513,7 @@ pub fn start_meek_transport_generation_owner_on(
             tokio::select! {
                 _ = stop_listener.cancelled() => break,
                 _ = janitor.tick() => prune_expired_meek_idle(&task_owner),
+                _ = task_owner.quiescent.notified() => prune_empty_meek_keys(&mut cleanup_lock(&task_owner.pools)),
             }
         }
         task_owner.closing.store(true, Ordering::Release);
@@ -572,13 +583,19 @@ fn meek_transport_generation(
 fn meek_transport_pool(
     owner: &Arc<MeekTransportGenerationOwner>,
     key: MeekTransportKey,
-) -> Result<Arc<MeekTransportPool>, String> {
+) -> Result<(Arc<MeekTransportPool>, OwnerKeyPin), String> {
     let mut pools = owner
         .pools
         .lock()
         .map_err(|_| "Meek transport owner map lock poisoned".to_owned())?;
+    if owner.closing.load(Ordering::Acquire) {
+        return Err("Meek transport owner is closing".to_owned());
+    }
+    if !pools.contains_key(&key) && pools.len() >= owner.resources.owner_limit() {
+        prune_empty_meek_keys(&mut pools);
+    }
     if let Some(pool) = pools.get(&key) {
-        return Ok(Arc::clone(pool));
+        return Ok((Arc::clone(pool), pool.usage.pin()));
     }
     if pools.len() >= owner.resources.owner_limit() {
         owner
@@ -590,9 +607,10 @@ fn meek_transport_pool(
             owner.resources.owner_limit()
         ));
     }
-    let pool = Arc::new(MeekTransportPool::new());
+    let pool = Arc::new(MeekTransportPool::new(Arc::clone(&owner.quiescent)));
+    let pin = pool.usage.pin();
     pools.insert(key, Arc::clone(&pool));
-    Ok(pool)
+    Ok((pool, pin))
 }
 
 pub async fn acquire_meek_transport(
@@ -601,7 +619,7 @@ pub async fn acquire_meek_transport(
 ) -> Result<MeekTransportLease, String> {
     let key = MeekTransportKey::for_binding(&binding);
     let owner = meek_transport_generation(key.generation)?;
-    let pool = meek_transport_pool(&owner, key)?;
+    let (pool, key_pin) = meek_transport_pool(&owner, key)?;
     loop {
         if owner.closing.load(Ordering::Acquire) {
             return Err(format!(
@@ -617,6 +635,7 @@ pub async fn acquire_meek_transport(
                 .cumulative_reuses
                 .fetch_add(1, Ordering::Relaxed);
             return Ok(MeekTransportLease {
+                _key_pin: key_pin,
                 physical: Some(physical),
                 pool,
                 owner: Arc::downgrade(&owner),
@@ -624,7 +643,7 @@ pub async fn acquire_meek_transport(
                 lease_counted: true,
             });
         }
-        match try_reserve_meek_physical(&owner, &pool) {
+        match try_reserve_meek_physical(&owner, &pool, &key_pin) {
             Ok(slot) => {
                 let receiver = spawn_meek_transport_build(&owner, binding.clone(), deadline, slot)?;
                 let remaining = deadline
@@ -636,6 +655,7 @@ pub async fn acquire_meek_transport(
                     .map_err(|_| "Meek transport build stopped before completion".to_owned())??;
                 owner.metrics.lease_opened();
                 return Ok(MeekTransportLease {
+                    _key_pin: key_pin,
                     physical: Some(physical),
                     pool,
                     owner: Arc::downgrade(&owner),
@@ -681,6 +701,7 @@ fn take_meek_idle(
 fn try_reserve_meek_physical(
     owner: &Arc<MeekTransportGenerationOwner>,
     pool: &Arc<MeekTransportPool>,
+    key_pin: &OwnerKeyPin,
 ) -> Result<MeekPhysicalSlot, MeekReservationError> {
     if owner.closing.load(Ordering::Acquire) {
         return Err(MeekReservationError::Closing(format!(
@@ -727,6 +748,7 @@ fn try_reserve_meek_physical(
                     global_count + 1,
                 );
                 return Ok(MeekPhysicalSlot {
+                    key_pin: key_pin.clone(),
                     pool: Arc::clone(pool),
                     _permit: MeekPhysicalPermit {
                         owner: Arc::downgrade(owner),
@@ -766,6 +788,7 @@ fn spawn_meek_transport_build(
         .cumulative_builds
         .fetch_add(1, Ordering::Relaxed);
     let guard = MeekBuildGuard {
+        _key_pin: slot.key_pin.clone(),
         owner: Arc::clone(owner),
         build_id,
     };
@@ -827,6 +850,13 @@ async fn build_meek_transport(
     })
 }
 
+// Registry lock alone serializes root pins and final removal. Pool slots pin
+// the entry through build, use, recycle and idle destruction; no idle/state
+// lock is acquired while pruning the registry.
+fn prune_empty_meek_keys(pools: &mut HashMap<MeekTransportKey, Arc<MeekTransportPool>>) {
+    pools.retain(|_, pool| !pool.usage.is_quiescent());
+}
+
 fn prune_expired_meek_idle(owner: &Arc<MeekTransportGenerationOwner>) {
     let pools = cleanup_lock(&owner.pools)
         .values()
@@ -836,6 +866,7 @@ fn prune_expired_meek_idle(owner: &Arc<MeekTransportGenerationOwner>) {
     for pool in pools {
         prune_pool_expired_idle(owner, &pool, now);
     }
+    prune_empty_meek_keys(&mut cleanup_lock(&owner.pools));
 }
 
 fn prune_pool_expired_idle(
@@ -913,6 +944,8 @@ async fn cleanup_meek_transport_owner(owner: &Arc<MeekTransportGenerationOwner>)
     }
 }
 
+#[cfg(test)]
+mod key_tests;
 #[cfg(test)]
 mod poison_tests;
 

@@ -26,8 +26,9 @@ async fn recycle_rechecks_closing_after_waiting_for_idle_inventory() {
     let owner = &handle.owner;
     let binding =
         crate::vless_mux_owner::poison_tests::test_binding_at(owner.generation.get(), address);
-    let pool = meek_transport_pool(owner, MeekTransportKey::for_binding(&binding)).unwrap();
-    let slot = match try_reserve_meek_physical(owner, &pool) {
+    let (pool, key_pin) =
+        meek_transport_pool(owner, MeekTransportKey::for_binding(&binding)).unwrap();
+    let slot = match try_reserve_meek_physical(owner, &pool, &key_pin) {
         Ok(slot) => slot,
         Err(_) => panic!("reserve physical"),
     };
@@ -41,6 +42,7 @@ async fn recycle_rechecks_closing_after_waiting_for_idle_inventory() {
     .unwrap();
     owner.metrics.lease_opened();
     let lease = MeekTransportLease {
+        _key_pin: key_pin.clone(),
         physical: Some(physical),
         pool: Arc::clone(&pool),
         owner: Arc::downgrade(owner),
@@ -106,8 +108,17 @@ async fn poisoned_meek_build_inventory_is_reaped_before_shutdown_returns() {
     )
     .unwrap();
     let owner = &handle.owner;
+    let (_, key_pin) = meek_transport_pool(
+        owner,
+        MeekTransportKey {
+            generation: owner.generation,
+            digest: [0; 32],
+        },
+    )
+    .unwrap();
     owner.metrics.active_builds.store(1, Ordering::Relaxed);
     let guard = MeekBuildGuard {
+        _key_pin: key_pin.clone(),
         owner: Arc::clone(owner),
         build_id: 1,
     };
@@ -146,8 +157,9 @@ async fn poisoned_meek_idle_pool_closes_tls_socket_and_releases_every_charge() {
     let owner = &handle.owner;
     let binding =
         crate::vless_mux_owner::poison_tests::test_binding_at(owner.generation.get(), address);
-    let pool = meek_transport_pool(owner, MeekTransportKey::for_binding(&binding)).unwrap();
-    let slot = match try_reserve_meek_physical(owner, &pool) {
+    let (pool, key_pin) =
+        meek_transport_pool(owner, MeekTransportKey::for_binding(&binding)).unwrap();
+    let slot = match try_reserve_meek_physical(owner, &pool, &key_pin) {
         Ok(slot) => slot,
         Err(_) => panic!("reserve idle physical"),
     };

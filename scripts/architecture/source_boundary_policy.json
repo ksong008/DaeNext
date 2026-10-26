@@ -55,11 +55,11 @@
     },
     "dae-resident-dataplane": {
       "production": 33363,
-      "tests": 36421
+      "tests": 36428
     },
     "dae-resident-transport": {
-      "production": 36001,
-      "tests": 8140
+      "production": 36034,
+      "tests": 8300
     },
     "dae-resident-tcp": {
       "production": 14295,
