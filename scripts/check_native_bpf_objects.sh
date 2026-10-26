@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-object="${CARGO_TARGET_DIR:-target}/bpfel-unknown-none/release/libdae_ebpf_program.so"
+native_target_dir="${CARGO_TARGET_DIR:-target}"
+[[ "$native_target_dir" = /* ]] || native_target_dir="$PWD/$native_target_dir"
+object="$native_target_dir/bpfel-unknown-none/release/libdae_ebpf_program.so"
 for variant in default pname-core; do
     args=()
     [[ "$variant" == default ]] || args+=(--features pname-core)

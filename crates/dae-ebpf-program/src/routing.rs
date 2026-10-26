@@ -103,7 +103,26 @@ struct RouteCtx {
     lpm_key_daddr: BpfLpmKey,
     lpm_key_mac: BpfLpmKey,
     state: u8,
+    /// One word of the destination domain bitmap plus the word index it holds.
+    ///
+    /// The lookups are keyed on `params.daddr`, which is constant for the whole
+    /// `route()` call, so without this every domain rule would repeat an
+    /// identical `bpf_map_lookup_elem`. `bpf_loop` visits rules in ascending
+    /// order and each word covers 32 consecutive rule indices, so caching a
+    /// single word collapses N lookups into one per 32 rules.
+    ///
+    /// Copy only the current word to bound callback stack use without retaining
+    /// a map-value pointer or copying the entire 32-word bitmap.
+    domain_word: u32,
+    /// Word currently in `domain_word`, or [`DOMAIN_WORD_NONE`].
+    domain_word_index: u16,
+    /// Set once the map lookup has missed, so later rules skip the lookup.
+    domain_absent: u8,
+    domain_padding: u8,
 }
+
+/// Sentinel for [`RouteCtx::domain_word_index`]; a real index is `0..32`.
+const DOMAIN_WORD_NONE: u16 = u16::MAX;
 
 impl RouteCtx {
     const fn zeroed() -> Self {
@@ -116,14 +135,25 @@ impl RouteCtx {
             lpm_key_daddr: BpfLpmKey::zeroed(),
             lpm_key_mac: BpfLpmKey::zeroed(),
             state: 0,
+            domain_word: 0,
+            domain_word_index: DOMAIN_WORD_NONE,
+            domain_absent: 0,
+            domain_padding: 0,
         }
     }
 }
 
 #[inline(always)]
 fn lookup_match_set(index: *const u32) -> *mut BpfMatchSet {
-    unsafe { helpers::bpf_map_lookup_elem(maps::routing_map_ptr(), index.cast::<c_void>()) }
-        .cast::<BpfMatchSet>()
+    let map = maps::routing_map_ptr();
+    #[cfg(test)]
+    {
+        cache_tests::lookup_match_set(map, index)
+    }
+    #[cfg(not(test))]
+    {
+        unsafe { helpers::bpf_map_lookup_elem(map, index.cast::<c_void>()) }.cast::<BpfMatchSet>()
+    }
 }
 
 #[inline(always)]
@@ -133,8 +163,15 @@ fn lookup_lpm_map(index: *const u32) -> *mut c_void {
 
 #[inline(always)]
 fn lookup_domain_route(ip: *const BpfIpBytes) -> *mut BpfDomainRouting {
-    unsafe { helpers::bpf_map_lookup_elem(maps::domain_routing_map_ptr(), ip.cast::<c_void>()) }
-        .cast::<BpfDomainRouting>()
+    let map = maps::domain_routing_map_ptr();
+    #[cfg(test)]
+    {
+        cache_tests::lookup_domain_route(map, ip)
+    }
+    #[cfg(not(test))]
+    {
+        unsafe { helpers::bpf_map_lookup_elem(map, ip.cast::<c_void>()) }.cast::<BpfDomainRouting>()
+    }
 }
 
 #[inline(always)]
@@ -205,12 +242,29 @@ unsafe fn set_lpm_key(key: *mut BpfLpmKey, ip: *const BpfIpBytes) {
     }
 }
 
+/// Test one domain match set against the destination bitmap, reusing the word
+/// already fetched for this packet.
+///
+/// See [`RouteCtx::domain_word`] for why only a single word is retained.
 #[inline(always)]
-unsafe fn domain_bitmap_hit(domain: *const BpfDomainRouting, index: u32) -> bool {
+unsafe fn domain_bitmap_hit_cached(ctx: *mut RouteCtx, index: u32) -> bool {
     unsafe {
-        let word_index = ((index >> 5) & 31) as usize;
+        if (*ctx).domain_absent != 0 {
+            return false;
+        }
+        let word_index = ((index >> 5) & 31) as u16;
+        if (*ctx).domain_word_index != word_index {
+            let params = (*ctx).params;
+            let domain = lookup_domain_route(ptr::addr_of!((*params).daddr));
+            if domain.is_null() {
+                (*ctx).domain_absent = 1;
+                return false;
+            }
+            (*ctx).domain_word = (*domain).bitmap[word_index as usize];
+            (*ctx).domain_word_index = word_index;
+        }
         let bit_index = index & 31;
-        (((*domain).bitmap[word_index] >> bit_index) & 1) != 0
+        (((*ctx).domain_word >> bit_index) & 1) != 0
     }
 }
 
@@ -367,8 +421,7 @@ extern "C" fn route_loop_cb(index: u32, data: *mut c_void) -> i64 {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_DOMAIN_SET {
-                let domain = lookup_domain_route(ptr::addr_of!((*params).daddr));
-                if !domain.is_null() && domain_bitmap_hit(domain, index) {
+                if domain_bitmap_hit_cached(ctx, index) {
                     route_state_or(ctx, ROUTE_GOOD_SUBRULE);
                 }
             } else if kind == MATCH_TYPE_PROCESS_NAME {
@@ -568,6 +621,9 @@ pub fn outbound_alive(info: *const ParsedPacket, outbound: u8) -> bool {
     .cast::<u32>();
     alive.is_null() || unsafe { *alive } != 0
 }
+
+#[cfg(test)]
+mod cache_tests;
 
 #[cfg(test)]
 mod tests {
