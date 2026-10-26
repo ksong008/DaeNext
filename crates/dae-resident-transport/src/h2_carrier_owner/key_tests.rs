@@ -158,6 +158,17 @@ async fn closing_old_driver_cannot_invalidate_rebuilt_stream_after_lease_drop() 
     Arc::get_mut(&mut owner).unwrap().resources =
         H2CarrierOwnerResourceProfile::selected().with_owner_limit(2);
     register_h2_carrier_generation(&owner).unwrap();
+    let refused = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let refused_address = refused.local_addr().unwrap();
+    drop(refused);
+    assert!(
+        acquire_h2_carrier(binding(&owner, refused_address), deadline())
+            .await
+            .is_err()
+    );
+    prune_h2_keys(&mut cleanup_lock(&owner.managers));
+    assert!(cleanup_lock(&owner.managers).is_empty());
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let identity = self_signed_tls_identity(&["localhost"]).unwrap();

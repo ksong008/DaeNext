@@ -167,7 +167,12 @@ fn budget_rejection_is_reported_separately_from_class_full() {
     assert_eq!(budget_pool.bytes, IDLE_BUDGET);
     assert_eq!(
         budget_pool.bytes,
-        budget_pool.bins.iter().flatten().map(Vec::capacity).sum::<usize>()
+        budget_pool
+            .bins
+            .iter()
+            .flatten()
+            .map(Vec::capacity)
+            .sum::<usize>()
     );
     return_unlocked(&mut budget_pool, Vec::with_capacity(CLASSES[0]));
     assert_eq!(budget_pool.rejected_budget, 1);
