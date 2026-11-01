@@ -22,6 +22,7 @@ const PACKET_HOST: u32 = 0;
 const PACKET_OTHERHOST: u32 = 3;
 const BPF_TCP_LISTEN: u32 = 10;
 const NOWHERE_IFINDEX: u32 = 0;
+const LISTEN_SOCKET_KEY_READY: u32 = 4;
 const LISTEN_SOCKET_KEY_TCP4: u32 = 0;
 const LISTEN_SOCKET_KEY_TCP6: u32 = 1;
 const LISTEN_SOCKET_KEY_UDP4: u32 = 2;
@@ -38,11 +39,13 @@ const METRIC_REDIRECT_PEER_LOOKUP_MISS: u32 = 4;
 const METRIC_REDIRECT_PEER_ABI_MISMATCH: u32 = 5;
 const METRIC_REDIRECT_RETURN_LOOKUP_MISS: u32 = 6;
 const METRIC_REDIRECT_RETURN_ABI_MISMATCH: u32 = 7;
+const METRIC_LISTENER_NOT_READY: u32 = 8;
+const METRIC_LISTENER_LOOKUP_MISS: u32 = 9;
 
 // tproxy failure counters live in the per-CPU `tproxy_metrics` map.  They make
 // helper failures observable (sk_assign / skb_store_bytes). Store failures
-// are counted and dropped fail-closed; sk_assign retains its prior packet
-// disposition and is counted. Userspace reads the map through the same
+// are counted and dropped fail-closed, including listener assignment.
+// Userspace reads the map through the same
 // PerCpuArray-by-id machinery as udp_state_metrics.
 #[inline(never)]
 fn increment_tproxy_metric(metric: u32) {
@@ -81,6 +84,8 @@ fn increment_tproxy_metric(metric: u32) {
             METRIC_REDIRECT_RETURN_ABI_MISMATCH => {
                 ptr::addr_of_mut!((*metrics).redirect_return_abi_mismatch_total)
             }
+            METRIC_LISTENER_NOT_READY => ptr::addr_of_mut!((*metrics).listener_not_ready_total),
+            METRIC_LISTENER_LOOKUP_MISS => ptr::addr_of_mut!((*metrics).listener_lookup_miss_total),
             _ => return,
         }
     };
@@ -154,7 +159,21 @@ const fn udp_state_unavailable_action_for_policy(policy: u32) -> i32 {
 }
 
 #[inline(always)]
-unsafe fn assign_listener(skb: *mut __sk_buff, l4proto: u32, is_ipv4: u32) {
+unsafe fn assign_listener(skb: *mut __sk_buff, l4proto: u32, is_ipv4: u32) -> i32 {
+    let ready_key = LISTEN_SOCKET_KEY_READY;
+    let ready = unsafe {
+        helpers::bpf_map_lookup_elem(
+            maps::listen_socket_map_ptr(),
+            ptr::addr_of!(ready_key).cast::<c_void>(),
+        )
+    };
+    if ready.is_null() {
+        increment_tproxy_metric(METRIC_LISTENER_NOT_READY);
+        return TC_ACT_SHOT;
+    }
+    unsafe {
+        let _ = helpers::bpf_sk_release(ready);
+    }
     let key = if l4proto == IPPROTO_TCP as u32 {
         if is_ipv4 != 0 {
             LISTEN_SOCKET_KEY_TCP4
@@ -168,7 +187,7 @@ unsafe fn assign_listener(skb: *mut __sk_buff, l4proto: u32, is_ipv4: u32) {
             LISTEN_SOCKET_KEY_UDP6
         }
     } else {
-        return;
+        return TC_ACT_SHOT;
     };
     let sock = unsafe {
         helpers::bpf_map_lookup_elem(
@@ -177,18 +196,18 @@ unsafe fn assign_listener(skb: *mut __sk_buff, l4proto: u32, is_ipv4: u32) {
         )
     };
     if sock.is_null() {
-        return;
+        increment_tproxy_metric(METRIC_LISTENER_LOOKUP_MISS);
+        return TC_ACT_SHOT;
     }
     unsafe {
-        // A failed bpf_sk_assign leaves the packet with the tproxy mark but
-        // without a listener socket: the connection is not redirected into
-        // the dae listener (a redirect hole).  Count the failure instead of
-        // discarding it; bpf_sk_release must still run either way.
-        if helpers::bpf_sk_assign(skb.cast::<c_void>(), sock, 0) != 0 {
-            increment_tproxy_metric(METRIC_SK_ASSIGN_FAILURE);
-        }
+        let assigned = helpers::bpf_sk_assign(skb.cast::<c_void>(), sock, 0);
         let _ = helpers::bpf_sk_release(sock);
+        if assigned != 0 {
+            increment_tproxy_metric(METRIC_SK_ASSIGN_FAILURE);
+            return TC_ACT_SHOT;
+        }
     }
+    TC_ACT_OK
 }
 
 #[inline(always)]
@@ -360,7 +379,7 @@ pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {
         let _ = helpers::bpf_skb_change_type(skb.cast::<c_void>(), PACKET_HOST);
         let info_ptr = ptr::addr_of!(info);
         if is_new_tcp(info_ptr) || (*info_ptr).l4proto == IPPROTO_UDP {
-            assign_listener(skb, (*info_ptr).l4proto as u32, (*info_ptr).is_ipv4 as u32);
+            return assign_listener(skb, (*info_ptr).l4proto as u32, (*info_ptr).is_ipv4 as u32);
         }
     }
     TC_ACT_OK

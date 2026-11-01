@@ -123,7 +123,7 @@ const MAP_CATALOG: [MapSpec; 13] = [
         map_type: "SockMap",
         key_size: 4,
         value_size: 8,
-        max_entries: 4,
+        max_entries: crate::sockmap::LISTEN_SOCKET_MAP_MAX_ENTRIES,
         flags: 0,
         pinning: "PinNone",
     },

@@ -25,6 +25,8 @@ impl NativeEbpfRuntimeReadHandle {
                 match dae_ebpf_support::read_aya_tproxy_metrics_by_id(map_id) {
                     Ok(metrics) => json!({
                         "skAssignFailureTotal": metrics.sk_assign_failure_total,
+                        "listenerNotReadyTotal": metrics.listener_not_ready_total,
+                        "listenerLookupMissTotal": metrics.listener_lookup_miss_total,
                         "redirectPrepStoreFailureTotal": metrics.redirect_prep_store_failure_total,
                         "redirectRestoreStoreFailureTotal": metrics.redirect_restore_store_failure_total,
                         "redirectTrackUpdateFailureTotal": metrics.redirect_track_update_failure_total,

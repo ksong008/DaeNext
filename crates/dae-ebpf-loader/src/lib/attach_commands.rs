@@ -122,17 +122,23 @@ pub(crate) fn run_tc_attach_pin(_options: TcAttachPinOptions) -> LoaderOutput {
 pub(crate) fn run_tproxy_listener_open_handoff(
     options: TproxyListenerOpenHandoffOptions,
 ) -> LoaderOutput {
-    let handoff = match dae_ebpf_support::open_tproxy_listener_set_and_update_sockmap_by_id(
-        options.map_id,
-        options.port,
-    ) {
-        Ok(handoff) => handoff,
-        Err(err) => {
-            return LoaderOutput::error(format!("tproxy listener open-handoff failed: {err}"));
-        }
+    let handoff =
+        match dae_ebpf_support::stage_tproxy_listener_set_by_id(options.map_id, options.port) {
+            Ok(handoff) => handoff,
+            Err(err) => {
+                return LoaderOutput::error(format!("tproxy listener open-handoff failed: {err}"));
+            }
+        };
+    let token = match listener_handoff_token() {
+        Ok(token) => token,
+        Err(error) => return LoaderOutput::error(error),
     };
     let payload = json!({
-        "status": "pass",
+        "status": "prepared",
+        "handoff_protocol": "dae-listener-v1",
+        "ready_token": token,
+        "ready_ack": format!("DAE_LISTENER_READY_V1 {token}\n"),
+        "ready_timeout_ms": 5000,
         "loader": "rust",
         "scope": "tproxy-listener-open-handoff",
         "map_id": handoff.map.id,
@@ -155,7 +161,7 @@ pub(crate) fn run_tproxy_listener_open_handoff(
             "ipv6_recvorigdstaddr": handoff.udp_options.ipv6_recvorigdstaddr,
             "original_dst_capture_ready": handoff.udp_options.original_dst_capture_ready,
         },
-        "native_userspace_handlers_ready": true,
+        "native_userspace_handlers_ready": false,
     });
     let handoff_fds = [
         handoff.listeners.tcp_listener.as_raw_fd(),
@@ -165,7 +171,21 @@ pub(crate) fn run_tproxy_listener_open_handoff(
     if let Err(err) = send_fd_handoff(options.handoff_fd, payload.as_bytes(), &handoff_fds) {
         return LoaderOutput::error(format!("send tproxy listener fd handoff failed: {err}"));
     }
-    LoaderOutput::ok(payload)
+    if let Err(error) = await_listener_ready(
+        options.handoff_fd,
+        &token,
+        std::time::Duration::from_secs(5),
+    ) {
+        return LoaderOutput::error(format!("tproxy listener adoption failed: {error}"));
+    }
+    if let Err(error) = handoff.publish() {
+        return LoaderOutput::error(format!("publish adopted tproxy listeners failed: {error}"));
+    }
+    LoaderOutput::ok(format!(
+        "{}\n",
+        json!({"status":"pass", "scope":"tproxy-listener-open-handoff", "map_id":handoff.map.id,
+        "handoff_protocol":"dae-listener-v1", "native_userspace_handlers_ready":true, "listener_map_published":true})
+    ))
 }
 
 pub(crate) fn run_tproxy_listener_update_map(
@@ -197,7 +217,8 @@ pub(crate) fn run_tproxy_listener_update_map(
             "tcp6_fd": options.tcp6_fd,
             "udp4_fd": options.udp4_fd,
             "udp6_fd": options.udp6_fd,
-            "native_userspace_handlers_ready": true,
+            "listener_map_published": true,
+            "userspace_readiness_contract": "caller-owned",
         })
     ))
 }

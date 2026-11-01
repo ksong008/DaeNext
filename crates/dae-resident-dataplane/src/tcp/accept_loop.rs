@@ -8,6 +8,7 @@ pub(crate) async fn resident_tcp_accept_loop_async(
     stop: SharedResidentStopSignal,
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
+    ready: std::sync::mpsc::SyncSender<&'static str>,
 ) {
     let active_generation = coordinator.active_generation_slot();
     let generation_gate = coordinator.generation_gate();
@@ -44,6 +45,10 @@ pub(crate) async fn resident_tcp_accept_loop_async(
     event["proxyExecutionDescriptor"] = tcp_execution_descriptor("async-proxy-tls").to_value();
     drop(initial_generation);
     append_event(&event_file, &event_lock, event);
+    if ready.send("tcp").is_err() {
+        return;
+    }
+    drop(ready);
     let mut stop_listener = stop.listener();
     let mut publication_listener = active_generation.subscribe_publication();
     let mut flows = tokio::task::JoinSet::new();

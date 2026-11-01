@@ -233,6 +233,7 @@ pub fn start_resident_dataplane_workers(
         ResidentGenerationDrainPolicy::selected(),
         Arc::new(ResidentDataplaneGenerationDrainHooks),
     );
+    let (worker_ready_tx, worker_ready_rx) = std::sync::mpsc::sync_channel(2);
     {
         let stop = owner.stop_handle();
         let drain = generation_drain.clone();
@@ -253,6 +254,7 @@ pub fn start_resident_dataplane_workers(
                 stop,
                 event_file,
                 event_lock,
+                worker_ready_tx.clone(),
             ),
         );
     }
@@ -271,10 +273,24 @@ pub fn start_resident_dataplane_workers(
                 event_file,
                 event_lock,
                 active_sessions,
+                worker_ready_tx,
             )
             .await;
             cleanup_reporter.finish(report);
         });
+    }
+    let readiness =
+        wait_for_listener_adoption(&worker_ready_rx, Duration::from_secs(5)).and_then(|()| {
+            handoff
+                .publish()
+                .map_err(|error| format!("publish adopted listeners: {error}"))
+        });
+    if let Err(error) = readiness {
+        let cleanup = owner.shutdown();
+        return (
+            json!({"status": "fail", "enabled": true, "error": error, "cleanup": cleanup}),
+            None,
+        );
     }
     if let Some(dns_bind_listener) = dns_bind_listener {
         let stop = owner.stop_handle();
@@ -309,6 +325,10 @@ pub fn start_resident_dataplane_workers(
     let mut start_map = serde_json::Map::new();
     start_map.insert("status".to_owned(), json!("pass"));
     start_map.insert("enabled".to_owned(), json!(true));
+    start_map.insert(
+        "listener_publication".to_owned(),
+        json!("active-after-worker-adoption"),
+    );
     start_map.insert("tcp_worker_started".to_owned(), json!(true));
     start_map.insert("udp_session_manager_started".to_owned(), json!(true));
     start_map.insert(
@@ -488,3 +508,27 @@ pub fn start_resident_dataplane_workers(
         }),
     )
 }
+
+fn wait_for_listener_adoption(
+    receiver: &std::sync::mpsc::Receiver<&'static str>,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut ready = Vec::with_capacity(2);
+    for _ in 0..2 {
+        ready.push(
+            receiver
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .map_err(|error| format!("listener adoption failed: {error}"))?,
+        );
+    }
+    ready.sort_unstable();
+    if ready != ["tcp", "udp"] {
+        return Err("invalid listener adoption acknowledgement".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "listener_ready_tests.rs"]
+mod listener_ready_tests;

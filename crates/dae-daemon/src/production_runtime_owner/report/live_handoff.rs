@@ -2,6 +2,7 @@ use super::*;
 pub(crate) fn live_handoff_json(handoff: &LiveLoadedTproxyListenSocketMap) -> Value {
     json!({
         "status": "pass",
+        "publication_contract": "four-staged-keys-then-ready-slot-after-adoption",
         "map": {
             "id": handoff.map.id,
             "name": handoff.map.name,

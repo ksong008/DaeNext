@@ -14,6 +14,7 @@ pub(crate) async fn resident_udp_loop_async(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     active_sessions: Arc<AtomicUsize>,
+    ready: std::sync::mpsc::SyncSender<&'static str>,
 ) -> Value {
     run_resident_udp_session_manager_async(
         socket,
@@ -22,6 +23,7 @@ pub(crate) async fn resident_udp_loop_async(
         event_file,
         event_lock,
         active_sessions,
+        ready,
     )
     .await
 }
