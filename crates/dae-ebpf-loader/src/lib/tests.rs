@@ -15,3 +15,6 @@ mod serve_handlers;
 
 #[path = "tests/primitives.rs"]
 mod primitives;
+
+#[path = "tests/listener_handoff.rs"]
+mod listener_handoff;

@@ -98,6 +98,29 @@ if ! grep -Fq 'test result: ok. 1 passed;' "$tc_roles_log"; then
   exit 1
 fi
 
+# These tests must execute, not silently pass an env-gated empty body.
+run_listener_lifecycle_test() {
+  local label="$1" expected="$2" flag="$3" package="$4" feature="$5" filter="$6"
+  local log="${cgroup_log}.${label}"
+  if ! env "$flag=1" DAE_TEST_NATIVE_BPF_OBJECT="$rust_native_object" \
+    cargo test --locked -p "$package" --features "$feature" --lib "$filter" \
+    -- --test-threads=1 --nocapture >"$log" 2>&1; then
+    tail -c 4000 "$log" >&2 || true
+    exit 1
+  fi
+  if ! grep -Fq "test result: ok. $expected passed;" "$log" || grep -q '^skip ' "$log"; then
+    echo "listener lifecycle gate did not execute: $label" >&2
+    tail -c 4000 "$log" >&2 || true
+    exit 1
+  fi
+}
+run_listener_lifecycle_test listener-negative 3 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
+  dae-ebpf-support aya-loader listener_lifecycle_tests
+run_listener_lifecycle_test sockmap-publication 1 DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE \
+  dae-ebpf-support aya-loader kernel_sockmap_staging_rollback_and_cookie_idempotence
+run_listener_lifecycle_test listener-handoff 1 DAE_RUN_LISTENER_HANDOFF_SMOKE \
+  dae-ebpf-loader native-ebpf real_open_handoff_publishes_only_after_adoption_and_reclaims_failures
+
 process_tree_pids() {
   local root_pid="$1"
   local queue=("$root_pid")

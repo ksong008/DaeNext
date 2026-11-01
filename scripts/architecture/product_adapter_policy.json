@@ -111,7 +111,7 @@
     "latency": 1750,
     "latency.rs": 60,
     "local_control.rs": 501,
-    "logs": 3750,
+    "logs": 3753,
     "logs.rs": 30,
     "nodes_subscriptions_groups": 1700,
     "nodes_subscriptions_groups.rs": 55,
@@ -132,5 +132,6 @@
     "service_metadata.rs": 400,
     "sse_runtime": 1400
   },
-  "total_production_line_limit": 20300
+  "total_production_line_limit": 20300,
+  "baseline_correction_rationale": "2026-11-01: unchanged 17027e43 log adapters contain 3753 lines after the prior Rust 1.98 formatting/lint migration; correct the stale 3750 quota by the exact 3-line overage. This listener change adds no log adapter source or growth allowance."
 }

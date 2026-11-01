@@ -23,6 +23,13 @@ fn real_native_bpf_objects_define_the_lpm_inner_abi() {
         assert_eq!(map.max_entries(), expected.max_entries);
         assert_eq!(map.map_flags(), expected.flags);
     }
+    for name in ["listen_socket_map", "tproxy_metrics", "udp_state_metrics"] {
+        let map = &object.maps[name];
+        let expected = catalog(name);
+        assert_eq!(map.key_size(), expected.key_size, "{name}");
+        assert_eq!(map.value_size(), expected.value_size, "{name}");
+        assert_eq!(map.max_entries(), expected.max_entries, "{name}");
+    }
     for expected in map_catalog() {
         assert!(
             object.maps.contains_key(expected.name),
