@@ -31,7 +31,7 @@
     {
       "flags": 0,
       "key_size": 4,
-      "max_entries": 4,
+      "max_entries": 5,
       "name": "listen_socket_map",
       "pinning": "PinNone",
       "type": "SockMap",
@@ -89,7 +89,7 @@
       "name": "tproxy_metrics",
       "pinning": "PinNone",
       "type": "PerCpuArray",
-      "value_size": 64
+      "value_size": 80
     },
     {
       "flags": 0,

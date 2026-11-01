@@ -1,7 +1,10 @@
+mod publication;
+use publication::ListenerPublication;
 use std::io;
 use std::mem::size_of;
 use std::net::{TcpListener, UdpSocket};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::Mutex;
 
 use crate::runtime_maps::{RuntimeMapInfo, map_ids, map_info, open_map_fd};
 use crate::tproxy_listener::{
@@ -19,7 +22,8 @@ pub const LISTEN_SOCKET_KEYS: [u32; 4] = [
     LISTEN_SOCKET_KEY_UDP4,
     LISTEN_SOCKET_KEY_UDP6,
 ];
-pub const LISTEN_SOCKET_MAP_MAX_ENTRIES: u32 = LISTEN_SOCKET_KEYS.len() as u32;
+pub const LISTEN_SOCKET_KEY_READY: u32 = 4;
+pub const LISTEN_SOCKET_MAP_MAX_ENTRIES: u32 = 5;
 
 const BPF_MAP_CREATE: libc::c_uint = 0;
 const BPF_MAP_UPDATE_ELEM: libc::c_uint = 2;
@@ -68,6 +72,7 @@ pub struct LiveLoadedTproxyListenSocketMap {
     pub tcp_options: TproxySocketOptions,
     pub udp_options: TproxySocketOptions,
     pub listeners: TproxyListenerSet,
+    publication: Mutex<Option<ListenerPublication>>,
 }
 
 pub fn run_listen_socket_map_fd_smoke() -> io::Result<ListenSocketMapFdSmoke> {
@@ -75,26 +80,16 @@ pub fn run_listen_socket_map_fd_smoke() -> io::Result<ListenSocketMapFdSmoke> {
     let tcp_listener = TcpListener::bind(("127.0.0.1", 0))?;
     let udp_socket = UdpSocket::bind(("127.0.0.1", 0))?;
 
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_TCP4,
-        tcp_listener.as_raw_fd(),
-    )?;
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_TCP6,
-        tcp_listener.as_raw_fd(),
-    )?;
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_UDP4,
-        udp_socket.as_raw_fd(),
-    )?;
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_UDP6,
-        udp_socket.as_raw_fd(),
-    )?;
+    ListenerPublication::stage(
+        map_fd,
+        [
+            tcp_listener.as_raw_fd(),
+            tcp_listener.as_raw_fd(),
+            udp_socket.as_raw_fd(),
+            udp_socket.as_raw_fd(),
+        ],
+    )?
+    .publish()?;
 
     Ok(ListenSocketMapFdSmoke {
         map_type: "SockMap",
@@ -114,26 +109,16 @@ pub fn run_loaded_listen_socket_map_fd_smoke(
     let tcp_listener = TcpListener::bind(("127.0.0.1", 0))?;
     let udp_socket = UdpSocket::bind(("127.0.0.1", 0))?;
 
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_TCP4,
-        tcp_listener.as_raw_fd(),
-    )?;
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_TCP6,
-        tcp_listener.as_raw_fd(),
-    )?;
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_UDP4,
-        udp_socket.as_raw_fd(),
-    )?;
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_UDP6,
-        udp_socket.as_raw_fd(),
-    )?;
+    ListenerPublication::stage(
+        map_fd,
+        [
+            tcp_listener.as_raw_fd(),
+            tcp_listener.as_raw_fd(),
+            udp_socket.as_raw_fd(),
+            udp_socket.as_raw_fd(),
+        ],
+    )?
+    .publish()?;
 
     Ok(LoadedListenSocketMapFdSmoke {
         map,
@@ -160,13 +145,32 @@ pub fn run_loaded_tproxy_listen_socket_map_fd_smoke(
     })
 }
 
+impl LiveLoadedTproxyListenSocketMap {
+    /// Publish only after the consumer has adopted both sockets.
+    pub fn publish(&self) -> io::Result<()> {
+        let mut staged = self
+            .publication
+            .lock()
+            .map_err(|_| io::Error::other("listener publication lock poisoned"))?;
+        if let Some(publication) = staged.as_mut() {
+            publication.publish()?;
+        }
+        // Kernel slots and the consumer retain the sockets. The temporary
+        // writer lock, map FD and validation duplicates are no longer needed.
+        staged.take();
+        Ok(())
+    }
+}
+
 pub fn open_live_loaded_tproxy_listen_socket_map(
     before_map_ids: &[u32],
     port: u16,
 ) -> io::Result<LiveLoadedTproxyListenSocketMap> {
-    open_live_loaded_tproxy_listen_socket_map_with_listener(before_map_ids, || {
+    let live = stage_live_loaded_tproxy_listen_socket_map_with_listener(before_map_ids, || {
         open_tproxy_listener_set(port)
-    })
+    })?;
+    live.publish()?;
+    Ok(live)
 }
 
 pub fn open_live_loaded_tproxy_listen_socket_map_in_netns(
@@ -174,32 +178,41 @@ pub fn open_live_loaded_tproxy_listen_socket_map_in_netns(
     port: u16,
     netns_name: &str,
 ) -> io::Result<LiveLoadedTproxyListenSocketMap> {
-    open_live_loaded_tproxy_listen_socket_map_with_listener(before_map_ids, || {
+    let live =
+        stage_live_loaded_tproxy_listen_socket_map_in_netns(before_map_ids, port, netns_name)?;
+    live.publish()?;
+    Ok(live)
+}
+
+pub fn stage_live_loaded_tproxy_listen_socket_map_in_netns(
+    before_map_ids: &[u32],
+    port: u16,
+    netns_name: &str,
+) -> io::Result<LiveLoadedTproxyListenSocketMap> {
+    stage_live_loaded_tproxy_listen_socket_map_with_listener(before_map_ids, || {
         open_tproxy_listener_set_in_netns(netns_name, port)
     })
+}
+
+pub fn stage_tproxy_listener_set_by_id(
+    map_id: u32,
+    port: u16,
+) -> io::Result<LiveLoadedTproxyListenSocketMap> {
+    let (map_fd, map) = open_listen_socket_map_by_id(map_id)?;
+    stage_listeners(map_fd, map, Vec::new(), open_tproxy_listener_set(port)?)
 }
 
 pub fn open_tproxy_listener_set_and_update_sockmap_by_id(
     map_id: u32,
     port: u16,
 ) -> io::Result<LiveLoadedTproxyListenSocketMap> {
-    let (map_fd, map) = open_listen_socket_map_by_id(map_id)?;
-    let listeners = open_tproxy_listener_set(port)?;
-
-    let keys_updated = update_sockmap_from_tproxy_listeners(map_fd.as_raw_fd(), &listeners)?;
-
-    Ok(LiveLoadedTproxyListenSocketMap {
-        map,
-        new_map_ids: Vec::new(),
-        keys_updated,
-        tcp_listener_fd: listeners.tcp_listener.as_raw_fd(),
-        udp_socket_fd: listeners.udp_socket.as_raw_fd(),
-        tcp_options: listeners.tcp_options.clone(),
-        udp_options: listeners.udp_options.clone(),
-        listeners,
-    })
+    let live = stage_tproxy_listener_set_by_id(map_id, port)?;
+    live.publish()?;
+    Ok(live)
 }
 
+/// The caller owns the consumer readiness contract. Active maps are immutable;
+/// passing the same socket cookies is an idempotent validation, not a rewrite.
 pub fn update_listen_socket_map_by_id(
     map_id: u32,
     tcp4_socket_fd: i32,
@@ -208,39 +221,54 @@ pub fn update_listen_socket_map_by_id(
     udp6_socket_fd: Option<i32>,
 ) -> io::Result<RuntimeMapInfo> {
     let (map_fd, map) = open_listen_socket_map_by_id(map_id)?;
-    update_sockmap_fd(map_fd.as_raw_fd(), LISTEN_SOCKET_KEY_TCP4, tcp4_socket_fd)?;
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_TCP6,
-        tcp6_socket_fd.unwrap_or(tcp4_socket_fd),
-    )?;
-    update_sockmap_fd(map_fd.as_raw_fd(), LISTEN_SOCKET_KEY_UDP4, udp4_socket_fd)?;
-    update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_UDP6,
-        udp6_socket_fd.unwrap_or(udp4_socket_fd),
-    )?;
+    ListenerPublication::stage(
+        map_fd,
+        [
+            tcp4_socket_fd,
+            tcp6_socket_fd.unwrap_or(tcp4_socket_fd),
+            udp4_socket_fd,
+            udp6_socket_fd.unwrap_or(udp4_socket_fd),
+        ],
+    )?
+    .publish()?;
     Ok(map)
 }
 
-fn open_live_loaded_tproxy_listen_socket_map_with_listener(
+fn stage_live_loaded_tproxy_listen_socket_map_with_listener(
     before_map_ids: &[u32],
     listener_factory: impl FnOnce() -> io::Result<TproxyListenerSet>,
 ) -> io::Result<LiveLoadedTproxyListenSocketMap> {
     let (map_fd, map, new_map_ids) = open_new_loaded_listen_socket_map(before_map_ids)?;
-    let listeners = listener_factory()?;
+    stage_listeners(map_fd, map, new_map_ids, listener_factory()?)
+}
 
-    let keys_updated = update_sockmap_from_tproxy_listeners(map_fd.as_raw_fd(), &listeners)?;
-
+fn stage_listeners(
+    map_fd: OwnedFd,
+    map: RuntimeMapInfo,
+    new_map_ids: Vec<u32>,
+    listeners: TproxyListenerSet,
+) -> io::Result<LiveLoadedTproxyListenSocketMap> {
+    let tcp_listener_fd = listeners.tcp_listener.as_raw_fd();
+    let udp_socket_fd = listeners.udp_socket.as_raw_fd();
+    let publication = ListenerPublication::stage(
+        map_fd,
+        [
+            tcp_listener_fd,
+            tcp_listener_fd,
+            udp_socket_fd,
+            udp_socket_fd,
+        ],
+    )?;
     Ok(LiveLoadedTproxyListenSocketMap {
         map,
         new_map_ids,
-        keys_updated,
-        tcp_listener_fd: listeners.tcp_listener.as_raw_fd(),
-        udp_socket_fd: listeners.udp_socket.as_raw_fd(),
+        keys_updated: LISTEN_SOCKET_KEYS.to_vec(),
+        tcp_listener_fd,
+        udp_socket_fd,
         tcp_options: listeners.tcp_options.clone(),
         udp_options: listeners.udp_options.clone(),
         listeners,
+        publication: Mutex::new(Some(publication)),
     })
 }
 
@@ -312,38 +340,6 @@ fn create_sockmap() -> io::Result<OwnedFd> {
         return Err(io::Error::last_os_error());
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
-}
-
-fn update_sockmap_from_tproxy_listeners(
-    map_fd: i32,
-    listeners: &TproxyListenerSet,
-) -> io::Result<Vec<u32>> {
-    let mut keys_updated = Vec::new();
-    update_sockmap_fd(
-        map_fd,
-        LISTEN_SOCKET_KEY_TCP4,
-        listeners.tcp_listener.as_raw_fd(),
-    )?;
-    keys_updated.push(LISTEN_SOCKET_KEY_TCP4);
-    update_sockmap_fd(
-        map_fd,
-        LISTEN_SOCKET_KEY_TCP6,
-        listeners.tcp_listener.as_raw_fd(),
-    )?;
-    keys_updated.push(LISTEN_SOCKET_KEY_TCP6);
-    update_sockmap_fd(
-        map_fd,
-        LISTEN_SOCKET_KEY_UDP4,
-        listeners.udp_socket.as_raw_fd(),
-    )?;
-    keys_updated.push(LISTEN_SOCKET_KEY_UDP4);
-    update_sockmap_fd(
-        map_fd,
-        LISTEN_SOCKET_KEY_UDP6,
-        listeners.udp_socket.as_raw_fd(),
-    )?;
-    keys_updated.push(LISTEN_SOCKET_KEY_UDP6);
-    Ok(keys_updated)
 }
 
 fn update_sockmap_fd(map_fd: i32, key: u32, socket_fd: i32) -> io::Result<()> {

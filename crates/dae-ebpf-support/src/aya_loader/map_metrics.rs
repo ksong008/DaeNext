@@ -126,6 +126,12 @@ fn sum_tproxy_metrics<'a>(
             total.redirect_return_lookup_miss_total = total
                 .redirect_return_lookup_miss_total
                 .saturating_add(value.redirect_return_lookup_miss_total);
+            total.listener_not_ready_total = total
+                .listener_not_ready_total
+                .saturating_add(value.listener_not_ready_total);
+            total.listener_lookup_miss_total = total
+                .listener_lookup_miss_total
+                .saturating_add(value.listener_lookup_miss_total);
             total.redirect_return_abi_mismatch_total = total
                 .redirect_return_abi_mismatch_total
                 .saturating_add(value.redirect_return_abi_mismatch_total);
@@ -147,6 +153,8 @@ mod tproxy_tests {
             redirect_peer_abi_mismatch_total: 6,
             redirect_return_lookup_miss_total: 7,
             redirect_return_abi_mismatch_total: 8,
+            listener_not_ready_total: 9,
+            listener_lookup_miss_total: 10,
         };
         let total = sum_tproxy_metrics([&value, &value]);
         assert_eq!(total.sk_assign_failure_total, 2);
@@ -157,6 +165,8 @@ mod tproxy_tests {
         assert_eq!(total.redirect_peer_abi_mismatch_total, 12);
         assert_eq!(total.redirect_return_lookup_miss_total, 14);
         assert_eq!(total.redirect_return_abi_mismatch_total, 16);
+        assert_eq!(total.listener_not_ready_total, 18);
+        assert_eq!(total.listener_lookup_miss_total, 20);
         let maximum = BpfTproxyMetrics {
             redirect_peer_lookup_miss_total: u64::MAX,
             ..Default::default()

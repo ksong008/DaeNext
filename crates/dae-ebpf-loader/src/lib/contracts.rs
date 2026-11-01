@@ -172,8 +172,8 @@ pub(super) fn run_tproxy_listener_contract() -> LoaderOutput {
                 "so_reuseaddr": true,
                 "ip_recvorigdstaddr_or_ipv6_recvorigdstaddr": true
             },
-            "handoff": "open-handoff sends TCP/UDP listener fds over SCM_RIGHTS; update-map accepts inherited fds for reload listener reuse",
-            "restore_path": "native listener open and native listen_socket_map update remain available when the helper fails",
+            "handoff": "open-handoff stages a cold map, sends SCM_RIGHTS prepare with dae-listener-v1 ready_token, waits up to 5000ms for DAE_LISTENER_READY_V1 <token> newline after both workers adopt the FDs, then publishes the ready slot; update-map validates caller-owned FDs and permits only identical active sockets",
+            "restore_path": "failed staging is reclaimed; active listener replacement is rejected; stop the old physical owner before installing different listeners",
         })
     ))
 }

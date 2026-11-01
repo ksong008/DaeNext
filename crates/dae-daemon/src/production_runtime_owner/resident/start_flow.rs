@@ -181,7 +181,7 @@ pub(super) fn start_with_options(
         let peer_attach_show = show_peer_program(&mut executed_steps);
 
         let loaded_map_handoff = if ok {
-            match open_live_loaded_tproxy_listen_socket_map_in_netns(
+            match dae_ebpf_support::stage_live_loaded_tproxy_listen_socket_map_in_netns(
                 &before_map_ids,
                 options.tproxy_port,
                 PRODUCTION_NETNS,

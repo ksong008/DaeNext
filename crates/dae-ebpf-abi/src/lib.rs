@@ -231,9 +231,7 @@ pub struct BpfUdpStateMetrics {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BpfTproxyMetrics {
-    /// `bpf_sk_assign` failed in `assign_listener`: the packet keeps the
-    /// tproxy mark but no listener socket is assigned, so it is not
-    /// redirected into the dae listener (a redirect hole).
+    /// Listener assignment failed; the proxy-marked packet is dropped.
     pub sk_assign_failure_total: u64,
     /// `bpf_skb_store_bytes` failed while preparing the packet for
     /// redirect-to-control-plane (l3proto ethertype on L3 devices, or the
@@ -252,6 +250,8 @@ pub struct BpfTproxyMetrics {
     pub redirect_return_lookup_miss_total: u64,
     /// Return ingress tracking ABI was incompatible; retains the OK action.
     pub redirect_return_abi_mismatch_total: u64,
+    pub listener_not_ready_total: u64,
+    pub listener_lookup_miss_total: u64,
 }
 
 #[repr(C)]
@@ -434,7 +434,8 @@ mod tests {
         assert_eq!(align_of::<BpfTimerOpaque>(), 8);
         assert_eq!(size_of::<BpfUdpConnState>(), 24);
         assert_eq!(offset_of!(BpfUdpConnState, timer), 8);
-        assert_eq!(size_of::<BpfTproxyMetrics>(), 64);
+        assert_eq!(offset_of!(BpfUdpConnState, is_wan_ingress_direction), 0);
+        assert_eq!(size_of::<BpfTproxyMetrics>(), 80);
         assert_eq!(align_of::<BpfTproxyMetrics>(), 8);
         assert_eq!(
             core::mem::offset_of!(BpfTproxyMetrics, redirect_track_update_failure_total),

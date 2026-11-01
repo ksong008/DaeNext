@@ -8,7 +8,7 @@ use dae_config::Config;
 use dae_ebpf_support::{
     AttachBackend, LiveLoadedTproxyListenSocketMap, RuntimeMapCapacity, RuntimeMapSnapshot,
     dae_cgroup_attach_matrix, map_capacity_by_id, map_capacity_fast_by_id, map_catalog, map_ids,
-    open_live_loaded_tproxy_listen_socket_map_in_netns, runtime_map_name_matches,
+    runtime_map_name_matches,
 };
 use serde_json::{Value, json};
 

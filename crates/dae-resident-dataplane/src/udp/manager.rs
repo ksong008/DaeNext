@@ -386,6 +386,7 @@ pub(super) async fn run_resident_udp_session_manager_async(
     event_file: PathBuf,
     event_lock: Arc<Mutex<()>>,
     active_sessions: Arc<AtomicUsize>,
+    ready: std::sync::mpsc::SyncSender<&'static str>,
 ) -> Value {
     let active_generation = coordinator.active_generation_slot();
     let mut publication = active_generation.subscribe_publication();
@@ -506,6 +507,15 @@ pub(super) async fn run_resident_udp_session_manager_async(
         ),
     );
     drop(initial_generation);
+    // Socket adoption and the initial dispatch generation are ready before
+    // the owner publishes the BPF ready slot.
+    if ready.send("udp").is_err() {
+        return udp_session_manager_start_failure(
+            "adoption-ack",
+            "startup owner closed".to_owned(),
+        );
+    }
+    drop(ready);
 
     let mut stop_listener = stop.listener();
     let mut memory_maintenance = time::interval(Duration::from_secs(1));
