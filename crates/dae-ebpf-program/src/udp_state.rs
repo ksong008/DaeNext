@@ -54,7 +54,10 @@ fn increment_udp_state_metric(metric: u32) {
 }
 
 #[inline(always)]
-unsafe fn refresh_state_timer(state: *mut BpfUdpConnState) {
+// bpf_timer_start validates that timer_init and set_callback have completed.
+// A competing CPU can see a NOEXIST entry before the inserter reaches either
+// helper. Never use that entry for classification when validation fails.
+unsafe fn refresh_state_timer(state: *mut BpfUdpConnState) -> *mut BpfUdpConnState {
     if unsafe {
         helpers::bpf_timer_start(
             ptr::addr_of_mut!((*state).timer).cast::<c_void>(),
@@ -64,7 +67,9 @@ unsafe fn refresh_state_timer(state: *mut BpfUdpConnState) {
     } != 0
     {
         increment_udp_state_metric(METRIC_TIMER_START_FAILURE);
+        return ptr::null_mut();
     }
+    state
 }
 
 #[inline(never)]
@@ -91,8 +96,7 @@ pub unsafe fn refresh_udp_conn_state(
     .cast::<BpfUdpConnState>();
     if !state.is_null() {
         increment_udp_state_metric(METRIC_STATE_REFRESH);
-        unsafe { refresh_state_timer(state) };
-        return state;
+        return unsafe { refresh_state_timer(state) };
     }
 
     unsafe {
@@ -109,8 +113,7 @@ pub unsafe fn refresh_udp_conn_state(
                     .cast::<BpfUdpConnState>();
             if !raced_state.is_null() {
                 increment_udp_state_metric(METRIC_STATE_REFRESH);
-                refresh_state_timer(raced_state);
-                return raced_state;
+                return refresh_state_timer(raced_state);
             }
             increment_udp_state_metric(METRIC_INSERT_FAILURE);
             return ptr::null_mut();
