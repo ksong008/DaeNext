@@ -332,7 +332,11 @@ fn hex_nibble(byte: u8) -> Result<u8, OutboundError> {
 }
 
 fn hex_u16_list(data: &[u8]) -> Vec<String> {
-    data.chunks_exact(2).map(hex_u16).collect()
+    data.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| hex_u16(pair))
+        .collect()
 }
 
 fn hex_byte(value: u8) -> String {

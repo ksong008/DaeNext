@@ -161,7 +161,7 @@ fn decode_udp_live_payload_hex(value: &str) -> Result<Vec<u8>, String> {
         return Err("resident-adapter-udp-live payload hex must contain full bytes".to_owned());
     }
     let mut out = Vec::with_capacity(nibbles.len() / 2);
-    for pair in nibbles.chunks_exact(2) {
+    for pair in nibbles.as_chunks::<2>().0 {
         let high = hex_value(pair[0]).ok_or_else(|| {
             format!(
                 "resident-adapter-udp-live payload hex contains invalid digit: {}",

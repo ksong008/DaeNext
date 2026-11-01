@@ -26,7 +26,7 @@ fn case_hysteria2_pin_sha256_matches_raw_cert_hash_only() {
     let configured = format!(
         "{}:{}-{}",
         &expected[0..2],
-        &expected[2..4].to_uppercase(),
+        expected[2..4].to_uppercase(),
         &expected[4..]
     );
     let check = hysteria2::pin_sha256_matches_raw_cert(&configured, raw_cert);

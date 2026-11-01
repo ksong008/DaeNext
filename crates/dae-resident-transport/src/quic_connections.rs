@@ -71,6 +71,7 @@ pub(crate) struct Hysteria2QuicConnectionRequest<'a> {
     pub(crate) session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 }
 
+#[allow(clippy::result_large_err)] // Error keeps the endpoint alive for owned cleanup.
 pub(crate) async fn open_hysteria2_quic_connection_candidates_async(
     request: Hysteria2QuicConnectionRequest<'_>,
     deadline: dae_runtime_control::AbsoluteDeadline,

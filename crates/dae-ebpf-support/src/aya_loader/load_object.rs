@@ -99,7 +99,7 @@ fn load_aya_userspace_object_from_source(
 
     let mut loader = aya::EbpfLoader::new();
     if let Some(btf) = target_btf.btf.as_ref() {
-        loader.btf(Some(btf));
+        loader.btf(btf);
     }
     if options.allow_unsupported_maps {
         loader.allow_unsupported_maps();

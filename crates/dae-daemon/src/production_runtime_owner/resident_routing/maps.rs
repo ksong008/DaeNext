@@ -207,7 +207,7 @@ pub(super) fn prefix_to_lpm_key(prefix: &IpPrefix) -> [u8; 20] {
         IpAddr::V6(addr) => (addr.octets(), prefix.bits() as u32),
     };
     key[..4].copy_from_slice(&bits.to_ne_bytes());
-    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+    for (index, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         key[4 + index * 4..8 + index * 4].copy_from_slice(&word.to_ne_bytes());
     }
