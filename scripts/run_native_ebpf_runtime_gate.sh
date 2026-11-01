@@ -26,6 +26,7 @@ resource_log="${RUNTIME_RESOURCE_LOG:-/tmp/dae-native-ebpf-runtime-resources-${r
 backend="${NATIVE_EBPF_BACKEND:-${DAE_NATIVE_EBPF_BACKEND:-auto}}"
 netns_link="${NETNS_LINK:-${DAE_NETNS_LINK:-auto}}"
 native_object_mode="${NATIVE_EBPF_OBJECT_MODE:-auto}"
+native_toolchain="${DAE_RUST_NATIVE_BPF_TOOLCHAIN:-nightly-2026-05-29}"
 runtime_timeout="${RUNTIME_TIMEOUT:-180s}"
 
 case "$native_object_mode" in
@@ -51,7 +52,7 @@ mkdir -p "$run_root"
 
 echo "building native Aya loader object from crates/dae-ebpf-program"
 echo "native object source: crates/dae-ebpf-program"
-cargo +nightly build -Z build-std=core --manifest-path Cargo.toml \
+cargo "+$native_toolchain" build --locked -Z build-std=core --manifest-path Cargo.toml \
   -p dae-ebpf-program \
   --target bpfel-unknown-none \
   --release
@@ -66,7 +67,7 @@ if ! grep -q ' PARAM$' <<<"$native_object_symbols"; then
 fi
 
 echo "running Aya cgroup attach/detach gate"
-if ! DAE_RUN_AYA_CGROUP_ATTACH_SMOKE=1 cargo test --manifest-path Cargo.toml \
+if ! DAE_RUN_AYA_CGROUP_ATTACH_SMOKE=1 DAE_TEST_NATIVE_BPF_OBJECT="$rust_native_object" cargo test --locked --manifest-path Cargo.toml \
   -p dae-ebpf-support \
   --features aya-loader \
   aya_cgroup_attach_detach_smoke_is_env_gated \
@@ -81,6 +82,21 @@ if grep -q 'skip aya cgroup attach smoke' "$cgroup_log"; then
   exit 1
 fi
 echo "Aya cgroup attach/detach gate passed"
+
+echo "running every L2 TC role through the kernel verifier"
+tc_roles_log="${cgroup_log}.tc-roles"
+if ! DAE_RUN_AYA_LOAD_SMOKE=1 DAE_TEST_NATIVE_BPF_OBJECT="$rust_native_object" cargo test --locked --manifest-path Cargo.toml \
+  -p dae-ebpf-support --features aya-loader --lib \
+  aya_upgrade_all_l2_tc_roles_pass_the_kernel_verifier_is_env_gated \
+  -- --nocapture >"$tc_roles_log" 2>&1; then
+  tail -c 20000 "$tc_roles_log" >&2 || true
+  exit 1
+fi
+if ! grep -Fq 'test result: ok. 1 passed;' "$tc_roles_log"; then
+  echo "L2 TC verifier gate did not execute its required test" >&2
+  tail -c 20000 "$tc_roles_log" >&2 || true
+  exit 1
+fi
 
 process_tree_pids() {
   local root_pid="$1"
@@ -158,7 +174,7 @@ run_with_resource_sample() {
 
 echo "running native eBPF runtime gate: root=$run_root backend=$backend netns_link=$netns_link object=$native_object_mode timeout=$runtime_timeout"
 : >"$cargo_log"
-if ! cargo build --manifest-path Cargo.toml \
+if ! cargo build --locked --manifest-path Cargo.toml \
   -p dae-daemon \
   --features native-ebpf \
   --bin daed-contract-runner \
