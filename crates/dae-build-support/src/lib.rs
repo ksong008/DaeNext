@@ -102,8 +102,8 @@ pub mod native_ebpf_build {
         features: &[&str],
     ) {
         let cargo = env::var("DAE_RUST_NATIVE_BPF_CARGO").ok();
-        let toolchain =
-            env::var("DAE_RUST_NATIVE_BPF_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned());
+        let toolchain = env::var("DAE_RUST_NATIVE_BPF_TOOLCHAIN")
+            .unwrap_or_else(|_| "nightly-2026-05-29".to_owned());
         let target_dir = out_dir.join("native-ebpf-target");
         let mut command = match cargo {
             Some(cargo) => Command::new(cargo),
@@ -124,6 +124,7 @@ pub mod native_ebpf_build {
             .env_remove("RUSTDOC")
             .env_remove("RUSTFLAGS")
             .arg("build")
+            .arg("--locked")
             .arg("-Z")
             .arg("build-std=core")
             .arg("--manifest-path")

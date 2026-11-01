@@ -56,7 +56,10 @@ pub(super) fn read_log_visibility(config_dir: &Path) -> io::Result<(u64, u64)> {
     }
     let mut last_id = 0;
     let mut valid_bytes = 0;
-    for record in data.chunks_exact(PRODUCT_LOG_VISIBILITY_RECORD_BYTES as usize) {
+    for record in data
+        .as_chunks::<{ PRODUCT_LOG_VISIBILITY_RECORD_BYTES as usize }>()
+        .0
+    {
         let id = u64::from_le_bytes(record[..8].try_into().expect("visibility record length"));
         let complement =
             u64::from_le_bytes(record[8..].try_into().expect("visibility record length"));

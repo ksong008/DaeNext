@@ -80,6 +80,7 @@ boring-v4-compat = { package = "boring", path = "vendor/boring-v4-compat" }
 [workspace.package]
 version = "3.1.0"
 edition = "2024"
+rust-version = "1.98"
 license = "AGPL-3.0-only"
 repository = "https://github.com/ksong008/DaeNext"
 
@@ -89,7 +90,7 @@ aes = { version = "0.8", features = ["zeroize"] }
 aes-gcm = { version = "0.10", features = ["zeroize"] }
 argon2 = "0.5"
 arc-swap = "1.7"
-aya = { version = "0.14.0", default-features = false }
+aya = { version = "0.16.0", default-features = false }
 aya-ebpf = { version = "0.2.1", default-features = false }
 base64 = "0.22"
 blake2 = "0.10"

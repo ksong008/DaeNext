@@ -485,7 +485,7 @@ async fn run_hysteria2_quic_server(
 fn colon_dash_pin(raw_hex: &str) -> String {
     format!(
         "{}:{}-{}",
-        &raw_hex[0..2].to_uppercase(),
+        raw_hex[0..2].to_uppercase(),
         &raw_hex[2..4],
         &raw_hex[4..]
     )

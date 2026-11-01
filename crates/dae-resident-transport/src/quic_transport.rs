@@ -349,13 +349,13 @@ fn salamander_deobfuscate_one(
 }
 
 fn salamander_xor_in_place(payload: &mut [u8], hash: &[u8; HYSTERIA2_SALAMANDER_HASH_LEN]) {
-    let mut chunks = payload.chunks_exact_mut(HYSTERIA2_SALAMANDER_HASH_LEN);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = payload.as_chunks_mut::<HYSTERIA2_SALAMANDER_HASH_LEN>();
+    for chunk in chunks {
         for (byte, hash_byte) in chunk.iter_mut().zip(hash) {
             *byte ^= *hash_byte;
         }
     }
-    for (index, byte) in chunks.into_remainder().iter_mut().enumerate() {
+    for (index, byte) in remainder.iter_mut().enumerate() {
         *byte ^= hash[index];
     }
 }
@@ -695,6 +695,7 @@ impl Hysteria2ConnectionFailure {
     }
 }
 
+#[allow(clippy::result_large_err)] // Error keeps the endpoint alive for owned cleanup.
 pub(crate) async fn connect_hysteria2_quic_endpoint_candidates_async<F, Fut>(
     candidates: &[SocketAddr],
     server_name: &str,

@@ -447,8 +447,8 @@ pub(super) fn build_aya_compatible_bpf_object(root: &std::path::Path, output: &s
         "dae-ebpf-support-test-target-{}",
         std::process::id()
     ));
-    let toolchain =
-        std::env::var("DAE_RUST_NATIVE_BPF_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned());
+    let toolchain = std::env::var("DAE_RUST_NATIVE_BPF_TOOLCHAIN")
+        .unwrap_or_else(|_| "nightly-2026-05-29".to_owned());
     let status = std::process::Command::new("rustup")
         .arg("run")
         .arg(toolchain)
@@ -461,6 +461,7 @@ pub(super) fn build_aya_compatible_bpf_object(root: &std::path::Path, output: &s
         .env_remove("RUSTDOC")
         .env_remove("RUSTFLAGS")
         .arg("build")
+        .arg("--locked")
         .arg("-Z")
         .arg("build-std=core")
         .arg("--manifest-path")

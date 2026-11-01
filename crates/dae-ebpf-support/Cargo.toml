@@ -2,6 +2,7 @@
 name = "dae-ebpf-support"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
@@ -15,6 +16,6 @@ dae-ebpf-abi.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
-aya-obj = "0.3.0"
+aya-obj = "0.6.0"
 dae-golden.workspace = true
 serde_json.workspace = true

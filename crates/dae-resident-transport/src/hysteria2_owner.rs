@@ -1852,7 +1852,7 @@ impl Hysteria2OwnerBuildError {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::result_large_err)] // Error owns endpoint cleanup.
 async fn build_hysteria2_transport(
     key: Hysteria2OwnerKey,
     binding: ResidentProxyBinding,

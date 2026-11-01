@@ -473,7 +473,7 @@ pub fn query_aya_interface_index(target: &crate::TcAttachTarget) -> Result<u32, 
     })
 }
 
-fn current_netns_interface_index(iface: &str) -> Result<u32, String> {
+pub(super) fn current_netns_interface_index(iface: &str) -> Result<u32, String> {
     let iface = CString::new(iface)
         .map_err(|_| "interface name contains an interior NUL byte".to_owned())?;
     // SAFETY: `iface` is a live NUL-terminated C string for the duration of
@@ -576,11 +576,14 @@ pub(super) fn attach_loaded_aya_sched_classifier(
     let (attach_options, tcx_anchor, tcx_pre_query_revision, tcx_pre_program_order) = match backend
     {
         AttachBackend::TcNetlink => (
-            TcAttachOptions::Netlink(NlOptions {
-                priority: spec.priority,
-                handle: spec.handle.into(),
-                classid: None,
-            }),
+            TcAttach::Netlink {
+                parent: attach_type.into(),
+                options: NlOptions {
+                    priority: spec.priority,
+                    handle: spec.handle.into(),
+                    classid: None,
+                },
+            },
             None,
             None,
             Vec::new(),
@@ -592,7 +595,10 @@ pub(super) fn attach_loaded_aya_sched_classifier(
             let preparation =
                 prepare_tcx_attach_order(&spec.target.iface, attach_type, spec.tcx_order)?;
             (
-                TcAttachOptions::TcxOrder(preparation.order),
+                TcAttach::Tcx {
+                    attach_type,
+                    order: preparation.order,
+                },
                 preparation.anchor,
                 Some(preparation.query_revision),
                 preparation.program_order,
@@ -600,14 +606,13 @@ pub(super) fn attach_loaded_aya_sched_classifier(
         }
         _ => unreachable!(),
     };
-    let link_id = classifier
-        .attach_with_options(&spec.target.iface, attach_type, attach_options)
-        .map_err(|err| {
-            format!(
-                "aya sched classifier {} attach failed: {err:?}",
-                backend.as_str()
-            )
-        })?;
+    let ifindex = current_netns_interface_index(&spec.target.iface)?;
+    let link_id = classifier.attach(ifindex, attach_options).map_err(|err| {
+        format!(
+            "aya sched classifier {} attach failed: {err:?}",
+            backend.as_str()
+        )
+    })?;
     Ok(LoadedClassifierAttachResult {
         link_id,
         tcx_anchor,
@@ -620,7 +625,8 @@ pub(super) fn query_tcx_program_order(
     iface: &str,
     attach_type: TcAttachType,
 ) -> Result<(u64, Vec<AyaTcxProgramOrderEntry>), String> {
-    let (revision, programs) = SchedClassifier::query_tcx(iface, attach_type)
+    let ifindex = current_netns_interface_index(iface)?;
+    let (revision, programs) = SchedClassifier::query_tcx(ifindex, attach_type)
         .map_err(|err| format!("aya tcx query failed: {err:?}"))?;
     let order = programs
         .into_iter()

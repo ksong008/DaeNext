@@ -228,15 +228,20 @@ fn bytes_to_block_words(bytes: &[u8]) -> [u32; 16] {
     let mut block = [0_u8; BLOCK_LEN];
     block[..bytes.len()].copy_from_slice(bytes);
     let mut words = [0_u32; 16];
-    for (word, chunk) in words.iter_mut().zip(block.chunks_exact(4)) {
-        *word = u32::from_le_bytes(chunk.try_into().expect("four-byte BLAKE3 word"));
+    for (word, chunk) in words.iter_mut().zip(block.as_chunks::<4>().0.iter()) {
+        *word = u32::from_le_bytes(*chunk);
     }
     words
 }
 
 fn words_to_bytes(words: &[u32]) -> [u8; OUT_LEN] {
     let mut output = [0_u8; OUT_LEN];
-    for (chunk, word) in output.chunks_exact_mut(4).zip(words.iter().copied()) {
+    for (chunk, word) in output
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(words.iter().copied())
+    {
         chunk.copy_from_slice(&word.to_le_bytes());
     }
     output

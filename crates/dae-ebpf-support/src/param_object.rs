@@ -123,7 +123,7 @@ fn locate_param_symbol(bytes: &[u8]) -> io::Result<ParamSymbolLocation> {
             .ok_or_else(|| invalid_data("ELF symtab links to missing string table"))?;
         let strings = slice(bytes, linked_strings.offset, linked_strings.size)?;
         let symtab = slice(bytes, section.offset, section.size)?;
-        for entry in symtab.chunks_exact(ELF64_SYMBOL_SIZE) {
+        for entry in symtab.as_chunks::<ELF64_SYMBOL_SIZE>().0 {
             let symbol = ElfSymbol::parse(entry)?;
             if symbol.name_offset == 0 || symbol.section_index == SHN_UNDEF {
                 continue;

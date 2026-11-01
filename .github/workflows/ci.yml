@@ -18,6 +18,7 @@ concurrency:
 
 env:
   BPF_LINKER_VERSION: "0.10.3"
+  DAE_RUST_NATIVE_BPF_TOOLCHAIN: "nightly-2026-05-29"
   CARGO_PROFILE_RELEASE_LTO: "fat"
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
   CARGO_TERM_COLOR: always
@@ -55,11 +56,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.98.0"
           components: rustfmt, clippy
 
       - name: Install native eBPF Rust toolchain
         run: |
-          rustup toolchain install nightly --profile minimal --component rust-src
+          rustup toolchain install "${DAE_RUST_NATIVE_BPF_TOOLCHAIN}" --profile minimal --component rust-src
           cargo install bpf-linker --version "${BPF_LINKER_VERSION}" --locked
 
       - name: Cache cargo
@@ -114,6 +116,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.0"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

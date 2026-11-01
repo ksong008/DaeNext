@@ -75,7 +75,8 @@ pub(super) fn setns(fd: i32) -> io::Result<()> {
 }
 
 pub(super) fn add_clsact_or_accept_existing(iface: &str) -> Result<(), String> {
-    accept_existing_clsact(iface, tc::qdisc_add_clsact(iface))
+    let ifindex = super::tc_attach::current_netns_interface_index(iface)?;
+    accept_existing_clsact(iface, tc::qdisc_add_clsact(ifindex))
 }
 
 fn accept_existing_clsact(
