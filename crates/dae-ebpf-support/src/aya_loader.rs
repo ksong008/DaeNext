@@ -60,3 +60,6 @@ pub use self::capability_probe::*;
 
 mod link_metadata;
 pub use self::link_metadata::*;
+
+#[cfg(test)]
+mod listener_lifecycle_tests;
