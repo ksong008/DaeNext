@@ -118,6 +118,8 @@ run_listener_lifecycle_test listener-negative 4 DAE_RUN_LISTENER_LIFECYCLE_SMOKE
   dae-ebpf-support aya-loader listener_lifecycle_tests
 run_listener_lifecycle_test udp-direction 2 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader udp_direction_tests
+run_listener_lifecycle_test redirect-pressure 1 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
+  dae-ebpf-support aya-loader redirect_pressure_tests
 run_listener_lifecycle_test sockmap-publication 1 DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader kernel_sockmap_staging_rollback_and_cookie_idempotence
 run_listener_lifecycle_test sockmap-public-api 1 DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE \
