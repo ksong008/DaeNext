@@ -23,6 +23,7 @@ pub(crate) fn start_prepared_resident_production_runtime(
     latency_seed: &[Value],
     dns_reload_snapshot: Option<ResidentDnsReloadSnapshot>,
 ) -> Result<ResidentProductionRuntime, String> {
+    validate_prepared_dataplane(&prepared.dataplane)?;
     let artifact_dir = resident_runtime_artifact_dir(std::process::id());
     cleanup_stale_resident_runtime_artifacts(&artifact_dir);
     if artifact_dir.exists() {

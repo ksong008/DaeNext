@@ -65,6 +65,8 @@ mod runtime_read_view;
 pub(crate) use self::runtime_read_view::*;
 mod prepared_generation;
 pub(crate) use self::prepared_generation::*;
+mod dataplane_admission;
+use self::dataplane_admission::*;
 mod start_entry;
 pub use self::start_entry::*;
 mod candidate_preflight;

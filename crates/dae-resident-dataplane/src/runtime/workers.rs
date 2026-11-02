@@ -33,7 +33,7 @@ pub fn start_resident_dataplane_workers(
     if !prepared.plan.enabled {
         return (
             json!({
-                "status": "pass",
+                "status": "fail",
                 "enabled": false,
                 "reason": prepared.plan.unsupported_reason,
                 "event_file": Value::Null,
