@@ -63,3 +63,6 @@ pub use self::link_metadata::*;
 
 #[cfg(test)]
 mod listener_lifecycle_tests;
+
+#[cfg(test)]
+mod udp_direction_tests;
