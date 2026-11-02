@@ -66,3 +66,6 @@ mod listener_lifecycle_tests;
 
 #[cfg(test)]
 mod udp_direction_tests;
+
+#[cfg(test)]
+mod redirect_pressure_tests;

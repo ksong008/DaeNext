@@ -40,6 +40,12 @@ fn loaded() -> Option<AyaUserspaceLoadedObject> {
     loaded_with_timeout(None)
 }
 pub(super) fn loaded_with_timeout(idle_ns: Option<u64>) -> Option<AyaUserspaceLoadedObject> {
+    loaded_with_profile(idle_ns, None)
+}
+pub(super) fn loaded_with_profile(
+    idle_ns: Option<u64>,
+    profile: Option<crate::RuntimeMapProfile>,
+) -> Option<AyaUserspaceLoadedObject> {
     if std::env::var("DAE_RUN_LISTENER_LIFECYCLE_SMOKE").as_deref() != Ok("1") {
         eprintln!("skip listener lifecycle kernel tests: opt-in required");
         return None;
@@ -49,6 +55,9 @@ pub(super) fn loaded_with_timeout(idle_ns: Option<u64>) -> Option<AyaUserspaceLo
     );
     let mut pins = TestPins::new();
     let mut options = AyaUserspaceLoaderOptions::new(&path);
+    if let Some(profile) = profile {
+        options.max_entries_overrides = profile.max_entries_overrides();
+    }
     options.map_pin_path = pins.0.as_deref();
     options.param = Some(crate::build_dae_param(crate::DaeParamInput {
         tproxy_port: 12345,
@@ -218,23 +227,44 @@ fn concurrent_udp_creation_refresh_and_timer_expiry_release_every_entry() {
     };
     let name = "tproxy_lan_ingress_l2";
     load(&mut loaded, name);
+    let direct = crate::BpfMatchSet {
+        kind: crate::MATCH_TYPE_FALLBACK,
+        outbound: 0,
+        ..Default::default()
+    };
+    update_map_elem_bytes(
+        map_fd(&loaded, "routing_map"),
+        &0u32.to_ne_bytes(),
+        bytes(&direct),
+    )
+    .unwrap();
     let program: &SchedClassifier = loaded.ebpf.program(name).unwrap().try_into().unwrap();
     let barrier = std::sync::Barrier::new(8);
+    let dropped = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
         for _ in 0..8 {
             let barrier = &barrier;
+            let dropped = &dropped;
             scope.spawn(move || {
                 barrier.wait();
                 for sequence in 0..512u16 {
                     let mut data = packet(17);
                     data[34..36].copy_from_slice(&(1234 + sequence % 64).to_be_bytes());
-                    program
+                    let action = program
                         .test_run(TestRunOptions {
                             data_in: Some(&data),
                             repeat: 1,
                             ..Default::default()
                         })
-                        .unwrap();
+                        .unwrap()
+                        .return_value;
+                    match action {
+                        2 => {
+                            dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        u32::MAX => {}
+                        other => panic!("unexpected concurrent UDP action: {other}"),
+                    }
                 }
             });
         }
@@ -244,6 +274,14 @@ fn concurrent_udp_creation_refresh_and_timer_expiry_release_every_entry() {
     assert!(metrics.state_refresh_total > 0);
     assert_eq!(metrics.timer_init_failure_total, 0);
     assert_eq!(metrics.timer_callback_failure_total, 0);
+    let rejected = dropped.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        rejected as u64,
+        metrics.insert_failure_total
+            + metrics.post_insert_lookup_failure_total
+            + metrics.timer_start_failure_total,
+        "every fail-closed packet must have corresponding failure evidence"
+    );
     let fd = map_fd(&loaded, "udp_conn_state_map");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
@@ -258,6 +296,6 @@ fn concurrent_udp_creation_refresh_and_timer_expiry_release_every_entry() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     eprintln!(
-        "verified 4096 concurrent UDP packets across 64 tuples and complete timer reclamation: {metrics:?}"
+        "verified 4096 concurrent UDP packets across 64 tuples, {rejected} fail-closed packets, and complete timer reclamation: {metrics:?}"
     );
 }
