@@ -175,11 +175,11 @@ pub use runtime_maps::{
 pub use sockmap::{
     LISTEN_SOCKET_KEY_READY, LISTEN_SOCKET_KEY_TCP4, LISTEN_SOCKET_KEY_TCP6,
     LISTEN_SOCKET_KEY_UDP4, LISTEN_SOCKET_KEY_UDP6, LISTEN_SOCKET_KEYS,
-    LISTEN_SOCKET_MAP_MAX_ENTRIES, ListenSocketMapFdSmoke, LiveLoadedTproxyListenSocketMap,
-    LoadedListenSocketMapFdSmoke, LoadedTproxyListenSocketMapFdSmoke,
-    open_live_loaded_tproxy_listen_socket_map, open_live_loaded_tproxy_listen_socket_map_in_netns,
-    open_tproxy_listener_set_and_update_sockmap_by_id, run_listen_socket_map_fd_smoke,
-    run_loaded_listen_socket_map_fd_smoke, run_loaded_tproxy_listen_socket_map_fd_smoke,
+    LISTEN_SOCKET_MAP_MAX_ENTRIES, ListenSocketMapFdSmoke, ListenerMapUpdate,
+    ListenerPublicationOutcome, LiveLoadedTproxyListenSocketMap, LoadedListenSocketMapFdSmoke,
+    LoadedTproxyListenSocketMapFdSmoke, listen_socket_cookie_snapshot,
+    run_listen_socket_map_fd_smoke, run_loaded_listen_socket_map_fd_smoke,
+    run_loaded_tproxy_listen_socket_map_fd_smoke, stage_live_loaded_tproxy_listen_socket_map,
     stage_live_loaded_tproxy_listen_socket_map_in_netns, stage_tproxy_listener_set_by_id,
     update_listen_socket_map_by_id,
 };

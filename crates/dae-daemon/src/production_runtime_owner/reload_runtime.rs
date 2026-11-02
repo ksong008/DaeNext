@@ -5,9 +5,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use dae_ebpf_support::{
-    AttachBackend, LISTEN_SOCKET_KEY_TCP4, LISTEN_SOCKET_KEY_TCP6, LISTEN_SOCKET_KEY_UDP4,
-    LISTEN_SOCKET_KEY_UDP6, LiveLoadedTproxyListenSocketMap, map_info, open_map_fd,
-    update_map_elem_bytes,
+    AttachBackend, ListenerPublicationOutcome, LiveLoadedTproxyListenSocketMap, map_info,
+    open_map_fd, update_listen_socket_map_by_id,
 };
 use dae_runtime_control::{
     DnsObservabilityStats, RuntimeOverview, RuntimeStatsSnapshot, RuntimeTrafficSample,
@@ -30,7 +29,7 @@ pub(super) struct ReloadRuntimeEvidence {
     pub(super) passed: bool,
     pub(super) live_reload_executed: bool,
     pub(super) production_listener_reused: bool,
-    pub(super) production_bpf_owner_transferred: bool,
+    pub(super) production_bpf_owner_continuity_verified: bool,
     pub(super) production_dns_cache_migrated: bool,
     pub(super) dns_cache_migration_guard_verified: bool,
     pub(super) bounded_close_verified: bool,
@@ -40,7 +39,7 @@ pub(super) struct ReloadRuntimeEvidence {
     pub(super) reload_diff_verified: bool,
     pub(super) compatible_state_reuse_verified: bool,
     pub(super) listener_reuse: Value,
-    pub(super) bpf_owner_transfer: Value,
+    pub(super) bpf_owner_continuity: Value,
     pub(super) dns_cache_migration: Value,
     pub(super) bounded_close: Value,
     pub(super) runtime_overview: Value,
@@ -77,28 +76,28 @@ pub(super) fn run_reload_runtime_parity_probe(
     .is_ok();
 
     let listener_before = listener_identity(handoff);
-    let bpf_owner_transfer = rewrite_sockmap_with_reused_listener_fds(handoff, options);
-    evidence.production_bpf_owner_transferred = bpf_owner_transfer["status"].as_str()
+    let bpf_owner_continuity = validate_sockmap_with_reused_listener_fds(handoff, options);
+    evidence.production_bpf_owner_continuity_verified = bpf_owner_continuity["status"].as_str()
         == Some("pass")
-        && bpf_owner_transfer["same_map_id_after_reopen"]
+        && bpf_owner_continuity["same_map_id_after_reopen"]
             .as_bool()
             .unwrap_or(false)
-        && bpf_owner_transfer["attach_continuity"]["status"].as_str() == Some("pass")
-        && bpf_owner_transfer["attach_continuity_evidence_passed"]
+        && bpf_owner_continuity["attach_continuity"]["status"].as_str() == Some("pass")
+        && bpf_owner_continuity["attach_continuity_evidence_passed"]
             .as_bool()
             .unwrap_or(false);
-    evidence.bpf_owner_transfer = bpf_owner_transfer;
+    evidence.bpf_owner_continuity = bpf_owner_continuity;
 
     let listener_after = listener_identity(handoff);
     evidence.production_listener_reused =
         listener_identity_reused(&listener_before, &listener_after)
-            && evidence.production_bpf_owner_transferred;
+            && evidence.production_bpf_owner_continuity_verified;
     evidence.listener_reuse = json!({
         "status": if evidence.production_listener_reused { "pass" } else { "fail" },
-        "strategy": "reuse existing production TCP/UDP listeners; rewrite listen_socket_map family keys with the same fds instead of re-listening",
+        "strategy": "reuse existing physical owner and listeners; validate complete published socket cookies under the writer lock without rewriting active slots",
         "old_owner_listener": listener_before,
         "new_owner_listener": listener_after,
-        "ready_after_map_handoff": evidence.production_bpf_owner_transferred,
+        "ready_after_map_handoff": evidence.production_bpf_owner_continuity_verified,
         "production_listener_reused": evidence.production_listener_reused,
     });
 
@@ -177,7 +176,7 @@ pub(super) fn run_reload_runtime_parity_probe(
     evidence.elapsed_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
     evidence.passed = evidence.live_reload_executed
         && evidence.production_listener_reused
-        && evidence.production_bpf_owner_transferred
+        && evidence.production_bpf_owner_continuity_verified
         && evidence.dns_cache_migration_guard_verified
         && evidence.bounded_close_verified
         && evidence.runtime_overview_parity_verified
@@ -189,7 +188,7 @@ pub(super) fn run_reload_runtime_parity_probe(
     evidence
 }
 
-fn rewrite_sockmap_with_reused_listener_fds(
+fn validate_sockmap_with_reused_listener_fds(
     handoff: &LiveLoadedTproxyListenSocketMap,
     options: &ProductionRuntimeOwnerOptions,
 ) -> Value {
@@ -211,26 +210,24 @@ fn rewrite_sockmap_with_reused_listener_fds(
             });
         }
     };
-    let tcp4_update = update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_TCP4,
-        handoff.tcp_listener_fd,
-    );
-    let tcp6_update = update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_TCP6,
-        handoff.tcp_listener_fd,
-    );
-    let udp4_update = update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_UDP4,
-        handoff.udp_socket_fd,
-    );
-    let udp6_update = update_sockmap_fd(
-        map_fd.as_raw_fd(),
-        LISTEN_SOCKET_KEY_UDP6,
-        handoff.udp_socket_fd,
-    );
+    let cookies_before = listen_socket_cookie_snapshot(handoff.map.id);
+    let validation = handoff.is_published().and_then(|published| {
+        if !published
+            || !cookies_before
+                .as_ref()
+                .is_ok_and(|cookies| cookies.iter().all(Option::is_some))
+        {
+            return Err(std::io::Error::other("parity requires published listeners"));
+        }
+        update_listen_socket_map_by_id(
+            handoff.map.id,
+            handoff.tcp_listener_fd,
+            None,
+            handoff.udp_socket_fd,
+            None,
+        )
+    });
+    let cookies_after = listen_socket_cookie_snapshot(handoff.map.id);
     let after_info = match map_info(map_fd.as_raw_fd()) {
         Ok(info) => json!({
             "id": info.id,
@@ -259,25 +256,26 @@ fn rewrite_sockmap_with_reused_listener_fds(
     let attach_continuity = attach_continuity_value(options, tc_filters_still_attached);
     let attach_continuity_evidence_passed = attach_continuity["status"].as_str() == Some("pass");
     let same_map_id_after_reopen = after_info["id"].as_u64() == Some(u64::from(handoff.map.id));
-    let passed = tcp4_update.is_ok()
-        && tcp6_update.is_ok()
-        && udp4_update.is_ok()
-        && udp6_update.is_ok()
+    let publication_already_active = validation
+        .as_ref()
+        .is_ok_and(|update| update.publication == ListenerPublicationOutcome::AlreadyPublished);
+    let cookies_unchanged = cookies_before.is_ok()
+        && cookies_after.is_ok()
+        && cookies_before.as_ref().ok() == cookies_after.as_ref().ok();
+    let passed = publication_already_active
+        && cookies_unchanged
         && same_map_id_after_reopen
         && attach_continuity_evidence_passed;
     json!({
         "status": if passed { "pass" } else { "fail" },
-        "old_owner_eject_bpf_object": true,
-        "new_owner_inject_bpf_object": passed,
+        "physical_owner_reused": same_map_id_after_reopen && publication_already_active && cookies_unchanged,
         "same_map_id_after_reopen": same_map_id_after_reopen,
-        "listen_socket_map_tcp4_rewritten_with_reused_fd": tcp4_update.is_ok(),
-        "listen_socket_map_tcp6_rewritten_with_reused_fd": tcp6_update.is_ok(),
-        "listen_socket_map_udp4_rewritten_with_reused_fd": udp4_update.is_ok(),
-        "listen_socket_map_udp6_rewritten_with_reused_fd": udp6_update.is_ok(),
-        "tcp4_update_error": tcp4_update.err().map(|err| err.to_string()),
-        "tcp6_update_error": tcp6_update.err().map(|err| err.to_string()),
-        "udp4_update_error": udp4_update.err().map(|err| err.to_string()),
-        "udp6_update_error": udp6_update.err().map(|err| err.to_string()),
+        "published_socket_cookies_validated": cookies_unchanged && validation.is_ok(),
+        "active_slots_rewritten": cookies_before.as_ref().ok().zip(cookies_after.as_ref().ok()).map(|(before, after)| before != after),
+        "publication_outcome": validation.as_ref().ok().map(|update| format!("{:?}", update.publication)),
+        "validation_error": validation.as_ref().err().map(|err| err.to_string()),
+        "cookies_before": cookies_before.as_ref().ok(),
+        "cookies_after": cookies_after.as_ref().ok(),
         "before": before_info,
         "after": after_info,
         "peer_filter": peer_filter,
@@ -285,8 +283,12 @@ fn rewrite_sockmap_with_reused_listener_fds(
         "tc_filters_still_attached": tc_filters_still_attached,
         "attach_continuity": attach_continuity,
         "attach_continuity_evidence_passed": attach_continuity_evidence_passed,
-        "current_swap_to_new_owner": passed,
+        "physical_owner_continuity_verified": passed,
     })
+}
+
+fn listen_socket_cookie_snapshot(map_id: u32) -> std::io::Result<[Option<u64>; 5]> {
+    dae_ebpf_support::listen_socket_cookie_snapshot(map_id)
 }
 
 fn attach_continuity_value(
@@ -319,12 +321,6 @@ fn attach_continuity_value(
             "tc filter text must still show the production peer and host programs after sockmap handoff"
         },
     })
-}
-
-fn update_sockmap_fd(map_fd: i32, key: u32, socket_fd: i32) -> std::io::Result<()> {
-    let key_bytes = key.to_ne_bytes();
-    let value_bytes = (socket_fd as u64).to_ne_bytes();
-    update_map_elem_bytes(map_fd, &key_bytes, &value_bytes)
 }
 
 fn listener_identity(handoff: &LiveLoadedTproxyListenSocketMap) -> Value {

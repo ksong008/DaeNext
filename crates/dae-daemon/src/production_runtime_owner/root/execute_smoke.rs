@@ -118,13 +118,29 @@ pub(super) fn execute_owner_smoke(
     evidence.peer_attach_show = show_peer_program(&mut evidence.executed_steps);
 
     let mut live_handoff = None;
+    let mut probe_consumers = None;
     if ok {
-        match open_live_loaded_tproxy_listen_socket_map_in_netns(
+        match stage_live_loaded_tproxy_listen_socket_map_in_netns(
             &before_map_ids,
             options.tproxy_port,
             PRODUCTION_NETNS,
         ) {
             Ok(handoff) => {
+                let readiness = (|| -> std::io::Result<_> {
+                    // The probe owns blocking consumers, not production async workers.
+                    let tcp = handoff.listeners.tcp_listener.try_clone()?;
+                    let udp = handoff.listeners.udp_socket.try_clone()?;
+                    handoff.publish()?;
+                    Ok((tcp, udp))
+                })();
+                ok &= readiness.is_ok();
+                evidence.executed_steps.push(json!({
+                    "name": "synchronous-probe-listener-publication",
+                    "status": if readiness.is_ok() { "pass" } else { "fail" },
+                    "error": readiness.as_ref().err().map(|error| error.to_string()),
+                    "consumer": "bounded synchronous probe owns both blocking sockets",
+                }));
+                probe_consumers = readiness.ok();
                 evidence.socket_options_verified =
                     socket_options_verified(&handoff.tcp_options, &handoff.udp_options);
                 evidence.discovered_map_id = Some(handoff.map.id);
@@ -192,9 +208,9 @@ pub(super) fn execute_owner_smoke(
     if options.execute_active_tcp {
         evidence.active_tcp.enabled = true;
         if ok {
-            let listener = live_handoff
+            let listener = probe_consumers
                 .as_ref()
-                .and_then(|handoff| handoff.listeners.tcp_listener.try_clone().ok());
+                .and_then(|(tcp, _)| tcp.try_clone().ok());
             match listener {
                 Some(listener) => {
                     let relay_listener = if options.execute_active_tcp_relay {
@@ -282,9 +298,9 @@ pub(super) fn execute_owner_smoke(
     if options.execute_active_udp {
         if ok {
             ok &= add_active_udp_loopback_target(&mut evidence.executed_steps, options);
-            let udp_socket = live_handoff
+            let udp_socket = probe_consumers
                 .as_ref()
-                .and_then(|handoff| handoff.listeners.udp_socket.try_clone().ok());
+                .and_then(|(_, udp)| udp.try_clone().ok());
             match udp_socket {
                 Some(udp_socket) => {
                     evidence.active_udp = run_active_udp_probe(udp_socket, options);
@@ -322,9 +338,9 @@ pub(super) fn execute_owner_smoke(
 
     if options.execute_active_dns {
         if ok {
-            let udp_socket = live_handoff
+            let udp_socket = probe_consumers
                 .as_ref()
-                .and_then(|handoff| handoff.listeners.udp_socket.try_clone().ok());
+                .and_then(|(_, udp)| udp.try_clone().ok());
             match udp_socket {
                 Some(udp_socket) => {
                     evidence.active_dns = run_active_dns_probe(udp_socket, options);
@@ -417,6 +433,7 @@ pub(super) fn execute_owner_smoke(
     let native_lan_attached = native_runtime.lan_attached();
     let native_host_attached = native_runtime.host_attached();
     evidence.native_object = native_runtime.pname_evidence(false, &evidence.native_param_image);
+    drop(probe_consumers);
     drop(live_handoff);
     native_runtime.reset();
     if options.execute_active_udp {

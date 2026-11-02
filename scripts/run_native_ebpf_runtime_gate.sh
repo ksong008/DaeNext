@@ -114,10 +114,14 @@ run_listener_lifecycle_test() {
     exit 1
   fi
 }
-run_listener_lifecycle_test listener-negative 3 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
+run_listener_lifecycle_test listener-negative 4 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader listener_lifecycle_tests
 run_listener_lifecycle_test sockmap-publication 1 DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader kernel_sockmap_staging_rollback_and_cookie_idempotence
+run_listener_lifecycle_test sockmap-public-api 1 DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE \
+  dae-ebpf-support aya-loader kernel_public_staging_and_parity_preserve_ready_and_socket_identity
+run_listener_lifecycle_test listener-update-evidence 1 DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE \
+  dae-ebpf-loader native-ebpf real_update_map_reports_only_keys_written_by_this_invocation
 run_listener_lifecycle_test listener-handoff 1 DAE_RUN_LISTENER_HANDOFF_SMOKE \
   dae-ebpf-loader native-ebpf real_open_handoff_publishes_only_after_adoption_and_reclaims_failures
 
@@ -280,7 +284,7 @@ required = [
     "dns_so_mark_upstream_socket_observed",
     "live_reload_executed",
     "production_listener_reused",
-    "production_bpf_owner_transferred",
+    "production_bpf_owner_continuity_verified",
     "production_dns_cache_migrated",
     "dns_cache_migration_guard_verified",
     "bounded_close_verified",
@@ -289,6 +293,21 @@ required = [
     "invalid_config_restore_verified",
 ]
 missing = [key for key in required if owner.get(key) is not True]
+continuity = (owner.get("reload_runtime") or {}).get("bpf_owner_continuity") or {}
+for key, expected in [("physical_owner_reused", True), ("published_socket_cookies_validated", True), ("active_slots_rewritten", False)]:
+    if continuity.get(key) is not expected:
+        missing.append("reload_runtime.bpf_owner_continuity." + key)
+if continuity.get("publication_outcome") != "AlreadyPublished":
+    missing.append("parity must observe an existing publication")
+cookies_before = continuity.get("cookies_before") or []
+if len(cookies_before) != 5 or cookies_before != continuity.get("cookies_after") or not all(cookies_before):
+    missing.append("observed cookie continuity")
+if owner.get("production_bpf_owner_transferred") != owner.get("production_bpf_owner_continuity_verified"):
+    missing.append("legacy owner continuity alias")
+publications = [step for step in owner.get("executed_steps", []) if step.get("name") == "synchronous-probe-listener-publication"]
+if len(publications) != 1 or publications[0].get("status") != "pass":
+    missing.append("synchronous probe consumer publication")
+
 
 native_steps = [
     step for step in owner.get("executed_steps", [])

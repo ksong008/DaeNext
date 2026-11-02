@@ -137,6 +137,7 @@ fn control_plane_owner_report_value(paths: &ControlPlaneOwnerPaths) -> Value {
         "control_plane_reload_owner_sequence_recorded": true,
         "control_plane_restore_sequence_recorded": true,
         "listener_reuse_contract_recorded": true,
+        "bpf_owner_continuity_contract_recorded": true,
         "bpf_owner_transfer_contract_recorded": true,
         "dns_cache_migration_guard_recorded": true,
         "reload_scoped_flush_after_current_swap_recorded": true,

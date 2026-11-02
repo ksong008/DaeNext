@@ -71,7 +71,7 @@ pub fn control_plane_entrypoint_admission_report(root: &Path) -> Result<Value, S
         "control_plane_reload_owner_sequence_recorded",
         "control_plane_restore_sequence_recorded",
         "listener_reuse_contract_recorded",
-        "bpf_owner_transfer_contract_recorded",
+        "bpf_owner_continuity_contract_recorded",
         "dns_cache_migration_guard_recorded",
         "reload_scoped_flush_after_current_swap_recorded",
         "isolated_control_plane_entrypoint_paths_validated",

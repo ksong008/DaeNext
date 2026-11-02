@@ -191,8 +191,7 @@ pub(crate) fn run_tproxy_listener_open_handoff(
 pub(crate) fn run_tproxy_listener_update_map(
     options: TproxyListenerUpdateMapOptions,
 ) -> LoaderOutput {
-    let keys_updated = dae_ebpf_support::LISTEN_SOCKET_KEYS.to_vec();
-    let map = match dae_ebpf_support::update_listen_socket_map_by_id(
+    let update = match dae_ebpf_support::update_listen_socket_map_by_id(
         options.map_id,
         options.tcp4_fd,
         options.tcp6_fd,
@@ -204,20 +203,30 @@ pub(crate) fn run_tproxy_listener_update_map(
             return LoaderOutput::error(format!("tproxy listener update-map failed: {err}"));
         }
     };
+    let wrote_publication =
+        update.publication == dae_ebpf_support::ListenerPublicationOutcome::Published;
+    let keys_updated = if wrote_publication {
+        dae_ebpf_support::LISTEN_SOCKET_KEYS.to_vec()
+    } else {
+        Vec::new()
+    };
     LoaderOutput::ok(format!(
         "{}\n",
         json!({
             "status": "pass",
             "loader": "rust",
             "scope": "tproxy-listener-update-map",
-            "map_id": map.id,
-            "map_name": map.name,
+            "map_id": update.map.id,
+            "map_name": update.map.name,
             "keys_updated": keys_updated,
+            "keys_validated": dae_ebpf_support::LISTEN_SOCKET_KEYS,
+            "ready_key_updated": wrote_publication,
             "tcp4_fd": options.tcp4_fd,
             "tcp6_fd": options.tcp6_fd,
             "udp4_fd": options.udp4_fd,
             "udp6_fd": options.udp6_fd,
             "listener_map_published": true,
+            "publication_outcome": format!("{:?}", update.publication),
             "userspace_readiness_contract": "caller-owned",
         })
     ))
