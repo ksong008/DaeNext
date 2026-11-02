@@ -122,6 +122,18 @@ pub struct AyaMapSpecMismatch {
 pub struct AyaUserspaceLoadedObject {
     pub ebpf: aya::Ebpf,
     pub report: AyaUserspaceLoadReport,
+    #[cfg(test)]
+    pub(crate) pin_guard: Option<AyaTestPinGuard>,
+}
+
+#[cfg(test)]
+pub(crate) struct AyaTestPinGuard(pub(crate) PathBuf);
+
+#[cfg(test)]
+impl Drop for AyaTestPinGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 #[repr(C)]

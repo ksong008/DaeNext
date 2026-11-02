@@ -76,23 +76,24 @@ impl<M: MapIo> Transaction<M> {
         }
         Ok(transaction)
     }
-    pub(super) fn publish(&mut self) -> io::Result<()> {
-        if !self.published {
-            // Recheck ownership before exposing any staged slot.
-            for key in LISTEN_SOCKET_KEYS {
-                if self.map.cookie(key)? != Some(self.cookies[key as usize]) {
-                    return Err(io::Error::other("staged listener ownership changed"));
-                }
-            }
-            if self.map.cookie(LISTEN_SOCKET_KEY_READY)?.is_some() {
-                return Err(io::Error::other(
-                    "listener ready slot changed during staging",
-                ));
-            }
-            self.map.put(LISTEN_SOCKET_KEY_READY, self.fds[0])?;
-            self.published = true;
+    pub(super) fn publish(&mut self) -> io::Result<ListenerPublicationOutcome> {
+        if self.published {
+            return Ok(ListenerPublicationOutcome::AlreadyPublished);
         }
-        Ok(())
+        // Recheck ownership before exposing any staged slot.
+        for key in LISTEN_SOCKET_KEYS {
+            if self.map.cookie(key)? != Some(self.cookies[key as usize]) {
+                return Err(io::Error::other("staged listener ownership changed"));
+            }
+        }
+        if self.map.cookie(LISTEN_SOCKET_KEY_READY)?.is_some() {
+            return Err(io::Error::other(
+                "listener ready slot changed during staging",
+            ));
+        }
+        self.map.put(LISTEN_SOCKET_KEY_READY, self.fds[0])?;
+        self.published = true;
+        Ok(ListenerPublicationOutcome::Published)
     }
     fn rollback(&mut self) -> io::Result<()> {
         let mut failure = None;
@@ -151,11 +152,11 @@ impl ListenerPublication {
             lock: Some(lock),
         })
     }
-    pub(super) fn publish(&mut self) -> io::Result<()> {
-        self.transaction.publish()?;
+    pub(super) fn publish(&mut self) -> io::Result<ListenerPublicationOutcome> {
+        let outcome = self.transaction.publish()?;
         // Never unlink the lock inode: another process may already be waiting.
         self.lock.take();
-        Ok(())
+        Ok(outcome)
     }
 }
 fn writer_lock() -> io::Result<File> {

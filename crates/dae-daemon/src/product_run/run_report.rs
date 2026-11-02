@@ -286,11 +286,13 @@ pub fn run_product_run_report(options: &RunOptions, version: &str) -> Result<Val
             .as_bool()
             .unwrap_or(false)
     );
-    report["production_bpf_owner_transferred"] = json!(
-        production_runtime_owner["production_bpf_owner_transferred"]
+    report["production_bpf_owner_continuity_verified"] = json!(
+        production_runtime_owner["production_bpf_owner_continuity_verified"]
             .as_bool()
             .unwrap_or(false)
     );
+    report["production_bpf_owner_transferred"] =
+        report["production_bpf_owner_continuity_verified"].clone();
     report["dns_cache_migration_guard_verified"] = json!(
         production_runtime_owner["dns_cache_migration_guard_verified"]
             .as_bool()

@@ -6,6 +6,30 @@ use aya::programs::{TestRun, TestRunOptions};
 use std::net::{TcpListener, UdpSocket};
 use std::os::fd::AsFd;
 
+struct TestPins(Option<PathBuf>);
+impl TestPins {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = crate::default_bpffs_mount().unwrap().join(format!(
+            "dae-listener-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&path).unwrap();
+        Self(Some(path))
+    }
+    fn take_path(&mut self) -> PathBuf {
+        self.0.take().expect("test pin path already transferred")
+    }
+}
+impl Drop for TestPins {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
 fn bytes<T>(value: &T) -> &[u8] {
     // All callers explicitly initialize every field, including ABI padding.
     unsafe { std::slice::from_raw_parts((value as *const T).cast(), size_of::<T>()) }
@@ -23,7 +47,9 @@ fn loaded_with_timeout(idle_ns: Option<u64>) -> Option<AyaUserspaceLoadedObject>
     let path = PathBuf::from(
         std::env::var_os("DAE_TEST_NATIVE_BPF_OBJECT").expect("native object required"),
     );
+    let mut pins = TestPins::new();
     let mut options = AyaUserspaceLoaderOptions::new(&path);
+    options.map_pin_path = pins.0.as_deref();
     options.param = Some(crate::build_dae_param(crate::DaeParamInput {
         tproxy_port: 12345,
         control_plane_pid: 99,
@@ -37,7 +63,19 @@ fn loaded_with_timeout(idle_ns: Option<u64>) -> Option<AyaUserspaceLoadedObject>
     if let Some(idle_ns) = idle_ns {
         options.param.as_mut().unwrap().udp_state_idle_timeout_ns = idle_ns;
     }
-    Some(load_aya_userspace_object(options).unwrap())
+    let mut loaded = load_aya_userspace_object(options).unwrap();
+    loaded.pin_guard = Some(AyaTestPinGuard(pins.take_path()));
+    Some(loaded)
+}
+
+#[test]
+fn private_pins_live_until_the_loaded_object_is_released() {
+    let Some(loaded) = loaded() else { return };
+    let path = loaded.report.map_pin_path.clone().unwrap();
+    assert!(path.is_dir());
+    assert!(path.join("cookie_pid_map").exists());
+    drop(loaded);
+    assert!(!path.exists());
 }
 fn packet(proto: u8) -> Vec<u8> {
     let mut data = vec![0; 14 + 20 + 20];

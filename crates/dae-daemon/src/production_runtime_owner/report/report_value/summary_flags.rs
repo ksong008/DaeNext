@@ -283,14 +283,18 @@ pub(crate) fn insert_summary_flags(report: &mut Map<String, Value>, context: &Re
         ),
     );
     report.insert(
-        "production_bpf_owner_transferred".to_owned(),
+        "production_bpf_owner_continuity_verified".to_owned(),
         json!(
             context.facts.reload_runtime_passed
                 && context
                     .evidence
                     .reload_runtime
-                    .production_bpf_owner_transferred
+                    .production_bpf_owner_continuity_verified
         ),
+    );
+    report.insert(
+        "production_bpf_owner_transferred".to_owned(),
+        report["production_bpf_owner_continuity_verified"].clone(),
     );
     report.insert(
         "production_dns_cache_migrated".to_owned(),

@@ -58,9 +58,15 @@ fn staging_is_invisible_and_drop_cancels_it() {
 #[test]
 fn publication_is_idempotent_and_active_or_partial_foreign_maps_are_immutable() {
     let map = FakeMap::default();
-    stage(&map).unwrap().publish().unwrap();
+    assert_eq!(
+        stage(&map).unwrap().publish().unwrap(),
+        ListenerPublicationOutcome::Published
+    );
     let snapshot = map.0.borrow().slots.clone();
-    stage(&map).unwrap().publish().unwrap();
+    assert_eq!(
+        stage(&map).unwrap().publish().unwrap(),
+        ListenerPublicationOutcome::AlreadyPublished
+    );
     assert_eq!(map.0.borrow().writes, 5);
     assert!(Transaction::stage(map.clone(), [30, 30, 40, 40], [30, 30, 40, 40]).is_err());
     assert_eq!(map.0.borrow().slots, snapshot);
@@ -144,4 +150,73 @@ fn kernel_sockmap_staging_rollback_and_cookie_idempotence() {
     for key in 0..5 {
         assert!(KernelMap(duplicate()).cookie(key).unwrap().is_some());
     }
+}
+
+#[test]
+fn kernel_public_staging_and_parity_preserve_ready_and_socket_identity() {
+    if std::env::var("DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE").as_deref() != Ok("1") {
+        eprintln!("skip public listener lifecycle smoke: opt-in required");
+        return;
+    }
+    let mut attr = BpfMapCreateAttr {
+        map_type: BPF_MAP_TYPE_SOCKMAP,
+        key_size: 4,
+        value_size: 8,
+        max_entries: LISTEN_SOCKET_MAP_MAX_ENTRIES,
+        ..BpfMapCreateAttr::default()
+    };
+    let name = LISTEN_SOCKET_MAP_KERNEL_NAME.as_bytes();
+    attr.map_name[..name.len()].copy_from_slice(name);
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_MAP_CREATE,
+            &attr,
+            size_of::<BpfMapCreateAttr>(),
+        )
+    };
+    assert!(fd >= 0, "{}", io::Error::last_os_error());
+    let map = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+    let id = crate::runtime_maps::map_info(map.as_raw_fd()).unwrap().id;
+    let cookies = || {
+        let fd = unsafe { libc::fcntl(map.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        assert!(fd >= 0);
+        let reader = KernelMap(unsafe { OwnedFd::from_raw_fd(fd) });
+        (0..5)
+            .map(|key| reader.cookie(key).unwrap())
+            .collect::<Vec<_>>()
+    };
+    {
+        let staged = stage_tproxy_listener_set_by_id(id, 0).unwrap();
+        assert!(!staged.is_published().unwrap());
+        assert_eq!(cookies()[4], None);
+    }
+    assert_eq!(cookies(), vec![None; 5]);
+    let live = stage_tproxy_listener_set_by_id(id, 0).unwrap();
+    live.publish().unwrap();
+    assert!(live.is_published().unwrap());
+    let before = cookies();
+    assert!(before.iter().all(Option::is_some));
+    let update =
+        update_listen_socket_map_by_id(id, live.tcp_listener_fd, None, live.udp_socket_fd, None)
+            .unwrap();
+    assert_eq!(
+        update.publication,
+        ListenerPublicationOutcome::AlreadyPublished
+    );
+    assert_eq!(cookies(), before);
+    let other = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    assert!(
+        update_listen_socket_map_by_id(id, other.as_raw_fd(), None, live.udp_socket_fd, None)
+            .is_err()
+    );
+    assert_eq!(cookies(), before);
+    for key in 0..5 {
+        crate::runtime_maps::delete_map_elem_bytes(map.as_raw_fd(), &(key as u32).to_ne_bytes())
+            .unwrap();
+    }
+    let update =
+        update_listen_socket_map_by_id(id, live.tcp_listener_fd, None, live.udp_socket_fd, None)
+            .unwrap();
+    assert_eq!(update.publication, ListenerPublicationOutcome::Published);
 }

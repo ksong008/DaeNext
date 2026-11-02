@@ -132,3 +132,41 @@ fn real_open_handoff_publishes_only_after_adoption_and_reclaims_failures() {
         drop((adopted, b));
     }
 }
+
+#[test]
+fn real_update_map_reports_only_keys_written_by_this_invocation() {
+    if std::env::var("DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE").as_deref() != Ok("1") {
+        eprintln!("skip real listener update evidence smoke: opt-in required");
+        return;
+    }
+    let map = cold_map();
+    let map_id = dae_ebpf_support::map_info(map.as_raw_fd()).unwrap().id;
+    let tcp = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let udp = std::net::UdpSocket::bind(("127.0.0.1", 0)).unwrap();
+    for (outcome, expected_keys, ready_updated) in [
+        ("Published", vec![0, 1, 2, 3], true),
+        ("AlreadyPublished", Vec::new(), false),
+    ] {
+        let before = (0..5).map(|key| slot(&map, key)).collect::<Vec<_>>();
+        let output = run_tproxy_listener_update_map(TproxyListenerUpdateMapOptions {
+            map_id,
+            tcp4_fd: tcp.as_raw_fd(),
+            tcp6_fd: None,
+            udp4_fd: udp.as_raw_fd(),
+            udp6_fd: None,
+        });
+        assert_eq!(output.exit_code, 0, "{}", output.stderr);
+        let value: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(value["publication_outcome"], outcome);
+        assert_eq!(value["keys_updated"], json!(expected_keys));
+        assert_eq!(value["keys_validated"], json!([0, 1, 2, 3]));
+        assert_eq!(value["ready_key_updated"], ready_updated);
+        let after = (0..5).map(|key| slot(&map, key)).collect::<Vec<_>>();
+        if ready_updated {
+            assert_eq!(before, vec![None; 5]);
+            assert!(after.iter().all(Option::is_some));
+        } else {
+            assert_eq!(after, before);
+        }
+    }
+}

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dae_ebpf_support::{
-    AttachBackend, map_ids, open_live_loaded_tproxy_listen_socket_map_in_netns,
+    AttachBackend, map_ids, stage_live_loaded_tproxy_listen_socket_map_in_netns,
 };
 use serde_json::{Value, json};
 
