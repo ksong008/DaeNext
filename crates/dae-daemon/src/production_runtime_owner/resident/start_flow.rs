@@ -227,6 +227,29 @@ pub(super) fn start_with_options(
                 "reason": "peer PARAM-aware attach did not pass",
             })
         };
+        let mut resident_routing_apply_cache = ResidentRoutingApplyCache::default();
+        // The peer role has loaded our private maps, but physical LAN/WAN
+        // hooks are not live yet. Fill the complete static routing snapshot
+        // now so they cannot classify traffic against partially seeded rules.
+        if ok && options.native_ebpf_requested {
+            let routing_map_id = native_runtime
+                .loaded_map_id("routing_map")
+                .ok_or_else(|| "native peer load did not expose routing_map".to_owned())?;
+            let (routing, _) = update_existing_resident_routing_map(
+                routing_map_id,
+                native_runtime.loaded_map_id("lpm_array_map"),
+                native_runtime.loaded_map_id("outbound_connectivity_map"),
+                config,
+                &geodata,
+                &mut resident_routing_apply_cache,
+            )?;
+            executed_steps.push(json!({
+                "name": "prepare-native-routing-before-physical-attach",
+                "status": "pass",
+                "routing_map_id": routing_map_id,
+                "routing": routing,
+            }));
+        }
         let pname_rules_required = resident_routing_requires_process_name(config);
         let (cgroup_ok, resident_cgroup_attach) = resident_cgroup_attach_evidence(
             &mut executed_steps,
@@ -252,7 +275,6 @@ pub(super) fn start_with_options(
 
         let mut resident_lan_attach = Vec::new();
         let mut resident_lan_routing = Vec::new();
-        let mut resident_routing_apply_cache = ResidentRoutingApplyCache::default();
         for iface in &lan_ifaces {
             if ok {
                 let link_layer = match interface_link_layer(iface) {
