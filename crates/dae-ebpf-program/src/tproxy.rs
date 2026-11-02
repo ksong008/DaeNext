@@ -479,12 +479,26 @@ pub fn lan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
     {
         return TC_ACT_SHOT;
     }
+    // Transparent replies arrive from our own dae0, not a new external flow.
+    // The UDP state may already have expired while its userspace proxy actor
+    // still accepts delayed replies. Do not let that reply claim the client's
+    // forward tuple as inbound and bypass the next packet's routing policy.
+    let proxy_reply = is_proxy_reply_ingress(
+        unsafe { (*skb).ingress_ifindex },
+        crate::abi::param_dae0_ifindex(),
+    );
     if info.l4proto == IPPROTO_UDP
+        && !proxy_reply
         && !udp_state::refresh_reversed_udp_state(ptr::addr_of!(info), true)
     {
         return udp_state_unavailable_action();
     }
     chain_next()
+}
+
+#[inline(always)]
+const fn is_proxy_reply_ingress(ingress_ifindex: u32, dae0_ifindex: u32) -> bool {
+    dae0_ifindex != 0 && ingress_ifindex == dae0_ifindex
 }
 
 #[inline(always)]
@@ -743,6 +757,14 @@ pub fn wan_egress(skb: *mut __sk_buff, link_h_len: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_reply_requires_the_runtime_dae0_ingress() {
+        assert!(is_proxy_reply_ingress(7, 7));
+        assert!(!is_proxy_reply_ingress(8, 7));
+        assert!(!is_proxy_reply_ingress(0, 7));
+        assert!(!is_proxy_reply_ingress(0, 0));
+    }
 
     fn redirect_entry(link_layer: u8) -> BpfRedirectEntry {
         let mut entry = BpfRedirectEntry::zeroed();

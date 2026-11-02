@@ -30,7 +30,7 @@ impl Drop for TestPins {
     }
 }
 
-fn bytes<T>(value: &T) -> &[u8] {
+pub(super) fn bytes<T>(value: &T) -> &[u8] {
     // All callers explicitly initialize every field, including ABI padding.
     unsafe { std::slice::from_raw_parts((value as *const T).cast(), size_of::<T>()) }
 }
@@ -39,7 +39,7 @@ use std::mem::size_of;
 fn loaded() -> Option<AyaUserspaceLoadedObject> {
     loaded_with_timeout(None)
 }
-fn loaded_with_timeout(idle_ns: Option<u64>) -> Option<AyaUserspaceLoadedObject> {
+pub(super) fn loaded_with_timeout(idle_ns: Option<u64>) -> Option<AyaUserspaceLoadedObject> {
     if std::env::var("DAE_RUN_LISTENER_LIFECYCLE_SMOKE").as_deref() != Ok("1") {
         eprintln!("skip listener lifecycle kernel tests: opt-in required");
         return None;
@@ -77,7 +77,7 @@ fn private_pins_live_until_the_loaded_object_is_released() {
     drop(loaded);
     assert!(!path.exists());
 }
-fn packet(proto: u8) -> Vec<u8> {
+pub(super) fn packet(proto: u8) -> Vec<u8> {
     let mut data = vec![0; 14 + 20 + 20];
     data[12..14].copy_from_slice(&[8, 0]);
     data[14] = 0x45;
@@ -96,7 +96,7 @@ fn packet(proto: u8) -> Vec<u8> {
     }
     data
 }
-fn tuple(proto: u8) -> BpfTuplesKey {
+pub(super) fn tuple(proto: u8) -> BpfTuplesKey {
     let mut key = BpfTuplesKey::zeroed();
     key.sip.u6_addr8[10..].copy_from_slice(&[255, 255, 127, 0, 0, 1]);
     key.dip.u6_addr8[10..].copy_from_slice(&[255, 255, 127, 0, 0, 2]);
@@ -105,14 +105,14 @@ fn tuple(proto: u8) -> BpfTuplesKey {
     key.l4proto = proto;
     key
 }
-fn map_fd(loaded: &AyaUserspaceLoadedObject, name: &str) -> i32 {
+pub(super) fn map_fd(loaded: &AyaUserspaceLoadedObject, name: &str) -> i32 {
     let data = match loaded.ebpf.map(name).unwrap() {
-        Map::SockMap(data) | Map::LruHashMap(data) | Map::HashMap(data) => data,
+        Map::SockMap(data) | Map::LruHashMap(data) | Map::HashMap(data) | Map::Array(data) => data,
         _ => panic!("unexpected map kind for {name}"),
     };
     data.fd().as_fd().as_raw_fd()
 }
-fn load(loaded: &mut AyaUserspaceLoadedObject, name: &str) {
+pub(super) fn load(loaded: &mut AyaUserspaceLoadedObject, name: &str) {
     let program: &mut SchedClassifier = loaded.ebpf.program_mut(name).unwrap().try_into().unwrap();
     program.load().unwrap();
 }
