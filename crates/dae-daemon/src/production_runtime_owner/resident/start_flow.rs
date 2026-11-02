@@ -44,6 +44,7 @@ pub(super) fn start_with_options(
         latency_seed,
         dns_reload_snapshot,
     } = context;
+    validate_prepared_dataplane(&prepared_dataplane)?;
     let config_owner = config;
     let config = config_owner.as_ref();
     let mut prepared_dataplane = Some(prepared_dataplane);
@@ -394,70 +395,46 @@ pub(super) fn start_with_options(
         }
 
         let resident_dataplane = if ok {
-            if !resident_dataplane_enabled() {
-                json!({
-                    "status": "pass",
-                    "enabled": false,
-                    "reason": "resident Rust userspace protocol dataplane was explicitly disabled by environment override",
-                    "override_env": DEFAULT_RESIDENT_DATAPLANE_ENV,
-                    "scope": "Rust-native product runtime enables resident userspace dataplane without systemd environment injection",
-                })
-            } else {
-                match live_handoff.as_ref() {
-                    Some(handoff) => match discover_routing_tuple_map(&native_runtime, handoff) {
-                        Ok(discovery) => {
-                            match discover_domain_routing_map(&native_runtime, handoff) {
-                                Ok(domain_routing_discovery) => {
-                                    let (mut value, runtime) = start_resident_dataplane_workers(
-                                        ResidentDataplaneStartContext {
-                                            handoff,
-                                            reload_generation: runtime_generation,
-                                            config,
-                                            config_owner: Arc::clone(&config_owner),
-                                            artifact_dir: &artifact_dir,
-                                            routing_tuple_map_id: discovery.id,
-                                            domain_routing_map_id: domain_routing_discovery.id,
-                                            prepared: prepared_dataplane.take().expect(
-                                                "prepared resident dataplane is consumed once",
-                                            ),
-                                            latency_seed,
-                                            dns_reload_snapshot: dns_reload_snapshot.as_ref(),
-                                        },
-                                    );
-                                    if let Value::Object(map) = &mut value {
-                                        map.insert(
-                                            "routing_tuple_map_source".to_owned(),
-                                            json!(discovery.source),
-                                        );
-                                        map.insert(
-                                            "routing_tuple_candidate_map_ids".to_owned(),
-                                            json!(discovery.candidate_map_ids),
-                                        );
-                                        map.insert(
-                                            "domain_routing_map_source".to_owned(),
-                                            json!(domain_routing_discovery.source),
-                                        );
-                                        map.insert(
-                                            "domain_routing_candidate_map_ids".to_owned(),
-                                            json!(domain_routing_discovery.candidate_map_ids),
-                                        );
-                                    }
-                                    ok &= value["status"].as_str() == Some("pass");
-                                    dataplane = runtime;
-                                    value
-                                }
-                                Err(err) => {
-                                    ok = false;
-                                    json!({
-                                        "status": "fail",
-                                        "enabled": true,
-                                        "error": err,
-                                        "routing_tuple_map_source": discovery.source,
-                                        "routing_tuple_candidate_map_ids": discovery.candidate_map_ids,
-                                        "domain_routing_map_source": "discovery-error",
-                                    })
-                                }
+            match live_handoff.as_ref() {
+                Some(handoff) => match discover_routing_tuple_map(&native_runtime, handoff) {
+                    Ok(discovery) => match discover_domain_routing_map(&native_runtime, handoff) {
+                        Ok(domain_routing_discovery) => {
+                            let (mut value, runtime) =
+                                start_resident_dataplane_workers(ResidentDataplaneStartContext {
+                                    handoff,
+                                    reload_generation: runtime_generation,
+                                    config,
+                                    config_owner: Arc::clone(&config_owner),
+                                    artifact_dir: &artifact_dir,
+                                    routing_tuple_map_id: discovery.id,
+                                    domain_routing_map_id: domain_routing_discovery.id,
+                                    prepared: prepared_dataplane
+                                        .take()
+                                        .expect("prepared resident dataplane is consumed once"),
+                                    latency_seed,
+                                    dns_reload_snapshot: dns_reload_snapshot.as_ref(),
+                                });
+                            if let Value::Object(map) = &mut value {
+                                map.insert(
+                                    "routing_tuple_map_source".to_owned(),
+                                    json!(discovery.source),
+                                );
+                                map.insert(
+                                    "routing_tuple_candidate_map_ids".to_owned(),
+                                    json!(discovery.candidate_map_ids),
+                                );
+                                map.insert(
+                                    "domain_routing_map_source".to_owned(),
+                                    json!(domain_routing_discovery.source),
+                                );
+                                map.insert(
+                                    "domain_routing_candidate_map_ids".to_owned(),
+                                    json!(domain_routing_discovery.candidate_map_ids),
+                                );
                             }
+                            ok &= value["status"].as_str() == Some("pass");
+                            dataplane = runtime;
+                            value
                         }
                         Err(err) => {
                             ok = false;
@@ -465,17 +442,28 @@ pub(super) fn start_with_options(
                                 "status": "fail",
                                 "enabled": true,
                                 "error": err,
-                                "routing_tuple_map_source": "discovery-error",
+                                "routing_tuple_map_source": discovery.source,
+                                "routing_tuple_candidate_map_ids": discovery.candidate_map_ids,
+                                "domain_routing_map_source": "discovery-error",
                             })
                         }
                     },
-                    None => {
+                    Err(err) => {
                         ok = false;
                         json!({
                             "status": "fail",
-                            "error": "resident tproxy listener handoff is unavailable",
+                            "enabled": true,
+                            "error": err,
+                            "routing_tuple_map_source": "discovery-error",
                         })
                     }
+                },
+                None => {
+                    ok = false;
+                    json!({
+                        "status": "fail",
+                        "error": "resident tproxy listener handoff is unavailable",
+                    })
                 }
             }
         } else {
@@ -486,6 +474,13 @@ pub(super) fn start_with_options(
         };
 
         if ok {
+            let published = live_handoff
+                .as_ref()
+                .map(LiveLoadedTproxyListenSocketMap::is_published)
+                .transpose()
+                .map_err(|error| format!("check listener publication before host attach: {error}"))?
+                .unwrap_or(false);
+            validate_started_dataplane(&resident_dataplane, dataplane.is_some(), published)?;
             ok &= attach_host_program(
                 &mut executed_steps,
                 &interface_attach_options,
@@ -655,6 +650,13 @@ pub(super) fn start_with_options(
         });
         start_report_for_runtime = compact_start_report_for_runtime(&start_report);
         if ok {
+            validate_started_dataplane(
+                &resident_dataplane,
+                dataplane.is_some(),
+                live_handoff
+                    .as_ref()
+                    .is_some_and(|handoff| handoff.is_published().unwrap_or(false)),
+            )?;
             let evidence_path = start_file.clone();
             start_evidence_writer = thread::Builder::new()
                 .name("resident-start-evidence".to_owned())

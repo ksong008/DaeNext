@@ -17,6 +17,7 @@ pub(crate) fn prepare_resident_production_generation(
         .collect::<Vec<_>>();
     let geodata = ResidentGeodataStore::new(geodata_asset_dirs.clone());
     let dataplane = build_resident_prepared_dataplane_with_geodata(&config, &geodata)?;
+    validate_prepared_dataplane(&dataplane)?;
     Ok(ResidentPreparedGeneration {
         config,
         geodata_asset_dirs,

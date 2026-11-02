@@ -7,6 +7,22 @@ pub struct ResidentPreparedDataplane {
     pub(crate) routing_matcher: RoutingMatcher,
     pub(crate) protocol_owner_specs: ResidentProtocolOwnerSpecs,
 }
+
+impl ResidentPreparedDataplane {
+    pub fn require_enabled(&self) -> Result<(), String> {
+        if self.plan.enabled {
+            Ok(())
+        } else {
+            Err(format!(
+                "resident production runtime requires an enabled userspace dataplane: {}",
+                self.plan
+                    .unsupported_reason
+                    .as_deref()
+                    .unwrap_or("disabled plan")
+            ))
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentDataplanePlan {
     pub(crate) enabled: bool,

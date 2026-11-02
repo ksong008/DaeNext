@@ -146,6 +146,13 @@ pub fn run_loaded_tproxy_listen_socket_map_fd_smoke(
 }
 
 impl LiveLoadedTproxyListenSocketMap {
+    pub fn is_published(&self) -> io::Result<bool> {
+        self.publication
+            .lock()
+            .map(|staged| staged.is_none())
+            .map_err(|_| io::Error::other("listener publication lock poisoned"))
+    }
+
     /// Publish only after the consumer has adopted both sockets.
     pub fn publish(&self) -> io::Result<()> {
         let mut staged = self
