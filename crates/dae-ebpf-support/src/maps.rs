@@ -45,7 +45,7 @@ impl RuntimeMapRole {
             b"listen_socket_map" => Self::SocketHandoff,
             b"routing_map" => Self::Routing,
             b"outbound_connectivity_map" => Self::Connectivity,
-            b"redirect_track" => Self::Tracking,
+            b"redirect_track" | b"redirect_udp" => Self::Tracking,
             b"domain_routing_map" => Self::DomainRouting,
             b"udp_conn_state_map" => Self::UdpState,
             b"udp_state_metrics" | b"tproxy_metrics" => Self::Observability,
@@ -90,7 +90,7 @@ const PINNED_REUSE_MAPS: [&str; 2] = ["cookie_pid_map", "routing_tuples_map"];
 // the catalog can never drift from the layout tests again: a stale literal
 // (previously 32) makes `loaded_map_spec_mismatches` reject real objects whose
 // data section is 48 bytes.
-const MAP_CATALOG: [MapSpec; 13] = [
+const MAP_CATALOG: [MapSpec; 14] = [
     MapSpec {
         name: ".rodata",
         map_type: "Array",
@@ -150,7 +150,16 @@ const MAP_CATALOG: [MapSpec; 13] = [
         map_type: "LRUHash",
         key_size: 48,
         value_size: 24,
-        max_entries: 65536,
+        max_entries: 32768,
+        flags: 0,
+        pinning: "PinNone",
+    },
+    MapSpec {
+        name: "redirect_udp",
+        map_type: "LRUHash",
+        key_size: 48,
+        value_size: 24,
+        max_entries: 32768,
         flags: 0,
         pinning: "PinNone",
     },

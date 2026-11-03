@@ -58,8 +58,17 @@
     {
       "flags": 0,
       "key_size": 48,
-      "max_entries": 65536,
+      "max_entries": 32768,
       "name": "redirect_track",
+      "pinning": "PinNone",
+      "type": "LRUHash",
+      "value_size": 24
+    },
+    {
+      "flags": 0,
+      "key_size": 48,
+      "max_entries": 32768,
+      "name": "redirect_udp",
       "pinning": "PinNone",
       "type": "LRUHash",
       "value_size": 24
