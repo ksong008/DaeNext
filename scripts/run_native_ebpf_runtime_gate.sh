@@ -124,7 +124,7 @@ run_listener_lifecycle_test resident-startup 1 DAE_RUN_RESIDENT_STARTUP_SMOKE \
   dae-daemon native-ebpf startup_routing_kernel_tests
 run_listener_lifecycle_test udp-direction 4 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader udp_direction_tests
-run_listener_lifecycle_test redirect-pressure 1 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
+run_listener_lifecycle_test redirect-pressure 2 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader redirect_pressure_tests
 run_listener_lifecycle_test sockmap-publication 1 DAE_RUN_SOCKMAP_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader kernel_sockmap_staging_rollback_and_cookie_idempotence
