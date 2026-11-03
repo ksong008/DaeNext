@@ -35,6 +35,13 @@ startup and shuts down the partial runtime. Temporary map/validation FDs and the
 writer lock are released after publication. The physical runtime continues to
 own the sockets and BPF links for normal shutdown and crash cleanup.
 
+Before host attachment, resident startup also reads all five kernel cookies and
+requires every slot to be present and key 4 to equal key 0. A read error or failed
+consistency check rejects startup and rolls back the partial runtime. This is a
+sequence of reads, not an atomic snapshot or a comparison against every original
+consumer cookie. It does not prevent a privileged writer bypassing the API from
+replacing a consistent publication or changing slots after the check.
+
 ## External loader protocol
 
 `tproxy-listener open-handoff` now requires a `dae-listener-v1` consumer. It sends

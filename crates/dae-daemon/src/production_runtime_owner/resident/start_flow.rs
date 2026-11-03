@@ -546,9 +546,14 @@ pub(super) fn start_with_options(
                 .unwrap_or(false);
             validate_started_dataplane(&resident_dataplane, dataplane.is_some(), published)?;
             let listener_map_id = live_handoff.as_ref().map(|handoff| handoff.map.id);
+            #[cfg(all(test, feature = "native-ebpf"))]
+            let snapshot_fault = startup_listener_kernel_tests::before_snapshot(listener_map_id);
             let cookies = listener_map_id
                 .map(dae_ebpf_support::sockmap::listen_socket_cookie_snapshot)
-                .transpose()
+                .transpose();
+            #[cfg(all(test, feature = "native-ebpf"))]
+            drop(snapshot_fault);
+            let cookies = cookies
                 .map_err(|error| format!("observe ready listener before host attach: {error}"))?;
             let kernel_ready = cookies
                 .is_some_and(|slots| slots.iter().all(Option::is_some) && slots[4] == slots[0]);
@@ -797,6 +802,8 @@ pub(super) fn start_with_options(
             native_peer_attached,
             native_host_attached,
         );
+        #[cfg(all(test, feature = "native-ebpf"))]
+        startup_listener_kernel_tests::observe_rollback(&executed_steps, &cleanup_steps);
         return Err(err);
     }
 
@@ -887,3 +894,6 @@ mod startup_routing_kernel_tests;
 
 #[cfg(all(test, feature = "native-ebpf"))]
 mod cleanup_retry_tests;
+
+#[cfg(all(test, feature = "native-ebpf"))]
+mod startup_listener_kernel_tests;
