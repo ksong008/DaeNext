@@ -25,7 +25,7 @@ fn run(loaded: &AyaUserspaceLoadedObject, name: &str, data: &[u8], ingress: u32)
         .return_value
 }
 
-fn flow(ipv6: bool) -> (Vec<u8>, Vec<u8>, BpfTuplesKey) {
+pub(super) fn flow(ipv6: bool) -> (Vec<u8>, Vec<u8>, BpfTuplesKey) {
     let (data, key, offset) = if ipv6 {
         let mut data = vec![0; 14 + 40 + 20];
         data[12..14].copy_from_slice(&[0x86, 0xdd]);

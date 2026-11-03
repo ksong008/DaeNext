@@ -304,7 +304,7 @@ unsafe fn prep_redirect_to_control_plane(
             return false;
         }
         if helpers::bpf_map_update_elem(
-            maps::redirect_track_map_ptr(),
+            maps::redirect_track_map_ptr((*redirect_track_key).l4proto),
             redirect_track_key.cast::<c_void>(),
             redirect_entry.cast::<c_void>(),
             BPF_ANY,
@@ -360,7 +360,7 @@ pub fn dae0peer_ingress(skb: *mut __sk_buff) -> i32 {
     }
     let entry = unsafe {
         helpers::bpf_map_lookup_elem(
-            maps::redirect_track_map_ptr(),
+            maps::redirect_track_map_ptr(redirect_track_key.l4proto),
             ptr::addr_of!(redirect_track_key).cast::<c_void>(),
         )
     }
@@ -403,7 +403,7 @@ pub fn dae0_ingress(skb: *mut __sk_buff) -> i32 {
 
     let entry = unsafe {
         helpers::bpf_map_lookup_elem(
-            maps::redirect_track_map_ptr(),
+            maps::redirect_track_map_ptr(redirect_track_key.l4proto),
             ptr::addr_of!(redirect_track_key).cast::<c_void>(),
         )
     }

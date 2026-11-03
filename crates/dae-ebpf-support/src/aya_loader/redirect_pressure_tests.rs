@@ -1,5 +1,5 @@
-//! Kernel LRU pressure exercises the two redirect lookup failure boundaries.
-use super::listener_lifecycle_tests::{bytes, load, loaded_with_profile, map_fd, packet};
+//! Protocol isolation at both redirect lookup boundaries, with real kernel LRU.
+use super::listener_lifecycle_tests::{bytes, load, loaded_with_profile, map_fd};
 use super::*;
 use crate::BpfMatchSet;
 use crate::runtime_maps::update_map_elem_bytes;
@@ -19,67 +19,91 @@ fn run(loaded: &AyaUserspaceLoadedObject, name: &str, data: &[u8]) -> u32 {
         .return_value
 }
 
+fn packet(ipv6: bool, proto: u8) -> (Vec<u8>, Vec<u8>) {
+    let (mut forward, mut reverse, _) = super::udp_direction_tests::flow(ipv6);
+    for data in [&mut forward, &mut reverse] {
+        data[if ipv6 { 20 } else { 23 }] = proto;
+        if proto == 6 {
+            let offset = if ipv6 { 54 } else { 34 };
+            data[offset + 4..offset + 8].fill(0);
+            data[offset + 12] = 0x50;
+            data[offset + 13] = 2;
+        }
+    }
+    (forward, reverse)
+}
+
 #[test]
-fn low_memory_tcp_churn_exposes_both_udp_redirect_miss_counters() {
-    let Some(mut loaded) = loaded_with_profile(None, Some(crate::RuntimeMapProfile::LowMemory))
-    else {
-        return;
-    };
-    for name in [
-        "tproxy_lan_ingress_l2",
-        "tproxy_dae0peer_ingress",
-        "tproxy_dae0_ingress",
-    ] {
-        load(&mut loaded, name);
+fn low_memory_protocol_churn_cannot_evict_the_other_protocol_at_either_boundary() {
+    for ipv6 in [false, true] {
+        for churn_protocol in [6, 17] {
+            let Some(mut loaded) =
+                loaded_with_profile(None, Some(crate::RuntimeMapProfile::LowMemory))
+            else {
+                return;
+            };
+            for name in [
+                "tproxy_lan_ingress_l2",
+                "tproxy_dae0peer_ingress",
+                "tproxy_dae0_ingress",
+            ] {
+                load(&mut loaded, name);
+            }
+            for name in ["redirect_track", "redirect_udp"] {
+                assert_eq!(
+                    crate::map_info(map_fd(&loaded, name)).unwrap().max_entries,
+                    4096
+                );
+            }
+            let fallback = BpfMatchSet {
+                kind: crate::MATCH_TYPE_FALLBACK,
+                outbound: 2,
+                ..Default::default()
+            };
+            update_map_elem_bytes(
+                map_fd(&loaded, "routing_map"),
+                &0u32.to_ne_bytes(),
+                bytes(&fallback),
+            )
+            .unwrap();
+            let (tcp, tcp_reply) = packet(ipv6, 6);
+            let (udp, udp_reply) = packet(ipv6, 17);
+            for data in [&tcp, &udp] {
+                assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", data), 7);
+                assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", data), 2); // reaches unpublished listener
+            }
+            let (mut churn, _) = packet(ipv6, churn_protocol);
+            for sequence in 0..8192u16 {
+                let offset = if ipv6 { 36 } else { 28 };
+                churn[offset..offset + 2].copy_from_slice(&(sequence + 256).to_be_bytes());
+                assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &churn), 7);
+                assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", &churn), 2);
+            }
+            let (protected, protected_reply, evicted, evicted_reply) = if churn_protocol == 6 {
+                (&udp, &udp_reply, &tcp, &tcp_reply)
+            } else {
+                (&tcp, &tcp_reply, &udp, &udp_reply)
+            };
+            assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", protected), 2);
+            run(&loaded, "tproxy_dae0_ingress", protected_reply);
+            let isolated = read_aya_tproxy_metrics(&loaded).unwrap();
+            assert_eq!(isolated.redirect_peer_lookup_miss_total, 0);
+            assert_eq!(isolated.redirect_return_lookup_miss_total, 0);
+            // A pool can still evict its own protocol. Keep this limitation
+            // explicit, and ensure both miss counters and repair still work.
+            assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", evicted), 2);
+            run(&loaded, "tproxy_dae0_ingress", evicted_reply);
+            let pressure = read_aya_tproxy_metrics(&loaded).unwrap();
+            assert_eq!(pressure.redirect_peer_lookup_miss_total, 1);
+            assert_eq!(pressure.redirect_return_lookup_miss_total, 1);
+            assert_eq!(pressure.redirect_track_update_failure_total, 0);
+            assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", evicted), 7);
+            assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", evicted), 2);
+            let repaired = read_aya_tproxy_metrics(&loaded).unwrap();
+            assert_eq!(repaired.redirect_peer_lookup_miss_total, 1);
+            eprintln!(
+                "ipv6={ipv6}, churn={churn_protocol}: isolated={isolated:?}, same-protocol pressure={pressure:?}"
+            );
+        }
     }
-    let tracking = map_fd(&loaded, "redirect_track");
-    assert_eq!(crate::map_info(tracking).unwrap().max_entries, 8192);
-    let fallback = BpfMatchSet {
-        kind: crate::MATCH_TYPE_FALLBACK,
-        outbound: 2,
-        ..Default::default()
-    };
-    update_map_elem_bytes(
-        map_fd(&loaded, "routing_map"),
-        &0u32.to_ne_bytes(),
-        bytes(&fallback),
-    )
-    .unwrap();
-    let udp = packet(17);
-    assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &udp), 7);
-    // No published listener: peer must find the redirect entry and reach the
-    // independent ready guard, rather than fail the tracking lookup.
-    assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", &udp), 2);
-    let initial = read_aya_tproxy_metrics(&loaded).unwrap();
-    assert_eq!(initial.redirect_peer_lookup_miss_total, 0);
-    assert_eq!(initial.listener_not_ready_total, 1);
-    let mut tcp = packet(6);
-    for sequence in 0..32768u32 {
-        tcp[26..30].copy_from_slice(&[127, 1, (sequence >> 8) as u8, sequence as u8]);
-        assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &tcp), 7);
-        assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", &tcp), 2);
-    }
-    // A suspended write->peer interval deliberately exposes the short race;
-    // the same eviction also models a delayed upstream response interval.
-    assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", &udp), 2);
-    let mut reverse = udp.clone();
-    reverse[26..30].copy_from_slice(&udp[30..34]);
-    reverse[30..34].copy_from_slice(&udp[26..30]);
-    reverse[34..36].copy_from_slice(&udp[36..38]);
-    reverse[36..38].copy_from_slice(&udp[34..36]);
-    assert_eq!(run(&loaded, "tproxy_dae0_ingress", &reverse), 0);
-    let pressure = read_aya_tproxy_metrics(&loaded).unwrap();
-    assert_eq!(pressure.redirect_peer_lookup_miss_total, 1);
-    assert_eq!(pressure.redirect_return_lookup_miss_total, 1);
-    assert_eq!(pressure.redirect_track_update_failure_total, 0);
-    // A new client packet repairs the entry. It does not prove that earlier
-    // responses were delivered or that sustained pressure loses only one.
-    assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &udp), 7);
-    assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", &udp), 2);
-    let repaired = read_aya_tproxy_metrics(&loaded).unwrap();
-    assert_eq!(repaired.redirect_peer_lookup_miss_total, 1);
-    assert_eq!(repaired.listener_not_ready_total, 32770);
-    eprintln!(
-        "LowMemory TCP churn: capacity=8192, TCP SYNs=32768, before={initial:?}, pressure={pressure:?}, repaired={repaired:?}"
-    );
 }

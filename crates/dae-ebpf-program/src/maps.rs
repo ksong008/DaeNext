@@ -114,7 +114,17 @@ static REDIRECT_TRACK: RawMap = RawMap::new(
     BPF_MAP_TYPE_LRU_HASH,
     size_of::<BpfRedirectKey>(),
     size_of::<BpfRedirectEntry>(),
-    65_536,
+    32_768,
+    0,
+    PIN_NONE,
+);
+
+#[map(name = "redirect_udp")]
+static REDIRECT_UDP: RawMap = RawMap::new(
+    BPF_MAP_TYPE_LRU_HASH,
+    size_of::<BpfRedirectKey>(),
+    size_of::<BpfRedirectEntry>(),
+    32_768,
     0,
     PIN_NONE,
 );
@@ -227,8 +237,13 @@ pub(crate) fn listen_socket_map_ptr() -> *mut c_void {
 }
 
 #[inline(always)]
-pub(crate) fn redirect_track_map_ptr() -> *mut c_void {
-    map_ptr(&REDIRECT_TRACK)
+pub(crate) fn redirect_track_map_ptr(l4proto: u8) -> *mut c_void {
+    // Separate budgets prevent TCP churn from evicting UDP redirect state.
+    if l4proto == 17 {
+        map_ptr(&REDIRECT_UDP)
+    } else {
+        map_ptr(&REDIRECT_TRACK)
+    }
 }
 
 #[inline(always)]
