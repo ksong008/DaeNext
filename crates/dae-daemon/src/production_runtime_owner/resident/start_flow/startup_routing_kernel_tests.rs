@@ -127,33 +127,7 @@ fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() 
             preparation["physical_generation"],
             report["runtime_generation"]
         );
-        let mut physical_roles = 0;
-        for (index, step) in steps.iter().enumerate() {
-            let attach = &step["native_attach"];
-            if attach["attached"] == true && attach["iface"] != "dae0peer" {
-                assert!(
-                    index > prepare_index,
-                    "physical attach preceded preparation: {step}"
-                );
-                physical_roles += 1;
-            }
-            if step["name"] == "attach-native-ebpf-cgroup-programs" && step["status"] == "pass" {
-                assert!(index > prepare_index, "cgroup attach preceded preparation");
-            }
-        }
-        assert_eq!(
-            steps
-                .iter()
-                .filter(
-                    |s| s["name"] == "attach-native-ebpf-cgroup-programs" && s["status"] == "pass"
-                )
-                .count(),
-            1
-        );
-        assert!(
-            physical_roles >= 6,
-            "WAN and both LAN interfaces must actually attach"
-        );
+        assert_physical_attach_evidence(steps, prepare_index, backend);
         assert_eq!(report["resident_native_cgroup_attached"], true);
         let rows = report["resident_lan_routing"].as_array().unwrap();
         assert_eq!(rows.len(), 2);
@@ -229,4 +203,85 @@ fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() 
             "real resident startup {backend:?}: ordered attach and frozen-map cache reuse verified"
         );
     }
+}
+
+fn assert_physical_attach_evidence(steps: &[Value], prepare_index: usize, backend: AttachBackend) {
+    let publications: Vec<_> = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| step["name"] == "validate-listener-publication-before-host-attach")
+        .collect();
+    assert_eq!(
+        publications.len(),
+        1,
+        "missing/duplicate listener publication evidence"
+    );
+    let (ready_index, publication) = publications[0];
+    assert_eq!(publication["status"], "pass");
+    assert_eq!(publication["published"], true);
+    assert!(publication["map_id"].as_u64().unwrap() > 0);
+    let cookies = publication["socket_cookies"].as_array().unwrap();
+    assert_eq!(cookies.len(), 5);
+    assert!(
+        cookies
+            .iter()
+            .all(|cookie| cookie.as_u64().is_some_and(|value| value > 0))
+    );
+    assert_eq!(cookies[4], cookies[0]);
+    assert!(ready_index > prepare_index);
+    let expected = [
+        ("host_ingress", "dae0", "tproxy_dae0_ingress", "ingress"),
+        (
+            "resident_lan_ingress",
+            "route-lan0",
+            "tproxy_lan_ingress_l2",
+            "ingress",
+        ),
+        ("lan_egress", "route-lan0", "tproxy_lan_egress_l2", "egress"),
+        (
+            "resident_lan_ingress",
+            "route-lan1",
+            "tproxy_lan_ingress_l2",
+            "ingress",
+        ),
+        ("lan_egress", "route-lan1", "tproxy_lan_egress_l2", "egress"),
+        (
+            "wan_ingress",
+            "route-wan0",
+            "tproxy_wan_ingress_l2",
+            "ingress",
+        ),
+        ("wan_egress", "route-wan0", "tproxy_wan_egress_l2", "egress"),
+    ];
+    for (role, iface, program, direction) in expected {
+        let matches: Vec<_> = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| step["role"] == role && step["native_attach"]["iface"] == iface)
+            .collect();
+        assert_eq!(matches.len(), 1, "expected exactly one {role} on {iface}");
+        let (index, step) = matches[0];
+        let attach = &step["native_attach"];
+        assert_eq!(step["status"], "pass");
+        assert_eq!(attach["program_name"], program);
+        assert_eq!(attach["direction"], direction);
+        assert_eq!(attach["attached"], true);
+        assert_eq!(attach["detached"], false);
+        assert_eq!(attach["backend"], backend.as_str());
+        assert!(attach["program_id"].as_u64().unwrap() > 0);
+        assert!(attach["ifindex"].as_u64().unwrap() > 0);
+        assert!(index > prepare_index, "{role} preceded routing preparation");
+        if role == "host_ingress" {
+            assert!(index > ready_index, "host preceded ready publication");
+        }
+    }
+    let cgroup: Vec<_> = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| {
+            step["name"] == "attach-native-ebpf-cgroup-programs" && step["status"] == "pass"
+        })
+        .collect();
+    assert_eq!(cgroup.len(), 1);
+    assert!(cgroup[0].0 > prepare_index);
 }
