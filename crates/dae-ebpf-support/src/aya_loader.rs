@@ -71,3 +71,6 @@ mod udp_direction_tests;
 
 #[cfg(test)]
 mod redirect_pressure_tests;
+
+#[cfg(test)]
+mod udp_timer_capacity_tests;
