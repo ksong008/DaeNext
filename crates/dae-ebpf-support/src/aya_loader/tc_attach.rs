@@ -658,3 +658,27 @@ pub(super) fn verify_tcx_program_order(
         expected_order.as_str()
     ))
 }
+
+/// Unload a retained classifier in the namespace where its netlink links live.
+/// Unlike TCX fd links, netlink detach resolves the ifindex in the current netns.
+pub fn unload_aya_sched_classifier_in_netns(
+    loaded: &mut AyaUserspaceLoadedObject,
+    program_name: &str,
+    netns: Option<&str>,
+) -> Result<(), String> {
+    with_optional_netns(netns, || {
+        let program = loaded
+            .ebpf
+            .program_mut(program_name)
+            .ok_or_else(|| format!("retained classifier not found: {program_name}"))?;
+        let classifier: &mut SchedClassifier = program
+            .try_into()
+            .map_err(|err| format!("retained program is not a classifier: {err:?}"))?;
+        classifier
+            .unload()
+            .map_err(|err| format!("unload retained classifier: {err:?}"))
+    })
+}
+
+#[cfg(test)]
+mod retained_netns_tests;

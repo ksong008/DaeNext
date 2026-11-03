@@ -232,11 +232,17 @@ impl ResidentProductionRuntime {
         let native_peer_attached = self.native_runtime.peer_attached();
         let native_host_attached = self.native_runtime.host_attached();
         let phase_started = Instant::now();
-        self.native_runtime.reset();
+        let native_reset = self.native_runtime.reset();
+        let native_reset_ok = native_reset.is_ok();
+        self.cleanup_steps.push(json!({
+            "name": "reset-native-ebpf-owner",
+            "status": if native_reset_ok { "pass" } else { "fail" },
+            "error": native_reset.err(),
+        }));
         push_cleanup_phase_timing(
             &mut phase_timings,
             "native_ebpf_reset",
-            "pass",
+            if native_reset_ok { "pass" } else { "fail" },
             phase_started.elapsed(),
         );
 
@@ -323,6 +329,7 @@ impl ResidentProductionRuntime {
         let elapsed_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         let report = json!({
             "status": if binding_cleanup_ok
+                && native_reset_ok
                 && loaded_map_cleaned
                 && leftovers_after_cleanup.is_empty()
                 && !sys_fs_bpf_dae_mutated

@@ -86,6 +86,7 @@ pub use aya_loader::{
     query_aya_interface_index, query_aya_tcx_binding, read_aya_tproxy_metrics,
     read_aya_tproxy_metrics_by_id, read_aya_udp_state_metrics, read_aya_udp_state_metrics_by_id,
     resolve_pname_btf_offsets, resolve_pname_btf_offsets_from_path,
+    unload_aya_sched_classifier_in_netns,
 };
 pub use bpf_error::{BpfErrorClass, classify_bpf_io_error, format_bpf_io_error};
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};

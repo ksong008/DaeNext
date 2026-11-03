@@ -105,6 +105,8 @@ pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeState {
     #[cfg(feature = "native-ebpf")]
     pub(super) loaded: Option<dae_ebpf_support::AyaUserspaceLoadedObject>,
     #[cfg(feature = "native-ebpf")]
+    pub(super) peer_netns: Option<std::fs::File>,
+    #[cfg(feature = "native-ebpf")]
     pub(super) loaded_map_ids: BTreeMap<String, u32>,
     #[cfg(feature = "native-ebpf")]
     pub(super) pin_root: Option<PathBuf>,
