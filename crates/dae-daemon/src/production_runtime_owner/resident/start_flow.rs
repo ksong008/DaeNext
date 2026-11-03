@@ -545,6 +545,21 @@ pub(super) fn start_with_options(
                 .map_err(|error| format!("check listener publication before host attach: {error}"))?
                 .unwrap_or(false);
             validate_started_dataplane(&resident_dataplane, dataplane.is_some(), published)?;
+            let listener_map_id = live_handoff.as_ref().map(|handoff| handoff.map.id);
+            let cookies = listener_map_id
+                .map(dae_ebpf_support::sockmap::listen_socket_cookie_snapshot)
+                .transpose()
+                .map_err(|error| format!("observe ready listener before host attach: {error}"))?;
+            let kernel_ready = cookies
+                .is_some_and(|slots| slots.iter().all(Option::is_some) && slots[4] == slots[0]);
+            if !kernel_ready {
+                return Err("listener kernel publication missing before host attach".to_owned());
+            }
+            executed_steps.push(json!({
+                "name": "validate-listener-publication-before-host-attach",
+                "status": "pass", "map_id": listener_map_id,
+                "socket_cookies": cookies, "published": published,
+            }));
             ok &= attach_host_program(
                 &mut executed_steps,
                 &interface_attach_options,
