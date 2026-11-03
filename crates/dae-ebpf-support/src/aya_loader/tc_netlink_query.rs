@@ -10,7 +10,7 @@ pub(super) struct FilterLocation {
 }
 
 pub(super) fn filter_program_id(location: &FilterLocation) -> Result<Option<u32>, String> {
-    let mut name = [0_i8; libc::IF_NAMESIZE];
+    let mut name = [0 as libc::c_char; libc::IF_NAMESIZE];
     // A removed interface cannot retain a filter. Other lookup failures remain
     // errors; an ifindex reused by another interface is checked by program ID.
     if unsafe { libc::if_indextoname(location.ifindex, name.as_mut_ptr()) }.is_null() {
