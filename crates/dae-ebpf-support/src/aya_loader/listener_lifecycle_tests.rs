@@ -208,28 +208,57 @@ fn listener_unpublished_missing_and_assign_failed_packets_are_dropped_and_counte
     );
 }
 #[test]
-fn visible_udp_entry_with_uninitialized_timer_is_never_classified() {
-    let Some(mut loaded) = loaded() else { return };
+fn visible_udp_entry_is_initialized_by_its_first_observer_before_classification() {
+    let Some(mut loaded) = loaded_with_timeout(Some(100_000_000)) else {
+        return;
+    };
     let program = "tproxy_lan_ingress_l2";
     load(&mut loaded, program);
-    // Freeze precisely the concurrent insertion window: the map entry exists,
-    // but its inserting CPU has not yet initialized the kernel timer.
-    let state = BpfUdpConnState::new(true);
+    // Freeze the insertion window, without leaving another CPU to initialize.
+    // The observer must arm a real timer before using the existing direction.
+    let state = BpfUdpConnState::new(false);
     update_map_elem_bytes(
         map_fd(&loaded, "udp_conn_state_map"),
         bytes(&tuple(17)),
         bytes(&state),
     )
     .unwrap();
-    assert_eq!(run(&loaded, program, 17), 2);
+    let direct = crate::BpfMatchSet {
+        kind: crate::MATCH_TYPE_FALLBACK,
+        outbound: 0,
+        ..Default::default()
+    };
+    update_map_elem_bytes(
+        map_fd(&loaded, "routing_map"),
+        &0u32.to_ne_bytes(),
+        bytes(&direct),
+    )
+    .unwrap();
+    assert_eq!(run(&loaded, program, 17), u32::MAX);
     let metrics = read_aya_udp_state_metrics(&loaded).unwrap();
-    assert_eq!(metrics.timer_start_failure_total, 1);
+    assert_eq!(
+        metrics.timer_init_failure_total
+            + metrics.timer_callback_failure_total
+            + metrics.timer_start_failure_total,
+        0
+    );
     assert_eq!(metrics.state_refresh_total, 1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while crate::count_map_entries_by_fd(map_fd(&loaded, "udp_conn_state_map")).unwrap() != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "assisted timer never reclaimed its entry"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 #[test]
 fn concurrent_udp_creation_refresh_and_timer_expiry_release_every_entry() {
-    let Some(mut loaded) = loaded_with_timeout(Some(500_000_000)) else {
+    let idle_ns = std::env::var("DAE_TEST_UDP_IDLE_TIMEOUT_NS").map_or(500_000_000, |value| {
+        value.parse::<u64>().expect("valid test timer TTL")
+    });
+    let Some(mut loaded) = loaded_with_timeout(Some(idle_ns)) else {
         return;
     };
     let name = "tproxy_lan_ingress_l2";
@@ -283,6 +312,10 @@ fn concurrent_udp_creation_refresh_and_timer_expiry_release_every_entry() {
     assert_eq!(metrics.timer_callback_failure_total, 0);
     let rejected = dropped.load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(
+        rejected, 0,
+        "creation/refresh must cooperatively initialize instead of rejecting racing packets"
+    );
+    assert_eq!(
         rejected as u64,
         metrics.insert_failure_total
             + metrics.post_insert_lookup_failure_total
@@ -290,7 +323,9 @@ fn concurrent_udp_creation_refresh_and_timer_expiry_release_every_entry() {
         "every fail-closed packet must have corresponding failure evidence"
     );
     let fd = map_fd(&loaded, "udp_conn_state_map");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_nanos(idle_ns)
+            .saturating_add(std::time::Duration::from_secs(5));
     loop {
         let entries = crate::count_map_entries_by_fd(fd).unwrap();
         if entries == 0 {
