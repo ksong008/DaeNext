@@ -109,3 +109,80 @@ fn low_memory_protocol_churn_cannot_evict_the_other_protocol_at_either_boundary(
         }
     }
 }
+
+#[test]
+fn redirect_pools_preserve_single_protocol_capacity_for_every_profile() {
+    let Some(default) = loaded_with_profile(None, None) else {
+        return;
+    };
+    for name in ["redirect_track", "redirect_udp"] {
+        assert_eq!(
+            crate::map_info(map_fd(&default, name)).unwrap().max_entries,
+            65536
+        );
+    }
+    drop(default);
+    for (profile, capacity) in [
+        (crate::RuntimeMapProfile::LowMemory, 8192),
+        (crate::RuntimeMapProfile::Balanced, 32768),
+        (crate::RuntimeMapProfile::HighPerformance, 65536),
+    ] {
+        for ipv6 in [false, true] {
+            for protocol in [6, 17] {
+                let mut loaded = loaded_with_profile(None, Some(profile)).unwrap();
+                for name in [
+                    "tproxy_lan_ingress_l2",
+                    "tproxy_dae0peer_ingress",
+                    "tproxy_dae0_ingress",
+                ] {
+                    load(&mut loaded, name);
+                }
+                for name in ["redirect_track", "redirect_udp"] {
+                    let fd = map_fd(&loaded, name);
+                    assert_eq!(crate::map_info(fd).unwrap().max_entries, capacity);
+                    eprintln!(
+                        "{profile:?} {name}: {}",
+                        std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}")).unwrap()
+                    );
+                }
+                let fallback = BpfMatchSet {
+                    kind: crate::MATCH_TYPE_FALLBACK,
+                    outbound: 2,
+                    ..Default::default()
+                };
+                update_map_elem_bytes(
+                    map_fd(&loaded, "routing_map"),
+                    &0u32.to_ne_bytes(),
+                    bytes(&fallback),
+                )
+                .unwrap();
+                // Fit within the old pool with headroom, but exceed a half pool.
+                // Delay every peer/return lookup until all entries are inserted.
+                let count = capacity * 3 / 4;
+                let (mut forward, mut reverse) = packet(ipv6, protocol);
+                let source = if ipv6 { 36 } else { 28 };
+                let destination = if ipv6 { 52 } else { 32 };
+                for sequence in 0..count {
+                    forward[source..source + 2]
+                        .copy_from_slice(&((sequence + 256) as u16).to_be_bytes());
+                    assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &forward), 7);
+                }
+                for sequence in 0..count {
+                    let address = ((sequence + 256) as u16).to_be_bytes();
+                    forward[source..source + 2].copy_from_slice(&address);
+                    reverse[destination..destination + 2].copy_from_slice(&address);
+                    assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", &forward), 2);
+                    run(&loaded, "tproxy_dae0_ingress", &reverse);
+                }
+                let metrics = read_aya_tproxy_metrics(&loaded).unwrap();
+                assert_eq!(metrics.redirect_peer_lookup_miss_total, 0);
+                assert_eq!(metrics.redirect_return_lookup_miss_total, 0);
+                assert_eq!(metrics.redirect_track_update_failure_total, 0);
+                assert_eq!(metrics.listener_not_ready_total, u64::from(count));
+                eprintln!(
+                    "{profile:?} ipv6={ipv6} protocol={protocol}: {count} delayed lookups preserved"
+                );
+            }
+        }
+    }
+}
