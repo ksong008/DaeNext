@@ -35,12 +35,16 @@ startup and shuts down the partial runtime. Temporary map/validation FDs and the
 writer lock are released after publication. The physical runtime continues to
 own the sockets and BPF links for normal shutdown and crash cleanup.
 
-Before host attachment, resident startup also reads all five kernel cookies and
-requires every slot to be present and key 4 to equal key 0. A read error or failed
-consistency check rejects startup and rolls back the partial runtime. This is a
-sequence of reads, not an atomic snapshot or a comparison against every original
-consumer cookie. It does not prevent a privileged writer bypassing the API from
-replacing a consistent publication or changing slots after the check.
+Resident startup duplicates one dual-stack TCP listener into keys 0 and 1, and
+one dual-stack UDP socket into keys 2 and 3. Before host attachment, it reads all
+five kernel cookies and requires every slot to be present, key 1 to equal key 0,
+key 3 to equal key 2, and key 4 to equal key 0. A read error or failed consistency
+check rejects startup and rolls back the partial runtime. These duplicate-slot
+checks describe the resident layout; the external loader may supply separate
+IPv4/IPv6 sockets. The reads are not an atomic snapshot or a comparison against
+every original consumer cookie. They do not prevent a privileged writer
+bypassing the API from replacing a consistent publication or changing slots
+after the check.
 
 ## External loader protocol
 
