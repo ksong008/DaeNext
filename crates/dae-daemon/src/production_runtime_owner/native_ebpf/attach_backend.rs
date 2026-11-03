@@ -107,8 +107,25 @@ impl NativeEbpfRuntimeState {
         spec: TcNativeAttachSpec,
         backend: AttachBackend,
     ) -> Result<Value, String> {
+        // Keep the actual peer namespace alive for netlink detach, even if its
+        // named bind mount disappears before runtime recovery/cleanup.
+        let peer_netns = if spec.program_name == "tproxy_dae0peer_ingress" {
+            let netns =
+                spec.target.netns.as_deref().ok_or_else(|| {
+                    "native peer attach requires its network namespace".to_owned()
+                })?;
+            Some(
+                std::fs::File::open(Path::new("/run/netns").join(netns))
+                    .map_err(|err| format!("retain native peer namespace: {err}"))?,
+            )
+        } else {
+            None
+        };
         let loaded = self.ensure_loaded(param_object)?;
         let report = dae_ebpf_support::load_attach_aya_sched_classifier(loaded, &spec, backend)?;
+        if let Some(peer_netns) = peer_netns {
+            self.peer_netns = Some(peer_netns);
+        }
         let tcx_program_order = report
             .tcx_program_order
             .iter()

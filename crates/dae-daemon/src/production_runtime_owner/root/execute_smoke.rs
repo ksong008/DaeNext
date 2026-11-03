@@ -435,7 +435,11 @@ pub(super) fn execute_owner_smoke(
     evidence.native_object = native_runtime.pname_evidence(false, &evidence.native_param_image);
     drop(probe_consumers);
     drop(live_handoff);
-    native_runtime.reset();
+    if let Err(error) = native_runtime.reset() {
+        evidence.cleanup_steps.push(json!({
+            "name": "reset-native-ebpf-owner", "status": "fail", "error": error,
+        }));
+    }
     if options.execute_active_udp {
         delete_active_udp_loopback_target(&mut evidence.cleanup_steps, options);
     }

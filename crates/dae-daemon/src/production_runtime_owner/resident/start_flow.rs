@@ -717,7 +717,9 @@ pub(super) fn start_with_options(
         drop(live_handoff.take());
         let native_peer_attached = native_runtime.peer_attached();
         let native_host_attached = native_runtime.host_attached();
-        native_runtime.reset();
+        if let Err(reset_error) = native_runtime.reset() {
+            err = format!("{err}; native owner reset failed: {reset_error}");
+        }
         if !binding_registry.is_empty() {
             let binding_cleanup_postflight = binding_registry.cleanup_postflight();
             let cleanup_ok = binding_cleanup_postflight["status"].as_str() == Some("pass");

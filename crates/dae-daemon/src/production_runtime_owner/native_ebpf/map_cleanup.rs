@@ -47,6 +47,6 @@ pub(super) fn is_transient_missing_map_id(err: &std::io::Error) -> bool {
 
 impl Drop for NativeEbpfRuntimeState {
     fn drop(&mut self) {
-        self.reset();
+        let _ = self.reset();
     }
 }

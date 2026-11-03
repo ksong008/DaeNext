@@ -127,10 +127,30 @@ impl NativeEbpfRuntimeState {
         }
     }
 
-    pub(in crate::production_runtime_owner) fn reset(&mut self) {
+    pub(in crate::production_runtime_owner) fn reset(&mut self) -> Result<(), String> {
+        #[cfg(feature = "native-ebpf")]
+        let peer_unload = if self.peer_attached {
+            use std::os::fd::AsRawFd;
+            match (self.loaded.as_mut(), self.peer_netns.as_ref()) {
+                (Some(loaded), Some(netns)) => {
+                    let path = format!("/proc/thread-self/fd/{}", netns.as_raw_fd());
+                    dae_ebpf_support::unload_aya_sched_classifier_in_netns(
+                        loaded,
+                        "tproxy_dae0peer_ingress",
+                        Some(&path),
+                    )
+                }
+                _ => Err("attached native peer has no loaded owner or namespace handle".to_owned()),
+            }
+        } else {
+            Ok(())
+        };
+        #[cfg(not(feature = "native-ebpf"))]
+        let peer_unload = Ok(());
         #[cfg(feature = "native-ebpf")]
         {
             self.loaded.take();
+            self.peer_netns.take();
             self.loaded_map_ids.clear();
             self.load_input.take();
             self.pname_report.take();
@@ -142,6 +162,7 @@ impl NativeEbpfRuntimeState {
         self.lan_attached = false;
         self.host_attached = false;
         self.cgroup_attached = false;
+        peer_unload
     }
 }
 
