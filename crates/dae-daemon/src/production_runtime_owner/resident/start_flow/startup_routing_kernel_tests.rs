@@ -2,7 +2,7 @@
 use super::*;
 use std::process::Command;
 
-fn command(args: &[&str]) {
+pub(super) fn command(args: &[&str]) {
     let output = Command::new(args[0]).args(&args[1..]).output().unwrap();
     assert!(
         output.status.success(),
@@ -11,12 +11,11 @@ fn command(args: &[&str]) {
     );
 }
 
-#[test]
-fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() {
+pub(super) fn enter_private_namespace(test_name: &str) -> bool {
     const CHILD: &str = "DAE_RESIDENT_STARTUP_TEST_CHILD";
     if env::var("DAE_RUN_RESIDENT_STARTUP_SMOKE").as_deref() != Ok("1") {
         eprintln!("skip real resident startup kernel test: opt-in required");
-        return;
+        return false;
     }
     assert_eq!(unsafe { libc::geteuid() }, 0);
     if env::var_os(CHILD).is_none() {
@@ -24,18 +23,10 @@ fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() 
             .unwrap()
             .join(format!("dae-startup-test-{}", std::process::id()));
         fs::create_dir(&cgroup).unwrap();
-        let test_name = concat!(
-            module_path!(),
-            "::real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache"
-        )
-        .split_once("::")
-        .unwrap()
-        .1
-        .to_owned();
         let output = Command::new("unshare")
             .args(["--mount", "--net", "--fork"])
             .arg(env::current_exe().unwrap())
-            .args(["--exact", &test_name, "--nocapture", "--test-threads=1"])
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
             .env(CHILD, &cgroup)
             .env("RESIDENT_DATAPLANE", "1")
             .output();
@@ -53,7 +44,8 @@ fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() 
         );
         removed.unwrap();
         eprintln!("{}", String::from_utf8_lossy(&output.stdout));
-        return;
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        return false;
     }
     command(&["mount", "--make-rprivate", "/"]);
     command(&["mount", "-t", "tmpfs", "tmpfs", "/run"]);
@@ -70,6 +62,18 @@ fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() 
     for iface in ["route-lan0", "route-lan1", "route-wan0"] {
         command(&["ip", "link", "add", iface, "type", "dummy"]);
         command(&["ip", "link", "set", iface, "up"]);
+    }
+    true
+}
+
+#[test]
+fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() {
+    let test_name = concat!(
+        module_path!(),
+        "::real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache"
+    );
+    if !enter_private_namespace(test_name.split_once("::").unwrap().1) {
+        return;
     }
     let config = dae_config::schema::build_config(&dae_config::parser::parse_config(
         "global { lan_interface: 'route-lan0,route-lan1'\nwan_interface: 'route-wan0' }\ndns {}\nnode { local: 'socks5://127.0.0.1:1080#local' }\ngroup { proxy { filter: name(local) policy: fixed(0) } }\nrouting { dip(198.51.100.0/24) -> block\nl4proto(tcp) -> proxy\nfallback: direct }"
