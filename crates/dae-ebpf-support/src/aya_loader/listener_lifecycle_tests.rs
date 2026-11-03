@@ -46,6 +46,13 @@ pub(super) fn loaded_with_profile(
     idle_ns: Option<u64>,
     profile: Option<crate::RuntimeMapProfile>,
 ) -> Option<AyaUserspaceLoadedObject> {
+    loaded_with_dae0_ifindex(idle_ns, profile, 1)
+}
+pub(super) fn loaded_with_dae0_ifindex(
+    idle_ns: Option<u64>,
+    profile: Option<crate::RuntimeMapProfile>,
+    dae0_ifindex: u32,
+) -> Option<AyaUserspaceLoadedObject> {
     if std::env::var("DAE_RUN_LISTENER_LIFECYCLE_SMOKE").as_deref() != Ok("1") {
         eprintln!("skip listener lifecycle kernel tests: opt-in required");
         return None;
@@ -62,7 +69,7 @@ pub(super) fn loaded_with_profile(
     options.param = Some(crate::build_dae_param(crate::DaeParamInput {
         tproxy_port: 12345,
         control_plane_pid: 99,
-        dae0_ifindex: 1,
+        dae0_ifindex,
         dae_netns_id: 49,
         dae0peer_mac: [1, 2, 3, 4, 5, 6],
         has_bpf_get_current_task: false,

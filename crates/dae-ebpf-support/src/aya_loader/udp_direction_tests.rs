@@ -1,5 +1,7 @@
 //! Real timer expiry and UDP direction ownership at the physical LAN boundary.
-use super::listener_lifecycle_tests::{bytes, load, loaded_with_timeout, map_fd, packet, tuple};
+use super::listener_lifecycle_tests::{
+    bytes, load, loaded_with_dae0_ifindex, loaded_with_timeout, map_fd, packet, tuple,
+};
 use super::*;
 use crate::runtime_maps::{lookup_map_elem_bytes, update_map_elem_bytes};
 use crate::{BpfMatchSet, BpfTuplesKey, BpfUdpConnState};
@@ -69,48 +71,56 @@ fn direction(loaded: &AyaUserspaceLoadedObject, key: &BpfTuplesKey) -> u8 {
 fn expired_proxy_reply_does_not_reclassify_client_as_inbound() {
     let mut observations = Vec::new();
     for ipv6 in [false, true] {
-        let Some(mut loaded) = loaded_with_timeout(Some(100_000_000)) else {
-            return;
-        };
-        for name in ["tproxy_lan_ingress_l2", "tproxy_lan_egress_l2"] {
-            load(&mut loaded, name);
-        }
-        // An explicit block fallback makes policy bypass distinguishable from
-        // listener readiness, redirect, or an uninitialized routing table.
-        let block = BpfMatchSet {
-            kind: crate::MATCH_TYPE_FALLBACK,
-            outbound: 1,
-            ..Default::default()
-        };
-        let routing = match loaded.ebpf.map("routing_map").unwrap() {
-            Map::Array(data) => data.fd().as_fd().as_raw_fd(),
-            _ => unreachable!(),
-        };
-        update_map_elem_bytes(routing, &0u32.to_ne_bytes(), bytes(&block)).unwrap();
-        let (forward, reverse, key) = flow(ipv6);
-        assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &forward, 0), 2);
-        assert_eq!(direction(&loaded, &key), 0);
-        let state_fd = map_fd(&loaded, "udp_conn_state_map");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while crate::count_map_entries_by_fd(state_fd).unwrap() != 0 {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "real timer did not expire"
+        for outbound in [1, 2] {
+            let Some(mut loaded) = loaded_with_timeout(Some(100_000_000)) else {
+                return;
+            };
+            for name in ["tproxy_lan_ingress_l2", "tproxy_lan_egress_l2"] {
+                load(&mut loaded, name);
+            }
+            // An explicit block fallback makes policy bypass distinguishable from
+            // listener readiness, redirect, or an uninitialized routing table.
+            let block = BpfMatchSet {
+                kind: crate::MATCH_TYPE_FALLBACK,
+                outbound,
+                ..Default::default()
+            };
+            let routing = match loaded.ebpf.map("routing_map").unwrap() {
+                Map::Array(data) => data.fd().as_fd().as_raw_fd(),
+                _ => unreachable!(),
+            };
+            update_map_elem_bytes(routing, &0u32.to_ne_bytes(), bytes(&block)).unwrap();
+            let (forward, reverse, key) = flow(ipv6);
+            assert_eq!(
+                run(&loaded, "tproxy_lan_ingress_l2", &forward, 0),
+                if outbound == 1 { 2 } else { 7 }
             );
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            assert_eq!(direction(&loaded, &key), 0);
+            let state_fd = map_fd(&loaded, "udp_conn_state_map");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while crate::count_map_entries_by_fd(state_fd).unwrap() != 0 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "real timer did not expire"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            // dae0_ifindex=1 in PARAM. A reply from that ingress must not create
+            // an inbound ownership record after the original timer has expired.
+            assert_eq!(run(&loaded, "tproxy_lan_egress_l2", &reverse, 1), u32::MAX);
+            let recreated = crate::count_map_entries_by_fd(state_fd).unwrap();
+            let action = run(&loaded, "tproxy_lan_ingress_l2", &forward, 0);
+            let direction = direction(&loaded, &key);
+            eprintln!(
+                "real expiry, ipv6={ipv6}: reply_entries={recreated}, client_action={action}, direction={direction}"
+            );
+            observations.push((recreated, action, direction));
         }
-        // dae0_ifindex=1 in PARAM. A reply from that ingress must not create
-        // an inbound ownership record after the original timer has expired.
-        assert_eq!(run(&loaded, "tproxy_lan_egress_l2", &reverse, 1), u32::MAX);
-        let recreated = crate::count_map_entries_by_fd(state_fd).unwrap();
-        let action = run(&loaded, "tproxy_lan_ingress_l2", &forward, 0);
-        let direction = direction(&loaded, &key);
-        eprintln!(
-            "real expiry, ipv6={ipv6}: reply_entries={recreated}, client_action={action}, direction={direction}"
-        );
-        observations.push((recreated, action, direction));
     }
-    assert_eq!(observations, vec![(0, 2, 0), (0, 2, 0)]);
+    assert_eq!(
+        observations,
+        vec![(0, 2, 0), (0, 7, 0), (0, 2, 0), (0, 7, 0)]
+    );
 }
 
 #[test]
@@ -129,5 +139,86 @@ fn ordinary_inbound_reply_keeps_direction_contract() {
         assert_eq!(direction(&loaded, &key), 1);
         assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &forward, 0), u32::MAX);
         assert_eq!(direction(&loaded, &key), 1);
+    }
+}
+
+#[test]
+fn proxy_reply_provenance_is_scoped_to_each_loaded_param_object() {
+    for ipv6 in [false, true] {
+        let mut objects = Vec::new();
+        for expected in [0, 1, 7] {
+            let Some(mut loaded) = loaded_with_dae0_ifindex(None, None, expected) else {
+                return;
+            };
+            load(&mut loaded, "tproxy_lan_egress_l2");
+            objects.push((expected, loaded));
+        }
+        // All three objects stay alive: loading B does not revoke A's PARAM.
+        for (expected, loaded) in &objects {
+            let expected = *expected;
+            let (_, reverse, mut key) = flow(ipv6);
+            // Keep the same object alive while testing all metadata values;
+            // independent tuples prevent prior state from masking insertion.
+            for (index, ingress) in [0, 1, 7, 8].into_iter().enumerate() {
+                let mut reply = reverse.clone();
+                let offset = if ipv6 { 54 } else { 34 };
+                let port = 2000 + index as u16;
+                reply[offset + 2..offset + 4].copy_from_slice(&port.to_be_bytes());
+                key.sport = port.to_be();
+                assert_eq!(
+                    run(loaded, "tproxy_lan_egress_l2", &reply, ingress),
+                    u32::MAX
+                );
+                let trusted = expected != 0 && expected == ingress;
+                let mut value = vec![0; mem::size_of::<BpfUdpConnState>()];
+                let result = lookup_map_elem_bytes(
+                    map_fd(loaded, "udp_conn_state_map"),
+                    bytes(&key),
+                    &mut value,
+                );
+                if trusted {
+                    assert_eq!(
+                        result.unwrap_err().raw_os_error(),
+                        Some(libc::ENOENT),
+                        "trusted proxy reply claimed inbound ownership"
+                    );
+                } else {
+                    result.unwrap();
+                    assert_eq!(value[0], 1);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn proxy_reply_preserves_existing_client_direction_and_proxy_policy() {
+    for ipv6 in [false, true] {
+        let Some(mut loaded) = loaded_with_timeout(None) else {
+            return;
+        };
+        for name in ["tproxy_lan_ingress_l2", "tproxy_lan_egress_l2"] {
+            load(&mut loaded, name);
+        }
+        // Proxy policy must still redirect (TC_ACT_REDIRECT), whereas an
+        // inbound ownership mistake would skip routing and return MAX.
+        let proxy = BpfMatchSet {
+            kind: crate::MATCH_TYPE_FALLBACK,
+            outbound: 2,
+            ..Default::default()
+        };
+        update_map_elem_bytes(
+            map_fd(&loaded, "routing_map"),
+            &0u32.to_ne_bytes(),
+            bytes(&proxy),
+        )
+        .unwrap();
+        let (forward, reverse, key) = flow(ipv6);
+        assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &forward, 0), 7);
+        assert_eq!(direction(&loaded, &key), 0);
+        assert_eq!(run(&loaded, "tproxy_lan_egress_l2", &reverse, 1), u32::MAX);
+        assert_eq!(direction(&loaded, &key), 0);
+        assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &forward, 0), 7);
+        assert_eq!(direction(&loaded, &key), 0);
     }
 }
