@@ -71,7 +71,7 @@ fn startup_routing_ready_is_bound_to_loaded_owner() {
 }
 
 #[test]
-fn startup_routing_is_reused_across_multiple_lan_interfaces() {
+fn startup_routing_preparation_is_shared_within_one_attach_phase() {
     let mut owner = Owner::default();
     with_prepared_routing(&mut owner, &mut None, prepare, |ready, _| {
         for _ in 0..3 {
