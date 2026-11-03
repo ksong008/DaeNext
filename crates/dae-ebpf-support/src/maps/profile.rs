@@ -6,13 +6,13 @@ pub enum RuntimeMapProfile {
     HighPerformance,
 }
 
-// Each protocol reserves half the previous shared entry budget. Separate maps
-// have their own metadata; no profile doubles its redirect entry budget.
+// Each protocol keeps the previous shared pool's full capacity. This preserves
+// single-protocol headroom while isolating churn; budget memory for both maps.
 const LOW_MEMORY_CAPACITIES: [(&str, u32); 6] = [
     ("cookie_pid_map", 8_192),
     ("domain_routing_map", 8_192),
-    ("redirect_track", 4_096),
-    ("redirect_udp", 4_096),
+    ("redirect_track", 8_192),
+    ("redirect_udp", 8_192),
     ("routing_tuples_map", 16_384),
     ("udp_conn_state_map", 16_384),
 ];
@@ -20,8 +20,8 @@ const LOW_MEMORY_CAPACITIES: [(&str, u32); 6] = [
 const BALANCED_CAPACITIES: [(&str, u32); 6] = [
     ("cookie_pid_map", 32_768),
     ("domain_routing_map", 32_768),
-    ("redirect_track", 16_384),
-    ("redirect_udp", 16_384),
+    ("redirect_track", 32_768),
+    ("redirect_udp", 32_768),
     ("routing_tuples_map", 65_536),
     ("udp_conn_state_map", 65_536),
 ];
@@ -29,8 +29,8 @@ const BALANCED_CAPACITIES: [(&str, u32); 6] = [
 const HIGH_PERFORMANCE_CAPACITIES: [(&str, u32); 6] = [
     ("cookie_pid_map", 65_536),
     ("domain_routing_map", 65_536),
-    ("redirect_track", 32_768),
-    ("redirect_udp", 32_768),
+    ("redirect_track", 65_536),
+    ("redirect_udp", 65_536),
     ("routing_tuples_map", 131_072),
     ("udp_conn_state_map", 131_072),
 ];

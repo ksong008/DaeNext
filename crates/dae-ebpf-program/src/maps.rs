@@ -114,7 +114,7 @@ static REDIRECT_TRACK: RawMap = RawMap::new(
     BPF_MAP_TYPE_LRU_HASH,
     size_of::<BpfRedirectKey>(),
     size_of::<BpfRedirectEntry>(),
-    32_768,
+    65_536,
     0,
     PIN_NONE,
 );
@@ -124,7 +124,7 @@ static REDIRECT_UDP: RawMap = RawMap::new(
     BPF_MAP_TYPE_LRU_HASH,
     size_of::<BpfRedirectKey>(),
     size_of::<BpfRedirectEntry>(),
-    32_768,
+    65_536,
     0,
     PIN_NONE,
 );
