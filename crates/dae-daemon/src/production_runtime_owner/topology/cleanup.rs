@@ -4,11 +4,15 @@ pub(crate) fn cleanup_production_topology(
     native_peer_attached: bool,
     native_host_attached: bool,
 ) {
+    if !iface_exists(PRODUCTION_HOST_IFACE) && !netns_exists(PRODUCTION_NETNS) {
+        steps.push(json!({"name": "production-topology-already-absent", "status": "skipped"}));
+        return;
+    }
     if native_host_attached {
         steps.push(json!({
             "name": "delete-production-dae0-param-aware-ebpf-program-filter",
             "status": "skipped",
-            "reason": "native Aya link lifetime detached the host ingress filter before tc command cleanup",
+            "reason": "native physical owner handles exact host filter cleanup; see reset-native-ebpf-owner and binding postflight",
         }));
     } else {
         let _ = run_step(
@@ -28,7 +32,7 @@ pub(crate) fn cleanup_production_topology(
         steps.push(json!({
             "name": "delete-production-dae0peer-param-aware-ebpf-program-filter",
             "status": "skipped",
-            "reason": "native Aya link lifetime detached the peer ingress filter before tc command cleanup",
+            "reason": "native physical owner handles exact peer filter cleanup; see reset-native-ebpf-owner and binding postflight",
         }));
     } else {
         let _ = run_step(

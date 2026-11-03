@@ -53,6 +53,7 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
     let cgroup = fs::File::open(cgroup_path)
         .map_err(|err| format!("open cgroup path {} failed: {err}", cgroup_path.display()))?;
     let (attach_mode, attach_mode_name) = compatible_cgroup_attach_mode()?;
+    let mut retained = None;
     let (program_id, program_tag, link_metadata) = match line.aya_program_kind {
         DaeCgroupProgramKind::Sock => {
             let program = loaded.ebpf.program_mut(line.program_name).ok_or_else(|| {
@@ -66,6 +67,11 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                 .info()
                 .map_err(|err| format!("read cgroup sock program info failed: {err:?}"))?;
             let identity = (info.id(), format!("{:016x}", info.tag()));
+            let retained_fd = program
+                .fd()
+                .map_err(|e| e.to_string())?
+                .try_clone()
+                .map_err(|e| format!("retain cgroup program fd: {e}"))?;
             let link_id = program
                 .attach(&cgroup, attach_mode)
                 .map_err(|err| format!("aya cgroup sock attach failed: {err:?}"))?;
@@ -74,6 +80,14 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                 program
                     .detach(link_id)
                     .map_err(|err| format!("aya cgroup sock detach failed: {err:?}"))?;
+            } else {
+                let link = program
+                    .take_link(link_id)
+                    .map_err(|e| format!("take cgroup link: {e}"))?;
+                retained = Some(super::retained_links::RetainedCgroupLink::Sock(
+                    link,
+                    retained_fd,
+                ));
             }
             (identity.0, identity.1, link_metadata)
         }
@@ -92,6 +106,11 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                 .info()
                 .map_err(|err| format!("read cgroup sock_addr program info failed: {err:?}"))?;
             let identity = (info.id(), format!("{:016x}", info.tag()));
+            let retained_fd = program
+                .fd()
+                .map_err(|e| e.to_string())?
+                .try_clone()
+                .map_err(|e| format!("retain cgroup program fd: {e}"))?;
             let link_id = program
                 .attach(&cgroup, attach_mode)
                 .map_err(|err| format!("aya cgroup sock_addr attach failed: {err:?}"))?;
@@ -100,10 +119,25 @@ pub(super) fn load_attach_aya_cgroup_program_with_mode(
                 program
                     .detach(link_id)
                     .map_err(|err| format!("aya cgroup sock_addr detach failed: {err:?}"))?;
+            } else {
+                let link = program
+                    .take_link(link_id)
+                    .map_err(|e| format!("take cgroup link: {e}"))?;
+                retained = Some(super::retained_links::RetainedCgroupLink::SockAddr(
+                    link,
+                    retained_fd,
+                ));
             }
             (identity.0, identity.1, link_metadata)
         }
     };
+    if let Some(link) = retained {
+        loaded
+            .attachments
+            .push(super::retained_links::RetainedLink::cgroup(
+                line, cgroup, link,
+            ));
+    }
     Ok(AyaCgroupAttachDetachReport {
         link_metadata,
         role: line.role,

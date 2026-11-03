@@ -869,3 +869,6 @@ mod startup_routing_tests;
 
 #[cfg(all(test, feature = "native-ebpf"))]
 mod startup_routing_kernel_tests;
+
+#[cfg(all(test, feature = "native-ebpf"))]
+mod cleanup_retry_tests;

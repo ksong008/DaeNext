@@ -26,7 +26,7 @@ pub(super) struct NetnsGuard {
 
 impl NetnsGuard {
     pub(super) fn enter(netns: &str) -> Result<Self, String> {
-        let original = fs::File::open("/proc/self/ns/net")
+        let original = fs::File::open("/proc/thread-self/ns/net")
             .map_err(|err| format!("open current netns failed: {err}"))?;
         let target_path = netns_path(netns);
         let target = fs::File::open(&target_path)

@@ -122,6 +122,7 @@ pub struct AyaMapSpecMismatch {
 pub struct AyaUserspaceLoadedObject {
     pub ebpf: aya::Ebpf,
     pub report: AyaUserspaceLoadReport,
+    pub(super) attachments: Vec<super::retained_links::RetainedLink>,
     #[cfg(test)]
     pub(crate) pin_guard: Option<AyaTestPinGuard>,
 }

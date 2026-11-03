@@ -156,7 +156,11 @@ fn should_cleanup_stale_production_owner(
     leftovers: &[String],
     pin_dirs: &[NativeRuntimePinDir],
 ) -> bool {
-    if leftovers.is_empty() || pin_dirs.iter().any(|pin_dir| !pin_dir.stale) {
+    if leftovers.is_empty()
+        || pin_dirs
+            .iter()
+            .any(|pin_dir| !pin_dir.stale || pin_dir.cleanup_pending)
+    {
         return false;
     }
     if !pin_dirs.is_empty() {
@@ -168,6 +172,7 @@ fn should_cleanup_stale_production_owner(
 struct NativeRuntimePinDir {
     path: PathBuf,
     stale: bool,
+    cleanup_pending: bool,
 }
 
 fn native_runtime_pin_dirs() -> Vec<NativeRuntimePinDir> {
@@ -180,6 +185,7 @@ fn native_runtime_pin_dirs() -> Vec<NativeRuntimePinDir> {
             let name = entry.file_name().into_string().ok()?;
             let pid = native_runtime_pin_pid(&name)?;
             Some(NativeRuntimePinDir {
+                cleanup_pending: entry.path().join("cleanup-pending").exists(),
                 path: entry.path(),
                 stale: !PathBuf::from(format!("/proc/{pid}")).exists(),
             })
@@ -331,10 +337,20 @@ mod tests {
         let stale = NativeRuntimePinDir {
             path: PathBuf::from("/tmp/dae-native-runtime-1-0"),
             stale: true,
+            cleanup_pending: false,
         };
+        assert!(!should_cleanup_stale_production_owner(
+            &[format!("iface:{PRODUCTION_HOST_IFACE}")],
+            &[NativeRuntimePinDir {
+                path: PathBuf::from("/tmp/dae-native-runtime-4-0"),
+                stale: true,
+                cleanup_pending: true,
+            }],
+        ));
         let active = NativeRuntimePinDir {
             path: PathBuf::from("/tmp/dae-native-runtime-2-0"),
             stale: false,
+            cleanup_pending: false,
         };
 
         assert!(!should_cleanup_stale_production_owner(&[], &[stale]));
@@ -355,6 +371,7 @@ mod tests {
             &[NativeRuntimePinDir {
                 path: PathBuf::from("/tmp/dae-native-runtime-3-0"),
                 stale: true,
+                cleanup_pending: false,
             }]
         ));
     }

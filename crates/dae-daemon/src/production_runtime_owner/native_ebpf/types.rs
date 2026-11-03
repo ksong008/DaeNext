@@ -102,6 +102,7 @@ pub(in crate::production_runtime_owner) struct NativeEbpfRuntimeState {
     pub(super) lan_attached: bool,
     pub(super) host_attached: bool,
     pub(super) cgroup_attached: bool,
+    pub(super) cleanup_report: Option<Value>,
     #[cfg(feature = "native-ebpf")]
     pub(super) loaded: Option<dae_ebpf_support::AyaUserspaceLoadedObject>,
     #[cfg(feature = "native-ebpf")]

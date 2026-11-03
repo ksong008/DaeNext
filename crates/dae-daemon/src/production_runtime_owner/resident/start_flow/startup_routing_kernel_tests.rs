@@ -224,8 +224,7 @@ fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() 
             "a fresh cache must attempt the frozen map write"
         );
         drop(map);
-        let cleanup = runtime.cleanup().unwrap();
-        assert_eq!(cleanup["status"], "pass", "{cleanup}");
+        super::cleanup_retry_tests::check_cleanup_retry(&mut runtime, backend);
         eprintln!(
             "real resident startup {backend:?}: ordered attach and frozen-map cache reuse verified"
         );
