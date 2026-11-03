@@ -67,5 +67,11 @@ count assertions reject skipped or unmatched test filters.
 
 The UDP state ABI and initial connection-direction ownership are unchanged.
 An existing state is usable only when `bpf_timer_start` succeeds; a concurrently
-inserted but uninitialized timer returns unavailable, so classification drops
-that packet rather than consuming partially initialized state.
+inserted but uninitialized timer can be completed by a concurrent observer.
+Classification proceeds only after initialization and timer start succeed;
+other helper errors remain fail-closed and counted. Full capacity can reject new
+tuples while existing initialized entries remain refreshable. These guarantees
+do not establish that every timer race is lossless.
+
+See [UDP direction ownership](native-udp-direction.md) for the separate
+provenance and first-writer contract.

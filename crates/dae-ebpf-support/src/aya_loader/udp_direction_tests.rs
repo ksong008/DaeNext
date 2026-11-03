@@ -222,3 +222,38 @@ fn proxy_reply_preserves_existing_client_direction_and_proxy_policy() {
         assert_eq!(direction(&loaded, &key), 0);
     }
 }
+
+#[test]
+fn ordinary_inbound_collision_cannot_replace_existing_client_ownership() {
+    for ipv6 in [false, true] {
+        let Some(mut loaded) = loaded_with_timeout(None) else {
+            return;
+        };
+        let ingress = "tproxy_lan_ingress_l2";
+        let egress = "tproxy_lan_egress_l2";
+        for name in [ingress, egress] {
+            load(&mut loaded, name);
+        }
+        let block = BpfMatchSet {
+            kind: crate::MATCH_TYPE_FALLBACK,
+            outbound: 1,
+            ..Default::default()
+        };
+        update_map_elem_bytes(
+            map_fd(&loaded, "routing_map"),
+            &0u32.to_ne_bytes(),
+            bytes(&block),
+        )
+        .unwrap();
+        let (forward, reverse, key) = flow(ipv6);
+        assert_eq!(run(&loaded, ingress, &forward, 0), 2);
+        assert_eq!(direction(&loaded, &key), 0);
+        // This ordinary source differs from the object's dae0 PARAM=1.
+        // A reverse packet may refresh the timer, but cannot transfer an
+        // existing client's ownership or bypass an explicit block rule.
+        assert_eq!(run(&loaded, egress, &reverse, 7), u32::MAX);
+        assert_eq!(direction(&loaded, &key), 0);
+        assert_eq!(run(&loaded, ingress, &forward, 0), 2);
+        assert_eq!(direction(&loaded, &key), 0);
+    }
+}
