@@ -168,6 +168,7 @@ fn load_aya_userspace_object_from_source(
     report.capability_probe = Some(cached_aya_capability_probes());
     pin_transaction.commit();
     Ok(AyaUserspaceLoadedObject {
+        attachments: Vec::new(),
         ebpf,
         report,
         #[cfg(test)]

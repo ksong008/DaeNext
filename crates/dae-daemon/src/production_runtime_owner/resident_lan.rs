@@ -117,7 +117,7 @@ pub(super) fn cleanup_resident_lan_programs(
             steps.push(json!({
                 "name": format!("delete-resident-lan-ingress-param-aware-ebpf-program-filter-{iface}"),
                 "status": "skipped",
-                "reason": "native Aya link lifetime detached the resident LAN ingress filter before tc command cleanup",
+                "reason": "native physical owner handles exact LAN filter cleanup; see reset-native-ebpf-owner and binding postflight",
             }));
         } else {
             let _ = run_observation_step(

@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 22934
+      "tests": 23001
     },
     "dae-outbound": {
       "production": 9255,
@@ -84,7 +84,7 @@
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,
-      "tests": 3565
+      "tests": 3632
     }
   },
   "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged.",
@@ -94,5 +94,6 @@
   "carrier_key_idle_ttl_rationale": "2026-10-26: account only for measured source growth from explicit carrier entry pins, bounded empty-key reclamation, shared weak H1 idle maintenance and their lifecycle/real-transport regression tests; no extra growth allowance.",
   "listener_adoption_regression_rationale": "2026-11-01: account only for the measured 17-line test-budget overage from distinct TCP/UDP adoption acknowledgements and failure/timeout regressions; production budgets unchanged, no growth allowance.",
   "startup_routing_regression_rationale": "2026-11-03: account only for the measured 136-line test-budget overage from startup routing order, failure admission, owner borrowing and cleanup regressions; production budgets unchanged, no extra growth allowance.",
-  "startup_routing_callsite_rationale": "2026-11-03: account only for measured test overages (daemon +233, runtime owner subtree +209) from isolated real resident startup and frozen kernel-map cache regressions; production budgets unchanged."
+  "startup_routing_callsite_rationale": "2026-11-03: account only for measured test overages (daemon +233, runtime owner subtree +209) from isolated real resident startup and frozen kernel-map cache regressions; production budgets unchanged.",
+  "native_cleanup_recovery_rationale": "2026-11-03: account only for the measured 67-line test-budget overage for real cleanup failure retention and explicit retry; production budgets unchanged."
 }

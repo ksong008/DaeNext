@@ -114,6 +114,8 @@ run_listener_lifecycle_test() {
     exit 1
   fi
 }
+run_listener_lifecycle_test retained-cleanup 3 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
+  dae-ebpf-support aya-loader retained_links::tests
 run_listener_lifecycle_test retained-netns 1 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader retained_netns_tests
 run_listener_lifecycle_test listener-negative 4 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \

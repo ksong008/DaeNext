@@ -47,6 +47,11 @@ pub(super) fn is_transient_missing_map_id(err: &std::io::Error) -> bool {
 
 impl Drop for NativeEbpfRuntimeState {
     fn drop(&mut self) {
-        let _ = self.reset();
+        if let Err(error) = self.reset() {
+            eprintln!(
+                "native eBPF owner cleanup incomplete; recovery pins retained at {:?}: {error}",
+                self.pin_root()
+            );
+        }
     }
 }
