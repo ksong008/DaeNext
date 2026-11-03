@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 23455
+      "tests": 23477
     },
     "dae-outbound": {
       "production": 9255,
@@ -84,7 +84,7 @@
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,
-      "tests": 4086
+      "tests": 4108
     }
   },
   "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged.",
@@ -97,5 +97,6 @@
   "startup_routing_callsite_rationale": "2026-11-03: account only for measured test overages (daemon +233, runtime owner subtree +209) from isolated real resident startup and frozen kernel-map cache regressions; production budgets unchanged.",
   "native_cleanup_recovery_rationale": "2026-11-03: account only for the measured 67-line test-budget overage for real cleanup failure retention and explicit retry; production budgets unchanged.",
   "host_attach_identity_rationale": "2026-11-03: account only for measured 55-line test overage for exact physical-role identity and real listener-cookie ordering assertions; production budgets unchanged.",
-  "listener_startup_failure_rationale": "2026-11-03: account only for measured test overages from real startup listener snapshot/corruption failure, exact rollback and foreign resource preservation regressions; no extra growth allowance or production budget changes."
+  "listener_startup_failure_rationale": "2026-11-03: account only for measured test overages from real startup listener snapshot/corruption failure, exact rollback and foreign resource preservation regressions; no extra growth allowance or production budget changes.",
+  "listener_duplicate_slot_rationale": "2026-11-03: account only for measured test growth covering live same-type replacement of every resident listener slot and paired TCP/UDP cookie consistency; production budgets unchanged, no extra growth allowance."
 }

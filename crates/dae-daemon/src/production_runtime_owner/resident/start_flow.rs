@@ -555,8 +555,13 @@ pub(super) fn start_with_options(
             drop(snapshot_fault);
             let cookies = cookies
                 .map_err(|error| format!("observe ready listener before host attach: {error}"))?;
-            let kernel_ready = cookies
-                .is_some_and(|slots| slots.iter().all(Option::is_some) && slots[4] == slots[0]);
+            // Resident IPv4/IPv6 slots share one TCP listener and one UDP socket.
+            let kernel_ready = cookies.is_some_and(|slots| {
+                slots.iter().all(Option::is_some)
+                    && slots[1] == slots[0]
+                    && slots[3] == slots[2]
+                    && slots[4] == slots[0]
+            });
             if !kernel_ready {
                 return Err("listener kernel publication missing before host attach".to_owned());
             }

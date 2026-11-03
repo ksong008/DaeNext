@@ -2,7 +2,11 @@
 use super::startup_routing_kernel_tests::{command, enter_private_namespace};
 use super::*;
 use std::{
-    cell::RefCell, collections::BTreeSet, net::TcpListener, os::fd::AsRawFd, process::Command,
+    cell::RefCell,
+    collections::BTreeSet,
+    net::{TcpListener, UdpSocket},
+    os::fd::{AsRawFd, OwnedFd},
+    process::Command,
     time::Duration,
 };
 
@@ -60,7 +64,7 @@ impl Drop for EffectiveCapabilities {
 
 pub(super) struct SnapshotFault {
     _capabilities: Option<EffectiveCapabilities>,
-    _socket: Option<TcpListener>,
+    _socket: Option<OwnedFd>,
 }
 
 pub(super) fn before_snapshot(map_id: Option<u32>) -> Option<SnapshotFault> {
@@ -70,6 +74,8 @@ pub(super) fn before_snapshot(map_id: Option<u32>) -> Option<SnapshotFault> {
         let id = map_id.expect("real startup must have a listener map");
         let before = dae_ebpf_support::sockmap::listen_socket_cookie_snapshot(id).unwrap();
         assert!(before.iter().all(Option::is_some));
+        assert_eq!(before[1], before[0], "resident TCP slots diverged");
+        assert_eq!(before[3], before[2], "resident UDP slots diverged");
         assert_eq!(before[4], before[0], "fault preceded real publication");
         let cgroup = dae_ebpf_support::query_cgroup_attachments(
             Path::new("/sys/fs/cgroup"),
@@ -109,7 +115,11 @@ pub(super) fn before_snapshot(map_id: Option<u32>) -> Option<SnapshotFault> {
                 None
             }
             Fault::Replace(key) => {
-                let other = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+                let other: OwnedFd = if matches!(key, 2 | 3) {
+                    UdpSocket::bind(("127.0.0.1", 0)).unwrap().into()
+                } else {
+                    TcpListener::bind(("127.0.0.1", 0)).unwrap().into()
+                };
                 let map = dae_ebpf_support::ValidatedRuntimeMapHandle::open_by_id(id).unwrap();
                 dae_ebpf_support::runtime_maps::update_map_elem_bytes(
                     map.as_raw_fd(),
@@ -120,7 +130,14 @@ pub(super) fn before_snapshot(map_id: Option<u32>) -> Option<SnapshotFault> {
                 let after = dae_ebpf_support::sockmap::listen_socket_cookie_snapshot(id).unwrap();
                 assert!(after.iter().all(Option::is_some));
                 assert_ne!(after[key as usize], before[key as usize]);
-                assert_ne!(after[4], after[0]);
+                for index in 0..5 {
+                    if index != key as usize {
+                        assert_eq!(after[index], before[index]);
+                    }
+                }
+                if matches!(key, 1..=3) {
+                    assert_eq!(after[4], after[0], "ready changed with unrelated slot");
+                }
                 Some(SnapshotFault {
                     _capabilities: None,
                     _socket: Some(other),
@@ -321,6 +338,9 @@ fn real_start_rejects_unreadable_or_corrupted_publication_and_rolls_back() {
             Fault::Missing(3),
             Fault::Missing(4),
             Fault::Replace(0),
+            Fault::Replace(1),
+            Fault::Replace(2),
+            Fault::Replace(3),
             Fault::Replace(4),
         ] {
             PROBE.with_borrow_mut(|probe| {

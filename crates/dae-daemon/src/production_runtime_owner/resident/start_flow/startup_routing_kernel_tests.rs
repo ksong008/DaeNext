@@ -231,6 +231,8 @@ fn assert_physical_attach_evidence(steps: &[Value], prepare_index: usize, backen
             .iter()
             .all(|cookie| cookie.as_u64().is_some_and(|value| value > 0))
     );
+    assert_eq!(cookies[1], cookies[0]);
+    assert_eq!(cookies[3], cookies[2]);
     assert_eq!(cookies[4], cookies[0]);
     assert!(ready_index > prepare_index);
     let expected = [
