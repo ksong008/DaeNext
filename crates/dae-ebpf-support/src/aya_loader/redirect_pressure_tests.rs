@@ -52,7 +52,7 @@ fn low_memory_protocol_churn_cannot_evict_the_other_protocol_at_either_boundary(
             for name in ["redirect_track", "redirect_udp"] {
                 assert_eq!(
                     crate::map_info(map_fd(&loaded, name)).unwrap().max_entries,
-                    4096
+                    8192
                 );
             }
             let fallback = BpfMatchSet {
@@ -73,7 +73,9 @@ fn low_memory_protocol_churn_cannot_evict_the_other_protocol_at_either_boundary(
                 assert_eq!(run(&loaded, "tproxy_dae0peer_ingress", data), 2); // reaches unpublished listener
             }
             let (mut churn, _) = packet(ipv6, churn_protocol);
-            for sequence in 0..8192u16 {
+            // Exceed this redirect pool without exhausting the independent
+            // 16384-entry UDP connection-state map used by UDP churn.
+            for sequence in 0..12288u16 {
                 let offset = if ipv6 { 36 } else { 28 };
                 churn[offset..offset + 2].copy_from_slice(&(sequence + 256).to_be_bytes());
                 assert_eq!(run(&loaded, "tproxy_lan_ingress_l2", &churn), 7);

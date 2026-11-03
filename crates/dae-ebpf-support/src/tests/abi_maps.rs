@@ -216,9 +216,9 @@ pub(super) fn runtime_map_profiles_are_ordered_and_cover_only_catalogued_maps() 
         assert!(balanced_capacity <= high_capacity);
         assert_eq!(high_capacity, catalog_capacity);
     }
-    for (profile, total) in [(low, 8192), (balanced, 32768), (high, 65536)] {
-        assert_eq!(profile_capacity(profile, "redirect_track"), total / 2);
-        assert_eq!(profile_capacity(profile, "redirect_udp"), total / 2);
+    for (profile, per_protocol) in [(low, 8192), (balanced, 32768), (high, 65536)] {
+        assert_eq!(profile_capacity(profile, "redirect_track"), per_protocol);
+        assert_eq!(profile_capacity(profile, "redirect_udp"), per_protocol);
     }
     assert!(
         RuntimeMapProfile::LowMemory.udp_state_idle_timeout_ns()
