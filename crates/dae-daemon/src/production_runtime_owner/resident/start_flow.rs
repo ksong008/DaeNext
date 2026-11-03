@@ -228,193 +228,235 @@ pub(super) fn start_with_options(
             })
         };
         let mut resident_routing_apply_cache = ResidentRoutingApplyCache::default();
-        // The peer role has loaded our private maps, but physical LAN/WAN
-        // hooks are not live yet. Fill the complete static routing snapshot
-        // now so they cannot classify traffic against partially seeded rules.
-        if ok && options.native_ebpf_requested {
-            let routing_map_id = native_runtime
-                .loaded_map_id("routing_map")
-                .ok_or_else(|| "native peer load did not expose routing_map".to_owned())?;
-            let (routing, _) = update_existing_resident_routing_map(
-                routing_map_id,
-                native_runtime.loaded_map_id("lpm_array_map"),
-                native_runtime.loaded_map_id("outbound_connectivity_map"),
-                config,
-                &geodata,
-                &mut resident_routing_apply_cache,
-            )?;
-            executed_steps.push(json!({
+        // The token exclusively borrows this physical owner until its cgroup,
+        // WAN and LAN attach phase finishes. It cannot survive a reset/rebind.
+        let routing_required = ok && options.native_ebpf_requested;
+        let pname_rules_required = resident_routing_requires_process_name(config);
+        let prepare =
+            |native_runtime: &mut NativeEbpfRuntimeState,
+             context: &mut (&mut Vec<Value>, &mut ResidentRoutingApplyCache)| {
+                let (executed_steps, resident_routing_apply_cache) = context;
+                let routing_map_id = native_runtime
+                    .loaded_map_id("routing_map")
+                    .ok_or_else(|| "native peer load did not expose routing_map".to_owned())?;
+                let (routing, _) = update_existing_resident_routing_map(
+                    routing_map_id,
+                    native_runtime.loaded_map_id("lpm_array_map"),
+                    native_runtime.loaded_map_id("outbound_connectivity_map"),
+                    config,
+                    &geodata,
+                    resident_routing_apply_cache,
+                )?;
+                executed_steps.push(json!({
                 "name": "prepare-native-routing-before-physical-attach",
                 "status": "pass",
                 "routing_map_id": routing_map_id,
+                "physical_generation": runtime_generation,
+                "lpm_array_map_id": native_runtime.loaded_map_id("lpm_array_map"),
+                "outbound_connectivity_map_id": native_runtime.loaded_map_id("outbound_connectivity_map"),
                 "routing": routing,
             }));
-        }
-        let pname_rules_required = resident_routing_requires_process_name(config);
-        let (cgroup_ok, resident_cgroup_attach) = resident_cgroup_attach_evidence(
-            &mut executed_steps,
-            &interface_attach_options,
-            &selected_native_param_object,
-            &mut native_runtime,
-            &wan_ifaces,
-            ok,
-            &native_param_image,
-            pname_rules_required,
-        );
-        ok = cgroup_ok;
+                Ok(())
+            };
+        let mut attach =
+            |native_runtime: &mut NativeEbpfRuntimeState,
+             context: &mut (&mut Vec<Value>, &mut ResidentRoutingApplyCache)| {
+                let (executed_steps, resident_routing_apply_cache) = context;
+                let mut ok = ok;
+                let (cgroup_ok, resident_cgroup_attach) = resident_cgroup_attach_evidence(
+                    executed_steps,
+                    &interface_attach_options,
+                    &selected_native_param_object,
+                    native_runtime,
+                    &wan_ifaces,
+                    ok,
+                    &native_param_image,
+                    pname_rules_required,
+                );
+                ok = cgroup_ok;
 
-        let (wan_ok, resident_wan_attach) = attach_resident_wan_programs(
-            &mut executed_steps,
-            &interface_attach_options,
-            &selected_native_param_object,
-            &mut native_runtime,
-            &wan_ifaces,
-            ok,
-        );
-        ok = wan_ok;
+                let (wan_ok, resident_wan_attach) = attach_resident_wan_programs(
+                    executed_steps,
+                    &interface_attach_options,
+                    &selected_native_param_object,
+                    native_runtime,
+                    &wan_ifaces,
+                    ok,
+                );
+                ok = wan_ok;
 
-        let mut resident_lan_attach = Vec::new();
-        let mut resident_lan_routing = Vec::new();
-        for iface in &lan_ifaces {
-            if ok {
-                let link_layer = match interface_link_layer(iface) {
-                    Ok(layer) => layer,
-                    Err(err) => {
-                        ok = false;
+                let mut resident_lan_attach = Vec::new();
+                let mut resident_lan_routing = Vec::new();
+                for iface in &lan_ifaces {
+                    if ok {
+                        let link_layer = match interface_link_layer(iface) {
+                            Ok(layer) => layer,
+                            Err(err) => {
+                                ok = false;
+                                resident_lan_attach.push(json!({
+                                    "interface": iface,
+                                    "status": "fail",
+                                    "error": err,
+                                }));
+                                resident_lan_routing.push(json!({
+                                "interface": iface,
+                                "routing_map_update": {
+                                    "status": "skipped",
+                                    "reason": "resident LAN interface link-layer detection did not pass"
+                                },
+                            }));
+                                continue;
+                            }
+                        };
+                        let before_lan_map_ids = map_ids().unwrap_or_default();
+                        let lan_attach = attach_resident_lan_program(
+                            executed_steps,
+                            &interface_attach_options,
+                            iface,
+                            link_layer,
+                            &param_object,
+                            &selected_native_param_object,
+                            native_runtime,
+                        );
+                        ok &= lan_attach.ok;
+                        if lan_attach.native_attached {
+                            native_lan_ifaces.push(iface.clone());
+                        }
+                        let lan_egress_attach = if lan_attach.native_attached && lan_attach.ok {
+                            let (egress_ok, egress_report) = attach_resident_lan_egress_program(
+                                executed_steps,
+                                &interface_attach_options,
+                                &selected_native_param_object,
+                                native_runtime,
+                                iface,
+                                link_layer,
+                            );
+                            ok &= egress_ok;
+                            egress_report
+                        } else {
+                            json!({
+                                "status": "skipped",
+                                "reason": "LAN egress Aya attach is required only for native resident mode after native ingress passes",
+                            })
+                        };
+                        let show = show_resident_lan_program(executed_steps, iface);
+                        let routing = if ok {
+                            let routing_update = if lan_attach.native_attached {
+                                native_runtime
+                                    .loaded_map_id("routing_map")
+                                    .ok_or_else(|| {
+                                        "resident LAN native attach did not expose routing_map"
+                                            .to_owned()
+                                    })
+                                    .and_then(|routing_map_id| {
+                                        update_existing_resident_routing_map(
+                                            routing_map_id,
+                                            native_runtime.loaded_map_id("lpm_array_map"),
+                                            native_runtime
+                                                .loaded_map_id("outbound_connectivity_map"),
+                                            config,
+                                            &geodata,
+                                            resident_routing_apply_cache,
+                                        )
+                                    })
+                            } else {
+                                update_new_resident_routing_map(
+                                    &before_lan_map_ids,
+                                    config,
+                                    &geodata,
+                                    resident_routing_apply_cache,
+                                )
+                            };
+                            match routing_update {
+                                Ok((value, id)) => {
+                                    discovered_routing_map_ids.push(Some(id));
+                                    value
+                                }
+                                Err(err) => {
+                                    ok = false;
+                                    json!({
+                                        "status": "fail",
+                                        "interface": iface,
+                                        "error": err,
+                                    })
+                                }
+                            }
+                        } else {
+                            json!({
+                                "status": "skipped",
+                                "interface": iface,
+                                "reason": "resident LAN ingress attach did not pass",
+                            })
+                        };
                         resident_lan_attach.push(json!({
                             "interface": iface,
-                            "status": "fail",
-                            "error": err,
+                            "status": if lan_attach.ok { "pass" } else { "fail" },
+                            "backend": lan_attach.backend,
+                            "command_backend_used": lan_attach.command_backend_used,
+                            "native_backend_attempted": lan_attach.native_backend_attempted,
+                            "native_backend": lan_attach.native_backend,
+                            "native_attached": lan_attach.native_attached,
+                            "link_layer": lan_attach.link_layer.suffix(),
+                            "kernel_parameters": resident_kernel_parameters.clone(),
+                            "egress": lan_egress_attach,
+                            "show": show,
+                        }));
+                        resident_lan_routing.push(json!({
+                            "interface": iface,
+                            "routing_map_update": routing,
+                        }));
+                    } else {
+                        resident_lan_attach.push(json!({
+                            "interface": iface,
+                            "backend": Value::Null,
+                            "command_backend_used": Value::Null,
+                            "native_backend_attempted": false,
+                            "native_backend": Value::Null,
+                            "native_attached": false,
+                            "link_layer": Value::Null,
+                            "kernel_parameters": Value::Null,
+                            "egress": Value::Null,
+                            "show": Value::Null,
+                            "status": "skipped",
+                            "reason": "previous resident runtime step did not pass",
                         }));
                         resident_lan_routing.push(json!({
                             "interface": iface,
                             "routing_map_update": {
                                 "status": "skipped",
-                                "reason": "resident LAN interface link-layer detection did not pass"
+                                "reason": "previous resident runtime step did not pass"
                             },
                         }));
-                        continue;
                     }
-                };
-                let before_lan_map_ids = map_ids().unwrap_or_default();
-                let lan_attach = attach_resident_lan_program(
-                    &mut executed_steps,
-                    &interface_attach_options,
-                    iface,
-                    link_layer,
-                    &param_object,
-                    &selected_native_param_object,
-                    &mut native_runtime,
-                );
-                ok &= lan_attach.ok;
-                if lan_attach.native_attached {
-                    native_lan_ifaces.push(iface.clone());
                 }
-                let lan_egress_attach = if lan_attach.native_attached && lan_attach.ok {
-                    let (egress_ok, egress_report) = attach_resident_lan_egress_program(
-                        &mut executed_steps,
-                        &interface_attach_options,
-                        &selected_native_param_object,
-                        &mut native_runtime,
-                        iface,
-                        link_layer,
-                    );
-                    ok &= egress_ok;
-                    egress_report
-                } else {
-                    json!({
-                        "status": "skipped",
-                        "reason": "LAN egress Aya attach is required only for native resident mode after native ingress passes",
-                    })
-                };
-                let show = show_resident_lan_program(&mut executed_steps, iface);
-                let routing = if ok {
-                    let routing_update = if lan_attach.native_attached {
-                        native_runtime
-                            .loaded_map_id("routing_map")
-                            .ok_or_else(|| {
-                                "resident LAN native attach did not expose routing_map".to_owned()
-                            })
-                            .and_then(|routing_map_id| {
-                                update_existing_resident_routing_map(
-                                    routing_map_id,
-                                    native_runtime.loaded_map_id("lpm_array_map"),
-                                    native_runtime.loaded_map_id("outbound_connectivity_map"),
-                                    config,
-                                    &geodata,
-                                    &mut resident_routing_apply_cache,
-                                )
-                            })
-                    } else {
-                        update_new_resident_routing_map(
-                            &before_lan_map_ids,
-                            config,
-                            &geodata,
-                            &mut resident_routing_apply_cache,
-                        )
-                    };
-                    match routing_update {
-                        Ok((value, id)) => {
-                            discovered_routing_map_ids.push(Some(id));
-                            value
-                        }
-                        Err(err) => {
-                            ok = false;
-                            json!({
-                                "status": "fail",
-                                "interface": iface,
-                                "error": err,
-                            })
-                        }
-                    }
-                } else {
-                    json!({
-                        "status": "skipped",
-                        "interface": iface,
-                        "reason": "resident LAN ingress attach did not pass",
-                    })
-                };
-                resident_lan_attach.push(json!({
-                    "interface": iface,
-                    "status": if lan_attach.ok { "pass" } else { "fail" },
-                    "backend": lan_attach.backend,
-                    "command_backend_used": lan_attach.command_backend_used,
-                    "native_backend_attempted": lan_attach.native_backend_attempted,
-                    "native_backend": lan_attach.native_backend,
-                    "native_attached": lan_attach.native_attached,
-                    "link_layer": lan_attach.link_layer.suffix(),
-                    "kernel_parameters": resident_kernel_parameters.clone(),
-                    "egress": lan_egress_attach,
-                    "show": show,
-                }));
-                resident_lan_routing.push(json!({
-                    "interface": iface,
-                    "routing_map_update": routing,
-                }));
-            } else {
-                resident_lan_attach.push(json!({
-                    "interface": iface,
-                    "backend": Value::Null,
-                    "command_backend_used": Value::Null,
-                    "native_backend_attempted": false,
-                    "native_backend": Value::Null,
-                    "native_attached": false,
-                    "link_layer": Value::Null,
-                    "kernel_parameters": Value::Null,
-                    "egress": Value::Null,
-                    "show": Value::Null,
-                    "status": "skipped",
-                    "reason": "previous resident runtime step did not pass",
-                }));
-                resident_lan_routing.push(json!({
-                    "interface": iface,
-                    "routing_map_update": {
-                        "status": "skipped",
-                        "reason": "previous resident runtime step did not pass"
-                    },
-                }));
-            }
-        }
+                Ok((
+                    ok,
+                    resident_cgroup_attach,
+                    resident_wan_attach,
+                    resident_lan_attach,
+                    resident_lan_routing,
+                ))
+            };
+        let mut context = (&mut executed_steps, &mut resident_routing_apply_cache);
+        let (
+            attached,
+            resident_cgroup_attach,
+            resident_wan_attach,
+            resident_lan_attach,
+            resident_lan_routing,
+        ) = if routing_required {
+            with_prepared_routing(
+                &mut native_runtime,
+                &mut context,
+                prepare,
+                |prepared, context| attach(prepared.0, context),
+            )?
+        } else {
+            // Failed earlier steps and the command backend retain their own
+            // existing admission path; neither receives a native ready token.
+            attach(&mut native_runtime, &mut context)?
+        };
+        ok = attached;
 
         let resident_dataplane = if ok {
             match live_handoff.as_ref() {
@@ -807,3 +849,20 @@ fn resident_topology_readiness(
         },
     })
 }
+
+// Kept local to startup: the proof is the successful writer and exclusive
+// owner borrow, not a generation number, map ID, or report field.
+struct PreparedRouting<'a, Owner>(&'a mut Owner);
+
+fn with_prepared_routing<Owner, Context, Output>(
+    owner: &mut Owner,
+    context: &mut Context,
+    prepare: impl FnOnce(&mut Owner, &mut Context) -> Result<(), String>,
+    attach: impl FnOnce(PreparedRouting<'_, Owner>, &mut Context) -> Result<Output, String>,
+) -> Result<Output, String> {
+    prepare(owner, context)?;
+    attach(PreparedRouting(owner), context)
+}
+
+#[cfg(test)]
+mod startup_routing_tests;
