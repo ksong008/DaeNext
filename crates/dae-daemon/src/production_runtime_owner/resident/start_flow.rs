@@ -866,3 +866,6 @@ fn with_prepared_routing<Owner, Context, Output>(
 
 #[cfg(test)]
 mod startup_routing_tests;
+
+#[cfg(all(test, feature = "native-ebpf"))]
+mod startup_routing_kernel_tests;

@@ -120,6 +120,8 @@ run_listener_lifecycle_test listener-negative 4 DAE_RUN_LISTENER_LIFECYCLE_SMOKE
   dae-ebpf-support aya-loader listener_lifecycle_tests
 run_listener_lifecycle_test startup-routing 6 DAE_RUN_STARTUP_ROUTING_TESTS \
   dae-daemon native-ebpf startup_routing_tests
+run_listener_lifecycle_test resident-startup 1 DAE_RUN_RESIDENT_STARTUP_SMOKE \
+  dae-daemon native-ebpf startup_routing_kernel_tests
 run_listener_lifecycle_test udp-direction 4 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader udp_direction_tests
 run_listener_lifecycle_test redirect-pressure 1 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
