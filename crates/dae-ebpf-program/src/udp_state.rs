@@ -54,18 +54,50 @@ fn increment_udp_state_metric(metric: u32) {
 }
 
 #[inline(always)]
-// bpf_timer_start validates that timer_init and set_callback have completed.
-// A competing CPU can see a NOEXIST entry before the inserter reaches either
-// helper. Never use that entry for classification when validation fails.
+// A NOEXIST entry is visible before the inserting CPU initializes its timer.
+// Any CPU may complete initialization; -EBUSY means a peer already did init.
+// Classification is allowed only after callback installation and a valid start.
+unsafe fn initialize_state_timer(state: *mut BpfUdpConnState) -> bool {
+    unsafe {
+        let timer = ptr::addr_of_mut!((*state).timer).cast::<c_void>();
+        let result =
+            helpers::bpf_timer_init(timer, maps::udp_conn_state_map_ptr(), CLOCK_MONOTONIC);
+        if result != 0 && result != -16 {
+            // EBUSY: the same entry already has a timer.
+            increment_udp_state_metric(METRIC_TIMER_INIT_FAILURE);
+            return false;
+        }
+        if helpers::bpf_timer_set_callback(timer, refresh_udp_conn_state_timer_cb as *const c_void)
+            != 0
+        {
+            increment_udp_state_metric(METRIC_TIMER_CALLBACK_FAILURE);
+            return false;
+        }
+        if helpers::bpf_timer_start(timer, crate::abi::param_udp_state_idle_timeout_ns(), 0) != 0 {
+            increment_udp_state_metric(METRIC_TIMER_START_FAILURE);
+            return false;
+        }
+    }
+    true
+}
+
+#[inline(always)]
 unsafe fn refresh_state_timer(state: *mut BpfUdpConnState) -> *mut BpfUdpConnState {
-    if unsafe {
+    let result = unsafe {
         helpers::bpf_timer_start(
             ptr::addr_of_mut!((*state).timer).cast::<c_void>(),
             crate::abi::param_udp_state_idle_timeout_ns(),
             0,
         )
-    } != 0
-    {
+    };
+    if result == -22 {
+        // EINVAL with flags=0: initialization/callback is incomplete.
+        if unsafe { initialize_state_timer(state) } {
+            return state;
+        }
+        return ptr::null_mut();
+    }
+    if result != 0 {
         increment_udp_state_metric(METRIC_TIMER_START_FAILURE);
         return ptr::null_mut();
     }
@@ -130,28 +162,12 @@ pub unsafe fn refresh_udp_conn_state(
         return ptr::null_mut();
     }
 
-    unsafe {
-        let timer = ptr::addr_of_mut!((*state).timer).cast::<c_void>();
-        if helpers::bpf_timer_init(timer, maps::udp_conn_state_map_ptr(), CLOCK_MONOTONIC) != 0 {
-            increment_udp_state_metric(METRIC_TIMER_INIT_FAILURE);
+    if !unsafe { initialize_state_timer(state) } {
+        unsafe {
             let _ =
                 helpers::bpf_map_delete_elem(maps::udp_conn_state_map_ptr(), key.cast::<c_void>());
-            return ptr::null_mut();
         }
-        if helpers::bpf_timer_set_callback(timer, refresh_udp_conn_state_timer_cb as *const c_void)
-            != 0
-        {
-            increment_udp_state_metric(METRIC_TIMER_CALLBACK_FAILURE);
-            let _ =
-                helpers::bpf_map_delete_elem(maps::udp_conn_state_map_ptr(), key.cast::<c_void>());
-            return ptr::null_mut();
-        }
-        if helpers::bpf_timer_start(timer, crate::abi::param_udp_state_idle_timeout_ns(), 0) != 0 {
-            increment_udp_state_metric(METRIC_TIMER_START_FAILURE);
-            let _ =
-                helpers::bpf_map_delete_elem(maps::udp_conn_state_map_ptr(), key.cast::<c_void>());
-            return ptr::null_mut();
-        }
+        return ptr::null_mut();
     }
 
     state
