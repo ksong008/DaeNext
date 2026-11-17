@@ -93,7 +93,7 @@ fn trim_must_name(name: &str) -> String {
     if name == "must_rules" {
         name.to_owned()
     } else {
-        name.strip_prefix("must_").unwrap_or(name).to_owned()
+        name.trim_prefix("must_").to_owned()
     }
 }
 
