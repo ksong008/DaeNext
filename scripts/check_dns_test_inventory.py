@@ -30,6 +30,8 @@ CRITICAL_TESTS = {
         "hot_path::negative::tests::negative_cache_uses_soa_ttl_and_minimum_and_fixed_ttl_only_shortens",
     ],
     "dae-resident-dns": [
+        "cache::maintenance::tests::incomplete_scan_releases_its_reservation_without_replacing_a_later_reservation",
+        "cache::maintenance::tests::completed_scan_keeps_its_reservation_and_not_due_scan_does_not_visit_shards",
         "runtime::flight::tests::cancelled_dns_leader_elects_only_one_replacement_for_live_followers",
         "runtime::flight::tests::asis_validation_failure_is_published_to_followers_in_both_execution_paths",
         "runtime::flight::tests::second_dns_leader_cancellation_does_not_elect_a_third_or_reset_deadline",

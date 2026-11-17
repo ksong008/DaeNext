@@ -72,29 +72,48 @@ impl ResidentDnsRuntimeCache {
     }
 }
 
+thread_local! {
+    static INTERRUPT_SCAN: std::cell::Cell<Option<Option<i64>>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+pub(super) fn interrupt_scan_if_requested(cache: &ResidentDnsRuntimeCache) {
+    if let Some(later) = INTERRUPT_SCAN.take() {
+        if let Some(later) = later {
+            cache.next_sweep.store(later, Ordering::Relaxed);
+        }
+        panic!("test interrupted scan");
+    }
+}
+
 #[test]
 fn incomplete_scan_releases_its_reservation_without_replacing_a_later_reservation() {
-    let gate = AtomicI64::new(60);
-    let result = std::panic::catch_unwind(|| {
-        let _reservation = SweepReservation {
-            gate: &gate,
-            previous: 0,
-            reserved: 60,
-            completed: false,
-        };
-        panic!("test interrupted scan");
-    });
-    assert!(result.is_err());
-    assert_eq!(gate.load(Ordering::Relaxed), 0);
-    let reservation = SweepReservation {
-        gate: &gate,
-        previous: 0,
-        reserved: 60,
-        completed: false,
-    };
-    gate.store(120, Ordering::Relaxed);
-    drop(reservation);
-    assert_eq!(gate.load(Ordering::Relaxed), 120);
+    for later in [None, Some(120)] {
+        let cache = ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+        INTERRUPT_SCAN.set(Some(later));
+        let result = std::panic::catch_unwind(|| cache.sweep_all_if_due(0));
+        assert!(result.is_err());
+        assert_eq!(cache.next_sweep.load(Ordering::Relaxed), later.unwrap_or(0));
+    }
+}
+
+#[test]
+fn completed_scan_keeps_its_reservation_and_not_due_scan_does_not_visit_shards() {
+    let cache = ResidentDnsRuntimeCache::with_cache_entry_limit(4);
+    cache.sweep_all_if_due(0);
+    assert_eq!(cache.next_sweep.load(Ordering::Relaxed), 60);
+    for shard in &cache.shards {
+        assert_eq!(shard.lock().unwrap().next_sweep_unix, 60);
+    }
+    INTERRUPT_SCAN.set(Some(None));
+    cache.sweep_all_if_due(1);
+    assert_eq!(
+        INTERRUPT_SCAN.take(),
+        Some(None),
+        "not due must skip the scan"
+    );
+    assert_eq!(cache.next_sweep.load(Ordering::Relaxed), 60);
 }
 
 #[test]
