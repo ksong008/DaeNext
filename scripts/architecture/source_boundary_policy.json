@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 23477
+      "tests": 23508
     },
     "dae-outbound": {
       "production": 9255,
@@ -84,7 +84,7 @@
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,
-      "tests": 4108
+      "tests": 4139
     }
   },
   "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged.",
@@ -99,5 +99,5 @@
   "host_attach_identity_rationale": "2026-11-03: account only for measured 55-line test overage for exact physical-role identity and real listener-cookie ordering assertions; production budgets unchanged.",
   "listener_startup_failure_rationale": "2026-11-03: account only for measured test overages from real startup listener snapshot/corruption failure, exact rollback and foreign resource preservation regressions; no extra growth allowance or production budget changes.",
   "listener_duplicate_slot_rationale": "2026-11-03: account only for measured test growth covering live same-type replacement of every resident listener slot and paired TCP/UDP cookie consistency; production budgets unchanged, no extra growth allowance.",
-  "resident_worker_park_regression_rationale": "2026-11-17: account only for distinct scheduler park/unpark wiring regression tests; no production limit changes or spare test allowance."
+  "resident_worker_park_regression_rationale": "2026-11-17: account only for production allocator adapter and distinct scheduler park/unpark wiring regression tests; no production limit changes or spare test allowance."
 }
