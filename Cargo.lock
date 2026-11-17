@@ -738,7 +738,6 @@ dependencies = [
  "dae-build-support",
  "dae-ebpf-support",
  "dae-runtime-control",
- "fastrand",
  "libc",
  "serde_json",
 ]
