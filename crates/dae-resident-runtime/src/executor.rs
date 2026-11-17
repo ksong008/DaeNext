@@ -11,6 +11,10 @@ pub trait ResidentRuntimeAllocatorHooks: std::fmt::Debug + Send + Sync {
     fn thread_start(&self);
     fn thread_stop(&self);
     fn thread_poll(&self) {}
+    /// Runs on the scheduler worker before it parks; `thread_poll` runs on unpark.
+    fn thread_park(&self) {
+        self.thread_poll();
+    }
     fn activate(&self, handle: tokio::runtime::Handle);
     fn deactivate(&self);
 }
@@ -64,7 +68,7 @@ impl ResidentRuntimeExecutor {
             .thread_stack_size(worker_stack_bytes)
             .on_thread_start(move || start_reclaim.thread_start())
             .on_thread_stop(move || stop_reclaim.thread_stop())
-            .on_thread_park(move || park_reclaim.thread_poll())
+            .on_thread_park(move || park_reclaim.thread_park())
             .on_thread_unpark(move || unpark_reclaim.thread_poll())
             .enable_all()
             .build()

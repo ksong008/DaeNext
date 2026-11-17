@@ -5,6 +5,9 @@ mod manual_probe_execution;
 mod manual_probe_index;
 mod shutdown;
 
+#[cfg(test)]
+mod allocator_reclaim_tests;
+
 use self::manual_probe_execution::{ManualProbeExecution, ManualProbeRuntime};
 pub(crate) use self::manual_probe_index::ResidentManualProbeIndex;
 pub(crate) use self::shutdown::ResidentRuntimeWorkloadShutdown;
@@ -49,6 +52,10 @@ impl dae_resident_runtime::ResidentRuntimeAllocatorHooks for ResidentAllocatorRu
 
     fn thread_poll(&self) {
         self.inner.thread_poll();
+    }
+
+    fn thread_park(&self) {
+        self.inner.thread_park();
     }
 
     fn thread_stop(&self) {

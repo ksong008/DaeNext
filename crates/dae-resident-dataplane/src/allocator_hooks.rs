@@ -25,6 +25,10 @@ pub trait ResidentAllocatorRuntimeHooks: fmt::Debug + Send + Sync {
     fn thread_start(&self);
     fn thread_stop(&self);
     fn thread_poll(&self) {}
+    /// Flush/disable the worker cache before park, restoring it in `thread_poll`.
+    fn thread_park(&self) {
+        self.thread_poll();
+    }
     fn activate(&self, handle: tokio::runtime::Handle);
     fn deactivate(&self);
 }
