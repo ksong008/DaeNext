@@ -26,7 +26,7 @@ resource_log="${RUNTIME_RESOURCE_LOG:-/tmp/dae-native-ebpf-runtime-resources-${r
 backend="${NATIVE_EBPF_BACKEND:-${DAE_NATIVE_EBPF_BACKEND:-auto}}"
 netns_link="${NETNS_LINK:-${DAE_NETNS_LINK:-auto}}"
 native_object_mode="${NATIVE_EBPF_OBJECT_MODE:-auto}"
-native_toolchain="${DAE_RUST_NATIVE_BPF_TOOLCHAIN:-nightly-2026-05-29}"
+native_toolchain="${DAE_RUST_NATIVE_BPF_TOOLCHAIN:-1.100.0}"
 runtime_timeout="${RUNTIME_TIMEOUT:-180s}"
 
 case "$native_object_mode" in
@@ -52,7 +52,7 @@ mkdir -p "$run_root"
 
 echo "building native Aya loader object from crates/dae-ebpf-program"
 echo "native object source: crates/dae-ebpf-program"
-cargo "+$native_toolchain" build --locked -Z build-std=core --manifest-path Cargo.toml \
+RUSTC_BOOTSTRAP=1 cargo "+$native_toolchain" build --locked -Z build-std=core --manifest-path Cargo.toml \
   -p dae-ebpf-program \
   --target bpfel-unknown-none \
   --release

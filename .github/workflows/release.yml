@@ -33,7 +33,8 @@ concurrency:
 
 env:
   BPF_LINKER_VERSION: "0.10.3"
-  DAE_RUST_NATIVE_BPF_TOOLCHAIN: "nightly-2026-05-29"
+  DAE_RUST_NATIVE_BPF_TOOLCHAIN: "1.100.0"
+  DAE_RUST_BUILD_STD_TOOLCHAIN: "1.100.0"
   CARGO_PROFILE_RELEASE_LTO: "fat"
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
   CARGO_TERM_COLOR: always
@@ -385,7 +386,9 @@ jobs:
       - name: Install Rust cross support
         run: |
           set -euo pipefail
-          rustup toolchain install "${DAE_RUST_NATIVE_BPF_TOOLCHAIN}" --profile minimal --component rust-src
+          if [ "${{ matrix.build_std }}" = "true" ]; then
+            rustup toolchain install "${DAE_RUST_BUILD_STD_TOOLCHAIN}" --profile minimal --component rust-src
+          fi
           if [ "${{ matrix.install_rust_target }}" = "true" ]; then
             rustup target add "${{ matrix.rust_target }}"
           fi
@@ -440,11 +443,13 @@ jobs:
             exit 0
           fi
           rust_target_env="${rust_target//-/_}"
-          echo "RUST_TARGET=${rust_target}" >>"${GITHUB_ENV}"
-          echo "CARGO_TARGET_${cargo_target_env}_LINKER=${linker}" >>"${GITHUB_ENV}"
-          echo "CC_${rust_target_env}=${cc}" >>"${GITHUB_ENV}"
-          echo "CXX_${rust_target_env}=${cxx}" >>"${GITHUB_ENV}"
-          echo "AR_${rust_target_env}=${ar}" >>"${GITHUB_ENV}"
+          {
+            echo "RUST_TARGET=${rust_target}"
+            echo "CARGO_TARGET_${cargo_target_env}_LINKER=${linker}"
+            echo "CC_${rust_target_env}=${cc}"
+            echo "CXX_${rust_target_env}=${cxx}"
+            echo "AR_${rust_target_env}=${ar}"
+          } >>"${GITHUB_ENV}"
 
       - name: Resolve release identity
         id: release
@@ -470,7 +475,7 @@ jobs:
             binary_dir="target/${RUST_TARGET}/release"
           fi
           if [ "$BUILD_STD" = "true" ]; then
-            cargo "+${DAE_RUST_NATIVE_BPF_TOOLCHAIN}" -Z build-std=std,panic_abort "${build_args[@]}"
+            RUSTC_BOOTSTRAP=1 cargo "+${DAE_RUST_BUILD_STD_TOOLCHAIN}" -Z build-std=std,panic_abort "${build_args[@]}"
           else
             cargo "${build_args[@]}"
           fi
