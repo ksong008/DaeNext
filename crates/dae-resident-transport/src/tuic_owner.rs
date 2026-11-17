@@ -313,13 +313,13 @@ fn update_high_water(high_water: &AtomicUsize, value: usize) {
 }
 
 fn subtract_active(active: &AtomicUsize) {
-    let _ = active.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    let _ = active.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
         Some(value.saturating_sub(1))
     });
 }
 
 fn subtract_count(active: &AtomicUsize, count: usize) {
-    let _ = active.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    let _ = active.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
         Some(value.saturating_sub(count))
     });
 }

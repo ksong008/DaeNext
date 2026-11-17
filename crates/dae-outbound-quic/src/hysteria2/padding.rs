@@ -88,10 +88,10 @@ fn record_padding(
 ) {
     samples.fetch_add(1, Ordering::Relaxed);
     bytes.fetch_add(u64::try_from(length).unwrap_or(u64::MAX), Ordering::Relaxed);
-    let _ = minimum.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = minimum.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.min(length))
     });
-    let _ = maximum.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = maximum.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.max(length))
     });
 }

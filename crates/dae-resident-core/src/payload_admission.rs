@@ -113,7 +113,7 @@ impl PayloadByteReservationOwner for ResidentUdpPayloadAdmissionState {
     fn release(&self, bytes: usize) {
         let _ = self
             .current
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 Some(current.saturating_sub(bytes))
             });
     }

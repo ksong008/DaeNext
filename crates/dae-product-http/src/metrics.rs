@@ -102,7 +102,7 @@ impl ProductHttpMetrics {
     pub fn dequeued(&self) {
         let _ = self
             .queue_depth
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                 Some(depth.saturating_sub(1))
             });
     }
@@ -120,7 +120,7 @@ impl ProductHttpMetrics {
     }
 
     pub fn closed(&self) {
-        let _ = self.active_connections.fetch_update(
+        let _ = self.active_connections.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |connections| Some(connections.saturating_sub(1)),
@@ -132,7 +132,7 @@ impl ProductHttpMetrics {
     }
 
     pub fn sse_closed(&self) {
-        let _ = self.active_sse_connections.fetch_update(
+        let _ = self.active_sse_connections.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |connections| Some(connections.saturating_sub(1)),
@@ -147,7 +147,7 @@ impl ProductHttpMetrics {
     pub fn sse_dequeued(&self) {
         let _ = self
             .sse_queue_depth
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                 Some(depth.saturating_sub(1))
             });
         self.sse_opened();
@@ -156,7 +156,7 @@ impl ProductHttpMetrics {
     pub fn sse_submission_rollback(&self) {
         let _ = self
             .sse_queue_depth
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
                 Some(depth.saturating_sub(1))
             });
     }

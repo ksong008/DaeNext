@@ -245,7 +245,7 @@ impl<'a> ResidentDnsUdpShardLease<'a> {
 
 impl Drop for ResidentDnsUdpShardLease<'_> {
     fn drop(&mut self) {
-        let _ = self.shard.inflight.fetch_update(
+        let _ = self.shard.inflight.try_update(
             std::sync::atomic::Ordering::AcqRel,
             std::sync::atomic::Ordering::Acquire,
             |inflight| Some(inflight.saturating_sub(1)),

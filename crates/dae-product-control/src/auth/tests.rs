@@ -16,7 +16,7 @@ fn response(status: u16) -> HttpResponse {
 }
 
 fn update_max(maximum: &AtomicU64, value: u64) {
-    let _ = maximum.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = maximum.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.max(value))
     });
 }

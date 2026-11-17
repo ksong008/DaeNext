@@ -290,7 +290,7 @@ pub struct ProductUiRequestLease {
 impl Drop for ProductUiRequestLease {
     fn drop(&mut self) {
         self.runtime.requests_active.fetch_sub(1, Ordering::Release);
-        let _ = self.runtime.bytes_in_flight.fetch_update(
+        let _ = self.runtime.bytes_in_flight.try_update(
             Ordering::Release,
             Ordering::Relaxed,
             |bytes| Some(bytes.saturating_sub(self.charged_bytes)),

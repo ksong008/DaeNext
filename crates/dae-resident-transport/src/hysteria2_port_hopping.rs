@@ -37,7 +37,7 @@ impl Hysteria2PortHoppingMetrics {
     fn sockets_closed(&self, count: usize) {
         let _ = self
             .active_sockets
-            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |active| {
+            .try_update(Ordering::AcqRel, Ordering::Relaxed, |active| {
                 Some(active.saturating_sub(count))
             });
     }
@@ -58,11 +58,11 @@ impl Hysteria2PortHoppingMetrics {
         } else {
             self.cumulative_failures.fetch_add(1, Ordering::Relaxed);
         }
-        let _ =
-            self.active_transitions
-                .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |active| {
-                    Some(active.saturating_sub(1))
-                });
+        let _ = self
+            .active_transitions
+            .try_update(Ordering::AcqRel, Ordering::Relaxed, |active| {
+                Some(active.saturating_sub(1))
+            });
     }
 
     pub(crate) fn snapshot(&self) -> Value {

@@ -2,7 +2,8 @@
 name = "dae-ebpf-abi"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Shared with the fixed Rust 1.98 eBPF toolchain.
+rust-version = "1.98"
 license.workspace = true
 repository.workspace = true
 

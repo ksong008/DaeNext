@@ -63,7 +63,7 @@ pub(crate) struct AllocatorReclaimBusyLease {
 
 impl Drop for AllocatorReclaimBusyLease {
     fn drop(&mut self) {
-        let _ = ACTIVE_RECLAIM_BUSY_LEASES[self.kind.index()].fetch_update(
+        let _ = ACTIVE_RECLAIM_BUSY_LEASES[self.kind.index()].try_update(
             Ordering::Release,
             Ordering::Relaxed,
             |active| Some(active.saturating_sub(1)),

@@ -106,7 +106,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.0"
+          toolchain: "1.100.0"
           components: rustfmt, clippy
 
       - name: Install native eBPF Rust toolchain
@@ -168,7 +168,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.0"
+          toolchain: "1.100.0"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -380,7 +380,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.0"
+          toolchain: "1.100.0"
 
       - name: Install Rust cross support
         run: |
