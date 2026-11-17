@@ -17,6 +17,11 @@ pub(crate) fn allocator_bind_control_plane_thread() -> Result<Option<u32>, Strin
 pub(crate) fn allocator_flush_current_thread_cache() -> Result<(), String> {
     #[cfg(feature = "allocator-jemalloc")]
     {
+        // jemalloc returns EFAULT for thread.tcache.flush when the cache is
+        // disabled. That thread already has no automatic cache to flush.
+        if !mallctl::read_bool(b"thread.tcache.enabled\0")? {
+            return Ok(());
+        }
         mallctl::command(b"thread.tcache.flush\0")
     }
     #[cfg(not(feature = "allocator-jemalloc"))]
