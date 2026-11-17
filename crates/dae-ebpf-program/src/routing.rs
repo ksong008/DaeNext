@@ -246,25 +246,28 @@ unsafe fn set_lpm_key(key: *mut BpfLpmKey, ip: *const BpfIpBytes) {
 /// already fetched for this packet.
 ///
 /// See [`RouteCtx::domain_word`] for why only a single word is retained.
+/// Keep cache accesses explicit to avoid the L2 WAN egress verifier regression
+/// produced by Rust 1.100 on Linux 6.12.
 #[inline(always)]
 unsafe fn domain_bitmap_hit_cached(ctx: *mut RouteCtx, index: u32) -> bool {
     unsafe {
-        if (*ctx).domain_absent != 0 {
+        if ptr::addr_of!((*ctx).domain_absent).read_volatile() != 0 {
             return false;
         }
         let word_index = ((index >> 5) & 31) as u16;
-        if (*ctx).domain_word_index != word_index {
+        if ptr::addr_of!((*ctx).domain_word_index).read_volatile() != word_index {
             let params = (*ctx).params;
             let domain = lookup_domain_route(ptr::addr_of!((*params).daddr));
             if domain.is_null() {
-                (*ctx).domain_absent = 1;
+                ptr::addr_of_mut!((*ctx).domain_absent).write_volatile(1);
                 return false;
             }
-            (*ctx).domain_word = (*domain).bitmap[word_index as usize];
-            (*ctx).domain_word_index = word_index;
+            ptr::addr_of_mut!((*ctx).domain_word)
+                .write_volatile((*domain).bitmap[word_index as usize]);
+            ptr::addr_of_mut!((*ctx).domain_word_index).write_volatile(word_index);
         }
         let bit_index = index & 31;
-        (((*ctx).domain_word >> bit_index) & 1) != 0
+        ((ptr::addr_of!((*ctx).domain_word).read_volatile() >> bit_index) & 1) != 0
     }
 }
 
