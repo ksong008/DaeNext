@@ -150,7 +150,7 @@ impl Drop for ResidentUdpSessionPermit {
         let _ = self
             .state
             .current
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 Some(current.saturating_sub(1))
             });
     }

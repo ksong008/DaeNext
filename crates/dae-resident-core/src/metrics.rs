@@ -156,7 +156,7 @@ pub struct UdpIngressMetricObservation {
 }
 
 fn subtract_metric(metric: &AtomicU64, value: u64) {
-    let updated = metric.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let updated = metric.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         current.checked_sub(value)
     });
     debug_assert!(updated.is_ok(), "resident dataplane metric underflow");
@@ -272,11 +272,11 @@ impl ResidentDataplaneMetrics {
     }
 
     pub fn tcp_admission_released(&self) {
-        let _ = self.tcp_admission_active.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |active| Some(active.saturating_sub(1)),
-        );
+        let _ =
+            self.tcp_admission_active
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |active| {
+                    Some(active.saturating_sub(1))
+                });
     }
 
     pub fn tcp_admission_waited(&self) {
@@ -296,11 +296,11 @@ impl ResidentDataplaneMetrics {
     }
 
     pub fn health_round_finished(&self, cancelled: bool) {
-        let _ = self.health_rounds_active.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |active| Some(active.saturating_sub(1)),
-        );
+        let _ =
+            self.health_rounds_active
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |active| {
+                    Some(active.saturating_sub(1))
+                });
         if cancelled {
             self.health_rounds_cancelled_total
                 .fetch_add(1, Ordering::Relaxed);
@@ -477,7 +477,7 @@ impl ResidentDataplaneMetrics {
 
     pub fn dns_udp_pending_removed(&self, count: usize) {
         let count = count as u64;
-        let _ = self.dns_udp_pending_current.fetch_update(
+        let _ = self.dns_udp_pending_current.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |current| Some(current.saturating_sub(count)),
@@ -739,11 +739,11 @@ impl ResidentDataplaneMetrics {
     }
 
     fn dns_fast_path_released(&self) {
-        let _ = self.dns_fast_path_active.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |active| Some(active.saturating_sub(1)),
-        );
+        let _ =
+            self.dns_fast_path_active
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |active| {
+                    Some(active.saturating_sub(1))
+                });
     }
 
     pub fn udp_reply_socket_recreated(&self) {
@@ -929,7 +929,7 @@ fn adjust_current_metric(metric: &AtomicU64, previous: usize, current: usize) ->
     } else {
         let decrease = previous.saturating_sub(current) as u64;
         let prior = metric
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |aggregate| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |aggregate| {
                 aggregate.checked_sub(decrease)
             })
             .expect("SS2022 replay current metric cannot underflow");

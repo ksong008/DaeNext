@@ -31,7 +31,7 @@ impl ProductControlAdmission {
     ) -> Option<ProductControlAdmissionPermit> {
         let (active, limit) = self.state(kind);
         let acquired = active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < limit).then_some(current.saturating_add(1))
             })
             .is_ok();

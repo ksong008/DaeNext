@@ -63,7 +63,7 @@ impl ResidentDnsTcpUdpHedgeState {
     fn delay(&self, profile: ResidentDnsTcpUdpHedgeProfile) -> Duration {
         let degraded_hedges = self
             .degraded_hedges
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
                 Some(remaining.saturating_sub(1))
             })
             .unwrap_or_default();
@@ -120,21 +120,21 @@ impl ResidentDnsTcpUdpHedgeState {
         let learning_samples = profile.learning_samples();
         let _ = self
             .samples
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |samples| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |samples| {
                 Some(samples.saturating_add(1).min(learning_samples))
             });
     }
 
     fn record_udp_failure(&self) {
-        let _ =
-            self.degraded_hedges
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |failures| {
-                    Some(
-                        failures
-                            .saturating_add(1)
-                            .min(DNS_TCP_UDP_HEDGE_IMMEDIATE_FAILURES),
-                    )
-                });
+        let _ = self
+            .degraded_hedges
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |failures| {
+                Some(
+                    failures
+                        .saturating_add(1)
+                        .min(DNS_TCP_UDP_HEDGE_IMMEDIATE_FAILURES),
+                )
+            });
     }
 }
 

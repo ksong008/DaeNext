@@ -250,7 +250,7 @@ impl Drop for ProductUiReclaimWorker {
     fn drop(&mut self) {
         let desired = self.reclaim.desired_epoch.load(Ordering::Acquire);
         if desired > self.last_epoch {
-            let _ = self.reclaim.expected_workers.fetch_update(
+            let _ = self.reclaim.expected_workers.try_update(
                 Ordering::AcqRel,
                 Ordering::Acquire,
                 |expected| Some(expected.saturating_sub(1)),

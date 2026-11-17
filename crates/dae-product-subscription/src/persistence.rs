@@ -289,13 +289,9 @@ fn leaf_name(path: &Path) -> io::Result<String> {
 
 fn cleanup_orphan_artifacts(directory: &Path) -> io::Result<()> {
     cleanup_matching_artifacts(directory, |name| {
-        if name == JOURNAL_NEXT_FILE
+        name == JOURNAL_NEXT_FILE
             || (name.starts_with('.')
                 && (name.ends_with(".candidate") || name.ends_with(".backup")))
-        {
-            return true;
-        }
-        false
     })
 }
 

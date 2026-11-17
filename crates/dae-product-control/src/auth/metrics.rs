@@ -122,7 +122,7 @@ impl ProductAuthMetrics {
 }
 
 fn decrement_saturating(value: &AtomicU64) {
-    let _ = value.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = value.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_sub(1))
     });
 }

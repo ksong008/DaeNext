@@ -172,7 +172,7 @@ impl ResidentDnsFlightRetainedBudget {
     fn try_reserve(self: &Arc<Self>, bytes: usize) -> Option<ResidentDnsFlightRetainedLease> {
         let bytes = bytes.max(1);
         self.current
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(bytes)
                     .filter(|next| *next <= self.limit)
@@ -196,7 +196,7 @@ impl Drop for ResidentDnsFlightRetainedLease {
         let _ = self
             .budget
             .current
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 Some(current.saturating_sub(self.bytes))
             });
     }
@@ -318,7 +318,7 @@ impl ResidentDnsRuntimeCache {
                 Some(state) => {
                     state
                         .followers
-                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |followers| {
+                        .try_update(Ordering::AcqRel, Ordering::Acquire, |followers| {
                             (followers < self.flight_follower_limit).then_some(followers + 1)
                         })
                         .map_err(|_| {
@@ -824,11 +824,12 @@ fn restore_flight_response_id(
 impl Drop for ResidentDnsFlightPermit<'_> {
     fn drop(&mut self) {
         if self.role == ResidentDnsFlightRole::Follower {
-            let _ = self.state.followers.fetch_update(
-                Ordering::AcqRel,
-                Ordering::Acquire,
-                |followers| Some(followers.saturating_sub(1)),
-            );
+            let _ =
+                self.state
+                    .followers
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |followers| {
+                        Some(followers.saturating_sub(1))
+                    });
         }
         if !self.is_leader() || self.published {
             return;

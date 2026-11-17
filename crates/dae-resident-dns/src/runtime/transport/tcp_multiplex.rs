@@ -232,7 +232,7 @@ impl ResidentDnsTcpMultiplexHandle {
 
     fn reserve_slot(&self) -> Result<(), ProxyDnsRequestError> {
         self.active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 (active < self.capacity).then_some(active + 1)
             })
             .map(|_| ())
@@ -690,7 +690,7 @@ fn release_resident_dns_tcp_slot(
     lifecycle: &ResidentDnsTcpMultiplexLifecycle,
     active_count: &AtomicUsize,
 ) {
-    let _ = active_count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+    let _ = active_count.try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
         Some(active.saturating_sub(1))
     });
     lifecycle.capacity_notify.notify_waiters();

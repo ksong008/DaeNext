@@ -28,7 +28,7 @@ impl ResidentDnsRuntimeCache {
         let reserved = now_unix.saturating_add(DNS_RUNTIME_CACHE_SWEEP_INTERVAL_SECS);
         let Ok(previous) =
             self.next_sweep
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
                     (next <= now_unix).then_some(reserved)
                 })
         else {
