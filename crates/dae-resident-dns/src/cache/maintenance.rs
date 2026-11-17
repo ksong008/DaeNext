@@ -1,5 +1,5 @@
 use super::*;
-use std::sync::MutexGuard;
+use std::{mem::DropGuard, sync::MutexGuard};
 
 pub(super) fn lock_cache_shard(
     shard: &Mutex<ResidentDnsRuntimeCacheState>,
@@ -36,37 +36,21 @@ impl ResidentDnsRuntimeCache {
         };
         // Reserve the scan so other writers do not all walk the shards. If the
         // scan unwinds, release its reservation for the next writer to retry.
-        let mut reservation = SweepReservation {
-            gate: &self.next_sweep,
-            previous,
-            reserved,
-            completed: false,
-        };
+        let reservation = DropGuard::new((), |()| {
+            let _ = self.next_sweep.compare_exchange(
+                reserved,
+                previous,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        });
+        #[cfg(test)]
+        tests::interrupt_scan_if_requested(self);
         for shard in &self.shards {
             let mut state = lock_cache_shard(shard);
             sweep_expired_if_due(&mut state, now_unix);
         }
-        reservation.completed = true;
-    }
-}
-
-struct SweepReservation<'a> {
-    gate: &'a AtomicI64,
-    previous: i64,
-    reserved: i64,
-    completed: bool,
-}
-
-impl Drop for SweepReservation<'_> {
-    fn drop(&mut self) {
-        if !self.completed {
-            let _ = self.gate.compare_exchange(
-                self.reserved,
-                self.previous,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            );
-        }
+        DropGuard::dismiss(reservation);
     }
 }
 
