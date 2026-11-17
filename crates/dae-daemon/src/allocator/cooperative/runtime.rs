@@ -39,20 +39,31 @@ impl AllocatorRuntimeReclaimHooks {
             // become unreachable participants in every future flush request.
             RUNTIME_WORKER.with(|slot| {
                 let mut slot = slot.borrow_mut();
-                if let Some(worker) = slot.as_ref() {
-                    worker.parked_cache_empty.store(false, Ordering::Release);
-                }
-                PARKED_TCACHE_ENABLED.with(|enabled| {
-                    if let Some(previous) = enabled.take() {
-                        let _ = mallctl::write_bool(b"thread.tcache.enabled\0", previous);
-                    }
-                });
                 if slot.is_none() {
                     let worker = Arc::new(AllocatorWorkerState::new(self.state.kind, 0));
                     let mut workers = self.state.workers.lock().unwrap_or_else(|e| e.into_inner());
                     workers.retain(|worker| worker.strong_count() > 0);
                     workers.push(Arc::downgrade(&worker));
                     *slot = Some(worker);
+                }
+                if let Some(worker) = slot.as_ref() {
+                    worker.parked_cache_empty.store(false, Ordering::Release);
+                    PARKED_TCACHE_ENABLED.with(|enabled| {
+                        if let Some(previous) = enabled.take()
+                            && let Err(error) =
+                                mallctl::write_bool(b"thread.tcache.enabled\0", previous)
+                        {
+                            // Keep the original setting for a later retry. A
+                            // subsequent park must not replace it with false.
+                            enabled.set(Some(previous));
+                            worker_reclaim().diagnostics.record_error(
+                                diagnostics::CacheOperation::UnparkRestore,
+                                worker.kind,
+                                worker_reclaim().desired_epoch.load(Ordering::Acquire),
+                                error,
+                            );
+                        }
+                    });
                 }
             });
             poll_runtime_worker();
@@ -69,14 +80,35 @@ impl AllocatorRuntimeReclaimHooks {
         // before parking, and invalidate it before the worker resumes tasks.
         // Disable tcache until unpark so scheduler maintenance cannot refill it.
         RUNTIME_WORKER.with(|slot| {
-            if let Some(worker) = slot.borrow().as_ref()
-                && let Ok(enabled) = mallctl::read_bool(b"thread.tcache.enabled\0")
-                && mallctl::write_bool(b"thread.tcache.enabled\0", false).is_ok()
-            {
-                PARKED_TCACHE_ENABLED.with(|previous| previous.set(Some(enabled)));
+            if let Some(worker) = slot.borrow().as_ref() {
                 let reclaim = worker_reclaim();
+                let epoch = reclaim.desired_epoch.load(Ordering::Acquire);
+                let enabled = match mallctl::read_bool(b"thread.tcache.enabled\0") {
+                    Ok(enabled) => enabled,
+                    Err(error) => {
+                        reclaim.diagnostics.record_error(
+                            diagnostics::CacheOperation::ParkReadEnabled,
+                            worker.kind,
+                            epoch,
+                            error,
+                        );
+                        return;
+                    }
+                };
+                if let Err(error) = mallctl::write_bool(b"thread.tcache.enabled\0", false) {
+                    reclaim.diagnostics.record_error(
+                        diagnostics::CacheOperation::ParkDisable,
+                        worker.kind,
+                        epoch,
+                        error,
+                    );
+                    return;
+                }
+                PARKED_TCACHE_ENABLED.with(|previous| {
+                    previous.set(Some(previous.get().unwrap_or(enabled)));
+                });
                 let _guard = reclaim.wait_lock.lock().unwrap_or_else(|e| e.into_inner());
-                worker.failed_epoch.store(0, Ordering::Relaxed);
+                worker.recover_flush_failure(reclaim);
                 worker.parked_cache_empty.store(true, Ordering::Release);
                 reclaim.waiter.notify_all();
             }
@@ -156,6 +188,8 @@ pub(super) struct AllocatorRuntimeFlushReport {
     pub(super) kind: AllocatorWorkerKind,
     pub(super) expected: usize,
     pub(super) acknowledged: usize,
+    // Workers whose flush failed in this epoch and has not recovered. Attempt
+    // errors (including recovered ones) are retained in cacheDiagnostics.
     pub(super) failures: usize,
 }
 
@@ -229,7 +263,7 @@ fn flush_runtime_workers_blocking(
             .count(),
         failures: workers
             .iter()
-            .filter(|worker| worker.failed_epoch.load(Ordering::Relaxed) == epoch)
+            .filter(|worker| worker.flush_failed(epoch))
             .count(),
     }
 }

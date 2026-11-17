@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Weak};
 use std::time::Duration;
 
+mod diagnostics;
 mod runtime;
 pub(crate) use self::runtime::AllocatorRuntimeReclaimHooks;
 use self::runtime::{AllocatorRuntimeState, flush_runtime_workers};
@@ -53,6 +54,7 @@ struct AllocatorWorkerState {
     parked_cache_empty: AtomicBool,
     acknowledged_epoch: AtomicU64,
     failed_epoch: AtomicU64,
+    recovered_epoch: AtomicU64,
 }
 
 impl AllocatorWorkerState {
@@ -63,6 +65,7 @@ impl AllocatorWorkerState {
             parked_cache_empty: AtomicBool::new(false),
             acknowledged_epoch: AtomicU64::new(epoch),
             failed_epoch: AtomicU64::new(0),
+            recovered_epoch: AtomicU64::new(0),
         }
     }
 
@@ -77,8 +80,16 @@ impl AllocatorWorkerState {
         if self.acknowledged_epoch.load(Ordering::Acquire) >= epoch {
             return;
         }
-        if allocator_flush_current_thread_cache().is_err() {
-            self.failed_epoch.store(epoch, Ordering::Relaxed);
+        if let Err(error) = allocator_flush_current_thread_cache() {
+            self.failed_epoch.store(epoch, Ordering::Release);
+            reclaim.diagnostics.record_error(
+                diagnostics::CacheOperation::Flush,
+                self.kind,
+                epoch,
+                error,
+            );
+        } else {
+            self.recover_flush_failure(reclaim);
         }
         let _guard = reclaim
             .wait_lock
@@ -86,6 +97,21 @@ impl AllocatorWorkerState {
             .unwrap_or_else(|error| error.into_inner());
         self.acknowledged_epoch.store(epoch, Ordering::Release);
         reclaim.waiter.notify_all();
+    }
+
+    fn flush_failed(&self, epoch: u64) -> bool {
+        self.failed_epoch.load(Ordering::Acquire) == epoch
+            && self.recovered_epoch.load(Ordering::Acquire) < epoch
+    }
+
+    fn recover_flush_failure(&self, reclaim: &AllocatorWorkerReclaim) {
+        // Keep the failure epoch as evidence. Only the unresolved state changes;
+        // lifetime error counters and the last error survive successful recovery.
+        let failed = self.failed_epoch.load(Ordering::Acquire);
+        if failed > self.recovered_epoch.load(Ordering::Acquire) {
+            self.recovered_epoch.store(failed, Ordering::Release);
+            reclaim.diagnostics.record_flush_recovery();
+        }
     }
 }
 
@@ -153,6 +179,7 @@ struct AllocatorWorkerReclaim {
     completed_total: AtomicU64,
     partial_total: AtomicU64,
     last: Mutex<Option<Value>>,
+    diagnostics: diagnostics::CacheDiagnostics,
 }
 
 impl Default for AllocatorWorkerReclaim {
@@ -168,6 +195,7 @@ impl Default for AllocatorWorkerReclaim {
             completed_total: AtomicU64::new(0),
             partial_total: AtomicU64::new(0),
             last: Mutex::new(None),
+            diagnostics: diagnostics::CacheDiagnostics::default(),
         }
     }
 }
@@ -263,7 +291,7 @@ fn allocator_flush_registered_worker_caches_blocking() -> (bool, Value) {
                 .entry(worker.kind.as_str())
                 .or_default() += 1;
         }
-        if worker.failed_epoch.load(Ordering::Relaxed) == epoch {
+        if worker.flush_failed(epoch) {
             *failures_by_kind.entry(worker.kind.as_str()).or_default() += 1;
         }
     }
@@ -290,6 +318,7 @@ fn allocator_flush_registered_worker_caches_blocking() -> (bool, Value) {
         "expectedWorkers": expected,
         "acknowledgedWorkers": acknowledged,
         "flushFailures": failures,
+        "cacheDiagnostics": reclaim.diagnostics.json(),
         "expectedByClass": expected_by_kind,
         "acknowledgedByClass": acknowledged_by_kind,
         "failuresByClass": failures_by_kind,
@@ -354,6 +383,7 @@ pub(super) fn allocator_worker_reclaim_snapshot_json() -> Value {
         "registeredWorkers": registered_by_kind.values().sum::<u64>(),
         "registeredByClass": registered_by_kind,
         "last": last,
+        "cacheDiagnostics": reclaim.diagnostics.json(),
     })
 }
 
