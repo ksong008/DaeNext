@@ -3,6 +3,10 @@ use std::ffi::c_void;
 #[cfg(feature = "allocator-jemalloc")]
 use std::ffi::{CStr, c_char};
 
+#[cfg(all(test, feature = "allocator-jemalloc"))]
+#[path = "mallctl/fault_tests.rs"]
+pub(super) mod fault;
+
 #[cfg(feature = "allocator-jemalloc")]
 pub(super) fn read_u32(name: &[u8]) -> Result<u32, String> {
     validate_name(name)?;
@@ -30,6 +34,8 @@ pub(super) fn read_u32(name: &[u8]) -> Result<u32, String> {
 
 #[cfg(feature = "allocator-jemalloc")]
 pub(super) fn read_bool(name: &[u8]) -> Result<bool, String> {
+    #[cfg(test)]
+    fault::check(name, None)?;
     validate_name(name)?;
     let mut value = 0_u8;
     let mut length = std::mem::size_of::<u8>();
@@ -132,6 +138,8 @@ pub(super) fn read_c_string(name: &[u8]) -> Result<String, String> {
 
 #[cfg(feature = "allocator-jemalloc")]
 pub(super) fn write_bool(name: &[u8], value: bool) -> Result<(), String> {
+    #[cfg(test)]
+    fault::check(name, Some(value))?;
     validate_name(name)?;
     // jemalloc's bool controls use the C bool ABI.
     unsafe { tikv_jemalloc_ctl::raw::write(name, value) }.map_err(|error| error.to_string())
@@ -163,6 +171,8 @@ pub(super) fn read_command_u32(name: &[u8]) -> Result<u32, String> {
 
 #[cfg(feature = "allocator-jemalloc")]
 pub(super) fn command(name: &[u8]) -> Result<(), String> {
+    #[cfg(test)]
+    fault::check(name, None)?;
     validate_name(name)?;
     let result = unsafe {
         tikv_jemalloc_sys::mallctl(

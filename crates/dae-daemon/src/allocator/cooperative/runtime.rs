@@ -269,6 +269,9 @@ fn flush_runtime_workers_blocking(
 }
 
 #[cfg(test)]
+mod cache_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
