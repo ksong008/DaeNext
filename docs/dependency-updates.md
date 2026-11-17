@@ -30,5 +30,6 @@ These settings belong to update commands, not global Cargo configuration or
 ordinary `--locked` builds. Already locked versions remain usable. Registries
 without publication timestamps cannot enforce this cooldown; verify the registry
 metadata before relying on it. This policy does not manage `cargo install` tools:
-keep their versions explicitly pinned. The eBPF toolchain remains separately
-pinned and does not receive these newer Cargo configuration keys.
+keep their versions explicitly pinned. The eBPF and MIPS build-std commands use
+the pinned official compiler with bootstrap enabled only for those commands;
+neither applies the cooldown to ordinary builds.

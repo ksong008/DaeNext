@@ -2,8 +2,7 @@
 name = "dae-ebpf-program"
 version.workspace = true
 edition.workspace = true
-# Built with nightly-2026-05-29 independently of the user-space toolchain.
-rust-version = "1.98"
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

@@ -93,15 +93,21 @@ DaeNext is a Cargo workspace. Build, test, fixture, and release paths are rooted
 at the repository root.
 
 The `dae` CLI uses Rust 1.100.0, pinned in `rust-toolchain.toml`, and requires a
-native C/C++ toolchain. The shared eBPF ABI retains a Rust 1.98 minimum for the
-fixed eBPF toolchain. A production `daed` build with the default features
-additionally requires:
+native C/C++ toolchain. The eBPF program and shared ABI use the same Rust 1.100
+minimum. A production `daed` build with the default features additionally requires:
 
-- Rust `nightly-2026-05-29` with the `rust-src` component, used for the
-  embedded eBPF objects;
+- the `rust-src` component for Rust 1.100.0, used to build the embedded eBPF
+  objects with the same stable compiler as user space;
 - `bpf-linker`, `clang`, LLVM, and libelf development headers;
 - CMake, Perl, `pkg-config`, and a C/C++ compiler for BoringSSL and native
   dependencies.
+
+The BPF target does not ship a precompiled `core`. Its build needs the unstable
+`-Z build-std=core` option, and Aya uses experimental BPF inline assembly.
+The nested eBPF build sets `RUSTC_BOOTSTRAP=1` for that command only, so the
+official Rust 1.100.0 compiler can use those interfaces. This does not make the
+interfaces stable. Ordinary user-space builds do not enable bootstrap. MIPS
+release targets that build `std` from source also enable it for that command.
 
 For dependency maintenance, follow the [update and cooldown policy](docs/dependency-updates.md).
 
@@ -160,7 +166,8 @@ production dependency graph.
 | `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` | Selects the default release codegen-unit count. Override only for a controlled comparison build. |
 | `RUSTFLAGS="-C target-cpu=..."` | Selects the minimum CPU instruction baseline. It affects compatibility and must match the artifact label. |
 | `DAE_DAEMON_VERSION` | Overrides the complete version text embedded in `daed --version`; product builds normally set this automatically. |
-| `DAE_RUST_NATIVE_BPF_TOOLCHAIN` | Selects the Rust toolchain used to build the embedded eBPF objects; the default is `nightly-2026-05-29`. |
+| `DAE_RUST_NATIVE_BPF_TOOLCHAIN` | Selects the compiler for the embedded eBPF objects; the default is the official `1.100.0` toolchain. The nested build enables bootstrap for `build-std` and BPF assembly. |
+| `DAE_RUST_BUILD_STD_TOOLCHAIN` | Selects the compiler for the release workflow's MIPS standard-library builds; it defaults to the official `1.100.0` toolchain and enables bootstrap for that command only. |
 | `DAE_RUST_NATIVE_BPF_OBJECT` | Reuses a prebuilt generic native eBPF object instead of rebuilding it. The object is still validated before embedding. |
 | `DAE_RUST_NATIVE_BPF_PNAME_CORE_OBJECT` | Reuses the corresponding prebuilt process-name CO-RE eBPF object. |
 
