@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 23508
+      "tests": 23730
     },
     "dae-outbound": {
       "production": 9255,
