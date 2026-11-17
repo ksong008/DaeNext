@@ -21,7 +21,7 @@ pub fn cleanup_subscription_persist_files(
         let entry = entry?;
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
-        let tag = file_name.strip_suffix(".sub").unwrap_or(&file_name);
+        let tag = file_name.trim_suffix(".sub");
         if active_tags.contains(tag) {
             remaining.push(file_name.into_owned());
             continue;
