@@ -64,11 +64,10 @@ impl AllocatorRuntimeReclaimHooks {
         if ATTACHED_RUNTIME.with(Cell::get) != self.state.id {
             return;
         }
-        // Control workers can remain parked indefinitely: scheduling N probe
+        // Scheduler workers can remain parked indefinitely: scheduling N probe
         // tasks cannot wake N distinct Tokio workers. Publish an empty cache
         // before parking, and invalidate it before the worker resumes tasks.
         // Disable tcache until unpark so scheduler maintenance cannot refill it.
-        // Data-plane runtimes keep their existing on-demand polling hooks.
         RUNTIME_WORKER.with(|slot| {
             if let Some(worker) = slot.borrow().as_ref()
                 && let Ok(enabled) = mallctl::read_bool(b"thread.tcache.enabled\0")
@@ -256,13 +255,7 @@ mod tests {
             .worker_threads(worker_threads)
             .on_thread_start(move || start.thread_start())
             .on_thread_stop(move || stop.thread_stop())
-            .on_thread_park(move || {
-                if kind == AllocatorWorkerKind::ProductControl {
-                    park.thread_park();
-                } else {
-                    park.thread_poll();
-                }
-            })
+            .on_thread_park(move || park.thread_park())
             .on_thread_unpark(move || unpark.thread_poll())
             .enable_all()
             .build()
@@ -278,85 +271,95 @@ mod tests {
     }
 
     #[test]
-    fn parked_control_cache_is_disabled_and_restores_the_previous_setting() {
+    fn parked_scheduler_cache_is_disabled_and_restores_the_previous_setting() {
         std::thread::spawn(|| {
-            let hooks = AllocatorRuntimeReclaimHooks::new(AllocatorWorkerKind::ProductControl, 1);
-            hooks.thread_start();
-            for enabled in [true, false] {
-                mallctl::write_bool(b"thread.tcache.enabled\0", enabled).unwrap();
-                hooks.thread_park();
-                assert!(!mallctl::read_bool(b"thread.tcache.enabled\0").unwrap());
-                hooks.thread_poll();
-                assert_eq!(
-                    mallctl::read_bool(b"thread.tcache.enabled\0").unwrap(),
-                    enabled
-                );
+            for kind in [
+                AllocatorWorkerKind::ProductControl,
+                AllocatorWorkerKind::ResidentData,
+            ] {
+                let hooks = AllocatorRuntimeReclaimHooks::new(kind, 1);
+                hooks.thread_start();
+                for enabled in [true, false] {
+                    mallctl::write_bool(b"thread.tcache.enabled\0", enabled).unwrap();
+                    hooks.thread_park();
+                    assert!(!mallctl::read_bool(b"thread.tcache.enabled\0").unwrap());
+                    hooks.thread_poll();
+                    assert_eq!(
+                        mallctl::read_bool(b"thread.tcache.enabled\0").unwrap(),
+                        enabled
+                    );
+                }
+                hooks.thread_stop();
             }
-            hooks.thread_stop();
         })
         .join()
         .unwrap();
     }
 
     #[test]
-    fn parked_control_workers_satisfy_reclaim_without_each_running_a_probe_task() {
-        let (hooks, runtime) = test_runtime_with_workers(AllocatorWorkerKind::ProductControl, 4);
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let all_parked = loop {
-            let parked = hooks
+    fn parked_scheduler_workers_satisfy_reclaim_without_each_running_a_probe_task() {
+        for kind in [
+            AllocatorWorkerKind::ProductControl,
+            AllocatorWorkerKind::ResidentData,
+        ] {
+            let (hooks, runtime) = test_runtime_with_workers(kind, 4);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let all_parked = loop {
+                let parked = hooks
+                    .state
+                    .workers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .filter(|worker| worker.parked_cache_empty.load(Ordering::Acquire))
+                    .count();
+                if parked == 4 || Instant::now() >= deadline {
+                    break parked == 4;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            let epoch = worker_reclaim()
+                .desired_epoch
+                .fetch_add(1, Ordering::AcqRel)
+                + 1;
+            // No probe tasks are submitted: all four caches were flushed before park.
+            let all_acknowledged = hooks
                 .state
                 .workers
                 .lock()
                 .unwrap()
                 .iter()
                 .filter_map(Weak::upgrade)
-                .filter(|worker| worker.parked_cache_empty.load(Ordering::Acquire))
-                .count();
-            if parked == 4 || Instant::now() >= deadline {
-                break parked == 4;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        };
-        let epoch = worker_reclaim()
-            .desired_epoch
-            .fetch_add(1, Ordering::AcqRel)
-            + 1;
-        // No probe tasks are submitted: all four caches were flushed before park.
-        let all_acknowledged = hooks
-            .state
-            .workers
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(Weak::upgrade)
-            .all(|worker| worker.acknowledged(epoch));
-        let resumed = hooks.clone();
-        let clears_parked = runtime.block_on(async {
-            tokio::spawn(async move {
-                resumed.thread_poll();
-                RUNTIME_WORKER.with(|slot| {
-                    !slot
-                        .borrow()
-                        .as_ref()
-                        .unwrap()
-                        .parked_cache_empty
-                        .load(Ordering::Acquire)
+                .all(|worker| worker.acknowledged(epoch));
+            let resumed = hooks.clone();
+            let clears_parked = runtime.block_on(async {
+                tokio::spawn(async move {
+                    resumed.thread_poll();
+                    RUNTIME_WORKER.with(|slot| {
+                        !slot
+                            .borrow()
+                            .as_ref()
+                            .unwrap()
+                            .parked_cache_empty
+                            .load(Ordering::Acquire)
+                    })
                 })
-            })
-            .await
-            .unwrap()
-        });
-        hooks.deactivate();
-        runtime.shutdown_timeout(Duration::from_secs(1));
-        assert!(all_parked, "control workers did not publish empty caches");
-        assert!(
-            all_acknowledged,
-            "parked workers required a scheduling probe"
-        );
-        assert!(
-            clears_parked,
-            "running worker retained its parked cache state"
-        );
+                .await
+                .unwrap()
+            });
+            hooks.deactivate();
+            runtime.shutdown_timeout(Duration::from_secs(1));
+            assert!(all_parked, "scheduler workers did not publish empty caches");
+            assert!(
+                all_acknowledged,
+                "parked workers required a scheduling probe"
+            );
+            assert!(
+                clears_parked,
+                "running worker retained its parked cache state"
+            );
+        }
     }
 
     #[test]

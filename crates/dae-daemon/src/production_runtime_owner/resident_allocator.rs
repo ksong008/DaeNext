@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+#[cfg(all(test, feature = "allocator-jemalloc"))]
+mod tests;
+
 #[cfg(test)]
 use serde_json::Value;
 
@@ -36,6 +39,10 @@ impl ResidentAllocatorRuntimeHooks for DaemonResidentAllocatorRuntimeHooks {
 
     fn thread_poll(&self) {
         self.inner.thread_poll();
+    }
+
+    fn thread_park(&self) {
+        self.inner.thread_park();
     }
 
     fn thread_stop(&self) {
