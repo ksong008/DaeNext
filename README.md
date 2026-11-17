@@ -103,6 +103,8 @@ additionally requires:
 - CMake, Perl, `pkg-config`, and a C/C++ compiler for BoringSSL and native
   dependencies.
 
+For dependency maintenance, follow the [update and cooldown policy](docs/dependency-updates.md).
+
 Format the workspace:
 
 ```bash
