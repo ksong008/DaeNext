@@ -112,16 +112,17 @@ pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted
         ResidentUdpExecutorFactory::VlessMuxXudp
     ));
 
-    let vision_mux_error = build_resident_proxy_plan_for_node(
+    let vision_mux = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
         "vless_encryption_vision_mux".to_owned(),
         vless_vision_mux_fixture_url(),
     )
-    .unwrap_err();
-    assert!(
-        vision_mux_error.contains("Vision-aware mux/XUDP"),
-        "{vision_mux_error}"
+    .unwrap();
+    assert!(!vision_mux.requires_vless_mux_owner());
+    assert_eq!(
+        vision_mux.execution_plan().udp,
+        ResidentUdpExecutorFactory::VlessVisionXudp
     );
 
     let websocket = build_resident_proxy_plan_for_node(

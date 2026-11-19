@@ -84,10 +84,7 @@ fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
                 FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
             )
         }),
-        Protocol::VlessMux => (is_vless_stream_security(shape.security)
-            && shape.wrapper == WrapperDimension::Mux
-            && shape.udp == UdpDimension::VlessMuxXudp)
-            .then_some(GENERATION_OWNED_VLESS_MUX_OWNERSHIP),
+        Protocol::VlessMux => vless_mux_profile(shape),
         Protocol::Socks5 => exact_profile(
             shape,
             &[SecurityDimension::None],
@@ -202,6 +199,32 @@ fn vless_vision_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipPr
             Some(FLOW_STREAM_PACKET_OWNERSHIP)
         }
         Wrapper::Grpc if stream_security => Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP),
+        Wrapper::XhttpH1
+            if shape.security == Security::None || is_standard_tls_security(shape.security) =>
+        {
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
+        }
+        Wrapper::XhttpH2 if is_standard_or_reality_security(shape.security) => {
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
+        }
+        Wrapper::XhttpH3 if shape.security == Security::QuicTls => {
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
+        }
+        _ => None,
+    }
+}
+
+fn vless_mux_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfile> {
+    use SecurityDimension as Security;
+    use WrapperDimension as Wrapper;
+
+    if shape.udp != UdpDimension::VlessMuxXudp {
+        return None;
+    }
+    match shape.wrapper {
+        Wrapper::Mux if is_vless_stream_security(shape.security) => {
+            Some(GENERATION_OWNED_VLESS_MUX_OWNERSHIP)
+        }
         Wrapper::XhttpH1
             if shape.security == Security::None || is_standard_tls_security(shape.security) =>
         {

@@ -37,6 +37,8 @@ impl MaterializedSourceShape {
                 RuntimeOwnershipModel::GenerationOwnedH2Transport
             }
             MaterializedProtocol::VlessStandard
+            | MaterializedProtocol::VlessMux
+            | MaterializedProtocol::VlessVision
                 if matches!(
                     self.wrapper,
                     MaterializedWrapper::XhttpH1
