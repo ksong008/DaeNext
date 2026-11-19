@@ -52,6 +52,35 @@ pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted
         ResidentUdpExecutorFactory::VlessVisionXudp
     ));
 
+    let mut plain_vision_link = VLESSLink::parse(&vless_vision_fixture_url("")).unwrap();
+    plain_vision_link.tls = "none".to_owned();
+    let plain_vision_link = plain_vision_link.export_url();
+    let plain_vision = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_plain_vision".to_owned(),
+        with_vless_encryption(plain_vision_link.clone()),
+    )
+    .unwrap();
+    assert_eq!(
+        plain_vision.execution_plan().security,
+        ResidentSecurityUnderlayPlan::None
+    );
+    assert_eq!(
+        plain_vision.execution_plan().udp,
+        ResidentUdpExecutorFactory::VlessVisionXudp
+    );
+    assert!(
+        build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vless_plain_vision_without_encryption".to_owned(),
+            plain_vision_link,
+        )
+        .unwrap_err()
+        .contains("Vision requires encrypted tcp")
+    );
+
     let reality_vision = build_resident_proxy_plan_for_node(
         &config,
         "proxy".to_owned(),
@@ -163,6 +192,32 @@ pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted
     assert_eq!(
         grpc.executable_graph_value()["streamWrapperEndpoint"]["grpcMode"],
         "multi"
+    );
+
+    grpc_link.tls = "none".to_owned();
+    let grpc_h2c = grpc_link.export_url();
+    let grpc = build_resident_proxy_plan_for_node(
+        &config,
+        "proxy".to_owned(),
+        "vless_encryption_grpc_h2c".to_owned(),
+        with_vless_encryption(grpc_h2c.clone()),
+    )
+    .unwrap();
+    assert_eq!(
+        grpc.execution_plan().security,
+        ResidentSecurityUnderlayPlan::None
+    );
+    assert!(grpc.requires_h2_carrier_owner());
+    assert!(!grpc.execution_plan().udp.policy_closed());
+    assert!(
+        build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            "vless_grpc_h2c_without_encryption".to_owned(),
+            grpc_h2c,
+        )
+        .unwrap_err()
+        .contains("security=none")
     );
 
     for (tag, mode) in [

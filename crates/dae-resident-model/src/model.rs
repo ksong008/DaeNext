@@ -156,8 +156,7 @@ impl ResidentProxyPlan {
                 execution.wrapper,
                 ResidentStreamWrapperPlan::Grpc | ResidentStreamWrapperPlan::H2
             ))
-            || (execution.protocol == ResidentProtocolShape::VmessAead
-                && execution.security == ResidentSecurityUnderlayPlan::None
+            || (execution.security == ResidentSecurityUnderlayPlan::None
                 && execution.wrapper == ResidentStreamWrapperPlan::Grpc)
     }
 

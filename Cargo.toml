@@ -171,6 +171,7 @@ sha3 = "0.10"
 socket2 = "0.6"
 tokio = { version = "1.52.3", default-features = false, features = ["rt", "net", "time", "io-util", "sync", "macros"] }
 tokio-boring = "5.0"
+tokio-util = { version = "0.7", default-features = false }
 tls-parser = "0.12.2"
 tikv-jemallocator = { version = "0.7", default-features = false, features = ["background_threads_runtime_support", "stats"] }
 tikv-jemalloc-ctl = { version = "0.7", default-features = false, features = ["stats"] }

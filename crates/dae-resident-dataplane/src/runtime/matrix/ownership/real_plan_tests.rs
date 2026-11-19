@@ -93,11 +93,11 @@ fn source_admission_rejects_factory_only_or_invalid_security_tuples() {
     for (link, expected) in [
         (
             vless_link("websocket", "none", "", "/ws").export_url(),
-            "security=none currently admits native tcp",
+            "security=none requires native tcp or encrypted",
         ),
         (
             vless_link("httpupgrade", "none", "", "/upgrade").export_url(),
-            "security=none currently admits native tcp",
+            "security=none requires native tcp or encrypted",
         ),
         (
             vless_link("h2", "reality", "h2", "/h2").export_url(),

@@ -285,6 +285,76 @@ impl Drop for AesCtr {
     }
 }
 
+#[derive(Default)]
+struct VisionRecordHeaderMask {
+    header: [u8; RECORD_HEADER_LEN],
+    filled: usize,
+    body_remaining: usize,
+}
+
+impl VisionRecordHeaderMask {
+    fn apply(&mut self, ctr: &mut AesCtr, mut bytes: &mut [u8], decode: bool) {
+        while !bytes.is_empty() {
+            let skip = self.body_remaining.min(bytes.len());
+            self.body_remaining -= skip;
+            bytes = &mut bytes[skip..];
+            if bytes.is_empty() {
+                break;
+            }
+
+            let count = (RECORD_HEADER_LEN - self.filled).min(bytes.len());
+            let (header_bytes, rest) = bytes.split_at_mut(count);
+            let header = &mut self.header[self.filled..self.filled + count];
+            if decode {
+                ctr.apply(header_bytes);
+            }
+            header.copy_from_slice(header_bytes);
+            if !decode {
+                ctr.apply(header_bytes);
+            }
+            self.filled += count;
+            if self.filled == RECORD_HEADER_LEN {
+                if self.header[..3] == [23, 3, 3] {
+                    self.body_remaining =
+                        u16::from_be_bytes([self.header[3], self.header[4]]).into();
+                }
+                self.filled = 0;
+            }
+            bytes = rest;
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn vision_random_record_mask_survives_fragmented_headers_and_bodies() {
+    let mut plain = Vec::new();
+    for (len, byte) in [(29, 9), (41, 11)] {
+        plain.extend_from_slice(&[23, 3, 3, 0, len]);
+        plain.extend(std::iter::repeat_n(byte, usize::from(len)));
+    }
+    // Vision continues the same CTR position after skipping the AEAD layer.
+    let mut writer = AesCtr::new(b"test", &[7; 16]);
+    let mut reader = AesCtr::new(b"test", &[7; 16]);
+    writer.apply(&mut [0; 15]);
+    reader.apply(&mut [0; 15]);
+    let mut encoded = plain.clone();
+    let mut write_mask = VisionRecordHeaderMask::default();
+    for part in encoded.chunks_mut(3) {
+        write_mask.apply(&mut writer, part, false);
+    }
+    assert_ne!(encoded[..5], plain[..5]);
+    assert_ne!(encoded[34..39], plain[34..39]);
+    assert_eq!(encoded[5..34], plain[5..34]);
+    assert_eq!(encoded[39..], plain[39..]);
+
+    let mut read_mask = VisionRecordHeaderMask::default();
+    for part in encoded.chunks_mut(7) {
+        read_mask.apply(&mut reader, part, true);
+    }
+    assert_eq!(encoded, plain);
+}
+
 #[derive(Debug)]
 enum ReadState {
     ServerRandom {
@@ -324,6 +394,8 @@ pub struct VlessEncryptedStream<S> {
     vision_raw_read_handoff_active: bool,
     vision_raw_write_handoff_requested: bool,
     vision_raw_write_handoff_active: bool,
+    vision_read_header_mask: VisionRecordHeaderMask,
+    vision_write_header_mask: VisionRecordHeaderMask,
     used_cached_ticket_identity: Option<[u8; 32]>,
     client: VlessEncryptionClient,
 }
@@ -388,6 +460,8 @@ where
                     vision_raw_read_handoff_active: false,
                     vision_raw_write_handoff_requested: false,
                     vision_raw_write_handoff_active: false,
+                    vision_read_header_mask: VisionRecordHeaderMask::default(),
+                    vision_write_header_mask: VisionRecordHeaderMask::default(),
                     used_cached_ticket_identity: Some(ticket_identity),
                     client,
                 });
@@ -551,6 +625,8 @@ where
             vision_raw_read_handoff_active: false,
             vision_raw_write_handoff_requested: false,
             vision_raw_write_handoff_active: false,
+            vision_read_header_mask: VisionRecordHeaderMask::default(),
+            vision_write_header_mask: VisionRecordHeaderMask::default(),
             used_cached_ticket_identity: None,
             client,
         })
@@ -564,11 +640,8 @@ where
         self.client.spec.mode
     }
 
-    /// Switch the Vision transport from VLESS Encryption records to the
-    /// underlying TLS stream after the server's direct command. Xray keeps the
-    /// outer TLS security layer but deliberately bypasses the VLESS record
-    /// wrapper at this point; retaining the wrapper would interpret raw TLS
-    /// records as VLESS ciphertext and produce BAD_RECORD_MAC.
+    /// Bypass the VLESS AEAD record layer after Vision's direct command.
+    /// In random mode Xray continues masking the inner TLS record headers.
     pub fn request_vision_raw_read_handoff(&mut self) {
         self.vision_raw_read_handoff_requested = true;
     }
@@ -672,7 +745,16 @@ where
     ) -> Poll<Result<()>> {
         self.as_mut().get_mut().activate_vision_raw_read_handoff();
         if self.vision_raw_read_handoff_active && self.read_plain_offset >= self.read_plain.len() {
-            return Pin::new(&mut self.inner).poll_read(cx, target);
+            let this = self.as_mut().get_mut();
+            let before = target.filled().len();
+            let result = Pin::new(&mut this.inner).poll_read(cx, target);
+            if matches!(&result, Poll::Ready(Ok(())))
+                && let Some(ctr) = &mut this.read_ctr
+            {
+                this.vision_read_header_mask
+                    .apply(ctr, &mut target.filled_mut()[before..], true);
+            }
+            return result;
         }
         if self.read_plain_offset < self.read_plain.len() {
             let remaining = &self.read_plain[self.read_plain_offset..];
@@ -905,10 +987,6 @@ where
         cx: &mut Context<'_>,
         input: &[u8],
     ) -> Poll<Result<usize>> {
-        self.as_mut().get_mut().activate_vision_raw_write_handoff();
-        if self.vision_raw_write_handoff_active {
-            return Pin::new(&mut self.inner).poll_write(cx, input);
-        }
         while self.pending_offset < self.pending_write.len() {
             let this = self.as_mut().get_mut();
             let pending = &this.pending_write[this.pending_offset..];
@@ -930,7 +1008,15 @@ where
         self.pending_offset = 0;
         self.as_mut().get_mut().activate_vision_raw_write_handoff();
         if self.vision_raw_write_handoff_active {
-            return Pin::new(&mut self.inner).poll_write(cx, input);
+            let this = self.as_mut().get_mut();
+            if let Some(ctr) = &mut this.write_ctr {
+                let take = input.len().min(MAX_RECORD_PAYLOAD);
+                this.pending_write.extend_from_slice(&input[..take]);
+                this.vision_write_header_mask
+                    .apply(ctr, &mut this.pending_write, false);
+                return Poll::Ready(Ok(take));
+            }
+            return Pin::new(&mut this.inner).poll_write(cx, input);
         }
         if input.is_empty() {
             return Poll::Ready(Ok(0));
@@ -943,10 +1029,6 @@ where
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        self.as_mut().get_mut().activate_vision_raw_write_handoff();
-        if self.vision_raw_write_handoff_active {
-            return Pin::new(&mut self.inner).poll_flush(cx);
-        }
         while self.pending_offset < self.pending_write.len() {
             let this = self.as_mut().get_mut();
             let pending = &this.pending_write[this.pending_offset..];
@@ -969,10 +1051,6 @@ where
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        self.as_mut().get_mut().activate_vision_raw_write_handoff();
-        if self.vision_raw_write_handoff_active {
-            return Pin::new(&mut self.inner).poll_shutdown(cx);
-        }
         match self.as_mut().poll_flush(cx) {
             Poll::Ready(Ok(())) => Pin::new(&mut self.inner).poll_shutdown(cx),
             Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
@@ -1172,6 +1250,8 @@ mod tests {
             vision_raw_read_handoff_active: false,
             vision_raw_write_handoff_requested: false,
             vision_raw_write_handoff_active: false,
+            vision_read_header_mask: VisionRecordHeaderMask::default(),
+            vision_write_header_mask: VisionRecordHeaderMask::default(),
             used_cached_ticket_identity: None,
             client,
         }

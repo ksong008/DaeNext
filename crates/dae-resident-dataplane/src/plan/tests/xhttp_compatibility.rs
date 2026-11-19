@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn encrypted_cleartext_xhttp_uses_http1_in_each_mode() {
+    let config =
+        parse_config("global {\n lan_interface: daerust0\n }\nrouting {\n fallback: direct\n }");
+    for (mode, expected) in [
+        ("auto", ResidentXhttpMode::PacketUp),
+        ("packet-up", ResidentXhttpMode::PacketUp),
+        ("stream-up", ResidentXhttpMode::StreamUp),
+        ("stream-one", ResidentXhttpMode::StreamOne),
+    ] {
+        let mut link = VLESSLink::parse(&vless_xhttp_parser_fixture_url(mode, "", "")).unwrap();
+        link.tls = "none".to_owned();
+        let plan = build_resident_proxy_plan_for_node(
+            &config,
+            "proxy".to_owned(),
+            mode.to_owned(),
+            with_vless_encryption(link.export_url()),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.xhttp_primary_http_version(),
+            ResidentXhttpHttpVersion::H1
+        );
+        assert_eq!(plan.xhttp_mode, expected);
+        assert!(!plan.execution_plan().udp.policy_closed());
+    }
+}
+
 fn xhttp_plan(extra: serde_json::Value, mode: &str) -> Result<ResidentProxyPlan, String> {
     let config = parse_config(
         "global {\nlan_interface: daerust0\nallow_insecure: false\nso_mark_from_dae: 1234\nmptcp: false\n}\nrouting {\nfallback: direct\n}",

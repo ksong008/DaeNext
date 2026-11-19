@@ -1213,6 +1213,7 @@ dependencies = [
  "tls-parser",
  "tokio",
  "tokio-boring",
+ "tokio-util",
  "url",
 ]
 
@@ -1242,6 +1243,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -17,8 +17,9 @@ pub fn grpc_request_path(service_name: &str, mode: GrpcMode) -> String {
 
 pub fn grpc_h2_request(proxy: &ResidentProxyPlan) -> Result<http::Request<()>, String> {
     let authority = grpc_authority(proxy);
+    let scheme = if proxy.tls == "none" { "http" } else { "https" };
     let uri = format!(
-        "https://{}{}",
+        "{scheme}://{}{}",
         authority,
         grpc_request_path(&proxy.stream_path, proxy.grpc_mode)
     );

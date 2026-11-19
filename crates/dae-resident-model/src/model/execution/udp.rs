@@ -191,12 +191,9 @@ impl ResidentUdpExecutorFactory {
                 ..
             } if is_xtls_rprx_vision_flow(&proxy.flow)
                 && matches!(wrapper, ResidentStreamWrapperPlan::None)
-                && security.is_tls_stream() =>
+                && (security == ResidentSecurityUnderlayPlan::None || security.is_tls_stream()) =>
             {
-                // Xray carries Vision UDP through the VLESS mux/XUDP
-                // command.  Encryption wraps the physical TLS/Reality byte
-                // stream before that request; it is not ordinary UDP-over-
-                // stream framing and therefore uses the Vision executor.
+                // Vision uses VLESS mux/XUDP inside the encrypted byte stream.
                 Self::VlessVisionXudp
             }
             ResidentProxyProtocolPlan::VlessVisionTcpTls {
@@ -214,7 +211,7 @@ impl ResidentUdpExecutorFactory {
             ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } if !proxy.flow.is_empty() => {
                 Self::PolicyClosed(Closed::VlessUnsupportedShape)
             }
-            ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } => match wrapper {
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { ref encryption, .. } => match wrapper {
                 ResidentStreamWrapperPlan::None
                     if security == ResidentSecurityUnderlayPlan::None =>
                 {
@@ -239,7 +236,11 @@ impl ResidentUdpExecutorFactory {
                 ResidentStreamWrapperPlan::HttpUpgrade if security.is_tls_stream() => {
                     Self::VlessStandard(Stream::HttpUpgradeTls)
                 }
-                ResidentStreamWrapperPlan::Grpc if security.is_tls_stream() => {
+                ResidentStreamWrapperPlan::Grpc
+                    if security.is_tls_stream()
+                        || (security == ResidentSecurityUnderlayPlan::None
+                            && encryption.is_some()) =>
+                {
                     Self::VlessStandard(Stream::GrpcTls)
                 }
                 ResidentStreamWrapperPlan::H2 if security.is_tls_stream() => {

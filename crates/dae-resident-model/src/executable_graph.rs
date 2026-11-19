@@ -74,11 +74,7 @@ impl ResidentExecutableGraphDescriptor {
             ResidentTlsFactorySelection::from_proxy(proxy)
                 .expect("resident TLS security underlay must have a typed factory selection")
         });
-        let xhttp_primary_http_version = if proxy.net == "xhttp" {
-            ResidentXhttpHttpVersion::from_tls_alpn(&proxy.alpn)
-        } else {
-            ResidentXhttpHttpVersion::H2
-        };
+        let xhttp_primary_http_version = proxy.xhttp_primary_http_version();
         let xhttp_primary_quic_tls_provider = (proxy.net == "xhttp"
             && xhttp_primary_http_version == ResidentXhttpHttpVersion::H3)
             .then(|| {
@@ -530,10 +526,10 @@ impl ResidentExecutableGraphDescriptor {
     }
 
     fn xhttp_http_version(&self) -> ResidentXhttpHttpVersion {
-        if self.security_underlay == "reality" {
-            ResidentXhttpHttpVersion::H2
-        } else {
-            ResidentXhttpHttpVersion::from_tls_alpn(&self.alpn)
+        match self.security_underlay.as_str() {
+            "reality" => ResidentXhttpHttpVersion::H2,
+            "none" => ResidentXhttpHttpVersion::H1,
+            _ => ResidentXhttpHttpVersion::from_tls_alpn(&self.alpn),
         }
     }
 

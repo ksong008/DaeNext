@@ -9,7 +9,7 @@ mod maintenance;
 
 const IDLE_TTL: Duration = Duration::from_secs(30);
 
-pub struct XhttpH1UploadPool<T = AsyncResidentTlsClient> {
+pub struct XhttpH1UploadPool<T = XhttpH1Client> {
     inner: Arc<PoolInner<T>>,
     limit: usize,
 }

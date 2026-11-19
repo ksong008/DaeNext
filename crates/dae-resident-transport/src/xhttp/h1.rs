@@ -11,6 +11,7 @@ use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio_util::either::Either;
 
 mod pool;
 use futures_util::FutureExt;
@@ -18,14 +19,30 @@ pub use pool::XhttpH1UploadPool;
 use pool::{PoolInner, drain_response};
 use tokio::sync::OwnedSemaphorePermit;
 
+pub type XhttpH1Client = Either<tokio::net::TcpStream, AsyncResidentTlsClient>;
+
+pub(super) async fn open_xhttp_h1_client(
+    binding: &ResidentProxyBinding,
+    mptcp: bool,
+) -> Result<(XhttpH1Client, &'static str), String> {
+    if binding.tls == "none" {
+        let stream = open_proxy_tcp_stream_with_binding(binding, mptcp).await?;
+        Ok((Either::Left(stream), "none"))
+    } else {
+        let client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
+        let underlay = async_tls_underlay_name(&client);
+        Ok((Either::Right(client), underlay))
+    }
+}
+
 pub struct XhttpH1ChunkedWriter {
     writer: XhttpH1ChunkedWriterInner,
     finished: bool,
 }
 
 enum XhttpH1ChunkedWriterInner {
-    Client(AsyncResidentTlsClient),
-    WriteHalf(tokio::io::WriteHalf<AsyncResidentTlsClient>),
+    Client(XhttpH1Client),
+    WriteHalf(tokio::io::WriteHalf<XhttpH1Client>),
 }
 
 pub struct XhttpH1DownloadBody {
@@ -37,8 +54,8 @@ pub struct XhttpH1DownloadBody {
 const MAX_CHUNK_LINE_BYTES: usize = 8 * 1024;
 
 enum XhttpH1BodyReader {
-    Client(AsyncResidentTlsClient),
-    ReadHalf(tokio::io::ReadHalf<AsyncResidentTlsClient>),
+    Client(XhttpH1Client),
+    ReadHalf(tokio::io::ReadHalf<XhttpH1Client>),
 }
 
 #[derive(Debug)]
@@ -59,16 +76,18 @@ pub async fn open_xhttp_h1_download_stream(
     separate_endpoint: bool,
 ) -> Result<XhttpResponseBody<XhttpH1DownloadBody>, String> {
     let client = if separate_endpoint {
-        open_async_xhttp_endpoint_tls_client(endpoint, binding.effective_socket_mark(), mptcp)
-            .await?
+        Either::Right(
+            open_async_xhttp_endpoint_tls_client(endpoint, binding.effective_socket_mark(), mptcp)
+                .await?,
+        )
     } else {
-        open_async_resident_tls_client_with_binding(binding, mptcp).await?
+        open_xhttp_h1_client(binding, mptcp).await?.0
     };
     open_xhttp_h1_download_stream_with_client(client, endpoint, session_id).await
 }
 
 async fn open_xhttp_h1_download_stream_with_client(
-    mut client: AsyncResidentTlsClient,
+    mut client: XhttpH1Client,
     endpoint: &ResidentXhttpEndpointPlan,
     session_id: &str,
 ) -> Result<XhttpResponseBody<XhttpH1DownloadBody>, String> {
@@ -123,10 +142,10 @@ pub async fn begin_xhttp_h1_packet_up_request(
                 client
             } else {
                 drop(client);
-                open_async_resident_tls_client_with_binding(binding, mptcp).await?
+                open_xhttp_h1_client(binding, mptcp).await?.0
             }
         }
-        None => open_async_resident_tls_client_with_binding(binding, mptcp).await?,
+        None => open_xhttp_h1_client(binding, mptcp).await?.0,
     };
     let request = xhttp_h1_packet_up_request_bytes(endpoint, session_id, seq, payload)?;
     send_on_connection(client, request, Some((owner, permit))).await
@@ -272,14 +291,14 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 }
 
 impl XhttpH1ChunkedWriter {
-    pub fn from_client(client: AsyncResidentTlsClient) -> Self {
+    pub fn from_client(client: XhttpH1Client) -> Self {
         Self {
             writer: XhttpH1ChunkedWriterInner::Client(client),
             finished: false,
         }
     }
 
-    pub fn from_write_half(writer: tokio::io::WriteHalf<AsyncResidentTlsClient>) -> Self {
+    pub fn from_write_half(writer: tokio::io::WriteHalf<XhttpH1Client>) -> Self {
         Self {
             writer: XhttpH1ChunkedWriterInner::WriteHalf(writer),
             finished: false,
@@ -310,16 +329,12 @@ impl XhttpH1ChunkedWriter {
 }
 
 impl XhttpH1DownloadBody {
-    fn new(
-        client: AsyncResidentTlsClient,
-        headers: Vec<(String, String)>,
-        body_prefix: Vec<u8>,
-    ) -> Self {
+    fn new(client: XhttpH1Client, headers: Vec<(String, String)>, body_prefix: Vec<u8>) -> Self {
         Self::new_with_reader(XhttpH1BodyReader::Client(client), headers, body_prefix)
     }
 
     pub fn new_with_read_half(
-        reader: tokio::io::ReadHalf<AsyncResidentTlsClient>,
+        reader: tokio::io::ReadHalf<XhttpH1Client>,
         headers: Vec<(String, String)>,
         body_prefix: Vec<u8>,
     ) -> Self {

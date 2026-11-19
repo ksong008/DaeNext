@@ -1,6 +1,10 @@
 use super::*;
 use dae_outbound_stream::vless::VlessEncryptedStream;
 use tokio::io::AsyncWriteExt;
+use tokio_util::either::Either;
+
+type VlessXudpEncryptedIo =
+    VlessEncryptedStream<Either<tokio::net::TcpStream, AsyncResidentTlsClient>>;
 
 async fn write_vless_encrypted_xhttp_bytes(
     stream: &mut (impl tokio::io::AsyncWrite + Unpin),
@@ -24,7 +28,7 @@ async fn write_vless_encrypted_xhttp_bytes(
 #[derive(Default)]
 pub(in crate::udp) struct VlessXudpStreamSession {
     client: Option<UdpSharedIo<AsyncResidentTlsClient>>,
-    encrypted: Option<UdpSharedIo<VlessEncryptedStream<AsyncResidentTlsClient>>>,
+    encrypted: Option<UdpSharedIo<VlessXudpEncryptedIo>>,
     key: Option<[u8; 16]>,
     uuid_sent: bool,
     response_header_seen: bool,
@@ -102,9 +106,6 @@ impl VlessXudpStreamSession {
         // and record counters instead of renegotiating a new stream.
         if self.client.is_none() && self.encrypted.is_none() {
             let frame = xudp_new_frame(original_dst, payload)?;
-            let mut client =
-                open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
-            self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
             let mut request =
                 packet::request_header(&key, &proxy.flow, "tcp", XUDP_MUX_TARGET, true, &[])
                     .map_err(|err| format!("build VLESS Vision XUDP mux request header: {err}"))?;
@@ -116,6 +117,16 @@ impl VlessXudpStreamSession {
                 false,
             ));
             if let Some(encryption) = proxy.vless_encryption()? {
+                let client = if binding.execution().security == ResidentSecurityUnderlayPlan::None {
+                    let stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
+                    self.tls_underlay = Some("none");
+                    Either::Left(stream)
+                } else {
+                    let client =
+                        open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
+                    self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
+                    Either::Right(client)
+                };
                 let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
                     .await
                     .map_err(|err| format!("VLESS Encryption XUDP handshake: {err}"))?;
@@ -127,6 +138,9 @@ impl VlessXudpStreamSession {
                 .await?;
                 self.encrypted = Some(encrypted.into());
             } else {
+                let mut client =
+                    open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
+                self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
                 write_async_tls_plain_all(
                     &mut client,
                     &request,
@@ -268,7 +282,7 @@ impl VlessXudpStreamSession {
         UdpExchangeResult::new(payload, "vless-xudp")
             .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
             .with_session_executor("tokio-stream-session")
-            .with_underlay_reuse("tls-stream-reused")
+            .with_underlay_reuse(self.underlay_reuse_label())
             .with_session_fixed_target(self.fixed_target)
     }
 
@@ -276,7 +290,15 @@ impl VlessXudpStreamSession {
         UdpExchangeResult::pending_response("vless-xudp")
             .with_tls_underlay(self.tls_underlay.unwrap_or("standard-tls"))
             .with_session_executor("tokio-stream-session")
-            .with_underlay_reuse("tls-stream-reused")
+            .with_underlay_reuse(self.underlay_reuse_label())
+    }
+
+    fn underlay_reuse_label(&self) -> &'static str {
+        if self.tls_underlay == Some("none") {
+            "tcp-stream-reused"
+        } else {
+            "tls-stream-reused"
+        }
     }
 
     pub(super) async fn shutdown(&mut self) {

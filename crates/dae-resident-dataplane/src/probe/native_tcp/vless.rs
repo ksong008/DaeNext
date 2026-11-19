@@ -11,6 +11,7 @@ use dae_outbound_stream::{
 };
 use dae_resident_transport::{
     httpupgrade_handshake_over_resident_tls_async as native_httpupgrade_handshake_over_resident_tls_async,
+    open_plain_vless_tcp_stream,
     websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async,
     write_websocket_binary_frame_over_resident_tls_async as native_write_websocket_binary_frame_over_resident_tls_async,
 };
@@ -19,9 +20,7 @@ use super::super::super::{ResidentStopSignal, SharedResidentStopSignal};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::time;
 
-use super::super::super::client::{
-    open_async_resident_tls_client_with_binding, open_proxy_tcp_stream_with_binding,
-};
+use super::super::super::client::open_async_resident_tls_client_with_binding;
 use super::super::super::plan::{
     ResidentProtocolShape, ResidentProxyBinding, ResidentSecurityUnderlayPlan,
     ResidentStreamWrapperPlan, ResidentXhttpMode,
@@ -63,10 +62,18 @@ pub(super) async fn open_vless_native_tcp_tunnel(
     if execution.protocol == ResidentProtocolShape::VlessMux {
         return open_vless_mux_native_tcp_tunnel(selection, target, owner_deadline).await;
     }
-    if execution.security == ResidentSecurityUnderlayPlan::None {
-        let mut stream = open_proxy_tcp_stream_with_binding(&selection.proxy, selection.mptcp)
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+    if execution.security == ResidentSecurityUnderlayPlan::None
+        && matches!(
+            execution.wrapper,
+            ResidentStreamWrapperPlan::None
+                | ResidentStreamWrapperPlan::WebSocket
+                | ResidentStreamWrapperPlan::HttpUpgrade
+        )
+    {
+        let mut stream =
+            open_plain_vless_tcp_stream(&selection.proxy, selection.mptcp, execution.wrapper)
+                .await
+                .map_err(NativeTcpProbeError::Open)?;
         if let Some(encryption) = selection
             .proxy
             .vless_encryption()
@@ -83,6 +90,9 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             encrypted.flush().await.map_err(|err| {
                 NativeTcpProbeError::Open(format!("flush native VLESS encrypted request: {err}"))
             })?;
+            if execution.protocol == ResidentProtocolShape::VlessVision {
+                return Ok(open_vless_vision_encrypted_probe(encrypted, key));
+            }
             return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(encrypted)));
         }
         tokio::io::AsyncWriteExt::write_all(&mut stream, &request)
@@ -303,29 +313,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             NativeTcpProbeError::Open(format!("flush native VLESS encrypted TLS request: {err}"))
         })?;
         if execution.protocol == ResidentProtocolShape::VlessVision {
-            let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
-            let stop = ResidentStopSignal::shared();
-            let relay_stop = Arc::clone(&stop);
-            let tunnel_stop = Arc::clone(&stop);
-            let metrics = ResidentDataplaneMetrics::default();
-            let task = tokio::spawn(async move {
-                let _ = relay_tcp_over_vless_vision_duplex(
-                    &mut relay_side,
-                    &mut encrypted,
-                    relay_stop,
-                    key,
-                    Vec::new(),
-                    Vec::new(),
-                    &metrics,
-                )
-                .await;
-                stop.store(true, Ordering::Relaxed);
-            });
-            return Ok(Box::new(SpawnedNativeTcpTunnel::new(
-                probe,
-                task,
-                tunnel_stop,
-            )));
+            return Ok(open_vless_vision_encrypted_probe(encrypted, key));
         }
         return Ok(boxed_native_tcp_tunnel(VlessNativeTunnel::new(encrypted)));
     }
@@ -363,6 +351,34 @@ pub(super) async fn open_vless_native_tcp_tunnel(
     VlessNativeTunnel::new_with_response_prefix(client, response_prefix)
         .map(boxed_native_tcp_tunnel)
         .map_err(NativeTcpProbeError::Open)
+}
+
+fn open_vless_vision_encrypted_probe<S>(
+    mut encrypted: VlessEncryptedStream<S>,
+    key: [u8; 16],
+) -> Box<dyn NativeTcpTunnel>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (probe, mut relay_side) = tokio::io::duplex(64 * 1024);
+    let stop = ResidentStopSignal::shared();
+    let relay_stop = Arc::clone(&stop);
+    let tunnel_stop = Arc::clone(&stop);
+    let metrics = ResidentDataplaneMetrics::default();
+    let task = tokio::spawn(async move {
+        let _ = relay_tcp_over_vless_vision_duplex(
+            &mut relay_side,
+            &mut encrypted,
+            relay_stop,
+            key,
+            Vec::new(),
+            Vec::new(),
+            &metrics,
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+    });
+    Box::new(SpawnedNativeTcpTunnel::new(probe, task, tunnel_stop))
 }
 
 async fn open_vless_meek_native_tcp_tunnel(
