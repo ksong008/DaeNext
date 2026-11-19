@@ -5,9 +5,8 @@ use super::{
 };
 use aes::Aes256;
 use aes::cipher::{BlockEncrypt, KeyInit as BlockKeyInit};
-use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, AeadInPlace, Payload};
-use chacha20poly1305::ChaCha20Poly1305;
+use boring::aead::{AeadCtx, Algorithm};
+use foreign_types::ForeignType;
 use getrandom::fill as random_fill;
 use std::io::{self, Error, ErrorKind, Result};
 use std::ops::{Deref, DerefMut};
@@ -122,9 +121,8 @@ enum AeadAlgorithm {
 
 impl AeadAlgorithm {
     fn preferred() -> Self {
-        // The shipped RustCrypto configuration accelerates both AES and GHASH
-        // on x86 with these features. AArch64 acceleration requires opt-in
-        // compiler flags for both crates.
+        // Keep the existing wire AEAD preference. Either algorithm is
+        // supported by the record and handshake codecs.
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         if std::arch::is_x86_feature_detected!("aes")
             && std::arch::is_x86_feature_detected!("pclmulqdq")
@@ -135,34 +133,30 @@ impl AeadAlgorithm {
     }
 }
 
-enum RecordCipher {
-    Aes(Aes256Gcm),
-    ChaCha(ChaCha20Poly1305),
-}
-
 struct AeadState {
-    cipher: RecordCipher,
+    cipher: AeadCtx,
+    algorithm: AeadAlgorithm,
     nonce: [u8; 12],
 }
 
 impl AeadState {
-    fn new(algorithm: AeadAlgorithm, context: &[u8], key_material: &[u8]) -> Self {
+    fn new(algorithm: AeadAlgorithm, context: &[u8], key_material: &[u8]) -> Result<Self> {
         let key = SecretArray::from(derive_key_bytes(context, key_material));
-        let cipher = match algorithm {
-            AeadAlgorithm::Aes => RecordCipher::Aes(Aes256Gcm::new((&*key).into())),
-            AeadAlgorithm::ChaCha => RecordCipher::ChaCha(ChaCha20Poly1305::new((&*key).into())),
+        let backend = match algorithm {
+            AeadAlgorithm::Aes => Algorithm::aes_256_gcm(),
+            AeadAlgorithm::ChaCha => Algorithm::chacha20_poly1305(),
         };
-        Self {
+        let cipher = AeadCtx::new(&backend, &key[..], AEAD_TAG_LEN)
+            .map_err(|_| io_other("VLESS Encryption could not initialize AEAD"))?;
+        Ok(Self {
             cipher,
+            algorithm,
             nonce: [0; 12],
-        }
+        })
     }
 
     fn algorithm(&self) -> AeadAlgorithm {
-        match self.cipher {
-            RecordCipher::Aes(_) => AeadAlgorithm::Aes,
-            RecordCipher::ChaCha(_) => AeadAlgorithm::ChaCha,
-        }
+        self.algorithm
     }
 
     fn nonce_next(nonce: &mut [u8; 12]) -> [u8; 12] {
@@ -176,10 +170,48 @@ impl AeadState {
     }
 
     fn seal_next(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-        let mut ciphertext = Vec::with_capacity(plaintext.len() + AEAD_TAG_LEN);
-        ciphertext.extend_from_slice(plaintext);
-        self.seal_next_in_place(&mut ciphertext, 0, aad)?;
+        let mut ciphertext = Vec::new();
+        self.seal_next_append(plaintext, aad, &mut ciphertext)?;
         Ok(ciphertext)
+    }
+
+    fn seal_next_append(
+        &mut self,
+        plaintext: &[u8],
+        aad: &[u8],
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        let nonce = Self::nonce_next(&mut self.nonce);
+        let length = plaintext.len() + AEAD_TAG_LEN;
+        output.reserve(length);
+        let slot = &mut output.spare_capacity_mut()[..length];
+        let mut written = 0;
+        // SAFETY: The reserved output is writable for `length` bytes and does not
+        // overlap the inputs. BoringSSL initializes the reported bytes on success.
+        let ok = unsafe {
+            boring_sys::EVP_AEAD_CTX_seal(
+                self.cipher.as_ptr(),
+                slot.as_mut_ptr().cast(),
+                &mut written,
+                slot.len(),
+                nonce.as_ptr(),
+                nonce.len(),
+                plaintext.as_ptr(),
+                plaintext.len(),
+                aad.as_ptr(),
+                aad.len(),
+            )
+        };
+        if ok != 1 || written != length {
+            let _ = boring::error::ErrorStack::get();
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "VLESS Encryption seal failed",
+            ));
+        }
+        // SAFETY: The successful seal initialized exactly `written` spare bytes.
+        unsafe { output.set_len(output.len() + written) };
+        Ok(())
     }
 
     fn open_next(&mut self, ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
@@ -187,58 +219,64 @@ impl AeadState {
         self.open_with_nonce(&nonce, ciphertext, aad)
     }
 
-    fn seal_next_in_place(
-        &mut self,
-        buffer: &mut Vec<u8>,
-        payload_offset: usize,
-        aad: &[u8],
-    ) -> Result<()> {
+    fn open_next_in_place(&mut self, ciphertext: &mut Vec<u8>, aad: &[u8]) -> Result<()> {
         let nonce = Self::nonce_next(&mut self.nonce);
-        let payload = &mut buffer[payload_offset..];
-        let tag = match &self.cipher {
-            RecordCipher::Aes(cipher) => {
-                cipher.encrypt_in_place_detached((&nonce).into(), aad, payload)
-            }
-            RecordCipher::ChaCha(cipher) => {
-                cipher.encrypt_in_place_detached((&nonce).into(), aad, payload)
-            }
-        }
-        .map_err(|_| Error::new(ErrorKind::InvalidData, "VLESS Encryption seal failed"))?;
-        buffer.extend_from_slice(&tag);
-        Ok(())
+        self.open_in_place(&nonce, ciphertext, aad)
     }
 
-    fn open_next_in_place(&mut self, ciphertext: &mut Vec<u8>, aad: &[u8]) -> Result<()> {
+    fn open_in_place(&self, nonce: &[u8; 12], ciphertext: &mut Vec<u8>, aad: &[u8]) -> Result<()> {
         let payload_len = ciphertext
             .len()
             .checked_sub(AEAD_TAG_LEN)
             .ok_or_else(|| io_other("VLESS Encryption record is shorter than its AEAD tag"))?;
-        let tag = aes_gcm::Tag::clone_from_slice(&ciphertext[payload_len..]);
-        let plaintext = &mut ciphertext[..payload_len];
-        let nonce = Self::nonce_next(&mut self.nonce);
-        match &self.cipher {
-            RecordCipher::Aes(cipher) => {
-                cipher.decrypt_in_place_detached((&nonce).into(), aad, plaintext, &tag)
-            }
-            RecordCipher::ChaCha(cipher) => {
-                cipher.decrypt_in_place_detached((&nonce).into(), aad, plaintext, &tag)
-            }
-        }
-        .map_err(|_| Error::new(ErrorKind::InvalidData, "VLESS Encryption open failed"))?;
+        let (payload, tag) = ciphertext.split_at_mut(payload_len);
+        self.cipher
+            .open_in_place(nonce, payload, tag, aad)
+            .map_err(|_| io_other("VLESS Encryption open failed"))?;
         ciphertext.truncate(payload_len);
         Ok(())
     }
 
     fn open_with_nonce(&self, nonce: &[u8; 12], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-        let payload = Payload {
-            msg: ciphertext,
-            aad,
+        let mut plaintext = ciphertext.to_vec();
+        self.open_in_place(nonce, &mut plaintext, aad)?;
+        Ok(plaintext)
+    }
+
+    fn open_next_into(
+        &mut self,
+        ciphertext: &[u8],
+        aad: &[u8],
+        output: &mut ReadBuf<'_>,
+    ) -> Result<()> {
+        let nonce = Self::nonce_next(&mut self.nonce);
+        let (ciphertext, tag) = ciphertext.split_at(ciphertext.len() - AEAD_TAG_LEN);
+        let length = ciphertext.len();
+        // SAFETY: The destination has room for the full record and is disjoint
+        // from the inputs. BoringSSL writes but does not read the destination.
+        let ok = unsafe {
+            let slot = &mut output.unfilled_mut()[..length];
+            boring_sys::EVP_AEAD_CTX_open_gather(
+                self.cipher.as_ptr(),
+                slot.as_mut_ptr().cast(),
+                nonce.as_ptr(),
+                nonce.len(),
+                ciphertext.as_ptr(),
+                ciphertext.len(),
+                tag.as_ptr(),
+                tag.len(),
+                aad.as_ptr(),
+                aad.len(),
+            )
         };
-        match &self.cipher {
-            RecordCipher::Aes(cipher) => cipher.decrypt(nonce.into(), payload),
-            RecordCipher::ChaCha(cipher) => cipher.decrypt(nonce.into(), payload),
+        if ok != 1 {
+            let _ = boring::error::ErrorStack::get();
+            return Err(io_other("VLESS Encryption open failed"));
         }
-        .map_err(|_| Error::new(ErrorKind::InvalidData, "VLESS Encryption open failed"))
+        // SAFETY: Authentication succeeded and BoringSSL initialized the output.
+        unsafe { output.assume_init(length) };
+        output.advance(length);
+        Ok(())
     }
 
     fn open_record(
@@ -246,14 +284,22 @@ impl AeadState {
         ciphertext: &mut Vec<u8>,
         header: &[u8],
         key_material: &[u8],
+        output: &mut ReadBuf<'_>,
     ) -> Result<()> {
-        let next_cipher = (self.nonce == MAX_NONCE).then(|| {
+        let next_cipher = if self.nonce == MAX_NONCE {
             let mut context = Vec::with_capacity(header.len() + ciphertext.len());
             context.extend_from_slice(header);
             context.extend_from_slice(ciphertext);
-            Self::new(self.algorithm(), &context, key_material)
-        });
-        self.open_next_in_place(ciphertext, header)?;
+            Some(Self::new(self.algorithm(), &context, key_material)?)
+        } else {
+            None
+        };
+        if ciphertext.len() - AEAD_TAG_LEN <= output.remaining() {
+            self.open_next_into(ciphertext, header, output)?;
+            ciphertext.clear();
+        } else {
+            self.open_next_in_place(ciphertext, header)?;
+        }
         if let Some(next_cipher) = next_cipher {
             *self = next_cipher;
         }
@@ -441,7 +487,7 @@ where
         let (relays, nfs_key) = build_relays(spec, &iv)?;
         let iv_and_relays_len = 16 + relays.len();
         let algorithm = AeadAlgorithm::preferred();
-        let mut nfs_aead = AeadState::new(algorithm, &iv, &nfs_key);
+        let mut nfs_aead = AeadState::new(algorithm, &iv, &nfs_key)?;
         let mut prewrite = Vec::new();
         let read_state;
         let mut read_aead: Option<AeadState> = None;
@@ -464,7 +510,7 @@ where
                 let encrypted_ticket = nfs_aead.seal_next(&ticket.ticket, &[])?;
                 prefix.extend_from_slice(&encrypted_ticket);
                 prewrite = prefix;
-                let write_aead = AeadState::new(algorithm, &encrypted_ticket, &united_key);
+                let write_aead = AeadState::new(algorithm, &encrypted_ticket, &united_key)?;
                 if spec.mode.random_records() {
                     write_ctr = Some(AesCtr::new(&united_key, &iv));
                 }
@@ -597,8 +643,8 @@ where
         pfs_key[32..].copy_from_slice(x25519_secret.as_bytes());
         united_key.extend_from_slice(&*pfs_key);
         united_key.extend_from_slice(&nfs_key);
-        let write_aead = AeadState::new(algorithm, &pfs_public, &united_key);
-        let mut peer_aead = AeadState::new(algorithm, &peer_pfs_plain, &united_key);
+        let write_aead = AeadState::new(algorithm, &pfs_public, &united_key)?;
+        let mut peer_aead = AeadState::new(algorithm, &peer_pfs_plain, &united_key)?;
 
         let mut encrypted_ticket = [0_u8; 32];
         inner.read_exact(&mut encrypted_ticket).await?;
@@ -725,10 +771,9 @@ where
             .reserve(RECORD_HEADER_LEN + payload.len() + AEAD_TAG_LEN);
         self.pending_write.extend_from_slice(&header);
         let payload_offset = self.pending_write.len();
-        self.pending_write.extend_from_slice(payload);
         let reset = self.write_aead.nonce == MAX_NONCE;
         self.write_aead
-            .seal_next_in_place(&mut self.pending_write, payload_offset, &header)?;
+            .seal_next_append(payload, &header, &mut self.pending_write)?;
         // Xray rekeys from the record that wrapped the nonce to zero, before
         // applying any random-mode header camouflage.
         if reset {
@@ -736,7 +781,7 @@ where
                 self.write_aead.algorithm(),
                 &self.pending_write[record_start..],
                 &self.united_key,
-            );
+            )?;
         }
         if let Some(ctr) = &mut self.write_ctr {
             ctr.apply(&mut self.pending_write[record_start..payload_offset]);
@@ -835,7 +880,7 @@ where
                                 self.write_aead.algorithm(),
                                 &buffer,
                                 &self.united_key,
-                            );
+                            )?;
                             self.read_aead = Some(aead);
                             if self.client.spec.mode.random_records() {
                                 self.read_ctr = Some(AesCtr::new(&self.united_key, &buffer));
@@ -991,7 +1036,12 @@ where
                                 .as_mut()
                                 .ok_or_else(|| io_other("VLESS Encryption peer AEAD missing"))
                                 .and_then(|aead| {
-                                    aead.open_record(&mut buffer, &header, &stream.united_key)
+                                    aead.open_record(
+                                        &mut buffer,
+                                        &header,
+                                        &stream.united_key,
+                                        target,
+                                    )
                                 });
                             match plaintext {
                                 Ok(()) => {
@@ -1011,8 +1061,8 @@ where
                                         let copied = self.read_plain.len().min(target.remaining());
                                         target.put_slice(&self.read_plain[..copied]);
                                         self.read_plain_offset = copied;
-                                        return Poll::Ready(Ok(()));
                                     }
+                                    return Poll::Ready(Ok(()));
                                 }
                                 Err(error) => return Poll::Ready(Err(error)),
                             }
@@ -1281,12 +1331,10 @@ mod tests {
         let client = test_client();
         VlessEncryptedStream {
             inner,
-            write_aead: AeadState::new(AeadAlgorithm::Aes, b"fixture-write", &[0x11; 32]),
-            read_aead: Some(AeadState::new(
-                AeadAlgorithm::Aes,
-                b"fixture-read",
-                &[0x22; 32],
-            )),
+            write_aead: AeadState::new(AeadAlgorithm::Aes, b"fixture-write", &[0x11; 32]).unwrap(),
+            read_aead: Some(
+                AeadState::new(AeadAlgorithm::Aes, b"fixture-read", &[0x22; 32]).unwrap(),
+            ),
             united_key: SecretVec::from(vec![0x33; 64]),
             write_ctr: None,
             read_ctr: None,
@@ -1329,7 +1377,8 @@ mod tests {
             stream.write_all(&payload).await.unwrap();
             stream.flush().await.unwrap();
             let wire = stream.into_inner().writes;
-            let mut aead = AeadState::new(AeadAlgorithm::Aes, b"fixture-write", &[0x11; 32]);
+            let mut aead =
+                AeadState::new(AeadAlgorithm::Aes, b"fixture-write", &[0x11; 32]).unwrap();
             let mut cursor = 0;
             let mut recovered = Vec::new();
             let mut records = 0;
@@ -1355,20 +1404,21 @@ mod tests {
     }
 
     #[test]
-    fn record_aead_in_place_matches_allocating_wire_and_open() {
+    fn record_aead_append_matches_allocating_wire_and_open() {
         let payload = b"in-place-record-payload";
         let aad = [23, 3, 3, 0, (payload.len() + AEAD_TAG_LEN) as u8];
         for algorithm in [AeadAlgorithm::Aes, AeadAlgorithm::ChaCha] {
-            let mut allocating = AeadState::new(algorithm, b"fixture", &[0x11; 32]);
+            let mut allocating = AeadState::new(algorithm, b"fixture", &[0x11; 32]).unwrap();
             let expected = allocating.seal_next(payload, &aad).unwrap();
 
-            let mut in_place = AeadState::new(algorithm, b"fixture", &[0x11; 32]);
+            let mut in_place = AeadState::new(algorithm, b"fixture", &[0x11; 32]).unwrap();
             let mut encoded = vec![0xaa, 0xbb];
-            encoded.extend_from_slice(payload);
-            in_place.seal_next_in_place(&mut encoded, 2, &aad).unwrap();
+            in_place
+                .seal_next_append(payload, &aad, &mut encoded)
+                .unwrap();
             assert_eq!(&encoded[2..], expected);
 
-            let mut opener = AeadState::new(algorithm, b"fixture", &[0x11; 32]);
+            let mut opener = AeadState::new(algorithm, b"fixture", &[0x11; 32]).unwrap();
             let mut ciphertext = expected;
             opener.open_next_in_place(&mut ciphertext, &aad).unwrap();
             assert_eq!(ciphertext, payload);
@@ -1378,7 +1428,7 @@ mod tests {
     #[tokio::test]
     async fn nonce_wrap_rekeys_both_directions_from_the_encrypted_record() {
         for algorithm in [AeadAlgorithm::Aes, AeadAlgorithm::ChaCha] {
-            let initial = || AeadState::new(algorithm, b"fixture-write", &[0x11; 32]);
+            let initial = || AeadState::new(algorithm, b"fixture-write", &[0x11; 32]).unwrap();
             let mut writer = test_stream(ChunkedIo::new(Vec::new(), usize::MAX), ReadState::Eof);
             writer.write_aead = initial();
             writer.write_aead.nonce = MAX_NONCE;
@@ -1390,7 +1440,8 @@ mod tests {
             let first_record_len = RECORD_HEADER_LEN + b"wrapping record".len() + AEAD_TAG_LEN;
             let (first_record, next_record) = wire.split_at(first_record_len);
             let (next_header, next_ciphertext) = next_record.split_at(RECORD_HEADER_LEN);
-            let mut independently_rekeyed = AeadState::new(algorithm, first_record, &[0x33; 64]);
+            let mut independently_rekeyed =
+                AeadState::new(algorithm, first_record, &[0x33; 64]).unwrap();
             assert_eq!(
                 independently_rekeyed
                     .open_next(next_ciphertext, next_header)
