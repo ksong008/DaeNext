@@ -1,7 +1,7 @@
 use crate::error::OutboundError;
 use crate::vmess::{VMessMetadata, VMessNetwork};
 
-use super::contract::is_xtls_rprx_vision_flow;
+use super::contract::{XTLS_RPRX_VISION, is_xtls_rprx_vision_flow};
 
 pub fn request_header(
     key: &[u8; 16],
@@ -61,6 +61,11 @@ pub fn first_write_bytes(
 }
 
 pub fn addons_bytes(flow: &str) -> Vec<u8> {
+    let flow = if is_xtls_rprx_vision_flow(flow) {
+        XTLS_RPRX_VISION
+    } else {
+        flow
+    };
     if flow.is_empty() {
         return Vec::new();
     }
@@ -82,6 +87,16 @@ fn write_varint(mut value: u64, out: &mut Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vision_udp443_policy_uses_the_official_wire_flow() {
+        use super::super::contract::XTLS_RPRX_VISION_UDP443;
+        for mux in [false, true] {
+            let request =
+                |flow| request_header(&[0; 16], flow, "tcp", "192.0.2.1:443", mux, &[]).unwrap();
+            assert_eq!(request(XTLS_RPRX_VISION), request(XTLS_RPRX_VISION_UDP443));
+        }
+    }
 
     #[test]
     fn udp_first_write_rejects_oversized_payload_instead_of_truncating() {
