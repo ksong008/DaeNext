@@ -266,6 +266,12 @@ fn vless_standard_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnership
     use WrapperDimension as Wrapper;
 
     match (shape.security, shape.wrapper, shape.udp) {
+        (SecurityDimension::QuicTls, Wrapper::QuicStream, Vless(Stream::TlsTcp)) => {
+            Some(FLOW_STREAM_PACKET_OWNERSHIP)
+        }
+        (security, Wrapper::Mkcp, Vless(Stream::TlsTcp)) if is_vless_stream_security(security) => {
+            Some(FLOW_STREAM_PACKET_OWNERSHIP)
+        }
         (NoSecurity, Wrapper::None, Vless(Stream::PlainTcp)) => Some(FLOW_STREAM_PACKET_OWNERSHIP),
         (security, Wrapper::None, Vless(Stream::TlsTcp))
         | (security, Wrapper::WebSocket, Vless(Stream::WebSocketTls))

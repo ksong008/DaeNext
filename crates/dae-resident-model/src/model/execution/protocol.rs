@@ -121,6 +121,8 @@ impl ResidentProtocolShape {
                 ResidentStreamWrapperPlan::H2 => "resident-vless-h2-stream",
                 ResidentStreamWrapperPlan::Meek => "resident-vless-meek-stream",
                 ResidentStreamWrapperPlan::Xhttp(_) => "resident-vless-xhttp-stream",
+                ResidentStreamWrapperPlan::QuicStream => "resident-vless-hysteria-stream",
+                ResidentStreamWrapperPlan::Mkcp => "resident-vless-mkcp-stream",
                 _ => "resident-vless-tcp-stream",
             },
             Self::VlessVision => "resident-vless-vision-tcp",

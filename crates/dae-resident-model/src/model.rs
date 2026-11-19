@@ -89,6 +89,7 @@ pub struct ResidentProxyPlan {
     pub xhttp_settings: ResidentXhttpSettingsPlan,
     pub xhttp_xmux: Option<ResidentXhttpXmuxPlan>,
     pub vless_mux: Option<VlessMuxOptions>,
+    pub vless_hysteria: Option<ResidentVlessHysteriaPlan>,
     pub tls: String,
     pub allow_insecure: bool,
     pub tls_fragment: Option<TlsFragmentOptions>,
@@ -100,6 +101,21 @@ pub struct ResidentProxyPlan {
     pub chain_parent: Option<Arc<ResidentProxyPlan>>,
     pub mark: u32,
     pub mptcp: bool,
+}
+
+#[derive(Clone)]
+pub struct ResidentVlessHysteriaPlan {
+    pub auth: String,
+    pub tls: dae_outbound_core::hysteria2::Hysteria2TlsIdentity,
+}
+
+impl std::fmt::Debug for ResidentVlessHysteriaPlan {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResidentVlessHysteriaPlan")
+            .field("tls", &self.tls)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ResidentProxyPlan {

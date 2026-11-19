@@ -279,6 +279,7 @@ fn meek_test_proxy(
         xhttp_settings: plan::ResidentXhttpSettingsPlan::default(),
         xhttp_xmux: None,
         vless_mux: None,
+        vless_hysteria: None,
         tls: "tls".to_owned(),
         allow_insecure: true,
         tls_fragment: None,

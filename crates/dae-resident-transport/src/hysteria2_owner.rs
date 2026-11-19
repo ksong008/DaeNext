@@ -88,6 +88,7 @@ impl Hysteria2OwnerKey {
         } = &proxy.handler
         else {
             update_identity_part(&mut digest, proxy.graph_link_hash.as_bytes());
+            update_identity_part(&mut digest, &binding.effective_socket_mark().to_be_bytes());
             return Self {
                 generation,
                 digest: digest.finalize().into(),
@@ -1864,6 +1865,20 @@ async fn build_hysteria2_transport(
     session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
 ) -> Result<(Hysteria2SharedTransport, Hysteria2AuthenticatedSession), Hysteria2OwnerBuildError> {
     let proxy = binding.plan();
+    let vless_carrier =
+        proxy
+            .vless_hysteria
+            .as_ref()
+            .map(|vless| ResidentProxyProtocolPlan::Hysteria2QuicTcp {
+                auth: vless.auth.clone(),
+                tls_identity: vless.tls.clone(),
+                max_tx: 0,
+                max_rx: 0,
+                congestion: Default::default(),
+                obfs: dae_resident_model::ResidentHysteria2ObfsPlan::none(),
+                port_hop_ports: Vec::new(),
+                port_hop_interval: std::time::Duration::ZERO,
+            });
     let ResidentProxyProtocolPlan::Hysteria2QuicTcp {
         auth,
         tls_identity,
@@ -1873,7 +1888,7 @@ async fn build_hysteria2_transport(
         obfs,
         port_hop_ports,
         port_hop_interval,
-    } = &proxy.handler
+    } = vless_carrier.as_ref().unwrap_or(&proxy.handler)
     else {
         return Err(Hysteria2OwnerBuildError::from_failure(
             Hysteria2Failure::new(

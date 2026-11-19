@@ -1360,6 +1360,7 @@ pub(super) fn resident_dataplane_plan_admits_vless_xhttp_reality_download_settin
         mldsa65_verify: Some(primary_mldsa65_verify.clone()),
         mux: false,
         mux_options: Default::default(),
+        hysteria_auth: String::new(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }

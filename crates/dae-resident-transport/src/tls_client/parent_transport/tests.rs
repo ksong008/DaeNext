@@ -31,6 +31,7 @@ fn proxy_plan(server: SocketAddr, handler: ResidentProxyProtocolPlan) -> Residen
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
         xhttp_xmux: None,
         vless_mux: None,
+        vless_hysteria: None,
         tls: "none".to_owned(),
         allow_insecure: false,
         tls_fragment: None,

@@ -1315,6 +1315,7 @@ fn test_udp_proxy(handler: ResidentProxyProtocolPlan) -> ResidentProxyPlan {
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
         xhttp_xmux: None,
         vless_mux: None,
+        vless_hysteria: None,
         tls: String::new(),
         allow_insecure: false,
         tls_fragment: None,

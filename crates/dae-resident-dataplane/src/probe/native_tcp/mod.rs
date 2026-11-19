@@ -168,7 +168,14 @@ async fn open_native_tcp_tunnel(
     match binding.execution().protocol.probe_dispatch() {
         ResidentTcpProbeDispatch::Basic => open_basic_native_tcp_tunnel(binding, target).await,
         ResidentTcpProbeDispatch::Vless => {
-            open_vless_native_tcp_tunnel(binding, target, owner_deadline).await
+            open_vless_native_tcp_tunnel(
+                binding,
+                target,
+                owner_deadline,
+                hysteria2_owner_registry.as_ref(),
+                caller,
+            )
+            .await
         }
         ResidentTcpProbeDispatch::Vmess => open_vmess_native_tcp_tunnel(binding, target).await,
         ResidentTcpProbeDispatch::Trojan => open_trojan_native_tcp_tunnel(binding, target).await,

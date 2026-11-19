@@ -43,6 +43,7 @@ impl ControlTransportOwnerRequirements {
     }
 
     fn include_plan(&mut self, plan: &plan::ResidentProxyPlan) {
+        self.hysteria2 |= plan.vless_hysteria.is_some();
         match &plan.handler {
             plan::ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. } => self.hysteria2 = true,
             plan::ResidentProxyProtocolPlan::TuicQuicTcp { .. } => self.tuic = true,

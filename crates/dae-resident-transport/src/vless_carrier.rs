@@ -1,5 +1,9 @@
 use super::*;
 
+mod hysteria;
+mod mkcp;
+mod xdrive;
+
 pub trait VlessCarrierIo: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> VlessCarrierIo for T {}
@@ -9,14 +13,52 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> VlessCarrierIo for T {}
 pub async fn open_vless_carrier(
     binding: &ResidentProxyBinding,
     mptcp: bool,
+    hysteria_owner: Option<(&Hysteria2OwnerRegistryHandle, QuicEndpointCallerClass)>,
 ) -> Result<(Box<dyn VlessCarrierIo>, &'static str), String> {
     let execution = binding.execution();
+    if binding.net == "xdrive" && execution.wrapper == ResidentStreamWrapperPlan::Mux {
+        if binding.chain_parent.is_some() {
+            return Err("VLESS XDrive local does not support proxy chains".to_owned());
+        }
+        return Ok((
+            Box::new(xdrive::open(&binding.stream_path).await?),
+            "local-storage",
+        ));
+    }
     let wrapper = if execution.wrapper == ResidentStreamWrapperPlan::Mux && binding.net == "tcp" {
         ResidentStreamWrapperPlan::None
     } else {
         execution.wrapper
     };
     match wrapper {
+        ResidentStreamWrapperPlan::Mkcp => {
+            let stream = mkcp::open(binding).await?;
+            if execution.security == ResidentSecurityUnderlayPlan::None {
+                return Ok((Box::new(stream), "none"));
+            }
+            let verification = if binding.allow_insecure {
+                dae_tls::BoringTlsVerification::ExplicitInsecure
+            } else {
+                dae_tls::BoringTlsVerification::SystemRoots
+            };
+            let alpn: Vec<_> = binding.alpn.iter().map(|value| value.as_bytes()).collect();
+            let context = dae_tls::build_boring_tls_context_with_alpn(verification, &alpn)
+                .map_err(|error| format!("build VLESS mKCP TLS: {error}"))?;
+            let tls = tokio::time::timeout(
+                dae_resident_core::RESIDENT_CONNECT_TIMEOUT,
+                dae_tls::connect_boring_tls_async(&context, &binding.server_name, stream),
+            )
+            .await
+            .map_err(|_| "VLESS mKCP TLS timeout".to_owned())?
+            .map_err(|error| format!("connect VLESS mKCP TLS: {error}"))?;
+            Ok((Box::new(tls), "boringssl"))
+        }
+        ResidentStreamWrapperPlan::QuicStream if binding.vless_hysteria.is_some() => {
+            let (registry, caller) =
+                hysteria_owner.ok_or("VLESS Hysteria owner registry unavailable")?;
+            let stream = hysteria::open(binding, registry, caller).await?;
+            Ok((Box::new(stream), "boringssl-quic"))
+        }
         ResidentStreamWrapperPlan::Xhttp(_) => {
             let (stream, underlay) = match binding.xhttp_mode {
                 ResidentXhttpMode::PacketUp => {

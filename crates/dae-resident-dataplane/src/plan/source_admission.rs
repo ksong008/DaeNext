@@ -38,6 +38,9 @@ fn resident_node_source_admission(
         format!("__subscription_source_{index}"),
         link.to_owned(),
     ) {
+        Ok(plan) if plan.net == "xdrive" => ResidentNodeSourceAdmission::NotAdmitted {
+            reason: "XDrive local requires a locally configured storage directory".to_owned(),
+        },
         Ok(_) => ResidentNodeSourceAdmission::Admitted,
         Err(reason) => ResidentNodeSourceAdmission::NotAdmitted { reason },
     }
@@ -64,6 +67,7 @@ mod tests {
             "socks://127.0.0.1:1080#valid".to_owned(),
             "missing-scheme".to_owned(),
             "unknown://127.0.0.1:1#unsupported".to_owned(),
+            "vless://fixture@127.0.0.1:443?type=xdrive&service=local&remoteFolder=%2Ftmp%2Fdrive&mux=1&encryption=mlkem768x25519plus.native.1rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
         ];
 
         let results = resident_node_source_admissions(&links);
@@ -76,6 +80,11 @@ mod tests {
         assert!(matches!(
             results[2],
             ResidentNodeSourceAdmission::NotAdmitted { .. }
+        ));
+        assert!(matches!(
+            &results[3],
+            ResidentNodeSourceAdmission::NotAdmitted { reason }
+                if reason == "XDrive local requires a locally configured storage directory"
         ));
     }
 }

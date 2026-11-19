@@ -82,6 +82,7 @@ pub(crate) fn build_trojan_proxy_plan(
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
         xhttp_xmux: None,
         vless_mux: None,
+        vless_hysteria: None,
         tls: "tls".to_owned(),
         allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,

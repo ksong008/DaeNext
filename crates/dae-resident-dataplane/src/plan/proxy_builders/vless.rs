@@ -31,7 +31,10 @@ pub(crate) fn build_vless_proxy_plan(
     let vision = is_xtls_rprx_vision_flow(&vless.flow);
     let encrypted_wrapper = encryption.is_some()
         && matches!(net.as_str(), "grpc" | "websocket" | "httpupgrade" | "xhttp");
-    if vless.mux && net != "tcp" && !(encrypted_wrapper && (vision || net == "xhttp")) {
+    if vless.mux
+        && !matches!(net.as_str(), "tcp" | "xdrive")
+        && !(encrypted_wrapper && (vision || net == "xhttp"))
+    {
         return Err(format!(
             "resident dataplane vless mux requires TCP or encrypted XHTTP, or an encrypted Vision carrier for node {node_tag}; got {net}"
         ));
@@ -52,10 +55,11 @@ pub(crate) fn build_vless_proxy_plan(
                 vless.flow
             ));
         }
-        "tcp" | "websocket" | "httpupgrade" | "grpc" | "h2" | "xhttp" | "meek" => {}
+        "tcp" | "websocket" | "httpupgrade" | "grpc" | "h2" | "xhttp" | "meek" | "hysteria"
+        | "mkcp" | "xdrive" => {}
         other => {
             return Err(format!(
-                "resident dataplane vless handler currently supports tcp, websocket, httpupgrade, grpc, h2, xhttp, and meek transports only, got {other} for node {node_tag}"
+                "unsupported resident VLESS transport {other} for node {node_tag}"
             ));
         }
     }
@@ -72,7 +76,7 @@ pub(crate) fn build_vless_proxy_plan(
     }
     let encrypted_vision = encryption.is_some() && (net == "tcp" || encrypted_wrapper);
     if vless.tls == "none"
-        && ((!encrypted_wrapper && net != "tcp")
+        && ((!encrypted_wrapper && !matches!(net.as_str(), "tcp" | "mkcp" | "xdrive"))
             || (vless.mux && encryption.is_none())
             || (!vless.flow.is_empty() && !encrypted_vision))
     {
@@ -88,6 +92,21 @@ pub(crate) fn build_vless_proxy_plan(
         ));
     }
     let requested_allow_insecure = vless.allow_insecure.unwrap_or(config.global.allow_insecure);
+    if net == "xdrive"
+        && (vless.tls != "none"
+            || !vless.flow.is_empty()
+            || encryption.is_none()
+            || !vless.mux
+            || !vless.mux_options.tcp_enabled()
+            || !vless.mux_options.xudp_enabled(true)
+            || vless.mux_options.udp443
+                == Some(dae_outbound_core::vless::mux::VlessUdp443Policy::Skip)
+            || !std::path::Path::new(&vless.path).is_absolute())
+    {
+        return Err(format!(
+            "VLESS XDrive local requires an absolute remoteFolder, security=none, Encryption, empty flow and TCP/XUDP mux for node {node_tag}"
+        ));
+    }
     let xhttp_primary_http_version = (net == "xhttp").then(|| {
         if vless.tls == "none" {
             return ResidentXhttpHttpVersion::H1;
@@ -129,6 +148,20 @@ pub(crate) fn build_vless_proxy_plan(
         "reality" => resident_reality_utls_fingerprint_plan(&vless.fingerprint)?,
         _ => None,
     };
+    if net == "mkcp"
+        && (!matches!(vless.tls.as_str(), "none" | "tls")
+            || !vless.flow.is_empty()
+            || encryption.is_none()
+            || vless.r#type != "none"
+            || !vless.path.is_empty()
+            || vless.ech.is_some()
+            || utls_fingerprint.is_some()
+            || tls_fragment.is_some())
+    {
+        return Err(format!(
+            "VLESS mKCP requires Encryption, empty flow, default unmasked mKCP and optional standard TLS for node {node_tag}"
+        ));
+    }
     if let Some(http_version) = xhttp_primary_http_version {
         validate_resident_xhttp_primary_quic_tls_features(
             http_version,
@@ -150,6 +183,34 @@ pub(crate) fn build_vless_proxy_plan(
         vless.add.clone()
     } else {
         vless.sni.clone()
+    };
+    let vless_hysteria = if net == "hysteria" {
+        if vless.tls != "tls"
+            || !vless.flow.is_empty()
+            || encryption.is_none()
+            || vless.hysteria_auth.is_empty()
+            || vless.ech.is_some()
+            || utls_fingerprint.is_some()
+            || tls_fragment.is_some()
+            || (!vless.alpn.is_empty() && vless.alpn != "h3")
+        {
+            return Err(format!(
+                "VLESS Hysteria requires auth, TLS with H3, Encryption, and empty flow for node {node_tag}"
+            ));
+        }
+        let tls = dae_outbound_core::hysteria2::Hysteria2TlsIdentity::from_node_and_global(
+            server_name.clone(),
+            vless.allow_insecure,
+            config.global.allow_insecure,
+            "",
+        )
+        .map_err(|error| format!("VLESS Hysteria TLS for node {node_tag}: {error}"))?;
+        Some(ResidentVlessHysteriaPlan {
+            auth: vless.hysteria_auth.clone(),
+            tls,
+        })
+    } else {
+        None
     };
     let xhttp_extra = if net == "xhttp" {
         resident_xhttp_extra_plan(
@@ -214,7 +275,7 @@ pub(crate) fn build_vless_proxy_plan(
     } else {
         String::new()
     };
-    let stream_path = if net == "grpc" {
+    let stream_path = if net == "xdrive" || net == "grpc" {
         resident_grpc_service_name(&vless.path)
     } else if let Some(meek_options) = &meek_options {
         meek_options.path.clone()
@@ -230,7 +291,7 @@ pub(crate) fn build_vless_proxy_plan(
     let graph = resident_graph_identity(&link);
     // Vision uses standalone TCP and XUDP. The mux option cannot send a TCP
     // substream under a Vision request.
-    let tcp_mux = net == "tcp" && vless.mux_options.tcp_enabled();
+    let tcp_mux = matches!(net.as_str(), "tcp" | "xdrive") && vless.mux_options.tcp_enabled();
     let handler = if vless.mux && !vision && (tcp_mux || vless.mux_options.xudp_enabled(tcp_mux)) {
         ResidentProxyProtocolPlan::VlessMuxTcpTls { key, encryption }
     } else {
@@ -268,6 +329,7 @@ pub(crate) fn build_vless_proxy_plan(
         xhttp_settings: xhttp_extra.settings,
         xhttp_xmux,
         vless_mux: vless.mux.then_some(vless.mux_options),
+        vless_hysteria,
         tls: vless.tls,
         allow_insecure,
         tls_fragment,

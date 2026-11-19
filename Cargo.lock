@@ -1195,6 +1195,7 @@ dependencies = [
  "dae-resident-core",
  "dae-resident-model",
  "dae-runtime-control",
+ "dae-tls",
  "fastrand",
  "foreign-types",
  "futures-util",
