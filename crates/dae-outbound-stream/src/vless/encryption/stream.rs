@@ -1404,23 +1404,52 @@ mod tests {
     }
 
     #[test]
-    fn record_aead_append_matches_allocating_wire_and_open() {
-        let payload = b"in-place-record-payload";
-        let aad = [23, 3, 3, 0, (payload.len() + AEAD_TAG_LEN) as u8];
-        for algorithm in [AeadAlgorithm::Aes, AeadAlgorithm::ChaCha] {
-            let mut allocating = AeadState::new(algorithm, b"fixture", &[0x11; 32]).unwrap();
-            let expected = allocating.seal_next(payload, &aad).unwrap();
+    fn record_aead_matches_rustcrypto_and_authenticates_before_advancing_read_buf() {
+        use aes_gcm::aead::{Aead, Payload};
+        use std::mem::MaybeUninit;
 
-            let mut in_place = AeadState::new(algorithm, b"fixture", &[0x11; 32]).unwrap();
+        let payload = b"out-of-place-record-payload";
+        let aad = [23, 3, 3, 0, (payload.len() + AEAD_TAG_LEN) as u8];
+        let key = derive_key_bytes(b"fixture", &[0x11; 32]);
+        let nonce = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        for algorithm in [AeadAlgorithm::Aes, AeadAlgorithm::ChaCha] {
+            let input = Payload {
+                msg: payload,
+                aad: &aad,
+            };
+            let expected = match algorithm {
+                AeadAlgorithm::Aes => {
+                    aes_gcm::Aes256Gcm::new((&key).into()).encrypt((&nonce).into(), input)
+                }
+                AeadAlgorithm::ChaCha => chacha20poly1305::ChaCha20Poly1305::new((&key).into())
+                    .encrypt((&nonce).into(), input),
+            }
+            .unwrap();
+            let make = || AeadState::new(algorithm, b"fixture", &[0x11; 32]).unwrap();
+
             let mut encoded = vec![0xaa, 0xbb];
-            in_place
+            make()
                 .seal_next_append(payload, &aad, &mut encoded)
                 .unwrap();
             assert_eq!(&encoded[2..], expected);
 
-            let mut opener = AeadState::new(algorithm, b"fixture", &[0x11; 32]).unwrap();
+            let mut storage = [MaybeUninit::uninit(); 64];
+            let mut output = ReadBuf::uninit(&mut storage);
+            output.put_slice(b"prefix");
+            make().open_next_into(&expected, &aad, &mut output).unwrap();
+            assert_eq!(&output.filled()[6..], payload);
+
+            let mut corrupted = expected.clone();
+            *corrupted.last_mut().unwrap() ^= 1;
+            assert!(
+                make()
+                    .open_next_into(&corrupted, &aad, &mut output)
+                    .is_err()
+            );
+            assert_eq!(output.filled().len(), 6 + payload.len());
+
             let mut ciphertext = expected;
-            opener.open_next_in_place(&mut ciphertext, &aad).unwrap();
+            make().open_next_in_place(&mut ciphertext, &aad).unwrap();
             assert_eq!(ciphertext, payload);
         }
     }
