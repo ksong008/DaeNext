@@ -1,6 +1,105 @@
 use super::*;
 use dae_outbound::shared_transport::grpc_hunk_frame;
 
+#[tokio::test]
+async fn grpc_payload_driver_drains_response_after_upload_end_stream() {
+    let (client_io, server_io) = tokio::io::duplex(1024);
+    let server = tokio::spawn(async move {
+        let mut connection = h2::server::handshake(server_io).await.unwrap();
+        let (request, mut respond) = connection.accept().await.unwrap().unwrap();
+        let reply = async move {
+            let mut body = request.into_body();
+            let mut uploaded = Vec::new();
+            while let Some(data) = body.data().await {
+                let data = data.unwrap();
+                body.flow_control().release_capacity(data.len()).unwrap();
+                uploaded.extend_from_slice(&data);
+            }
+            assert!(body.is_end_stream());
+            let expected: Vec<_> = [b"".as_slice(), b"request", b""]
+                .into_iter()
+                .flat_map(|data| grpc_hunk_frame(data).unwrap())
+                .collect();
+            assert_eq!(uploaded, expected);
+
+            let mut send = respond
+                .send_response(http::Response::new(()), false)
+                .unwrap();
+            for chunk in [b"first".as_slice(), b"second"] {
+                let frame = grpc_hunk_frame(chunk).unwrap();
+                send.send_data(Bytes::copy_from_slice(&frame[..3]), false)
+                    .unwrap();
+                send.send_data(Bytes::copy_from_slice(&frame[3..]), false)
+                    .unwrap();
+            }
+            let mut trailers = http::HeaderMap::new();
+            trailers.insert("grpc-status", http::HeaderValue::from_static("0"));
+            send.send_trailers(trailers).unwrap();
+        };
+        tokio::pin!(reply);
+        tokio::select! {
+            () = &mut reply => {},
+            _ = connection.accept() => panic!("H2 connection ended before the response"),
+        }
+        while connection.accept().await.is_some() {}
+    });
+
+    time::timeout(Duration::from_secs(3), async {
+        let (send, response, connection) =
+            open_grpc_h2_stream_on_io(client_io, grpc_payload_test_request(), &[])
+                .await
+                .unwrap();
+        let (mut stream, logical) = tokio::io::duplex(1024);
+        let driver = tokio::spawn(open_stream::drive_grpc_h2_payload_stream(
+            logical, send, response,
+        ));
+        stream.write_all(b"request").await.unwrap();
+        stream.shutdown().await.unwrap();
+        let mut received = Vec::new();
+        stream.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received, b"firstsecond");
+        driver.await.unwrap().unwrap();
+        connection.abort();
+    })
+    .await
+    .expect("gRPC driver failed to drain the response");
+    server.abort();
+}
+
+#[tokio::test]
+async fn grpc_payload_driver_propagates_upload_failure_with_response_pending() {
+    let (client_io, server_io) = tokio::io::duplex(1024);
+    let server = tokio::spawn(async move {
+        let mut connection = h2::server::handshake(server_io).await.unwrap();
+        let _pending_request = connection.accept().await.unwrap().unwrap();
+        while connection.accept().await.is_some() {}
+    });
+
+    time::timeout(Duration::from_secs(3), async {
+        let (mut send, response, connection) =
+            open_grpc_h2_stream_on_io(client_io, grpc_payload_test_request(), &[])
+                .await
+                .unwrap();
+        send.send_data(Bytes::new(), true).unwrap();
+        let (mut stream, logical) = tokio::io::duplex(1024);
+        stream.shutdown().await.unwrap();
+        let error = open_stream::drive_grpc_h2_payload_stream(logical, send, response)
+            .await
+            .unwrap_err();
+        assert!(error.contains("gRPC HTTP/2 send stream closed"), "{error}");
+        connection.abort();
+    })
+    .await
+    .expect("gRPC driver waited for the response after an upload failure");
+    server.abort();
+}
+
+fn grpc_payload_test_request() -> http::Request<()> {
+    http::Request::post("https://grpc.fixture.invalid/GunService/Tun")
+        .body(())
+        .unwrap()
+}
+
 #[test]
 fn pooled_frame_keeps_storage_until_the_final_bytes_slice_drops() {
     use std::sync::atomic::{AtomicUsize, Ordering};
