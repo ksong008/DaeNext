@@ -56,6 +56,8 @@ impl ResidentStreamWrapperPlan {
             "meek" => Self::Meek,
             "xhttp" => Self::Xhttp(if proxy.tls == "reality" {
                 ResidentXhttpHttpVersion::H2
+            } else if proxy.tls == "none" {
+                ResidentXhttpHttpVersion::H1
             } else {
                 ResidentXhttpHttpVersion::from_tls_alpn(&proxy.alpn)
             }),

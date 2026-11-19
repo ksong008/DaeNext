@@ -134,6 +134,11 @@ pub async fn handle_vless_grpc_tcp_connection_async(
     .await?;
     let tls_underlay = carrier_lease.tls_underlay();
     if let Some(encryption) = encryption {
+        let executor = if selection.proxy.tls == "none" {
+            "async-proxy-grpc-encrypted-h2c"
+        } else {
+            "async-proxy-grpc-encrypted-tls"
+        };
         let logical = spawn_grpc_h2_payload_stream(h2_send, h2_recv, carrier_lease);
         let mut encrypted = VlessEncryptedStream::handshake(logical, encryption)
             .await
@@ -166,14 +171,14 @@ pub async fn handle_vless_grpc_tcp_connection_async(
                     client_to_direct: stats.client_to_proxy,
                     direct_to_client: stats.proxy_to_client,
                 },
-                "async-proxy-grpc-encrypted-tls",
+                executor,
             );
             event["tls_underlay"] = json!(tls_underlay);
             event["stream_wrapper"] = json!("grpc");
             event["vless_encryption"] = json!(true);
             append_proxy_tcp_execution_fields(
                 &mut event,
-                "async-proxy-grpc-encrypted-tls",
+                executor,
                 "vless",
                 Some(tls_underlay),
                 None,
@@ -188,14 +193,14 @@ pub async fn handle_vless_grpc_tcp_connection_async(
                 sniff,
                 "vless",
                 &err.message,
-                "async-proxy-grpc-encrypted-tls",
+                executor,
             );
             event["tls_underlay"] = json!(tls_underlay);
             event["stream_wrapper"] = json!("grpc");
             event["vless_encryption"] = json!(true);
             append_proxy_tcp_execution_fields(
                 &mut event,
-                "async-proxy-grpc-encrypted-tls",
+                executor,
                 "vless",
                 Some(tls_underlay),
                 None,

@@ -23,7 +23,9 @@ pub async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if execution.wrapper == ResidentStreamWrapperPlan::WebSocket {
+    if execution.wrapper == ResidentStreamWrapperPlan::WebSocket
+        && execution.security.is_tls_stream()
+    {
         return handle_vless_websocket_tcp_connection_async(
             inbound,
             peer,
@@ -35,7 +37,9 @@ pub async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if execution.wrapper == ResidentStreamWrapperPlan::HttpUpgrade {
+    if execution.wrapper == ResidentStreamWrapperPlan::HttpUpgrade
+        && execution.security.is_tls_stream()
+    {
         return handle_vless_httpupgrade_tcp_connection_async(
             inbound,
             peer,
@@ -95,9 +99,7 @@ pub async fn handle_proxy_tcp_connection_async(
         )
         .await;
     }
-    if execution.wrapper == ResidentStreamWrapperPlan::None
-        && execution.security == ResidentSecurityUnderlayPlan::None
-    {
+    if execution.security == ResidentSecurityUnderlayPlan::None {
         return handle_vless_plain_tcp_connection_async(
             inbound,
             peer,
@@ -212,7 +214,9 @@ pub async fn handle_vless_plain_tcp_connection_async(
     sniff: &mut TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
-    let mut client = open_proxy_tcp_stream_with_binding(&selection.proxy, selection.mptcp).await?;
+    let wrapper = selection.proxy.execution_plan().wrapper;
+    let mut client =
+        open_plain_vless_tcp_stream(&selection.proxy, selection.mptcp, wrapper).await?;
     let encryption = selection.proxy.vless_encryption()?;
     let encryption_enabled = encryption.is_some();
     let key = selection.proxy.vless_key()?;
@@ -239,7 +243,21 @@ pub async fn handle_vless_plain_tcp_connection_async(
             .map_err(|err| format!("flush VLESS encrypted TCP request: {err}"))?;
         drop(request);
         let initial_payload = sniff.take_payload();
-        relay_tcp_over_vless_plain_async(inbound, &mut client, stop, initial_payload, metrics).await
+        if is_xtls_rprx_vision_flow(&selection.proxy.flow) {
+            relay_tcp_over_vless_vision_duplex(
+                inbound,
+                &mut client,
+                stop,
+                key,
+                initial_payload,
+                Vec::new(),
+                metrics,
+            )
+            .await
+        } else {
+            relay_tcp_over_vless_plain_async(inbound, &mut client, stop, initial_payload, metrics)
+                .await
+        }
     } else {
         client
             .write_all(&request)
@@ -259,6 +277,9 @@ pub async fn handle_vless_plain_tcp_connection_async(
             &stats,
             "async-proxy-plain",
         );
+        if wrapper != ResidentStreamWrapperPlan::None {
+            event["stream_wrapper"] = json!(wrapper.graph_label());
+        }
         event["vless_encryption"] = json!(encryption_enabled);
         event
     })
@@ -272,6 +293,9 @@ pub async fn handle_vless_plain_tcp_connection_async(
             &err,
             "async-proxy-plain",
         );
+        if wrapper != ResidentStreamWrapperPlan::None {
+            event["stream_wrapper"] = json!(wrapper.graph_label());
+        }
         event["vless_encryption"] = json!(encryption_enabled);
         Ok::<Value, String>(event)
     })

@@ -217,7 +217,7 @@ async fn delayed_h1_download_headers(ua: Option<&'static str>) {
         .unwrap();
     let body = time::timeout(
         Duration::from_secs(2),
-        open_xhttp_h1_download_stream_with_client(client, &endpoint, "session"),
+        open_xhttp_h1_download_stream_with_client(Either::Right(client), &endpoint, "session"),
     )
     .await
     .expect("download waited for response headers before allowing upload")

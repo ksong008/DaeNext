@@ -1,5 +1,5 @@
 use super::super::h1::{
-    XhttpH1ChunkedWriter, XhttpH1DownloadBody, open_xhttp_h1_download_stream,
+    XhttpH1ChunkedWriter, XhttpH1DownloadBody, open_xhttp_h1_client, open_xhttp_h1_download_stream,
     read_xhttp_h1_response_head,
 };
 use super::super::h2_transport::{
@@ -47,8 +47,7 @@ async fn open_xhttp_stream_one_parts(
     let upload_http_version = proxy.xhttp_primary_http_version();
     match upload_http_version {
         ResidentXhttpHttpVersion::H1 => {
-            let mut client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
-            let upload_underlay = async_tls_underlay_name(&client);
+            let (mut client, upload_underlay) = open_xhttp_h1_client(binding, mptcp).await?;
             write_xhttp_h1_chunked_request_head(&mut client, &endpoint, "", "stream-one").await?;
             write_xhttp_h1_chunk(&mut client, &initial_payload, false, "stream-one").await?;
             let (mut reader, writer) = tokio::io::split(client);
@@ -263,7 +262,12 @@ async fn open_xhttp_download_client(
     session_id: &str,
     separate_endpoint: bool,
 ) -> Result<XhttpDownloadClient, String> {
-    match endpoint.http_version() {
+    let version = if separate_endpoint {
+        endpoint.http_version()
+    } else {
+        binding.plan().xhttp_primary_http_version()
+    };
+    match version {
         ResidentXhttpHttpVersion::H1 => {
             let body = open_xhttp_h1_download_stream(
                 binding,
@@ -328,8 +332,7 @@ async fn open_xhttp_stream_upload_client(
     let proxy = binding.plan();
     match upload_http_version {
         ResidentXhttpHttpVersion::H1 => {
-            let mut client = open_async_resident_tls_client_with_binding(binding, mptcp).await?;
-            let upload_underlay = async_tls_underlay_name(&client);
+            let (mut client, upload_underlay) = open_xhttp_h1_client(binding, mptcp).await?;
             write_xhttp_h1_chunked_request_head(&mut client, endpoint, session_id, "stream-up")
                 .await?;
             write_xhttp_h1_chunk(&mut client, &initial_payload, false, "stream-up").await?;

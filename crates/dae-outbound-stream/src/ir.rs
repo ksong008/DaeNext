@@ -200,8 +200,10 @@ pub fn normalize_xhttp_mode_ref(
     has_download_settings: bool,
 ) -> XHttpModeRefResult {
     let mode = mode.trim();
+    let supported_scheme =
+        scheme == "https" || (scheme == "http" && security.eq_ignore_ascii_case("none"));
     if mode.is_empty() || mode.eq_ignore_ascii_case("auto") {
-        if scheme != "https" {
+        if !supported_scheme {
             return xhttp_mode_ref_err("auto mode without tls is not supported yet");
         }
         if security.eq_ignore_ascii_case("reality") {
@@ -219,13 +221,13 @@ pub fn normalize_xhttp_mode_ref(
         if has_download_settings {
             return xhttp_mode_ref_err("stream-one cannot use downloadSettings");
         }
-        if scheme == "https" {
+        if supported_scheme {
             return xhttp_mode_ref_ok("stream-one");
         }
         return xhttp_mode_ref_err("stream-one without tls is not supported yet");
     }
     if mode.eq_ignore_ascii_case("packet-up") {
-        if scheme == "https" {
+        if supported_scheme {
             return xhttp_mode_ref_ok("packet-up");
         }
         return xhttp_mode_ref_err("packet-up without tls is not supported yet");

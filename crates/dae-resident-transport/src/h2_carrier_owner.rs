@@ -26,8 +26,7 @@ use dae_resident_core::{
     H2CarrierOwnerResourceProfile, RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE, SharedResidentStopSignal,
 };
 use dae_resident_model::{
-    ResidentProtocolShape, ResidentProxyBinding, ResidentSecurityUnderlayPlan,
-    ResidentStreamWrapperPlan,
+    ResidentProxyBinding, ResidentSecurityUnderlayPlan, ResidentStreamWrapperPlan,
 };
 
 const H2_CARRIER_IDENTITY_DOMAIN: &[u8] = b"dae/h2-carrier-owner/v1";
@@ -972,10 +971,9 @@ async fn build_h2_carrier(
 > {
     let proxy = binding.plan();
     let execution = proxy.execution_plan();
-    let plain_vmess_grpc = execution.protocol == ResidentProtocolShape::VmessAead
-        && execution.wrapper == ResidentStreamWrapperPlan::Grpc
+    let cleartext_grpc = execution.wrapper == ResidentStreamWrapperPlan::Grpc
         && execution.security == ResidentSecurityUnderlayPlan::None;
-    let (client, tls_underlay) = if plain_vmess_grpc {
+    let (client, tls_underlay) = if cleartext_grpc {
         let remaining = deadline
             .remaining_at(Instant::now())
             .ok_or_else(|| "HTTP/2 carrier connect deadline elapsed".to_owned())?;

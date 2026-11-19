@@ -81,9 +81,17 @@ pub(crate) fn build_vless_proxy_plan(
             "resident dataplane ECH requires security=tls for VLESS node {node_tag}"
         ));
     }
-    if vless.tls == "none" && (net != "tcp" || vless.mux || !vless.flow.is_empty()) {
+    let encrypted_cleartext_wrapper = encryption.is_some()
+        && matches!(net.as_str(), "grpc" | "websocket" | "httpupgrade" | "xhttp");
+    let encrypted_raw_vision =
+        encryption.is_some() && net == "tcp" && is_xtls_rprx_vision_flow(&vless.flow);
+    if vless.tls == "none"
+        && ((!encrypted_cleartext_wrapper && net != "tcp")
+            || vless.mux
+            || (!vless.flow.is_empty() && !encrypted_raw_vision))
+    {
         return Err(format!(
-            "resident dataplane vless security=none currently admits native tcp empty-flow endpoints only for node {node_tag}; got net={net}, mux={}, flow='{}'",
+            "resident dataplane vless security=none requires native tcp or encrypted WS, HTTPUpgrade, gRPC, or xHTTP without mux, and Vision requires encrypted tcp for node {node_tag}; got net={net}, mux={}, flow='{}'",
             vless.mux, vless.flow
         ));
     }
@@ -101,6 +109,9 @@ pub(crate) fn build_vless_proxy_plan(
     }
     let requested_allow_insecure = vless.allow_insecure.unwrap_or(config.global.allow_insecure);
     let xhttp_primary_http_version = (net == "xhttp").then(|| {
+        if vless.tls == "none" {
+            return ResidentXhttpHttpVersion::H1;
+        }
         let alpn = if vless.alpn.trim().is_empty() {
             Vec::new()
         } else {
@@ -175,7 +186,7 @@ pub(crate) fn build_vless_proxy_plan(
     let xhttp_mode = if net == "xhttp" {
         let mode = ir::normalize_xhttp_mode(
             &vless.xhttp_mode,
-            "https",
+            if vless.tls == "none" { "http" } else { "https" },
             &vless.tls,
             xhttp_extra.download.is_some(),
         );
@@ -193,7 +204,9 @@ pub(crate) fn build_vless_proxy_plan(
                 alpn_result.error_contains
             ));
         }
-        validate_resident_xhttp_primary_alpn(&vless.alpn, &vless.tls, &node_tag)?;
+        if vless.tls != "none" {
+            validate_resident_xhttp_primary_alpn(&vless.alpn, &vless.tls, &node_tag)?;
+        }
         mode
     } else {
         ResidentXhttpMode::PacketUp
@@ -325,5 +338,8 @@ fn resident_vless_alpn(
     net: &str,
     fingerprint: Option<&ResidentUtlsFingerprintPlan>,
 ) -> Vec<String> {
+    if net == "xhttp" && vless.tls == "none" {
+        return Vec::new();
+    }
     resident_raw_tls_alpn(split_alpn(&vless.alpn), net, fingerprint)
 }

@@ -5,12 +5,13 @@ use dae_outbound_stream::websocket::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::AsyncVlessTlsClient;
+use crate::{AsyncPrefixedStream, AsyncVlessTlsClient, open_proxy_tcp_stream_with_binding};
 use crate::{
     HttpHeadRead, HttpHeadReadOptions, SpawnedLogicalStream, read_http_head,
     write_all_vectored_header_payload,
 };
 use dae_resident_core::RESIDENT_CONNECT_TIMEOUT;
+use dae_resident_model::{ResidentProxyBinding, ResidentStreamWrapperPlan};
 
 mod async_payload;
 mod duplex_control;
@@ -24,6 +25,33 @@ pub use framing::RESIDENT_WEBSOCKET_MAX_MESSAGE_BYTES;
 pub use framing::WebSocketBinaryFrameDecoder;
 
 pub const RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE: usize = 16 * 1024;
+
+pub async fn open_plain_vless_tcp_stream(
+    binding: &ResidentProxyBinding,
+    mptcp: bool,
+    wrapper: ResidentStreamWrapperPlan,
+) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + use<>, String> {
+    let mut stream = open_proxy_tcp_stream_with_binding(binding, mptcp).await?;
+    let options = HttpUpgradeOptions::new(&binding.stream_host, &binding.stream_path);
+    match wrapper {
+        ResidentStreamWrapperPlan::None => Ok(tokio_util::either::Either::Left(
+            AsyncPrefixedStream::new(Vec::new(), stream),
+        )),
+        ResidentStreamWrapperPlan::WebSocket => {
+            let leftover = websocket_handshake_over_async_stream(&mut stream, &options).await?;
+            Ok(tokio_util::either::Either::Right(
+                spawn_websocket_payload_stream(stream, leftover),
+            ))
+        }
+        ResidentStreamWrapperPlan::HttpUpgrade => {
+            let leftover = httpupgrade_handshake_over_async_stream(&mut stream, &options).await?;
+            Ok(tokio_util::either::Either::Left(AsyncPrefixedStream::new(
+                leftover, stream,
+            )))
+        }
+        _ => Err("unsupported plain VLESS TCP wrapper".to_owned()),
+    }
+}
 
 pub async fn websocket_handshake_over_resident_tls_async(
     client: &mut AsyncVlessTlsClient,
