@@ -224,11 +224,14 @@ impl AeadState {
         self.open_in_place(&nonce, ciphertext, aad)
     }
 
-    fn open_in_place(&self, nonce: &[u8; 12], ciphertext: &mut Vec<u8>, aad: &[u8]) -> Result<()> {
-        let payload_len = ciphertext
-            .len()
+    fn payload_len(record_len: usize) -> Result<usize> {
+        record_len
             .checked_sub(AEAD_TAG_LEN)
-            .ok_or_else(|| io_other("VLESS Encryption record is shorter than its AEAD tag"))?;
+            .ok_or_else(|| io_other("VLESS Encryption record is shorter than its AEAD tag"))
+    }
+
+    fn open_in_place(&self, nonce: &[u8; 12], ciphertext: &mut Vec<u8>, aad: &[u8]) -> Result<()> {
+        let payload_len = Self::payload_len(ciphertext.len())?;
         let (payload, tag) = ciphertext.split_at_mut(payload_len);
         self.cipher
             .open_in_place(nonce, payload, tag, aad)
@@ -249,9 +252,9 @@ impl AeadState {
         aad: &[u8],
         output: &mut ReadBuf<'_>,
     ) -> Result<()> {
+        let length = Self::payload_len(ciphertext.len())?;
         let nonce = Self::nonce_next(&mut self.nonce);
-        let (ciphertext, tag) = ciphertext.split_at(ciphertext.len() - AEAD_TAG_LEN);
-        let length = ciphertext.len();
+        let (ciphertext, tag) = ciphertext.split_at(length);
         // SAFETY: The destination has room for the full record and is disjoint
         // from the inputs. BoringSSL writes but does not read the destination.
         let ok = unsafe {
@@ -286,6 +289,7 @@ impl AeadState {
         key_material: &[u8],
         output: &mut ReadBuf<'_>,
     ) -> Result<()> {
+        let payload_len = Self::payload_len(ciphertext.len())?;
         let next_cipher = if self.nonce == MAX_NONCE {
             let mut context = Vec::with_capacity(header.len() + ciphertext.len());
             context.extend_from_slice(header);
@@ -294,7 +298,7 @@ impl AeadState {
         } else {
             None
         };
-        if ciphertext.len() - AEAD_TAG_LEN <= output.remaining() {
+        if payload_len <= output.remaining() {
             self.open_next_into(ciphertext, header, output)?;
             ciphertext.clear();
         } else {
@@ -1451,6 +1455,34 @@ mod tests {
             let mut ciphertext = expected;
             make().open_next_in_place(&mut ciphertext, &aad).unwrap();
             assert_eq!(ciphertext, payload);
+        }
+    }
+
+    #[test]
+    fn short_record_is_rejected_before_advancing_nonce_or_output() {
+        let mut aead = AeadState::new(AeadAlgorithm::Aes, b"fixture", &[0x11; 32]).unwrap();
+        let mut storage = [0_u8; 32];
+        let mut output = ReadBuf::new(&mut storage);
+        output.put_slice(b"prefix");
+        for length in [0, AEAD_TAG_LEN - 1] {
+            let mut ciphertext = vec![0; length];
+            let error = aead
+                .open_next_into(&ciphertext, &[], &mut output)
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "VLESS Encryption record is shorter than its AEAD tag"
+            );
+            let error = aead
+                .open_record(&mut ciphertext, &[], &[0x11; 32], &mut output)
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "VLESS Encryption record is shorter than its AEAD tag"
+            );
+            assert_eq!(aead.nonce, [0; 12]);
+            assert_eq!(output.filled(), b"prefix");
+            assert_eq!(ciphertext, vec![0; length]);
         }
     }
 
