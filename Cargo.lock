@@ -890,6 +890,7 @@ dependencies = [
  "dae-netutil",
  "dae-outbound-core",
  "fastrand",
+ "foreign-types",
  "getrandom 0.3.4",
  "hkdf",
  "md-5",
