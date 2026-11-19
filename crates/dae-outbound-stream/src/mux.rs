@@ -14,6 +14,8 @@ pub const OPTION_DATA: u8 = 0x01;
 pub const OPTION_ERROR: u8 = 0x02;
 pub const MUX_MAX_METADATA_BYTES: usize = 512;
 pub const MUX_MAX_PAYLOAD_BYTES: usize = u16::MAX as usize;
+// Xray reads each mux datagram into a single 8 KiB packet buffer.
+pub const MUX_MAX_DATAGRAM_BYTES: usize = 8192;
 pub const MUX_DATA_FRAME_HEADER_BYTES: usize = 8;
 pub const MUX_MAX_FRAME_BYTES: usize = 2 + MUX_MAX_METADATA_BYTES + 2 + MUX_MAX_PAYLOAD_BYTES;
 
@@ -66,10 +68,33 @@ impl MuxFrameOptions {
 }
 
 pub fn mux_new_frame(options: &MuxFrameOptions) -> Result<Vec<u8>, OutboundError> {
+    mux_new_frame_inner(options, None)
+}
+
+pub fn mux_new_datagram_frame(
+    options: &MuxFrameOptions,
+    payload: &[u8],
+) -> Result<Vec<u8>, OutboundError> {
+    if payload.len() > MUX_MAX_DATAGRAM_BYTES {
+        return Err(OutboundError::BadSharedTransport(
+            "mux datagram payload too large".to_owned(),
+        ));
+    }
+    mux_new_frame_inner(options, Some(payload))
+}
+
+fn mux_new_frame_inner(
+    options: &MuxFrameOptions,
+    payload: Option<&[u8]>,
+) -> Result<Vec<u8>, OutboundError> {
     let mut metadata = Vec::new();
     metadata.extend_from_slice(&options.id);
     metadata.push(SESSION_STATUS_NEW);
-    metadata.push(OPTION_NONE);
+    metadata.push(if payload.is_some() {
+        OPTION_DATA
+    } else {
+        OPTION_NONE
+    });
     metadata.push(if options.network == "udp" { 0x02 } else { 0x01 });
     metadata.extend_from_slice(&options.port.to_be_bytes());
     match options.host.parse::<IpAddr>() {
@@ -92,7 +117,12 @@ pub fn mux_new_frame(options: &MuxFrameOptions) -> Result<Vec<u8>, OutboundError
             metadata.extend_from_slice(options.host.as_bytes());
         }
     }
-    Ok(length_prefixed(metadata))
+    let mut frame = length_prefixed(metadata);
+    if let Some(payload) = payload {
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        frame.extend_from_slice(payload);
+    }
+    Ok(frame)
 }
 
 pub fn mux_data_frame(id: [u8; 2], payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
@@ -379,6 +409,22 @@ mod tests {
                 .push(&[0, 4, 0, 1, SESSION_STATUS_KEEP, 0x80])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn mux_new_datagram_frame_preserves_payload_boundaries() {
+        let options = MuxFrameOptions::new([0, 1], "192.0.2.1", 53, "udp");
+        for length in [0, 1, MUX_MAX_DATAGRAM_BYTES] {
+            let payload = vec![0x5a; length];
+            let bytes = mux_new_datagram_frame(&options, &payload).unwrap();
+            let mut decoder = MuxFrameDecoder::default();
+            let frames = decoder.push(&bytes).unwrap();
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0].status, SESSION_STATUS_NEW);
+            assert_eq!(frames[0].option, OPTION_DATA);
+            assert_eq!(frames[0].payload, payload);
+        }
+        assert!(mux_new_datagram_frame(&options, &[0; MUX_MAX_DATAGRAM_BYTES + 1]).is_err());
     }
 
     #[test]

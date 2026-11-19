@@ -157,8 +157,8 @@ pub use tuic_owner::{
 pub use vision::*;
 pub use vless_carrier::{VlessCarrierIo, open_vless_carrier};
 pub use vless_mux_owner::{
-    VlessMuxGenerationOwnerHandle, VlessMuxLogicalStream, acquire_vless_mux_logical_stream,
-    start_vless_mux_generation_owner_on,
+    VlessMuxGenerationOwnerHandle, VlessMuxLogicalStream, acquire_vless_mux_datagram_stream,
+    acquire_vless_mux_logical_stream, start_vless_mux_generation_owner_on,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use vless_mux_owner::{

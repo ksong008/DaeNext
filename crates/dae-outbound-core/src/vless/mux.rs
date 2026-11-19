@@ -33,6 +33,12 @@ pub struct VlessMuxOptions {
 }
 
 impl VlessMuxOptions {
+    pub fn xudp_limit(self) -> Option<usize> {
+        self.xudp_concurrency
+            .filter(|value| *value > 0)
+            .map(|value| value as usize)
+    }
+
     pub fn tcp_limit(self) -> Option<usize> {
         self.concurrency
             .filter(|value| *value >= 0)

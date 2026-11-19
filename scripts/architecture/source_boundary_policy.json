@@ -58,15 +58,15 @@
       "tests": 36671
     },
     "dae-resident-transport": {
-      "production": 37070,
-      "tests": 8703
+      "production": 37188,
+      "tests": 8705
     },
     "dae-resident-tcp": {
       "production": 14295,
       "tests": 850
     },
     "dae-resident-udp": {
-      "production": 14016,
+      "production": 14097,
       "tests": 2471
     },
     "dae-resident-dns": {

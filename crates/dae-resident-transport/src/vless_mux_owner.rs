@@ -13,9 +13,9 @@ use crate::owner_key::{OwnerKeyPin, OwnerKeyUsage};
 use bytes::Bytes;
 use dae_outbound_core::vmess::VMessMetadata;
 use dae_outbound_stream::mux::{
-    MuxFrame, MuxFrameDecoder, MuxFrameOptions, OPTION_DATA, SESSION_STATUS_END,
-    SESSION_STATUS_KEEP, SESSION_STATUS_KEEPALIVE, SESSION_STATUS_NEW, mux_end_frame,
-    mux_error_frame, mux_new_frame,
+    MUX_MAX_DATAGRAM_BYTES, MuxFrame, MuxFrameDecoder, MuxFrameOptions, OPTION_DATA,
+    SESSION_STATUS_END, SESSION_STATUS_KEEP, SESSION_STATUS_KEEPALIVE, SESSION_STATUS_NEW,
+    mux_end_frame, mux_error_frame, mux_new_datagram_frame, mux_new_frame,
 };
 use dae_outbound_stream::vless::{VlessEncryptedStream, packet};
 use dae_runtime_control::{AbsoluteDeadline, OwnerGeneration};
@@ -49,6 +49,7 @@ static VLESS_MUX_TRANSPORT_GENERATIONS: OnceLock<
 struct VlessMuxTransportKey {
     generation: OwnerGeneration,
     digest: [u8; 32],
+    xudp: bool,
 }
 
 impl VlessMuxTransportKey {
@@ -59,6 +60,7 @@ impl VlessMuxTransportKey {
                 VLESS_MUX_TRANSPORT_IDENTITY_DOMAIN,
                 binding,
             ),
+            xudp: false,
         }
     }
 }
@@ -193,6 +195,33 @@ struct VlessMuxGenerationOwner {
 enum VlessMuxCarrier {
     Plain(AsyncResidentTlsClient),
     Encrypted(VlessEncryptedStream<Box<dyn VlessCarrierIo>>),
+}
+
+struct VlessMuxPhysicalIo {
+    carrier: VlessMuxCarrier,
+    vision: Option<VisionMuxFraming>,
+}
+
+struct VisionMuxFraming {
+    uuid_sent: bool,
+    unpadder: crate::VisionUnpadder,
+}
+
+impl VlessMuxPhysicalIo {
+    async fn write_frame(&mut self, payload: &[u8]) -> std::io::Result<()> {
+        if let Some(vision) = &mut self.vision {
+            let padded = crate::vision_padding_block(
+                payload,
+                dae_resident_core::VISION_COMMAND_CONTINUE,
+                vision.unpadder.user_uuid,
+                &mut vision.uuid_sent,
+                false,
+            );
+            self.carrier.write_frame(&padded).await
+        } else {
+            self.carrier.write_frame(payload).await
+        }
+    }
 }
 
 impl VlessMuxCarrier {
@@ -573,6 +602,7 @@ impl AsyncWrite for VlessMuxLogicalStream {
 
 struct VlessMuxOpenCommand {
     target: String,
+    first_datagram: Option<Bytes>,
     deadline: AbsoluteDeadline,
     permit: VlessMuxLogicalPermit,
     response: oneshot::Sender<Result<VlessMuxLogicalStream, String>>,
@@ -593,6 +623,7 @@ enum VlessMuxLogicalEvent {
 
 struct VlessMuxSession {
     events: mpsc::Sender<VlessMuxLogicalEvent>,
+    datagram: bool,
     uplink_abort: tokio::task::AbortHandle,
     downlink_abort: tokio::task::AbortHandle,
     failure: Arc<OnceLock<String>>,
@@ -917,15 +948,45 @@ pub async fn acquire_vless_mux_logical_stream(
     target: String,
     deadline: AbsoluteDeadline,
 ) -> Result<VlessMuxLogicalStream, String> {
+    acquire_vless_mux_session(binding, target, deadline, None).await
+}
+
+pub async fn acquire_vless_mux_datagram_stream(
+    binding: ResidentProxyBinding,
+    target: std::net::SocketAddr,
+    first_datagram: Bytes,
+    deadline: AbsoluteDeadline,
+) -> Result<VlessMuxLogicalStream, String> {
+    if !binding.plan().requires_vless_xudp_owner() || first_datagram.len() > MUX_MAX_DATAGRAM_BYTES
+    {
+        return Err("VLESS mux owner rejected the XUDP session configuration".to_owned());
+    }
+    acquire_vless_mux_session(binding, target.to_string(), deadline, Some(first_datagram)).await
+}
+
+async fn acquire_vless_mux_session(
+    binding: ResidentProxyBinding,
+    target: String,
+    deadline: AbsoluteDeadline,
+    first_datagram: Option<Bytes>,
+) -> Result<VlessMuxLogicalStream, String> {
     let execution = binding.execution();
-    if execution.protocol != ResidentProtocolShape::VlessMux
-        || execution.wrapper != ResidentStreamWrapperPlan::Mux
+    let xudp = first_datagram.is_some();
+    if !xudp
+        && (execution.protocol != ResidentProtocolShape::VlessMux
+            || execution.wrapper != ResidentStreamWrapperPlan::Mux)
     {
         return Err("VLESS mux owner received a non-mux execution plan".to_owned());
     }
-    VMessMetadata::parse("tcp", &target)
+    VMessMetadata::parse(if xudp { "udp" } else { "tcp" }, &target)
         .map_err(|error| format!("build VLESS mux target metadata: {error}"))?;
-    let key = VlessMuxTransportKey::for_binding(&binding);
+    let mut key = VlessMuxTransportKey::for_binding(&binding);
+    key.xudp = xudp
+        && binding
+            .plan()
+            .vless_mux
+            .and_then(|mux| mux.xudp_limit())
+            .is_some();
     let owner = vless_mux_generation(key.generation)?;
     let (pool, key_pin) = vless_mux_pool(&owner, key)?;
     loop {
@@ -944,7 +1005,8 @@ pub async fn acquire_vless_mux_logical_stream(
         let selected = select_vless_mux_physical(&owner, &pool, &key_pin)?;
         if let Some((physical, permit)) = selected {
             drop(gate);
-            return open_vless_mux_logical(physical, permit, target, deadline).await;
+            return open_vless_mux_logical(physical, permit, target, deadline, first_datagram)
+                .await;
         }
         let capacity = try_reserve_vless_mux_physical(&owner, &pool, &key_pin);
         if let Some(capacity) = capacity {
@@ -955,7 +1017,8 @@ pub async fn acquire_vless_mux_logical_stream(
             let permit = physical.reserve_logical(&owner, &key_pin).ok_or_else(|| {
                 "new VLESS mux physical rejected its first logical stream".to_owned()
             })?;
-            return open_vless_mux_logical(physical, permit, target, deadline).await;
+            return open_vless_mux_logical(physical, permit, target, deadline, first_datagram)
+                .await;
         }
         let mut notified = Box::pin(owner.changed.notified());
         notified.as_mut().enable();
@@ -1185,15 +1248,25 @@ async fn build_vless_mux_physical_on_owner(
     })
     .await
     .map_err(|_| "VLESS mux carrier handshake deadline elapsed".to_owned())??;
-    let header = packet::request_header(&key_bytes, "", "tcp", "0.0.0.0:0", true, &[])
+    let vision =
+        key.xudp && dae_outbound_core::vless::contract::is_xtls_rprx_vision_flow(&proxy.flow);
+    let flow = if vision { proxy.flow.as_str() } else { "" };
+    let header = packet::request_header(&key_bytes, flow, "tcp", "0.0.0.0:0", true, &[])
         .map_err(|error| format!("build VLESS mux request header: {error}"))?;
-    write_vless_mux_physical_until(
-        &mut client,
-        &header,
-        "write VLESS mux request header",
-        deadline,
-    )
-    .await?;
+    let remaining = deadline
+        .remaining_at(Instant::now())
+        .ok_or_else(|| "VLESS mux request header deadline elapsed".to_owned())?;
+    time::timeout(remaining, client.write_frame(&header))
+        .await
+        .map_err(|_| "VLESS mux request header deadline elapsed".to_owned())?
+        .map_err(|error| format!("write VLESS mux request header: {error}"))?;
+    let client = VlessMuxPhysicalIo {
+        carrier: client,
+        vision: vision.then(|| VisionMuxFraming {
+            uuid_sent: false,
+            unpadder: crate::VisionUnpadder::new(key_bytes),
+        }),
+    };
     let instance_id = owner
         .next_physical_id
         .fetch_add(1, Ordering::Relaxed)
@@ -1203,10 +1276,17 @@ async fn build_vless_mux_physical_on_owner(
         stop: dae_resident_core::ResidentStopSignal::shared(),
         instance_id,
         sender: sender.clone(),
-        logical_stream_limit: proxy
-            .vless_mux
-            .and_then(|mux| mux.tcp_limit())
-            .unwrap_or(usize::MAX),
+        logical_stream_limit: if key.xudp {
+            proxy
+                .vless_mux
+                .and_then(|mux| mux.xudp_limit())
+                .expect("validated XUDP mux capacity")
+        } else {
+            proxy
+                .vless_mux
+                .and_then(|mux| mux.tcp_limit())
+                .unwrap_or(usize::MAX)
+        },
         active_logical: AtomicUsize::new(0),
         cumulative_logical: AtomicUsize::new(0),
         accepting: AtomicBool::new(true),
@@ -1257,10 +1337,12 @@ async fn open_vless_mux_logical(
     permit: VlessMuxLogicalPermit,
     target: String,
     deadline: AbsoluteDeadline,
+    first_datagram: Option<Bytes>,
 ) -> Result<VlessMuxLogicalStream, String> {
     let (response, receiver) = oneshot::channel();
     let command = VlessMuxPhysicalCommand::Open(VlessMuxOpenCommand {
         target,
+        first_datagram,
         deadline,
         permit,
         response,
@@ -1295,7 +1377,7 @@ async fn open_vless_mux_logical(
 }
 
 async fn run_vless_mux_physical(
-    mut client: VlessMuxCarrier,
+    mut client: VlessMuxPhysicalIo,
     mut commands: mpsc::Receiver<VlessMuxPhysicalCommand>,
     sender: mpsc::Sender<VlessMuxPhysicalCommand>,
     physical: Arc<VlessMuxPhysicalHandle>,
@@ -1385,7 +1467,7 @@ async fn run_vless_mux_physical(
                         VlessMuxPhysicalCommand::Close => break,
                     }
                 }
-                read = client.read(&mut read_buffer) => {
+                read = client.carrier.read(&mut read_buffer) => {
                     let read = match read {
                         Ok(0) => {
                             terminal_error = Some("VLESS mux physical closed by peer".to_owned());
@@ -1407,6 +1489,16 @@ async fn run_vless_mux_physical(
                     if payload.is_empty() {
                         continue;
                     }
+                    let payload = match client.vision.as_mut() {
+                        Some(vision) => match vision.unpadder.consume_shared(std::borrow::Cow::Owned(payload)) {
+                            Ok(payload) => payload.into_owned(),
+                            Err(error) => {
+                                terminal_error = Some(error);
+                                break;
+                            }
+                        },
+                        None => payload,
+                    };
                     let frames = match decoder.push(&payload) {
                         Ok(frames) => frames,
                         Err(error) => {
@@ -1457,12 +1549,13 @@ async fn run_vless_mux_physical(
             "VLESS mux physical owner closed",
         );
     }
-    let _ = dae_resident_core::run_until_resident_stop(&physical.stop, client.shutdown()).await;
+    let _ =
+        dae_resident_core::run_until_resident_stop(&physical.stop, client.carrier.shutdown()).await;
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn open_vless_mux_session(
-    client: &mut VlessMuxCarrier,
+    client: &mut VlessMuxPhysicalIo,
     sessions: &mut HashMap<u16, VlessMuxSession>,
     allocator: &mut VlessMuxSidAllocator,
     sender: &mpsc::Sender<VlessMuxPhysicalCommand>,
@@ -1471,7 +1564,9 @@ async fn open_vless_mux_session(
     tls_underlay: &'static str,
     command: VlessMuxOpenCommand,
 ) -> Result<(), String> {
-    let metadata = match VMessMetadata::parse("tcp", &command.target) {
+    let datagram = command.first_datagram.is_some();
+    let network = if datagram { "udp" } else { "tcp" };
+    let metadata = match VMessMetadata::parse(network, &command.target) {
         Ok(metadata) => metadata,
         Err(error) => {
             let _ = command
@@ -1491,9 +1586,13 @@ async fn open_vless_mux_session(
         sid.to_be_bytes(),
         metadata.hostname(),
         metadata.port(),
-        "tcp",
+        network,
     );
-    let frame = match mux_new_frame(&options) {
+    let frame = match command.first_datagram {
+        Some(payload) => mux_new_datagram_frame(&options, &payload),
+        None => mux_new_frame(&options),
+    };
+    let frame = match frame {
         Ok(frame) => frame,
         Err(error) => {
             let _ = command
@@ -1527,6 +1626,7 @@ async fn open_vless_mux_session(
         sid,
         sender.clone(),
         owner.resources.frame_bytes(),
+        datagram,
     ));
     let downlink = owner.runtime.spawn(run_vless_mux_downlink(
         owner_write,
@@ -1534,11 +1634,13 @@ async fn open_vless_mux_session(
         sid,
         sender.clone(),
         Arc::clone(&failure),
+        datagram,
     ));
     sessions.insert(
         sid,
         VlessMuxSession {
             events,
+            datagram,
             uplink_abort: uplink.abort_handle(),
             downlink_abort: downlink.abort_handle(),
             failure: Arc::clone(&failure),
@@ -1566,17 +1668,43 @@ async fn run_vless_mux_uplink(
     sid: u16,
     sender: mpsc::Sender<VlessMuxPhysicalCommand>,
     frame_bytes: usize,
+    datagram: bool,
 ) {
     let prefix = dae_outbound_stream::mux::MUX_DATA_FRAME_HEADER_BYTES;
     loop {
         let mut buffer = PooledBuffer::with_capacity(prefix + frame_bytes.max(1));
-        buffer.resize(prefix + frame_bytes.max(1), 0);
-        match stream.read(&mut buffer[prefix..]).await {
-            Ok(0) => {
+        let read = if datagram {
+            async {
+                let mut length = [0_u8; 2];
+                if stream.read(&mut length[..1]).await? == 0 {
+                    return Ok(None);
+                }
+                stream.read_exact(&mut length[1..]).await?;
+                let length = usize::from(u16::from_be_bytes(length));
+                if length > MUX_MAX_DATAGRAM_BYTES {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "VLESS mux datagram payload too large",
+                    ));
+                }
+                buffer.resize(prefix + length, 0);
+                stream.read_exact(&mut buffer[prefix..]).await?;
+                Ok::<_, std::io::Error>(Some(length))
+            }
+            .await
+        } else {
+            buffer.resize(prefix + frame_bytes.max(1), 0);
+            stream
+                .read(&mut buffer[prefix..])
+                .await
+                .map(|read| (read != 0).then_some(read))
+        };
+        match read {
+            Ok(None) => {
                 let _ = sender.send(VlessMuxPhysicalCommand::LocalEnd { sid }).await;
                 return;
             }
-            Ok(read) => {
+            Ok(Some(read)) => {
                 let header = match dae_outbound_stream::mux::mux_data_frame_header(
                     sid.to_be_bytes(),
                     read,
@@ -1624,11 +1752,21 @@ async fn run_vless_mux_downlink(
     sid: u16,
     sender: mpsc::Sender<VlessMuxPhysicalCommand>,
     failure: Arc<OnceLock<String>>,
+    datagram: bool,
 ) {
     while let Some(event) = events.recv().await {
         match event {
             VlessMuxLogicalEvent::Payload(payload) => {
-                if let Err(error) = stream.write_all(&payload).await {
+                let result = async {
+                    if datagram {
+                        stream
+                            .write_all(&(payload.len() as u16).to_be_bytes())
+                            .await?;
+                    }
+                    stream.write_all(&payload).await
+                }
+                .await;
+                if let Err(error) = result {
                     let message = format!("write VLESS mux logical downlink: {error}");
                     let _ = failure.set(message.clone());
                     let _ = sender
@@ -1647,7 +1785,7 @@ async fn run_vless_mux_downlink(
 }
 
 async fn handle_vless_mux_response_frame(
-    client: &mut VlessMuxCarrier,
+    client: &mut VlessMuxPhysicalIo,
     frame: MuxFrame,
     sessions: &mut HashMap<u16, VlessMuxSession>,
     allocator: &mut VlessMuxSidAllocator,
@@ -1661,7 +1799,10 @@ async fn handle_vless_mux_response_frame(
             .fetch_add(1, Ordering::Relaxed);
         return Err("VLESS mux server sent a forbidden New frame".to_owned());
     }
-    if frame.metadata.len() != 4 {
+    let datagram = sessions.get(&sid).is_some_and(|session| session.datagram);
+    if frame.metadata.len() != 4
+        && !(datagram && frame.status == SESSION_STATUS_KEEP && frame.metadata.get(4) == Some(&2))
+    {
         return Err(format!(
             "VLESS mux non-New metadata length is {}, expected 4",
             frame.metadata.len()
@@ -1700,7 +1841,7 @@ async fn handle_vless_mux_response_frame(
             .map_err(|error| format!("reject unknown VLESS mux Session ID: {error}"))?;
         return Ok(());
     };
-    if frame.option & OPTION_DATA == 0 || frame.payload.is_empty() {
+    if frame.option & OPTION_DATA == 0 || (!datagram && frame.payload.is_empty()) {
         return Ok(());
     }
     if session
@@ -1793,7 +1934,7 @@ fn fan_out_vless_mux_failure(
 }
 
 async fn write_vless_mux_physical_until(
-    client: &mut (impl AsyncWrite + Unpin),
+    client: &mut VlessMuxPhysicalIo,
     payload: &[u8],
     label: &str,
     deadline: AbsoluteDeadline,
@@ -1801,18 +1942,10 @@ async fn write_vless_mux_physical_until(
     let remaining = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| format!("{label}: absolute deadline elapsed"))?;
-    time::timeout(remaining, async {
-        client
-            .write_all(payload)
-            .await
-            .map_err(|error| format!("{label}: {error}"))?;
-        client
-            .flush()
-            .await
-            .map_err(|error| format!("flush {label}: {error}"))
-    })
-    .await
-    .map_err(|_| format!("{label}: absolute deadline elapsed"))?
+    time::timeout(remaining, client.write_frame(payload))
+        .await
+        .map_err(|_| format!("{label}: absolute deadline elapsed"))?
+        .map_err(|error| format!("{label}: {error}"))
 }
 
 // Every acquirer, logical permit and build/actor capacity guard pins its entry.
