@@ -11,7 +11,7 @@ use dae_outbound_stream::{
 };
 use dae_resident_transport::{
     httpupgrade_handshake_over_resident_tls_async as native_httpupgrade_handshake_over_resident_tls_async,
-    open_plain_vless_tcp_stream,
+    open_plain_vless_tcp_stream, open_vless_carrier,
     websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async,
     write_websocket_binary_frame_over_resident_tls_async as native_write_websocket_binary_frame_over_resident_tls_async,
 };
@@ -61,6 +61,32 @@ pub(super) async fn open_vless_native_tcp_tunnel(
 
     if execution.protocol == ResidentProtocolShape::VlessMux {
         return open_vless_mux_native_tcp_tunnel(selection, target, owner_deadline).await;
+    }
+    if execution.protocol == ResidentProtocolShape::VlessVision
+        && execution.wrapper != ResidentStreamWrapperPlan::None
+    {
+        let encryption = selection
+            .proxy
+            .vless_encryption()
+            .map_err(NativeTcpProbeError::Open)?
+            .ok_or_else(|| {
+                NativeTcpProbeError::Open("wrapped VLESS Vision requires Encryption".to_owned())
+            })?;
+        let (carrier, _) = open_vless_carrier(&selection.proxy, selection.mptcp)
+            .await
+            .map_err(NativeTcpProbeError::Open)?;
+        let mut stream = VlessEncryptedStream::handshake(carrier, encryption)
+            .await
+            .map_err(|err| {
+                NativeTcpProbeError::Open(format!("VLESS Encryption Vision handshake: {err}"))
+            })?;
+        stream.write_all(&request).await.map_err(|err| {
+            NativeTcpProbeError::Open(format!("write VLESS Vision request: {err}"))
+        })?;
+        stream.flush().await.map_err(|err| {
+            NativeTcpProbeError::Open(format!("flush VLESS Vision request: {err}"))
+        })?;
+        return Ok(open_vless_vision_encrypted_probe(stream, key));
     }
     if execution.security == ResidentSecurityUnderlayPlan::None
         && matches!(

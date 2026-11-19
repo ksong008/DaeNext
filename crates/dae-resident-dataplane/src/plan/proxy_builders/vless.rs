@@ -33,15 +33,8 @@ pub(crate) fn build_vless_proxy_plan(
             "resident dataplane rejects VLESS Encryption + mux + xtls-rprx-vision for node {node_tag}; a Vision-aware mux/XUDP executor is not admitted"
         ));
     }
-    if encryption.is_some()
-        && (vless.mux && net != "tcp"
-            || (!vless.flow.is_empty() && (net != "tcp" || !is_xtls_rprx_vision_flow(&vless.flow))))
-    {
-        return Err(format!(
-            "resident dataplane VLESS Encryption admits tcp Vision or empty-flow official wrappers only for node {node_tag}; got net={net}, mux={}, flow='{}'",
-            vless.mux, vless.flow
-        ));
-    }
+    let encrypted_wrapper = encryption.is_some()
+        && matches!(net.as_str(), "grpc" | "websocket" | "httpupgrade" | "xhttp");
     if vless.mux && net != "tcp" {
         return Err(format!(
             "resident dataplane vless mux transport admits tcp carrier only for node {node_tag}; got {net}"
@@ -56,7 +49,7 @@ pub(crate) fn build_vless_proxy_plan(
             ));
         }
         "websocket" | "httpupgrade" | "grpc" | "h2" | "xhttp" | "meek"
-            if !vless.flow.is_empty() =>
+            if !vless.flow.is_empty() && !encrypted_wrapper =>
         {
             return Err(format!(
                 "resident dataplane vless wrapped-stream handler admits only empty flow, got '{}' for node {node_tag}; resident shape remains fail-closed for this config",
@@ -81,17 +74,14 @@ pub(crate) fn build_vless_proxy_plan(
             "resident dataplane ECH requires security=tls for VLESS node {node_tag}"
         ));
     }
-    let encrypted_cleartext_wrapper = encryption.is_some()
-        && matches!(net.as_str(), "grpc" | "websocket" | "httpupgrade" | "xhttp");
-    let encrypted_raw_vision =
-        encryption.is_some() && net == "tcp" && is_xtls_rprx_vision_flow(&vless.flow);
+    let encrypted_vision = encryption.is_some() && (net == "tcp" || encrypted_wrapper);
     if vless.tls == "none"
-        && ((!encrypted_cleartext_wrapper && net != "tcp")
+        && ((!encrypted_wrapper && net != "tcp")
             || vless.mux
-            || (!vless.flow.is_empty() && !encrypted_raw_vision))
+            || (!vless.flow.is_empty() && !encrypted_vision))
     {
         return Err(format!(
-            "resident dataplane vless security=none requires native tcp or encrypted WS, HTTPUpgrade, gRPC, or xHTTP without mux, and Vision requires encrypted tcp for node {node_tag}; got net={net}, mux={}, flow='{}'",
+            "resident dataplane vless security=none requires native tcp or encrypted WS, HTTPUpgrade, gRPC, or xHTTP without mux, and Vision requires Encryption for node {node_tag}; got net={net}, mux={}, flow='{}'",
             vless.mux, vless.flow
         ));
     }

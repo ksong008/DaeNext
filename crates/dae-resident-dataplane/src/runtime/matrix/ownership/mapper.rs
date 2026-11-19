@@ -75,14 +75,7 @@ fn materialized_runtime_ownership_result(
 fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfile> {
     match shape.protocol {
         Protocol::VlessStandard => vless_standard_profile(shape),
-        Protocol::VlessVision => exact_profile(
-            shape,
-            STANDARD_OR_REALITY_SECURITY,
-            WrapperDimension::None,
-            UdpDimension::VlessVision,
-            FLOW_STREAM_PACKET_OWNERSHIP,
-        )
-        .or_else(|| {
+        Protocol::VlessVision => vless_vision_profile(shape).or_else(|| {
             exact_profile(
                 shape,
                 STANDARD_OR_REALITY_SECURITY,
@@ -195,6 +188,35 @@ fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
             UdpDimension::Juicity,
             GENERATION_OWNED_JUICITY_OWNERSHIP,
         ),
+    }
+}
+
+fn vless_vision_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfile> {
+    use SecurityDimension as Security;
+    use WrapperDimension as Wrapper;
+
+    if shape.udp != UdpDimension::VlessVision {
+        return None;
+    }
+    let stream_security =
+        shape.security == Security::None || is_standard_or_reality_security(shape.security);
+    match shape.wrapper {
+        Wrapper::None | Wrapper::WebSocket | Wrapper::HttpUpgrade if stream_security => {
+            Some(FLOW_STREAM_PACKET_OWNERSHIP)
+        }
+        Wrapper::Grpc if stream_security => Some(GENERATION_OWNED_H2_PACKET_OWNERSHIP),
+        Wrapper::XhttpH1
+            if shape.security == Security::None || is_standard_tls_security(shape.security) =>
+        {
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
+        }
+        Wrapper::XhttpH2 if is_standard_or_reality_security(shape.security) => {
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
+        }
+        Wrapper::XhttpH3 if shape.security == Security::QuicTls => {
+            Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
+        }
+        _ => None,
     }
 }
 

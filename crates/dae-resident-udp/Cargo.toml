@@ -37,7 +37,6 @@ quinn.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
-tokio-util.workspace = true
 
 [dev-dependencies]
 dae-outbound = { workspace = true, features = ["test-support"] }

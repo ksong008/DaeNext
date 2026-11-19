@@ -26,6 +26,7 @@ impl ResidentTcpCarrierOwnership {
                 Self::GenerationFramed
             }
             ResidentProtocolShape::VlessStandard
+            | ResidentProtocolShape::VlessVision
             | ResidentProtocolShape::Trojan
             | ResidentProtocolShape::VmessAead
                 if matches!(

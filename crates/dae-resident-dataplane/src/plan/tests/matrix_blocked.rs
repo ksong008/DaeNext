@@ -78,7 +78,7 @@ pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted
             plain_vision_link,
         )
         .unwrap_err()
-        .contains("Vision requires encrypted tcp")
+        .contains("Vision requires Encryption")
     );
 
     let reality_vision = build_resident_proxy_plan_for_node(

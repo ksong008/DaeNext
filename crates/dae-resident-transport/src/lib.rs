@@ -49,6 +49,7 @@ mod tls_client;
 mod transport_identity;
 mod tuic_owner;
 mod vision;
+mod vless_carrier;
 mod vless_mux_owner;
 mod vmess_http_header;
 mod websocket;
@@ -154,6 +155,7 @@ pub use tuic_owner::{
     start_tuic_owner_registry, start_tuic_owner_registry_on,
 };
 pub use vision::*;
+pub use vless_carrier::{VlessCarrierIo, open_vless_carrier};
 pub use vless_mux_owner::{
     VlessMuxGenerationOwnerHandle, VlessMuxLogicalStream, acquire_vless_mux_logical_stream,
     start_vless_mux_generation_owner_on,
