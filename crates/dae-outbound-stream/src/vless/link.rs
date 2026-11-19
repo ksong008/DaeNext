@@ -61,7 +61,7 @@ impl VLESSLink {
                 .to_owned(),
             port: url.port().map(|port| port.to_string()).unwrap_or_default(),
             id: url.username().to_owned(),
-            net: query_value(&query, "type").unwrap_or_default(),
+            net: canonical_transport(query_value(&query, "type").unwrap_or_default()),
             r#type: query_value(&query, "headerType").unwrap_or_default(),
             host: query_value(&query, "host").unwrap_or_default(),
             sni: query_value(&query, "sni").unwrap_or_default(),
@@ -89,9 +89,6 @@ impl VLESSLink {
             encryption: query_value(&query, "encryption").unwrap_or_default(),
             protocol: "vless".to_owned(),
         };
-        if parsed.net.is_empty() {
-            parsed.net = "tcp".to_owned();
-        }
         if parsed.net == "grpc" {
             parsed.path = query_value(&query, "serviceName").unwrap_or_default();
             parsed.grpc_mode =
@@ -183,10 +180,10 @@ impl VLESSLink {
             "meek" => push_if_non_empty(&mut query, "url", &self.path),
             _ => {}
         }
+        push_if_non_empty(&mut query, "flow", &canonical_flow(&self.flow));
         if self.tls != "none" {
             push_if_non_empty(&mut query, "sni", &self.sni);
             push_if_non_empty(&mut query, "alpn", &self.alpn);
-            push_if_non_empty(&mut query, "flow", &canonical_flow(&self.flow));
             push_if_non_empty(&mut query, "fp", &self.fingerprint);
             if let Some(ech) = &self.ech {
                 push_if_non_empty(&mut query, "ech", ech.canonical_base64());
@@ -229,6 +226,14 @@ impl VLESSLink {
     }
 }
 
+fn canonical_transport(net: String) -> String {
+    match net.as_str() {
+        "" | "raw" => "tcp".to_owned(),
+        "splithttp" => "xhttp".to_owned(),
+        _ => net,
+    }
+}
+
 fn parse_mux_enabled(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)]) -> bool {
     query_value(query, "mux")
         .or_else(|| query_value(query, "muxEnabled"))
@@ -241,6 +246,34 @@ fn canonical_flow(flow: &str) -> String {
         String::new()
     } else {
         flow.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod transport_alias_tests {
+    use super::VLESSLink;
+
+    #[test]
+    fn xray_aliases_keep_vless_transport_fields() {
+        let link = "vless://test@example.invalid:443?security=tls&mode=stream-up&path=%2Froute&extra=%7B%22noSSEHeader%22%3Atrue%7D&encryption=mlkem768x25519plus.native.1rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let parsed = VLESSLink::parse(&format!("{link}&type=splithttp")).unwrap();
+        assert_eq!(
+            parsed,
+            VLESSLink::parse(&format!("{link}&type=xhttp")).unwrap()
+        );
+        assert_eq!(parsed.xhttp_mode, "stream-up");
+        assert_eq!(parsed.path, "/route");
+        assert_eq!(VLESSLink::parse(&parsed.export_url()).unwrap(), parsed);
+        assert_eq!(
+            VLESSLink::parse(&format!("{link}&type=raw")).unwrap().net,
+            "tcp"
+        );
+        assert_eq!(
+            VLESSLink::parse(&format!("{link}&type=xdrive"))
+                .unwrap()
+                .net,
+            "xdrive"
+        );
     }
 }
 
