@@ -77,18 +77,12 @@ pub(crate) fn build_vless_proxy_plan(
     let encrypted_vision = encryption.is_some() && (net == "tcp" || encrypted_wrapper);
     if vless.tls == "none"
         && ((!encrypted_wrapper && net != "tcp")
-            || vless.mux
+            || (vless.mux && encryption.is_none())
             || (!vless.flow.is_empty() && !encrypted_vision))
     {
         return Err(format!(
-            "resident dataplane vless security=none requires native tcp or encrypted WS, HTTPUpgrade, gRPC, or xHTTP without mux, and Vision requires Encryption for node {node_tag}; got net={net}, mux={}, flow='{}'",
+            "resident dataplane vless security=none requires native tcp or encrypted WS, HTTPUpgrade, gRPC, or xHTTP, and Vision and mux require Encryption for node {node_tag}; got net={net}, mux={}, flow='{}'",
             vless.mux, vless.flow
-        ));
-    }
-    if vless.mux && vless.tls != "tls" {
-        return Err(format!(
-            "resident dataplane vless mux transport admits standard tls underlay only for node {node_tag}; got {}",
-            vless.tls
         ));
     }
     if net == "h2" && vless.tls != "tls" {

@@ -41,7 +41,7 @@ fn every_protocol_shape_has_a_deliberate_valid_ownership_tuple() {
                 Protocol::VlessMux,
                 Security::StandardTls,
                 Wrapper::Mux,
-                Udp::PolicyClosed(Closed::VlessMux),
+                Udp::VlessMuxXudp,
             ),
             GENERATION_OWNED_VLESS_MUX_OWNERSHIP,
         ),

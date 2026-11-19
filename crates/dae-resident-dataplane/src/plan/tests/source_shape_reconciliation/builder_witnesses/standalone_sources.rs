@@ -163,6 +163,7 @@ pub(super) fn standalone_builder_sources() -> Vec<String> {
         vless_xhttp_parser_fixture_url("packet-up", "h2", ""),
         vless_xhttp_parser_fixture_url("packet-up", "h3", ""),
         vless_mux_fixture_url(),
+        with_vless_encryption(vless_mux_fixture_url().replace("security=tls", "security=none")),
         http_transport_fixture_url(&primary, fixture_port(3)),
         https_proxy_insecure_fixture_url(&primary, fixture_port(3)),
         https_proxy_utls_fixture_url(&primary, fixture_port(3)),

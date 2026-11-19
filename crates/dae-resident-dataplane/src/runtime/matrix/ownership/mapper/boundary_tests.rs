@@ -47,7 +47,7 @@ fn legal_tcp_with_policy_closed_udp_keeps_its_explicit_ownership() {
         Protocol::VlessMux,
         Security::StandardTls,
         Wrapper::Mux,
-        Udp::PolicyClosed(Closed::VlessMux),
+        Udp::VlessMuxXudp,
     );
     assert_eq!(
         profile_for_shape(mux),

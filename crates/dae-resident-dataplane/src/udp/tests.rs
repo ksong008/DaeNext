@@ -194,10 +194,6 @@ pub(in crate::udp) mod tests {
                 inner_cipher: String::new(),
                 inner_password: String::new(),
             }),
-            test_udp_proxy(ResidentProxyProtocolPlan::VlessMuxTcpTls {
-                key: [0; 16],
-                encryption: None,
-            }),
         ];
 
         let mut trojan = test_udp_proxy(ResidentProxyProtocolPlan::TrojanTcpTls {
@@ -462,6 +458,13 @@ pub(in crate::udp) mod tests {
                 UdpExecutorShape::VlessVision,
             ),
             (
+                ResidentProxyProtocolPlan::VlessMuxTcpTls {
+                    key: [0; 16],
+                    encryption: None,
+                },
+                UdpExecutorShape::VlessVision,
+            ),
+            (
                 ResidentProxyProtocolPlan::TrojanTcpTls {
                     password: String::new(),
                 },
@@ -611,10 +614,6 @@ pub(in crate::udp) mod tests {
         }
 
         let fail_closed = [
-            ResidentProxyProtocolPlan::VlessMuxTcpTls {
-                key: [0; 16],
-                encryption: None,
-            },
             ResidentProxyProtocolPlan::ShadowsocksSimpleObfsHttpTcp {
                 cipher: String::new(),
                 password: String::new(),

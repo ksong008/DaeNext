@@ -100,6 +100,7 @@ pub enum ResidentUdpExecutorFactory {
     Shadowsocks2022,
     VlessStandard(ResidentStreamPacketTransport),
     VlessVisionXudp,
+    VlessMuxXudp,
     Trojan(ResidentStreamPacketTransport),
     Vmess(ResidentStreamPacketTransport),
     AnyTlsPacketStream,
@@ -128,6 +129,7 @@ impl ResidentUdpExecutorFactory {
             }
             Self::VlessStandard(_)
             | Self::VlessVisionXudp
+            | Self::VlessMuxXudp
             | Self::Vmess(_)
             | Self::AnyTlsPacketStream => {
                 ResidentUdpSourceContract::fixed_target(Wire::SessionBoundTarget)
@@ -147,6 +149,7 @@ impl ResidentUdpExecutorFactory {
             | Self::Shadowsocks2022
             | Self::VlessStandard(_)
             | Self::VlessVisionXudp
+            | Self::VlessMuxXudp
             | Self::Trojan(_)
             | Self::Vmess(_)
             | Self::AnyTlsPacketStream
@@ -183,9 +186,7 @@ impl ResidentUdpExecutorFactory {
             ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => {
                 Self::PolicyClosed(Closed::TrojanInnerShadowsocks)
             }
-            ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => {
-                Self::PolicyClosed(Closed::VlessMux)
-            }
+            ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => Self::VlessMuxXudp,
             ResidentProxyProtocolPlan::VlessVisionTcpTls {
                 encryption: Some(_),
                 ..
@@ -324,7 +325,7 @@ impl ResidentUdpExecutorFactory {
             Self::Socks5Associate => "resident-socks5-udp-associate",
             Self::ShadowsocksAead => "resident-shadowsocks-aead-datagram",
             Self::Shadowsocks2022 => "resident-shadowsocks-2022-datagram",
-            Self::VlessVisionXudp => "resident-vless-xudp",
+            Self::VlessVisionXudp | Self::VlessMuxXudp => "resident-vless-xudp",
             Self::VlessStandard(transport) => vless_executor_label(transport),
             Self::Trojan(transport) => trojan_executor_label(transport),
             Self::Vmess(transport) => vmess_executor_label(transport),
@@ -346,7 +347,7 @@ impl ResidentUdpExecutorFactory {
             Self::Socks5Associate => UdpPacketSemantics::UdpAssociate,
             Self::ShadowsocksAead => UdpPacketSemantics::DatagramAead,
             Self::Shadowsocks2022 => UdpPacketSemantics::DatagramAead2022,
-            Self::VlessVisionXudp => UdpPacketSemantics::Xudp,
+            Self::VlessVisionXudp | Self::VlessMuxXudp => UdpPacketSemantics::Xudp,
             Self::VlessStandard(_)
             | Self::Trojan(_)
             | Self::Vmess(_)

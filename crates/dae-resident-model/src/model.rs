@@ -168,7 +168,8 @@ impl ResidentProxyPlan {
     pub fn requires_vless_mux_owner(&self) -> bool {
         let execution = self.execution_plan();
         execution.protocol == ResidentProtocolShape::VlessMux
-            && execution.security.is_tls_stream()
+            && (execution.security.is_tls_stream()
+                || execution.security == ResidentSecurityUnderlayPlan::None)
             && execution.wrapper == ResidentStreamWrapperPlan::Mux
     }
 

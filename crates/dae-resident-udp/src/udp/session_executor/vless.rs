@@ -27,6 +27,7 @@ async fn write_vless_encrypted_xhttp_bytes(
 pub(in crate::udp) struct VlessXudpStreamSession {
     client: Option<UdpSharedIo<AsyncResidentTlsClient>>,
     encrypted: Option<UdpSharedIo<VlessXudpEncryptedIo>>,
+    plain_mux: bool,
     key: Option<[u8; 16]>,
     uuid_sent: bool,
     response_header_seen: bool,
@@ -39,6 +40,27 @@ pub(in crate::udp) struct VlessXudpStreamSession {
 }
 
 impl VlessXudpStreamSession {
+    pub(super) fn without_vision() -> Self {
+        Self {
+            plain_mux: true,
+            ..Self::default()
+        }
+    }
+
+    fn request_frame(&mut self, frame: Vec<u8>, key: [u8; 16]) -> Vec<u8> {
+        if self.plain_mux {
+            frame
+        } else {
+            vision_padding_block(
+                &frame,
+                VISION_COMMAND_CONTINUE,
+                key,
+                &mut self.uuid_sent,
+                false,
+            )
+        }
+    }
+
     pub(super) fn begin_dns_send(
         &mut self,
         payload: &[u8],
@@ -50,13 +72,7 @@ impl VlessXudpStreamSession {
             .key
             .ok_or_else(|| "VLESS XUDP key missing".to_owned())?;
         let frame = xudp_keep_frame(payload)?;
-        let block = vision_padding_block(
-            &frame,
-            VISION_COMMAND_CONTINUE,
-            key,
-            &mut self.uuid_sent,
-            false,
-        );
+        let block = self.request_frame(frame, key);
         if let Some(encrypted) = self.encrypted.as_mut() {
             Ok(Some(ProxyDnsUdpSend::stream(
                 encrypted.share()?,
@@ -81,20 +97,23 @@ impl VlessXudpStreamSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if binding.execution().protocol != ResidentProtocolShape::VlessVision {
-            return Err(
-                "VLESS Vision XUDP stream executor requires an official Vision flow; other admitted VLESS UDP shapes use their own executor"
-                    .to_owned(),
-            );
+        let protocol = binding.execution().protocol;
+        if (!self.plain_mux && protocol != ResidentProtocolShape::VlessVision)
+            || (self.plain_mux && protocol != ResidentProtocolShape::VlessMux)
+        {
+            return Err("VLESS XUDP executor received an incompatible execution plan".to_owned());
         }
         let proxy = binding.plan();
         if original_dst.port() == 443
-            && proxy.flow == dae_outbound_core::vless::contract::XTLS_RPRX_VISION
+            && (self.plain_mux
+                || proxy.flow == dae_outbound_core::vless::contract::XTLS_RPRX_VISION)
         {
-            return Err(
+            return Err(if self.plain_mux {
+                "VLESS mux rejected UDP/443 by its default XUDP policy"
+            } else {
                 "VLESS Vision rejected UDP/443 (use xtls-rprx-vision-udp443 to allow it)"
-                    .to_owned(),
-            );
+            }
+            .to_owned());
         }
         self.fixed_target
             .bind(original_dst, "VLESS Vision XUDP stream")?;
@@ -115,13 +134,7 @@ impl VlessXudpStreamSession {
             let mut request =
                 packet::request_header(&key, &proxy.flow, "tcp", XUDP_MUX_TARGET, true, &[])
                     .map_err(|err| format!("build VLESS Vision XUDP mux request header: {err}"))?;
-            request.extend_from_slice(&vision_padding_block(
-                &frame,
-                VISION_COMMAND_CONTINUE,
-                key,
-                &mut self.uuid_sent,
-                false,
-            ));
+            request.extend_from_slice(&self.request_frame(frame, key));
             if let Some(encryption) = proxy.vless_encryption()? {
                 let (client, underlay) = open_vless_carrier(binding, proxy.mptcp).await?;
                 self.tls_underlay = Some(underlay);
@@ -149,13 +162,7 @@ impl VlessXudpStreamSession {
             }
         } else {
             let frame = xudp_keep_frame(payload)?;
-            let block = vision_padding_block(
-                &frame,
-                VISION_COMMAND_CONTINUE,
-                key,
-                &mut self.uuid_sent,
-                false,
-            );
+            let block = self.request_frame(frame, key);
             if let Some(encrypted) = self.encrypted.as_mut() {
                 write_vless_xudp_encrypted_bytes(
                     encrypted,
@@ -261,18 +268,22 @@ impl VlessXudpStreamSession {
                 }
                 self.response_plaintext.drain(..header_len);
                 self.response_header_seen = true;
-                self.response_unpadder = Some(VisionUnpadder::new(key));
                 continue;
             }
             if self.response_plaintext.is_empty() {
                 return Ok(None);
             }
-            let unpadder = self
-                .response_unpadder
-                .get_or_insert_with(|| VisionUnpadder::new(key));
-            let payload = unpadder.consume(&self.response_plaintext)?;
-            self.response_plaintext.clear();
-            self.response_xudp_payload.extend(payload);
+            if self.plain_mux {
+                self.response_xudp_payload
+                    .append(&mut self.response_plaintext);
+            } else {
+                let unpadder = self
+                    .response_unpadder
+                    .get_or_insert_with(|| VisionUnpadder::new(key));
+                let payload = unpadder.consume(&self.response_plaintext)?;
+                self.response_plaintext.clear();
+                self.response_xudp_payload.extend(payload);
+            }
         }
     }
 
