@@ -286,6 +286,7 @@ pub(super) fn vless_fixture_url(_ps: &str, add: &str, port: u16) -> String {
         ech: None,
         mldsa65_verify: None,
         mux: false,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }
@@ -318,6 +319,7 @@ pub(super) fn vless_transport_fixture_url(net: &str, path: &str, flow: &str) -> 
         ech: None,
         mldsa65_verify: None,
         mux: false,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }

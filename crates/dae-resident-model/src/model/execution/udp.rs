@@ -186,7 +186,9 @@ impl ResidentUdpExecutorFactory {
             ResidentProxyProtocolPlan::TrojanInnerShadowsocksTcpTls { .. } => {
                 Self::PolicyClosed(Closed::TrojanInnerShadowsocks)
             }
-            ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } => Self::VlessMuxXudp,
+            ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } if proxy.vless_xudp_enabled() => {
+                Self::VlessMuxXudp
+            }
             ResidentProxyProtocolPlan::VlessVisionTcpTls {
                 encryption: Some(_),
                 ..
@@ -218,53 +220,10 @@ impl ResidentUdpExecutorFactory {
             ResidentProxyProtocolPlan::VlessVisionTcpTls { .. } if !proxy.flow.is_empty() => {
                 Self::PolicyClosed(Closed::VlessUnsupportedShape)
             }
-            ResidentProxyProtocolPlan::VlessVisionTcpTls { ref encryption, .. } => match wrapper {
-                ResidentStreamWrapperPlan::None
-                    if security == ResidentSecurityUnderlayPlan::None =>
-                {
-                    Self::VlessStandard(Stream::PlainTcp)
-                }
-                ResidentStreamWrapperPlan::None if security.is_tls_stream() => {
-                    Self::VlessStandard(Stream::TlsTcp)
-                }
-                ResidentStreamWrapperPlan::WebSocket
-                    if security == ResidentSecurityUnderlayPlan::None =>
-                {
-                    Self::VlessStandard(Stream::WebSocketPlain)
-                }
-                ResidentStreamWrapperPlan::WebSocket if security.is_tls_stream() => {
-                    Self::VlessStandard(Stream::WebSocketTls)
-                }
-                ResidentStreamWrapperPlan::HttpUpgrade
-                    if security == ResidentSecurityUnderlayPlan::None =>
-                {
-                    Self::VlessStandard(Stream::HttpUpgradePlain)
-                }
-                ResidentStreamWrapperPlan::HttpUpgrade if security.is_tls_stream() => {
-                    Self::VlessStandard(Stream::HttpUpgradeTls)
-                }
-                ResidentStreamWrapperPlan::Grpc
-                    if security.is_tls_stream()
-                        || (security == ResidentSecurityUnderlayPlan::None
-                            && encryption.is_some()) =>
-                {
-                    Self::VlessStandard(Stream::GrpcTls)
-                }
-                ResidentStreamWrapperPlan::H2 if security.is_tls_stream() => {
-                    Self::VlessStandard(Stream::H2Tls)
-                }
-                ResidentStreamWrapperPlan::Xhttp(ResidentXhttpHttpVersion::H1) => {
-                    Self::VlessStandard(Stream::XhttpH1)
-                }
-                ResidentStreamWrapperPlan::Xhttp(ResidentXhttpHttpVersion::H2) => {
-                    Self::VlessStandard(Stream::XhttpH2)
-                }
-                ResidentStreamWrapperPlan::Xhttp(ResidentXhttpHttpVersion::H3) => {
-                    Self::VlessStandard(Stream::XhttpH3)
-                }
-                ResidentStreamWrapperPlan::Meek => Self::PolicyClosed(Closed::VlessMeek),
-                _ => Self::PolicyClosed(Closed::VlessUnsupportedShape),
-            },
+            ResidentProxyProtocolPlan::VlessVisionTcpTls { ref encryption, .. }
+            | ResidentProxyProtocolPlan::VlessMuxTcpTls { ref encryption, .. } => {
+                Self::vless_standard(wrapper, security, encryption.is_some())
+            }
             ResidentProxyProtocolPlan::TrojanTcpTls { .. } => match wrapper {
                 ResidentStreamWrapperPlan::None => Self::Trojan(Stream::TlsTcp),
                 ResidentStreamWrapperPlan::WebSocket => Self::Trojan(Stream::WebSocketTls),
@@ -373,6 +332,37 @@ impl ResidentUdpExecutorFactory {
             Self::PolicyClosed(reason) => Some(reason.reason()),
             _ => None,
         }
+    }
+}
+
+impl ResidentUdpExecutorFactory {
+    pub fn vless_standard(
+        wrapper: ResidentStreamWrapperPlan,
+        security: ResidentSecurityUnderlayPlan,
+        encrypted: bool,
+    ) -> Self {
+        use ResidentStreamPacketTransport as Stream;
+        use ResidentStreamWrapperPlan as Wrapper;
+        use ResidentUdpPolicyClosedReason as Closed;
+
+        let plain = security == ResidentSecurityUnderlayPlan::None;
+        let tls = security.is_tls_stream();
+        let transport = match wrapper {
+            Wrapper::None | Wrapper::Mux if plain => Stream::PlainTcp,
+            Wrapper::None | Wrapper::Mux if tls => Stream::TlsTcp,
+            Wrapper::WebSocket if plain => Stream::WebSocketPlain,
+            Wrapper::WebSocket if tls => Stream::WebSocketTls,
+            Wrapper::HttpUpgrade if plain => Stream::HttpUpgradePlain,
+            Wrapper::HttpUpgrade if tls => Stream::HttpUpgradeTls,
+            Wrapper::Grpc if tls || (plain && encrypted) => Stream::GrpcTls,
+            Wrapper::H2 if tls => Stream::H2Tls,
+            Wrapper::Xhttp(ResidentXhttpHttpVersion::H1) => Stream::XhttpH1,
+            Wrapper::Xhttp(ResidentXhttpHttpVersion::H2) => Stream::XhttpH2,
+            Wrapper::Xhttp(ResidentXhttpHttpVersion::H3) => Stream::XhttpH3,
+            Wrapper::Meek => return Self::PolicyClosed(Closed::VlessMeek),
+            _ => return Self::PolicyClosed(Closed::VlessUnsupportedShape),
+        };
+        Self::VlessStandard(transport)
     }
 }
 

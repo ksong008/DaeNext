@@ -1024,6 +1024,7 @@ pub(in crate::udp) mod tests {
             xhttp_mode: ResidentXhttpMode::PacketUp,
             xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
             xhttp_xmux: None,
+            vless_mux: None,
             tls: String::new(),
             allow_insecure: false,
             tls_fragment: None,

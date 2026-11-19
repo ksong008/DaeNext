@@ -218,25 +218,44 @@ fn vless_mux_profile(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
     use SecurityDimension as Security;
     use WrapperDimension as Wrapper;
 
-    if shape.udp != UdpDimension::VlessMuxXudp {
-        return None;
-    }
     match shape.wrapper {
-        Wrapper::Mux if is_vless_stream_security(shape.security) => {
+        Wrapper::Mux
+            if is_vless_stream_security(shape.security)
+                && matches!(
+                    shape.udp,
+                    UdpDimension::VlessMuxXudp
+                        | UdpDimension::Vless(
+                            StreamPacketDimension::PlainTcp | StreamPacketDimension::TlsTcp
+                        )
+                ) =>
+        {
             Some(GENERATION_OWNED_VLESS_MUX_OWNERSHIP)
         }
+        Wrapper::None
+            if is_vless_stream_security(shape.security)
+                && shape.udp == UdpDimension::VlessMuxXudp =>
+        {
+            Some(FLOW_STREAM_PACKET_OWNERSHIP)
+        }
         Wrapper::XhttpH1
-            if shape.security == Security::None || is_standard_tls_security(shape.security) =>
+            if shape.udp == UdpDimension::VlessMuxXudp
+                && (shape.security == Security::None
+                    || is_standard_tls_security(shape.security)) =>
         {
             Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
-        Wrapper::XhttpH2 if is_standard_or_reality_security(shape.security) => {
+        Wrapper::XhttpH2
+            if shape.udp == UdpDimension::VlessMuxXudp
+                && is_standard_or_reality_security(shape.security) =>
+        {
             Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
-        Wrapper::XhttpH3 if shape.security == Security::QuicTls => {
+        Wrapper::XhttpH3
+            if shape.udp == UdpDimension::VlessMuxXudp && shape.security == Security::QuicTls =>
+        {
             Some(GENERATION_OWNED_XHTTP_OWNERSHIP)
         }
-        _ => None,
+        _ => vless_standard_profile(shape),
     }
 }
 

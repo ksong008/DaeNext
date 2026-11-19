@@ -37,6 +37,7 @@ pub(crate) fn build_anytls_proxy_plan(
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
         xhttp_xmux: None,
+        vless_mux: None,
         tls: "tls".to_owned(),
         allow_insecure,
         tls_fragment: resident_tls_fragment_plan(config)?,

@@ -1,4 +1,5 @@
 use super::*;
+use dae_outbound_core::vless::mux::VlessUdp443Policy;
 
 impl UdpSessionExecutor {
     pub async fn execute(
@@ -27,6 +28,33 @@ impl UdpSessionExecutor {
         payload: &[u8],
     ) -> Result<(ResidentEventKind, UdpExchangeResult), String> {
         let proxy = binding.plan();
+        if original_dst.port() == 443
+            && let Some(options) = proxy.vless_mux
+        {
+            match options.udp443.unwrap_or_default() {
+                VlessUdp443Policy::Reject if options.udp443.is_some() || proxy.flow.is_empty() => {
+                    return Err("VLESS mux rejected UDP/443".to_owned());
+                }
+                VlessUdp443Policy::Skip if proxy.flow.is_empty() => {
+                    if let Self::VlessVision(session) = self {
+                        session.bind_target(original_dst)?;
+                        let execution = binding.execution();
+                        let factory = ResidentUdpExecutorFactory::vless_standard(
+                            execution.wrapper,
+                            execution.security,
+                            proxy.vless_encryption()?.is_some(),
+                        );
+                        let ResidentUdpExecutorFactory::VlessStandard(transport) = factory else {
+                            return Err(
+                                "VLESS mux UDP/443 skip has no standard UDP carrier".to_owned()
+                            );
+                        };
+                        *self = Self::new_vless_standard(transport);
+                    }
+                }
+                _ => {}
+            }
+        }
         match self {
             Self::Dns => Err(
                 "resident DNS UDP executor cannot be used as a proxy packet executor".to_owned(),

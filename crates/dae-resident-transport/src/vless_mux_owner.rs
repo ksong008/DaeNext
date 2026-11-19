@@ -348,6 +348,7 @@ struct VlessMuxPhysicalHandle {
     stop: SharedResidentStopSignal,
     instance_id: u64,
     sender: mpsc::Sender<VlessMuxPhysicalCommand>,
+    logical_stream_limit: usize,
     active_logical: AtomicUsize,
     cumulative_logical: AtomicUsize,
     accepting: AtomicBool,
@@ -371,7 +372,11 @@ impl VlessMuxPhysicalHandle {
             return None;
         }
         let active = self.active_logical.load(Ordering::Relaxed);
-        if active >= owner.resources.logical_streams_per_physical() {
+        if active
+            >= self
+                .logical_stream_limit
+                .min(owner.resources.logical_streams_per_physical())
+        {
             return None;
         }
         self.active_logical.fetch_add(1, Ordering::AcqRel);
@@ -1004,7 +1009,9 @@ fn least_loaded_vless_mux_physical(
             continue;
         }
         let active = candidate.active_logical.load(Ordering::Relaxed);
-        if active >= logical_stream_limit || active >= least_active {
+        if active >= logical_stream_limit.min(candidate.logical_stream_limit)
+            || active >= least_active
+        {
             continue;
         }
         selected = Some(candidate);
@@ -1196,6 +1203,10 @@ async fn build_vless_mux_physical_on_owner(
         stop: dae_resident_core::ResidentStopSignal::shared(),
         instance_id,
         sender: sender.clone(),
+        logical_stream_limit: proxy
+            .vless_mux
+            .and_then(|mux| mux.tcp_limit())
+            .unwrap_or(usize::MAX),
         active_logical: AtomicUsize::new(0),
         cumulative_logical: AtomicUsize::new(0),
         accepting: AtomicBool::new(true),
@@ -1918,6 +1929,7 @@ mod tests {
             stop: dae_resident_core::ResidentStopSignal::shared(),
             instance_id,
             sender,
+            logical_stream_limit: usize::MAX,
             active_logical: AtomicUsize::new(active_logical),
             cumulative_logical: AtomicUsize::new(active_logical),
             accepting: AtomicBool::new(accepting),

@@ -40,6 +40,10 @@ pub(in crate::udp) struct VlessXudpStreamSession {
 }
 
 impl VlessXudpStreamSession {
+    pub(super) fn bind_target(&mut self, target: SocketAddr) -> Result<(), String> {
+        self.fixed_target.bind(target, "VLESS XUDP stream")
+    }
+
     pub(super) fn without_vision() -> Self {
         Self {
             plain_mux: true,
@@ -104,7 +108,11 @@ impl VlessXudpStreamSession {
             return Err("VLESS XUDP executor received an incompatible execution plan".to_owned());
         }
         let proxy = binding.plan();
+        let allow_udp443 = proxy.vless_mux.is_some_and(|mux| {
+            mux.udp443 == Some(dae_outbound_core::vless::mux::VlessUdp443Policy::Allow)
+        });
         if original_dst.port() == 443
+            && !allow_udp443
             && (self.plain_mux
                 || proxy.flow == dae_outbound_core::vless::contract::XTLS_RPRX_VISION)
         {
@@ -115,8 +123,7 @@ impl VlessXudpStreamSession {
             }
             .to_owned());
         }
-        self.fixed_target
-            .bind(original_dst, "VLESS Vision XUDP stream")?;
+        self.bind_target(original_dst)?;
         let key = match self.key {
             Some(key) => key,
             None => {
@@ -453,7 +460,10 @@ impl VlessXhttpH2UdpSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if binding.execution().protocol != ResidentProtocolShape::VlessStandard {
+        if !matches!(
+            binding.execution().protocol,
+            ResidentProtocolShape::VlessStandard | ResidentProtocolShape::VlessMux
+        ) {
             return Err(
                 "VLESS xHTTP UDP uses the standard VLESS UDP-over-stream command; flow must be empty"
                     .to_owned(),
