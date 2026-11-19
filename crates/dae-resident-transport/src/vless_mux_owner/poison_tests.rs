@@ -56,6 +56,7 @@ async fn poisoned_mux_inventories_close_existing_physical_and_reap_builds() {
     .unwrap();
     let owner = &handle.owner;
     let key = VlessMuxTransportKey {
+        xudp: false,
         generation: owner.generation,
         digest: [0; 32],
     };

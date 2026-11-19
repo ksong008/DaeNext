@@ -27,6 +27,7 @@ fn owner() -> Arc<VlessMuxGenerationOwner> {
 
 fn key(owner: &VlessMuxGenerationOwner, n: u8) -> VlessMuxTransportKey {
     VlessMuxTransportKey {
+        xudp: false,
         generation: owner.generation,
         digest: [n; 32],
     }

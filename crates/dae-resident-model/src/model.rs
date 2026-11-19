@@ -200,8 +200,23 @@ impl ResidentProxyPlan {
 
     pub fn requires_vless_mux_owner(&self) -> bool {
         let execution = self.execution_plan();
-        execution.protocol == ResidentProtocolShape::VlessMux
-            && execution.wrapper == ResidentStreamWrapperPlan::Mux
+        self.requires_vless_xudp_owner()
+            || (execution.protocol == ResidentProtocolShape::VlessMux
+                && execution.wrapper == ResidentStreamWrapperPlan::Mux)
+    }
+
+    pub fn requires_vless_xudp_owner(&self) -> bool {
+        let Some(mux) = self.vless_mux else {
+            return false;
+        };
+        match self.execution_plan().udp {
+            ResidentUdpExecutorFactory::VlessMuxXudp => {
+                mux.xudp_limit().is_some()
+                    || (mux.xudp_concurrency == Some(0) && self.net == "tcp" && mux.tcp_enabled())
+            }
+            ResidentUdpExecutorFactory::VlessVisionXudp => mux.xudp_limit().is_some(),
+            _ => false,
+        }
     }
 
     pub fn compact_allocations(&mut self) {

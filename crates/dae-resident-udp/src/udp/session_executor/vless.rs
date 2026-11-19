@@ -27,6 +27,7 @@ async fn write_vless_encrypted_xhttp_bytes(
 pub(in crate::udp) struct VlessXudpStreamSession {
     client: Option<UdpSharedIo<AsyncResidentTlsClient>>,
     encrypted: Option<UdpSharedIo<VlessXudpEncryptedIo>>,
+    shared_mux: Option<UdpSharedIo<VlessMuxLogicalStream>>,
     plain_mux: bool,
     key: Option<[u8; 16]>,
     uuid_sent: bool,
@@ -69,6 +70,13 @@ impl VlessXudpStreamSession {
         &mut self,
         payload: &[u8],
     ) -> Result<Option<ProxyDnsUdpSend>, String> {
+        if let Some(stream) = self.shared_mux.as_mut() {
+            return Ok(Some(ProxyDnsUdpSend::stream(
+                stream.share()?,
+                vless_mux_datagram_frame(payload)?,
+                false,
+            )));
+        }
         if self.client.is_none() && self.encrypted.is_none() {
             return Ok(None);
         }
@@ -124,6 +132,11 @@ impl VlessXudpStreamSession {
             .to_owned());
         }
         self.bind_target(original_dst)?;
+        if proxy.requires_vless_xudp_owner() {
+            return self
+                .exchange_shared_mux(binding, original_dst, payload)
+                .await;
+        }
         let key = match self.key {
             Some(key) => key,
             None => {
@@ -197,6 +210,37 @@ impl VlessXudpStreamSession {
         }
     }
 
+    async fn exchange_shared_mux(
+        &mut self,
+        binding: &ResidentProxyBinding,
+        target: SocketAddr,
+        payload: &[u8],
+    ) -> Result<UdpExchangeResult, String> {
+        check_vless_mux_datagram_len(payload)?;
+        if let Some(stream) = self.shared_mux.as_mut() {
+            let packet = vless_udp_length_frame(payload)?;
+            write_vless_xudp_encrypted_bytes(stream, &packet, "write VLESS mux datagram").await?;
+        } else {
+            let deadline = dae_runtime_control::AbsoluteDeadline::from_now(
+                std::time::Instant::now(),
+                RESIDENT_UDP_RESPONSE_TIMEOUT,
+            );
+            let stream = acquire_vless_mux_datagram_stream(
+                binding.clone(),
+                target,
+                Bytes::copy_from_slice(payload),
+                deadline,
+            )
+            .await?;
+            self.tls_underlay = Some(stream.tls_underlay());
+            self.shared_mux = Some(stream.into());
+        }
+        Ok(self
+            .poll_response()
+            .await?
+            .unwrap_or_else(|| self.pending_response_result()))
+    }
+
     pub(super) async fn poll_response(&mut self) -> Result<Option<UdpExchangeResult>, String> {
         self.read_response(UdpStreamReadMode::ReadyOnly).await
     }
@@ -212,12 +256,18 @@ impl VlessXudpStreamSession {
         if let Some(payload) = self.try_pop_response_payload()? {
             return Ok(Some(self.response_result(payload)));
         }
-        if self.client.is_none() && self.encrypted.is_none() && mode.waits_for_readiness() {
+        if self.client.is_none()
+            && self.encrypted.is_none()
+            && self.shared_mux.is_none()
+            && mode.waits_for_readiness()
+        {
             return std::future::pending().await;
         }
         self.response_read_buffer.resize(2048, 0);
         let read_buffer = &mut self.response_read_buffer;
-        let read = if let Some(encrypted) = self.encrypted.as_mut() {
+        let read = if let Some(stream) = self.shared_mux.as_mut() {
+            read_udp_stream_once(stream, read_buffer, mode, "read VLESS mux datagram").await?
+        } else if let Some(encrypted) = self.encrypted.as_mut() {
             read_udp_stream_once(
                 encrypted,
                 read_buffer,
@@ -248,6 +298,17 @@ impl VlessXudpStreamSession {
     }
 
     fn try_pop_response_payload(&mut self) -> Result<Option<Vec<u8>>, String> {
+        if self.shared_mux.is_some() {
+            let Some(head) = self.response_plaintext.first_chunk::<2>() else {
+                return Ok(None);
+            };
+            let length = usize::from(u16::from_be_bytes(*head));
+            if self.response_plaintext.len() < length + 2 {
+                return Ok(None);
+            }
+            self.response_plaintext.drain(..2);
+            return Ok(Some(self.response_plaintext.drain(..length).collect()));
+        }
         let key = match self.key {
             Some(key) => key,
             None => return Ok(None),
@@ -310,7 +371,9 @@ impl VlessXudpStreamSession {
     }
 
     fn underlay_reuse_label(&self) -> &'static str {
-        if self.tls_underlay == Some("none") {
+        if self.shared_mux.is_some() {
+            "shared-mux-carrier"
+        } else if self.tls_underlay == Some("none") {
             "tcp-stream-reused"
         } else {
             "tls-stream-reused"
@@ -318,6 +381,9 @@ impl VlessXudpStreamSession {
     }
 
     pub(super) async fn shutdown(&mut self) {
+        if let Some(mut stream) = self.shared_mux.take() {
+            let _ = stream.shutdown().await;
+        }
         if let Some(encrypted) = self.encrypted.as_mut() {
             let _ = encrypted.shutdown().await;
         }
@@ -925,6 +991,21 @@ impl VlessXhttpH3UdpSession {
     pub(super) async fn shutdown(&mut self) {
         self.inner.shutdown().await;
     }
+}
+
+fn check_vless_mux_datagram_len(payload: &[u8]) -> Result<(), String> {
+    if payload.len() > dae_outbound_stream::mux::MUX_MAX_DATAGRAM_BYTES {
+        return Err(format!(
+            "VLESS mux datagram payload too large: {} bytes",
+            payload.len()
+        ));
+    }
+    Ok(())
+}
+
+fn vless_mux_datagram_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
+    check_vless_mux_datagram_len(payload)?;
+    vless_udp_length_frame(payload)
 }
 
 pub fn vless_udp_length_frame(payload: &[u8]) -> Result<Vec<u8>, String> {
