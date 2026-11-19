@@ -137,16 +137,16 @@ pub fn spawn_grpc_h2_payload_stream(
     response: GrpcH2Response,
     carrier_lease: H2CarrierLease,
 ) -> SpawnedLogicalStream {
-    SpawnedLogicalStream::spawn(move |logical| {
-        drive_grpc_h2_payload_stream(logical, send_stream, response, carrier_lease)
+    SpawnedLogicalStream::spawn(move |logical| async move {
+        let _carrier_lease = carrier_lease;
+        drive_grpc_h2_payload_stream(logical, send_stream, response).await
     })
 }
 
-async fn drive_grpc_h2_payload_stream(
+pub(super) async fn drive_grpc_h2_payload_stream(
     logical: tokio::io::DuplexStream,
     mut send_stream: h2::SendStream<Bytes>,
     mut response: GrpcH2Response,
-    _carrier_lease: H2CarrierLease,
 ) -> Result<(), String> {
     let grpc_mode = response.grpc_mode();
     let (mut logical_read, mut logical_write) = tokio::io::split(logical);
