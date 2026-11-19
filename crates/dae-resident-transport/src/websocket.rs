@@ -330,22 +330,58 @@ where
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn logical_upload_eof_keeps_websocket_download_open() {
-        let (client, mut peer) = tokio::io::duplex(1024);
-        let mut stream = spawn_websocket_payload_stream(client, Vec::new());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let (client, mut peer) = tokio::io::duplex(1024);
+            let mut stream = spawn_websocket_payload_stream(client, Vec::new());
+            stream.write_all(b"request").await.unwrap();
+            stream.shutdown().await.unwrap();
+
+            let mut frame = [0; 13];
+            peer.read_exact(&mut frame).await.unwrap();
+            assert_eq!(frame[0..2], [0x82, 0x87]);
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+            peer.write_all(b"\x82\x05first\x89\x01!").await.unwrap();
+            let mut first = [0; 5];
+            stream.read_exact(&mut first).await.unwrap();
+            assert_eq!(&first, b"first");
+            let mut pong = [0; 7];
+            peer.read_exact(&mut pong).await.unwrap();
+            assert_eq!(pong[..2], [0x8a, 0x81]);
+            assert_eq!(pong[6] ^ pong[2], b'!');
+
+            peer.write_all(b"\x82\x06second").await.unwrap();
+            let mut second = [0; 6];
+            stream.read_exact(&mut second).await.unwrap();
+            assert_eq!(&second, b"second");
+            drop(stream);
+            assert_eq!(peer.read(&mut frame).await.unwrap(), 0);
+        })
+        .await
+        .expect("WebSocket stalled after logical upload EOF");
+    }
+
+    #[tokio::test]
+    async fn websocket_payload_driver_propagates_upload_write_failure() {
+        let (upload, peer_read) = tokio::io::duplex(1024);
+        let (download, _peer_write) = tokio::io::simplex(1024);
+        drop(peer_read);
+        let (_, upload) = tokio::io::split(upload);
+        let mut stream =
+            spawn_websocket_payload_stream(tokio::io::join(download, upload), Vec::new());
         stream.write_all(b"request").await.unwrap();
-        stream.shutdown().await.unwrap();
-
-        let mut frame = [0; 13];
-        peer.read_exact(&mut frame).await.unwrap();
-        assert_eq!(frame[0..2], [0x82, 0x87]);
-        peer.write_all(b"\x82\x05reply").await.unwrap();
-        peer.shutdown().await.unwrap();
-
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response).await.unwrap();
-        assert_eq!(response, b"reply");
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), stream.read_u8())
+            .await
+            .expect("WebSocket driver waited for the response after the upload write failed")
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("write VLESS Encryption websocket frame"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
