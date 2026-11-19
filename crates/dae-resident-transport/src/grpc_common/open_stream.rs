@@ -161,7 +161,7 @@ async fn drive_grpc_h2_payload_stream(
                 .map_err(|error| format!("read VLESS Encryption gRPC logical stream: {error}"))?;
             if read == 0 {
                 send_grpc_data(&mut send_stream, &[], true, grpc_mode).await?;
-                return Ok(());
+                return Ok::<(), String>(());
             }
             buffer.truncate(prefix + read);
             send_h2_data(
@@ -197,9 +197,13 @@ async fn drive_grpc_h2_payload_stream(
             }
         }
     };
+    tokio::pin!(download);
     tokio::select! {
-        result = upload => result,
-        result = download => result,
+        result = upload => {
+            result?;
+            download.await
+        }
+        result = &mut download => result,
     }
 }
 

@@ -237,6 +237,7 @@ where
     let (control_tx, mut control_rx) = websocket_control_channel();
     let upload = async {
         let mut buffer = [0_u8; RESIDENT_WEBSOCKET_RELAY_BUFFER_SIZE];
+        let mut upload_closed = false;
         loop {
             tokio::select! {
                 biased;
@@ -250,12 +251,14 @@ where
                         "VLESS Encryption websocket",
                     ).await?;
                 }
-                read = logical_read.read(&mut buffer) => {
+                read = logical_read.read(&mut buffer), if !upload_closed => {
                     let read = read.map_err(|error| {
                         format!("read VLESS Encryption websocket logical stream: {error}")
                     })?;
                     if read == 0 {
-                        return Ok(());
+                        // WebSocket Close also ends the peer's download direction.
+                        upload_closed = true;
+                        continue;
                     }
                     write_websocket_binary_frame_in_place_to_async_stream(
                         &mut client_write,
@@ -326,6 +329,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn logical_upload_eof_keeps_websocket_download_open() {
+        let (client, mut peer) = tokio::io::duplex(1024);
+        let mut stream = spawn_websocket_payload_stream(client, Vec::new());
+        stream.write_all(b"request").await.unwrap();
+        stream.shutdown().await.unwrap();
+
+        let mut frame = [0; 13];
+        peer.read_exact(&mut frame).await.unwrap();
+        assert_eq!(frame[0..2], [0x82, 0x87]);
+        peer.write_all(b"\x82\x05reply").await.unwrap();
+        peer.shutdown().await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, b"reply");
+    }
 
     #[tokio::test]
     async fn in_place_websocket_writer_preserves_binary_payload() {
