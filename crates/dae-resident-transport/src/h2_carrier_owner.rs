@@ -994,12 +994,18 @@ async fn build_h2_carrier(
         )
         .await
         .map_err(|_| "HTTP/2 carrier TLS deadline elapsed".to_owned())??;
-        if client.negotiated_alpn() != Some(b"h2") {
+        let alpn = client.negotiated_alpn();
+        // Xray's authenticated REALITY listener may serve gRPC without ALPN.
+        let reality_grpc = execution.wrapper == ResidentStreamWrapperPlan::Grpc
+            && matches!(
+                execution.security,
+                ResidentSecurityUnderlayPlan::RealityBoring
+                    | ResidentSecurityUnderlayPlan::RealityFingerprint
+            );
+        if !(alpn == Some(b"h2") || (alpn.is_none() && reality_grpc)) {
             return Err(format!(
                 "HTTP/2 carrier negotiated unsupported ALPN {}",
-                client
-                    .negotiated_alpn()
-                    .map(|alpn| String::from_utf8_lossy(alpn).into_owned())
+                alpn.map(|alpn| String::from_utf8_lossy(alpn).into_owned())
                     .unwrap_or_else(|| "<none>".to_owned())
             ));
         }
