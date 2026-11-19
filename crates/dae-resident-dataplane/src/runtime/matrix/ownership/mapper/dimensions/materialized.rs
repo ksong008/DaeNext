@@ -92,6 +92,7 @@ fn materialized_udp(udp: UdpDimension) -> MaterializedUdp {
         UdpDimension::Shadowsocks2022 => MaterializedUdp::Shadowsocks2022,
         UdpDimension::Vless(transport) => MaterializedUdp::Vless(materialized_stream(transport)),
         UdpDimension::VlessVision => MaterializedUdp::VlessVision,
+        UdpDimension::VlessMuxXudp => MaterializedUdp::VlessMuxXudp,
         UdpDimension::Trojan(transport) => MaterializedUdp::Trojan(materialized_stream(transport)),
         UdpDimension::Vmess(transport) => MaterializedUdp::Vmess(materialized_stream(transport)),
         UdpDimension::AnyTls => MaterializedUdp::AnyTls,

@@ -78,7 +78,7 @@ pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted
             plain_vision_link,
         )
         .unwrap_err()
-        .contains("Vision requires Encryption")
+        .contains("Vision and mux require Encryption")
     );
 
     let reality_vision = build_resident_proxy_plan_for_node(
@@ -109,7 +109,7 @@ pub(super) fn vless_encryption_official_tcp_shapes_and_udp_wrappers_are_admitted
     ));
     assert!(matches!(
         mux.execution_plan().udp,
-        ResidentUdpExecutorFactory::PolicyClosed(ResidentUdpPolicyClosedReason::VlessMux)
+        ResidentUdpExecutorFactory::VlessMuxXudp
     ));
 
     let vision_mux_error = build_resident_proxy_plan_for_node(
@@ -609,7 +609,7 @@ pub(super) fn resident_dataplane_plan_keeps_deferred_unsupported_shapes_blocked(
     ));
     let mux_graph = mux_proxy.executable_graph_value();
     assert_eq!(mux_graph["streamWrapper"], "mux");
-    assert_eq!(mux_graph["packetSemantics"], "multiplexed-stream");
+    assert_eq!(mux_graph["packetSemantics"], "xudp");
     assert_eq!(
         mux_graph["runtimeComponents"]["streamWrapperFactory"]["provider"],
         "resident-vless-mux-framing"

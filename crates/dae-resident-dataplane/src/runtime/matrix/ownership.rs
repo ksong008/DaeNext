@@ -140,7 +140,7 @@ mod tests {
             Protocol::VlessMux,
             Security::StandardTls,
             Wrapper::Mux,
-            Udp::PolicyClosed(Closed::VlessMux),
+            Udp::VlessMuxXudp,
         ));
 
         assert_eq!(ownership, GENERATION_OWNED_VLESS_MUX_OWNERSHIP);
@@ -158,7 +158,7 @@ mod tests {
         );
         assert_eq!(
             ownership.data_udp.admission,
-            RuntimeRouteAdmission::FailClosed
+            RuntimeRouteAdmission::Admitted
         );
     }
 

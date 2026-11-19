@@ -108,6 +108,10 @@ impl UdpSessionExecutor {
                 ResidentUdpExecutorFactory::VlessVisionXudp,
             ) => Self::VlessVision(VlessXudpStreamSession::default()),
             (
+                ResidentProxyProtocolPlan::VlessMuxTcpTls { .. },
+                ResidentUdpExecutorFactory::VlessMuxXudp,
+            ) => Self::VlessVision(VlessXudpStreamSession::without_vision()),
+            (
                 ResidentProxyProtocolPlan::VlessVisionTcpTls { .. },
                 ResidentUdpExecutorFactory::VlessStandard(transport),
             ) => Self::new_vless_standard(transport),

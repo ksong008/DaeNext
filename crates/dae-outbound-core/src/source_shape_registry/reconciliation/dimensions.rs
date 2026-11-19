@@ -137,6 +137,7 @@ pub enum MaterializedUdp {
     Shadowsocks2022,
     Vless(MaterializedStreamPacketTransport),
     VlessVision,
+    VlessMuxXudp,
     Trojan(MaterializedStreamPacketTransport),
     Vmess(MaterializedStreamPacketTransport),
     AnyTls,

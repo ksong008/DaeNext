@@ -28,8 +28,8 @@ use tokio::time;
 
 use crate::transport_identity::resident_transport_binding_identity_digest;
 use crate::{
-    AsyncResidentTlsClient, async_resident_tls_underlay_name,
-    open_async_resident_tls_client_with_binding,
+    AsyncResidentTlsClient, VlessCarrierIo, async_resident_tls_underlay_name,
+    open_async_resident_tls_client_with_binding, open_vless_carrier,
 };
 #[cfg(test)]
 use dae_resident_core::ResidentRuntimeProfile;
@@ -192,7 +192,14 @@ struct VlessMuxGenerationOwner {
 #[allow(clippy::large_enum_variant)]
 enum VlessMuxCarrier {
     Plain(AsyncResidentTlsClient),
-    Encrypted(VlessEncryptedStream<AsyncResidentTlsClient>),
+    Encrypted(VlessEncryptedStream<Box<dyn VlessCarrierIo>>),
+}
+
+impl VlessMuxCarrier {
+    async fn write_frame(&mut self, payload: &[u8]) -> std::io::Result<()> {
+        self.write_all(payload).await?;
+        self.flush().await
+    }
 }
 
 impl AsyncRead for VlessMuxCarrier {
@@ -1154,28 +1161,23 @@ async fn build_vless_mux_physical_on_owner(
     let proxy = binding.plan();
     let remaining = deadline
         .remaining_at(Instant::now())
-        .ok_or_else(|| "VLESS mux physical TLS deadline elapsed".to_owned())?;
-    let client = time::timeout(
-        remaining,
-        open_async_resident_tls_client_with_binding(&binding, proxy.mptcp),
-    )
-    .await
-    .map_err(|_| "VLESS mux physical TLS deadline elapsed".to_owned())??;
+        .ok_or_else(|| "VLESS mux physical dial deadline elapsed".to_owned())?;
     let key_bytes = proxy.vless_key()?;
-    let tls_underlay = async_resident_tls_underlay_name(&client);
-    let mut client = if let Some(encryption) = proxy.vless_encryption()? {
-        VlessMuxCarrier::Encrypted(
-            time::timeout(
-                remaining,
-                VlessEncryptedStream::handshake(client, encryption),
-            )
-            .await
-            .map_err(|_| "VLESS mux Encryption handshake deadline elapsed".to_owned())?
-            .map_err(|error| format!("VLESS mux Encryption handshake: {error}"))?,
-        )
-    } else {
-        VlessMuxCarrier::Plain(client)
-    };
+    let (mut client, tls_underlay) = time::timeout(remaining, async {
+        if let Some(encryption) = proxy.vless_encryption()? {
+            let (client, underlay) = open_vless_carrier(&binding, proxy.mptcp).await?;
+            let client = VlessEncryptedStream::handshake(client, encryption)
+                .await
+                .map_err(|error| format!("VLESS mux Encryption handshake: {error}"))?;
+            Ok::<_, String>((VlessMuxCarrier::Encrypted(client), underlay))
+        } else {
+            let client = open_async_resident_tls_client_with_binding(&binding, proxy.mptcp).await?;
+            let underlay = async_resident_tls_underlay_name(&client);
+            Ok((VlessMuxCarrier::Plain(client), underlay))
+        }
+    })
+    .await
+    .map_err(|_| "VLESS mux carrier handshake deadline elapsed".to_owned())??;
     let header = packet::request_header(&key_bytes, "", "tcp", "0.0.0.0:0", true, &[])
         .map_err(|error| format!("build VLESS mux request header: {error}"))?;
     write_vless_mux_physical_until(
@@ -1324,7 +1326,7 @@ async fn run_vless_mux_physical(
                             if !sessions.contains_key(&sid) {
                                 continue;
                             }
-                            if let Err(error) = client.write_all(&payload).await {
+                            if let Err(error) = client.write_frame(&payload).await {
                                 terminal_error = Some(format!("write VLESS mux logical payload: {error}"));
                                 break;
                             }
@@ -1332,7 +1334,7 @@ async fn run_vless_mux_physical(
                         VlessMuxPhysicalCommand::LocalEnd { sid } => {
                             if sessions.contains_key(&sid) {
                                 if let Err(error) = client
-                                    .write_all(&mux_end_frame(sid.to_be_bytes()))
+                                    .write_frame(&mux_end_frame(sid.to_be_bytes()))
                                     .await
                                 {
                                     terminal_error = Some(format!("write VLESS mux logical end: {error}"));
@@ -1352,7 +1354,7 @@ async fn run_vless_mux_physical(
                         VlessMuxPhysicalCommand::LogicalFault { sid, error } => {
                             if sessions.contains_key(&sid) {
                                 if let Err(write_error) = client
-                                    .write_all(&mux_error_frame(sid.to_be_bytes()))
+                                    .write_frame(&mux_error_frame(sid.to_be_bytes()))
                                     .await
                                 {
                                     terminal_error = Some(format!("write VLESS mux logical error: {write_error}"));
@@ -1542,7 +1544,7 @@ async fn open_vless_mux_session(
     };
     if let Err(lease) = command.response.send(Ok(lease)) {
         drop(lease);
-        let _ = client.write_all(&mux_end_frame(sid.to_be_bytes())).await;
+        let _ = client.write_frame(&mux_end_frame(sid.to_be_bytes())).await;
         retire_vless_mux_session(sid, sessions, allocator, owner.resources, None, true);
     }
     Ok(())
@@ -1667,7 +1669,7 @@ async fn handle_vless_mux_response_frame(
         } else {
             observe_unknown_vless_mux_sid(sid, allocator, owner);
             client
-                .write_all(&mux_error_frame(frame.id))
+                .write_frame(&mux_error_frame(frame.id))
                 .await
                 .map_err(|error| format!("reject unknown VLESS mux Session ID: {error}"))?;
         }
@@ -1682,7 +1684,7 @@ async fn handle_vless_mux_response_frame(
     let Some(session) = sessions.get(&sid) else {
         observe_unknown_vless_mux_sid(sid, allocator, owner);
         client
-            .write_all(&mux_error_frame(frame.id))
+            .write_frame(&mux_error_frame(frame.id))
             .await
             .map_err(|error| format!("reject unknown VLESS mux Session ID: {error}"))?;
         return Ok(());
@@ -1700,7 +1702,7 @@ async fn handle_vless_mux_response_frame(
             .cumulative_logical_queue_rejections
             .fetch_add(1, Ordering::Relaxed);
         client
-            .write_all(&mux_error_frame(frame.id))
+            .write_frame(&mux_error_frame(frame.id))
             .await
             .map_err(|error| format!("retire saturated VLESS mux logical stream: {error}"))?;
         retire_vless_mux_session(

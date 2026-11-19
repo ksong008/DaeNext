@@ -161,11 +161,9 @@ impl ResidentProxyProtocolPlan {
             },
             Self::VlessMuxTcpTls { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-vless-mux-tcp",
-                // Policy-closed: this resident mux row is scoped to TCP stream
-                // carriage and has no admitted UDP packet executor.
-                udp_executor: "policy-closed",
-                packet_semantics: "multiplexed-stream",
-                udp_policy_closed: true,
+                udp_executor: "resident-vless-xudp",
+                packet_semantics: "xudp",
+                udp_policy_closed: false,
             },
             Self::Socks5Tcp { .. } => ResidentProtocolExecutorContract {
                 tcp_executor: "resident-socks5-connect",

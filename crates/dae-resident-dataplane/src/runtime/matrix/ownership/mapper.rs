@@ -84,13 +84,10 @@ fn profile_for_shape(shape: TypedOwnershipShape) -> Option<RuntimeOwnershipProfi
                 FLOW_STREAM_POLICY_CLOSED_OWNERSHIP,
             )
         }),
-        Protocol::VlessMux => exact_profile(
-            shape,
-            STANDARD_TLS_SECURITY,
-            WrapperDimension::Mux,
-            UdpDimension::PolicyClosed(PolicyClosedDimension::VlessMux),
-            GENERATION_OWNED_VLESS_MUX_OWNERSHIP,
-        ),
+        Protocol::VlessMux => (is_vless_stream_security(shape.security)
+            && shape.wrapper == WrapperDimension::Mux
+            && shape.udp == UdpDimension::VlessMuxXudp)
+            .then_some(GENERATION_OWNED_VLESS_MUX_OWNERSHIP),
         Protocol::Socks5 => exact_profile(
             shape,
             &[SecurityDimension::None],

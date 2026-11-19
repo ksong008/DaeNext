@@ -28,7 +28,7 @@ fn admitted_policy_closed_plans_keep_their_explicit_tcp_owner() {
     }
 
     let mux = build_proxy(vless_mux_link().export_url()).unwrap();
-    assert!(mux.execution_plan().udp.policy_closed());
+    assert!(!mux.execution_plan().udp.policy_closed());
     assert_eq!(
         materialized_runtime_ownership(mux.execution_plan()),
         GENERATION_OWNED_VLESS_MUX_OWNERSHIP

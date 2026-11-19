@@ -78,12 +78,12 @@ pub const GENERATION_OWNED_VLESS_MUX_OWNERSHIP: RuntimeOwnershipProfile = Runtim
     allowed_materialized_models: GENERATION_VLESS_MUX_MODELS,
     disposition: RuntimeOwnershipDisposition::Implemented,
     data_tcp: generation_vless_mux_route(RuntimeCallerClass::DataTcp),
-    data_udp: closed_route(RuntimeCallerClass::DataUdp),
+    data_udp: UDP_PACKET_ROUTE,
     health_tcp: generation_vless_mux_route(RuntimeCallerClass::HealthTcp),
-    health_dns: closed_route(RuntimeCallerClass::HealthDns),
+    health_dns: HEALTH_DNS_PACKET_ROUTE,
     manual: generation_vless_mux_route(RuntimeCallerClass::ManualProbe),
-    configured_dns: closed_route(RuntimeCallerClass::ConfiguredDns),
-    forced_managed_dns: closed_route(RuntimeCallerClass::ForcedManagedDns),
+    configured_dns: CONFIGURED_DNS_PACKET_ROUTE,
+    forced_managed_dns: FORCED_MANAGED_DNS_PACKET_ROUTE,
 };
 
 pub const GENERATION_OWNED_ANYTLS_OWNERSHIP: RuntimeOwnershipProfile = RuntimeOwnershipProfile {

@@ -11,7 +11,12 @@ pub async fn open_vless_carrier(
     mptcp: bool,
 ) -> Result<(Box<dyn VlessCarrierIo>, &'static str), String> {
     let execution = binding.execution();
-    match execution.wrapper {
+    let wrapper = if execution.wrapper == ResidentStreamWrapperPlan::Mux && binding.net == "tcp" {
+        ResidentStreamWrapperPlan::None
+    } else {
+        execution.wrapper
+    };
+    match wrapper {
         ResidentStreamWrapperPlan::Xhttp(_) => {
             let (stream, underlay) = match binding.xhttp_mode {
                 ResidentXhttpMode::PacketUp => {

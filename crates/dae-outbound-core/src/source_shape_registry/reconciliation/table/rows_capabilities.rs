@@ -255,12 +255,20 @@ pub(super) const SHARED_REALITY_SECURITY_UNDERLAY: SourceShapeReconciliation = a
 
 pub(super) const MUX_TRANSPORT_WRAPPER: SourceShapeReconciliation = production(
     "mux-transport-wrapper",
-    &[standalone(
-        MaterializedProtocol::VlessMux,
-        FULL_STREAM_TLS_VARIANTS,
-        MaterializedWrapper::Mux,
-        MaterializedUdp::PolicyClosed(MaterializedPolicyClosedReason::VlessMux),
-    )],
+    &[
+        standalone(
+            MaterializedProtocol::VlessMux,
+            FULL_STREAM_TLS_AND_REALITY_VARIANTS,
+            MaterializedWrapper::Mux,
+            MaterializedUdp::VlessMuxXudp,
+        ),
+        standalone(
+            MaterializedProtocol::VlessMux,
+            NO_SECURITY_VARIANTS,
+            MaterializedWrapper::Mux,
+            MaterializedUdp::VlessMuxXudp,
+        ),
+    ],
 );
 
 pub(super) const PASSTHROUGH_UDP_TRANSPORT: SourceShapeReconciliation =
