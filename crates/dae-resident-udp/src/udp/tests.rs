@@ -29,6 +29,7 @@ pub(in crate::udp) mod tests {
             xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
             xhttp_xmux: None,
             vless_mux: None,
+            vless_hysteria: None,
             tls: String::new(),
             allow_insecure: false,
             tls_fragment: None,

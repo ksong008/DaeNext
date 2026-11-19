@@ -68,6 +68,7 @@ pub fn download_test_key(
         xhttp_settings: endpoint.settings.clone(),
         xhttp_xmux: Some(plan.clone()),
         vless_mux: None,
+        vless_hysteria: None,
         tls: "reality".to_owned(),
         allow_insecure: false,
         tls_fragment: None,

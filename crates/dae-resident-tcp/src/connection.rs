@@ -118,6 +118,7 @@ pub async fn handle_tcp_connection_async_or_handoff(
                     selection.proxy.execution_plan().protocol
                 ))
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::Vless {
+                let hysteria2_owner_registry = router.hysteria2_owner_registry();
                 drop(router);
                 Box::pin(handle_proxy_tcp_connection_async(
                     &mut inbound,
@@ -127,6 +128,7 @@ pub async fn handle_tcp_connection_async_or_handoff(
                     Arc::clone(&stop),
                     sniff,
                     &metrics,
+                    hysteria2_owner_registry.as_ref(),
                 ))
                 .await
             } else if runtime_dispatch == ResidentTcpRuntimeDispatch::FrameTls {

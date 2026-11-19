@@ -9,12 +9,17 @@ pub async fn handle_proxy_tcp_connection_async(
     stop: SharedResidentStopSignal,
     mut sniff: TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
+    hysteria_owner: Option<&Hysteria2OwnerRegistryHandle>,
 ) -> Result<Value, String> {
     let execution = selection.proxy.execution_plan();
-    if execution.protocol == ResidentProtocolShape::VlessVision
-        && execution.wrapper != ResidentStreamWrapperPlan::None
+    if (execution.protocol == ResidentProtocolShape::VlessVision
+        && execution.wrapper != ResidentStreamWrapperPlan::None)
+        || matches!(
+            execution.wrapper,
+            ResidentStreamWrapperPlan::QuicStream | ResidentStreamWrapperPlan::Mkcp
+        )
     {
-        return handle_vless_wrapped_vision(
+        return handle_vless_encrypted_carrier(
             inbound,
             peer,
             original_dst,
@@ -22,6 +27,7 @@ pub async fn handle_proxy_tcp_connection_async(
             stop,
             sniff,
             metrics,
+            hysteria_owner,
         )
         .await;
     }
@@ -218,7 +224,7 @@ pub async fn handle_proxy_tcp_connection_async(
     })
 }
 
-async fn handle_vless_wrapped_vision(
+async fn handle_vless_encrypted_carrier(
     inbound: &mut TokioTcpStream,
     peer: SocketAddr,
     original_dst: SocketAddr,
@@ -226,12 +232,13 @@ async fn handle_vless_wrapped_vision(
     stop: SharedResidentStopSignal,
     mut sniff: TcpSniffReport,
     metrics: &ResidentDataplaneMetrics,
+    hysteria_owner: Option<&Hysteria2OwnerRegistryHandle>,
 ) -> Result<Value, String> {
     let key = selection.proxy.vless_key()?;
     let encryption = selection
         .proxy
         .vless_encryption()?
-        .ok_or_else(|| "wrapped VLESS Vision requires Encryption".to_owned())?;
+        .ok_or_else(|| "VLESS carrier requires Encryption".to_owned())?;
     let request = packet::first_write_bytes(
         &key,
         &selection.proxy.flow,
@@ -240,30 +247,43 @@ async fn handle_vless_wrapped_vision(
         false,
         &[],
     )
-    .map_err(|err| format!("build wrapped VLESS Vision request: {err}"))?;
-    let (stream, underlay) = open_vless_carrier(&selection.proxy, selection.mptcp).await?;
+    .map_err(|err| format!("build VLESS carrier request: {err}"))?;
+    let (stream, underlay) = open_vless_carrier(
+        &selection.proxy,
+        selection.mptcp,
+        hysteria_owner.map(|owner| (owner, QuicEndpointCallerClass::TcpData)),
+    )
+    .await?;
     let mut stream = VlessEncryptedStream::handshake(stream, encryption)
         .await
-        .map_err(|err| format!("VLESS Encryption Vision handshake: {err}"))?;
+        .map_err(|err| format!("VLESS Encryption carrier handshake: {err}"))?;
     stream
         .write_all(&request)
         .await
-        .map_err(|err| format!("write VLESS Vision request: {err}"))?;
+        .map_err(|err| format!("write VLESS carrier request: {err}"))?;
     stream
         .flush()
         .await
-        .map_err(|err| format!("flush VLESS Vision request: {err}"))?;
-    let result = relay_tcp_over_vless_vision_duplex(
-        inbound,
-        &mut stream,
-        stop,
-        key,
-        sniff.take_payload(),
-        Vec::new(),
-        metrics,
-    )
-    .await;
-    let executor = "async-proxy-wrapped-vision";
+        .map_err(|err| format!("flush VLESS carrier request: {err}"))?;
+    let initial_payload = sniff.take_payload();
+    let (result, executor) = if is_xtls_rprx_vision_flow(&selection.proxy.flow) {
+        let result = relay_tcp_over_vless_vision_duplex(
+            inbound,
+            &mut stream,
+            stop,
+            key,
+            initial_payload,
+            Vec::new(),
+            metrics,
+        )
+        .await;
+        (result, "async-proxy-wrapped-vision")
+    } else {
+        let result =
+            relay_tcp_over_vless_plain_async(inbound, &mut stream, stop, initial_payload, metrics)
+                .await;
+        (result, "async-proxy-vless-carrier")
+    };
     let mut event = match result {
         Ok(stats) => proxy_tcp_finished_event(
             peer,

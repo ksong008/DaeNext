@@ -82,6 +82,7 @@ fn test_proxy(endpoint: &ResidentXhttpEndpointPlan) -> ResidentProxyPlan {
         xhttp_settings: endpoint.settings.clone(),
         xhttp_xmux: Some(xmux(9)),
         vless_mux: None,
+        vless_hysteria: None,
         tls: if endpoint.reality.is_some() {
             "reality".to_owned()
         } else {

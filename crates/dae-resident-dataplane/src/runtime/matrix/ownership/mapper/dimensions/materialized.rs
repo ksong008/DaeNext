@@ -77,6 +77,7 @@ fn materialized_wrapper(wrapper: WrapperDimension) -> MaterializedWrapper {
         WrapperDimension::XhttpH3 => MaterializedWrapper::XhttpH3,
         WrapperDimension::FrameStream => MaterializedWrapper::FrameStream,
         WrapperDimension::QuicStream => MaterializedWrapper::QuicStream,
+        WrapperDimension::Mkcp => MaterializedWrapper::Mkcp,
         WrapperDimension::SimpleObfsHttp => MaterializedWrapper::SimpleObfsHttp,
         WrapperDimension::SimpleObfsTls => MaterializedWrapper::SimpleObfsTls,
         WrapperDimension::LegacyObfs => MaterializedWrapper::LegacyObfs,

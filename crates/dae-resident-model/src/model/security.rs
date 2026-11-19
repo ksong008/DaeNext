@@ -21,10 +21,12 @@ impl ResidentSecurityUnderlayPlan {
         proxy: &ResidentProxyPlan,
         wrapper: ResidentStreamWrapperPlan,
     ) -> Self {
-        if matches!(
-            wrapper,
-            ResidentStreamWrapperPlan::Xhttp(ResidentXhttpHttpVersion::H3)
-        ) {
+        if proxy.vless_hysteria.is_some()
+            || matches!(
+                wrapper,
+                ResidentStreamWrapperPlan::Xhttp(ResidentXhttpHttpVersion::H3)
+            )
+        {
             return Self::QuicTls;
         }
         if proxy.tls == "reality" {

@@ -25,6 +25,7 @@ dae-outbound-stream.workspace = true
 dae-resident-core.workspace = true
 dae-resident-model.workspace = true
 dae-runtime-control.workspace = true
+dae-tls.workspace = true
 base64.workspace = true
 boring.workspace = true
 boring-sys.workspace = true
@@ -45,7 +46,7 @@ quinn-boring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }
 tokio-boring.workspace = true
 tokio-util.workspace = true
 tls-parser.workspace = true

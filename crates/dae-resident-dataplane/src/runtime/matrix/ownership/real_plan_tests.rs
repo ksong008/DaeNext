@@ -215,6 +215,7 @@ fn vless_link(net: &str, security: &str, alpn: &str, path: &str) -> VLESSLink {
         mldsa65_verify: None,
         mux: false,
         mux_options: Default::default(),
+        hysteria_auth: String::new(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }

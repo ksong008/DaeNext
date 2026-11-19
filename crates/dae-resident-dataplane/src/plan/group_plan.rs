@@ -390,10 +390,12 @@ impl ResidentProxyGroupPlan {
 
     pub(crate) fn requires_hysteria2_owner(&self) -> bool {
         self.candidates.iter().any(|candidate| {
-            matches!(
-                &candidate.binding.plan().handler,
-                ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
-            )
+            let proxy = candidate.binding.plan();
+            proxy.vless_hysteria.is_some()
+                || matches!(
+                    &proxy.handler,
+                    ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }
+                )
         })
     }
 

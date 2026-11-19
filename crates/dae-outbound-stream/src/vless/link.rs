@@ -38,6 +38,7 @@ pub struct VLESSLink {
     pub mldsa65_verify: Option<Mldsa65VerifyKey>,
     pub mux: bool,
     pub mux_options: VlessMuxOptions,
+    pub hysteria_auth: String,
     /// Xray VLESS Encryption account string.  `none`/empty keeps the
     /// legacy unencrypted VLESS record path; any other value is parsed and
     /// validated by the resident builder before a connection is published.
@@ -89,6 +90,7 @@ impl VLESSLink {
             .map_err(|err| OutboundError::BadVless(err.to_string()))?,
             mux: parse_mux_enabled(&query),
             mux_options: parse_mux_options(&query)?,
+            hysteria_auth: query_value(&query, "auth").unwrap_or_default(),
             encryption: query_value(&query, "encryption").unwrap_or_default(),
             protocol: "vless".to_owned(),
         };
@@ -111,8 +113,21 @@ impl VLESSLink {
         if parsed.tls.is_empty() {
             parsed.tls = "none".to_owned();
         }
-        if parsed.r#type == "mkcp" || parsed.r#type == "kcp" {
+        if matches!(parsed.net.as_str(), "mkcp" | "kcp") {
             parsed.path = query_value(&query, "seed").unwrap_or_default();
+        }
+        if parsed.net == "xdrive" {
+            match query_value(&query, "service").as_deref() {
+                Some("local") => {
+                    parsed.path = query_value(&query, "remoteFolder").unwrap_or_default()
+                }
+                None => parsed.path.clear(),
+                Some(_) => {
+                    return Err(OutboundError::BadVless(
+                        "unsupported VLESS XDrive service".to_owned(),
+                    ));
+                }
+            }
         }
         Ok(parsed)
     }
@@ -181,6 +196,11 @@ impl VLESSLink {
                 push_if_non_empty(&mut query, "authority", &self.grpc_authority);
             }
             "meek" => push_if_non_empty(&mut query, "url", &self.path),
+            "hysteria" => push_if_non_empty(&mut query, "auth", &self.hysteria_auth),
+            "xdrive" if !self.path.is_empty() => {
+                query.push(("service".to_owned(), "local".to_owned()));
+                push_if_non_empty(&mut query, "remoteFolder", &self.path);
+            }
             _ => {}
         }
         push_if_non_empty(&mut query, "flow", &canonical_flow(&self.flow));
@@ -242,6 +262,7 @@ fn canonical_transport(net: String) -> String {
     match net.as_str() {
         "" | "raw" => "tcp".to_owned(),
         "splithttp" => "xhttp".to_owned(),
+        "kcp" => "mkcp".to_owned(),
         _ => net,
     }
 }

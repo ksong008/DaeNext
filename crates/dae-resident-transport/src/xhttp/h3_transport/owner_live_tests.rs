@@ -140,6 +140,7 @@ fn xhttp_h3_owner_plan(
         xhttp_settings: endpoint.settings.clone(),
         xhttp_xmux: Some(xmux),
         vless_mux: None,
+        vless_hysteria: None,
         tls: "tls".to_owned(),
         allow_insecure: true,
         tls_fragment: None,

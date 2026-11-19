@@ -1172,7 +1172,7 @@ async fn build_vless_mux_physical_on_owner(
     let key_bytes = proxy.vless_key()?;
     let (mut client, tls_underlay) = time::timeout(remaining, async {
         if let Some(encryption) = proxy.vless_encryption()? {
-            let (client, underlay) = open_vless_carrier(&binding, proxy.mptcp).await?;
+            let (client, underlay) = open_vless_carrier(&binding, proxy.mptcp, None).await?;
             let client = VlessEncryptedStream::handshake(client, encryption)
                 .await
                 .map_err(|error| format!("VLESS mux Encryption handshake: {error}"))?;

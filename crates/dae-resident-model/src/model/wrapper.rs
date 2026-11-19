@@ -14,6 +14,7 @@ pub enum ResidentStreamWrapperPlan {
     Xhttp(ResidentXhttpHttpVersion),
     FrameStream,
     QuicStream,
+    Mkcp,
     SimpleObfsHttp,
     SimpleObfsTls,
     LegacyObfs,
@@ -56,6 +57,8 @@ impl ResidentStreamWrapperPlan {
             "grpc" => Self::Grpc,
             "h2" => Self::H2,
             "meek" => Self::Meek,
+            "hysteria" if proxy.vless_hysteria.is_some() => Self::QuicStream,
+            "mkcp" => Self::Mkcp,
             "xhttp" => Self::Xhttp(if proxy.tls == "reality" {
                 ResidentXhttpHttpVersion::H2
             } else if proxy.tls == "none" {
@@ -81,6 +84,7 @@ impl ResidentStreamWrapperPlan {
             Self::Xhttp(_) => "xhttp",
             Self::FrameStream => "frame-stream",
             Self::QuicStream => "quic-stream",
+            Self::Mkcp => "mkcp",
             Self::SimpleObfsHttp => "simple-obfs-http",
             Self::SimpleObfsTls => "simple-obfs-tls",
             Self::LegacyObfs => "legacy-obfs",

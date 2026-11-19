@@ -356,6 +356,12 @@ impl ResidentUdpExecutorFactory {
             Wrapper::HttpUpgrade if tls => Stream::HttpUpgradeTls,
             Wrapper::Grpc if tls || (plain && encrypted) => Stream::GrpcTls,
             Wrapper::H2 if tls => Stream::H2Tls,
+            Wrapper::Mkcp if encrypted && (plain || tls) => Stream::TlsTcp,
+            Wrapper::QuicStream
+                if encrypted && security == ResidentSecurityUnderlayPlan::QuicTls =>
+            {
+                Stream::TlsTcp
+            }
             Wrapper::Xhttp(ResidentXhttpHttpVersion::H1) => Stream::XhttpH1,
             Wrapper::Xhttp(ResidentXhttpHttpVersion::H2) => Stream::XhttpH2,
             Wrapper::Xhttp(ResidentXhttpHttpVersion::H3) => Stream::XhttpH3,

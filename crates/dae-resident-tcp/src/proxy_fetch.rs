@@ -244,6 +244,7 @@ fn start_resident_proxy_tcp_handler(
                 handler_stop,
                 sniff,
                 &handler_metrics,
+                hysteria2_owner_registry.as_ref(),
             )
             .await
         } else if runtime_dispatch == ResidentTcpRuntimeDispatch::FrameTls {

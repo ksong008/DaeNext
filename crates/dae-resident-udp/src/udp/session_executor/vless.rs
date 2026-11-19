@@ -143,7 +143,7 @@ impl VlessXudpStreamSession {
                     .map_err(|err| format!("build VLESS Vision XUDP mux request header: {err}"))?;
             request.extend_from_slice(&self.request_frame(frame, key));
             if let Some(encryption) = proxy.vless_encryption()? {
-                let (client, underlay) = open_vless_carrier(binding, proxy.mptcp).await?;
+                let (client, underlay) = open_vless_carrier(binding, proxy.mptcp, None).await?;
                 self.tls_underlay = Some(underlay);
                 let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
                     .await

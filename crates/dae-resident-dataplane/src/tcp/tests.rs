@@ -1647,6 +1647,7 @@ fn dummy_proxy_plan() -> ResidentProxyPlan {
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
         xhttp_xmux: None,
         vless_mux: None,
+        vless_hysteria: None,
         tls: "tls".to_owned(),
         allow_insecure: false,
         tls_fragment: None,

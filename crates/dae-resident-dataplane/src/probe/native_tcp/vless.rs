@@ -10,6 +10,7 @@ use dae_outbound_stream::{
     vless::{VlessEncryptedStream, packet},
 };
 use dae_resident_transport::{
+    Hysteria2OwnerRegistryHandle, QuicEndpointCallerClass,
     httpupgrade_handshake_over_resident_tls_async as native_httpupgrade_handshake_over_resident_tls_async,
     open_plain_vless_tcp_stream, open_vless_carrier,
     websocket_handshake_over_resident_tls_async as native_websocket_handshake_over_resident_tls_async,
@@ -47,6 +48,8 @@ pub(super) async fn open_vless_native_tcp_tunnel(
     binding: ResidentProxyBinding,
     target: &str,
     owner_deadline: dae_runtime_control::AbsoluteDeadline,
+    hysteria_owner: Option<&Hysteria2OwnerRegistryHandle>,
+    caller: QuicEndpointCallerClass,
 ) -> Result<Box<dyn NativeTcpTunnel>, NativeTcpProbeError> {
     let selection = native_tcp_probe_selection(binding, target);
     let execution = selection.proxy.execution_plan();
@@ -62,19 +65,27 @@ pub(super) async fn open_vless_native_tcp_tunnel(
     if execution.wrapper == ResidentStreamWrapperPlan::Mux {
         return open_vless_mux_native_tcp_tunnel(selection, target, owner_deadline).await;
     }
-    if execution.protocol == ResidentProtocolShape::VlessVision
-        && execution.wrapper != ResidentStreamWrapperPlan::None
+    if (execution.protocol == ResidentProtocolShape::VlessVision
+        && execution.wrapper != ResidentStreamWrapperPlan::None)
+        || matches!(
+            execution.wrapper,
+            ResidentStreamWrapperPlan::QuicStream | ResidentStreamWrapperPlan::Mkcp
+        )
     {
         let encryption = selection
             .proxy
             .vless_encryption()
             .map_err(NativeTcpProbeError::Open)?
             .ok_or_else(|| {
-                NativeTcpProbeError::Open("wrapped VLESS Vision requires Encryption".to_owned())
+                NativeTcpProbeError::Open("VLESS carrier requires Encryption".to_owned())
             })?;
-        let (carrier, _) = open_vless_carrier(&selection.proxy, selection.mptcp)
-            .await
-            .map_err(NativeTcpProbeError::Open)?;
+        let (carrier, _) = open_vless_carrier(
+            &selection.proxy,
+            selection.mptcp,
+            hysteria_owner.map(|owner| (owner, caller)),
+        )
+        .await
+        .map_err(NativeTcpProbeError::Open)?;
         let mut stream = VlessEncryptedStream::handshake(carrier, encryption)
             .await
             .map_err(|err| {
@@ -86,7 +97,13 @@ pub(super) async fn open_vless_native_tcp_tunnel(
         stream.flush().await.map_err(|err| {
             NativeTcpProbeError::Open(format!("flush VLESS Vision request: {err}"))
         })?;
-        return Ok(open_vless_vision_encrypted_probe(stream, key));
+        return Ok(
+            if execution.protocol == ResidentProtocolShape::VlessVision {
+                open_vless_vision_encrypted_probe(stream, key)
+            } else {
+                boxed_native_tcp_tunnel(VlessNativeTunnel::new(stream))
+            },
+        );
     }
     if execution.security == ResidentSecurityUnderlayPlan::None
         && matches!(

@@ -12,6 +12,7 @@ pub(in crate::udp) struct VlessStandardUdpOverStreamSession {
     response_header_seen: bool,
     response_plaintext: Vec<u8>,
     fixed_target: UdpSessionFixedTarget,
+    hysteria_owner: Option<Hysteria2OwnerRegistryHandle>,
 }
 
 impl VlessStandardUdpOverStreamSession {
@@ -55,7 +56,12 @@ impl VlessStandardUdpOverStreamSession {
             response_header_seen: false,
             response_plaintext: Vec::new(),
             fixed_target: UdpSessionFixedTarget::default(),
+            hysteria_owner: None,
         }
+    }
+
+    pub(super) fn set_hysteria_owner(&mut self, owner: Option<Hysteria2OwnerRegistryHandle>) {
+        self.hysteria_owner = owner;
     }
 
     pub(super) fn begin_dns_send(
@@ -123,8 +129,15 @@ impl VlessStandardUdpOverStreamSession {
     ) -> Result<(), String> {
         self.response_header_seen = false;
         self.response_plaintext.clear();
-        self.underlay =
-            Some(VlessStandardUdpUnderlay::open(self.wrapper, binding, initial_packet).await?);
+        self.underlay = Some(
+            VlessStandardUdpUnderlay::open(
+                self.wrapper,
+                binding,
+                initial_packet,
+                self.hysteria_owner.as_ref(),
+            )
+            .await?,
+        );
         Ok(())
     }
 

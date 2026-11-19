@@ -1,5 +1,6 @@
 use super::*;
 use dae_outbound_stream::vless::VlessEncryptedStream;
+use dae_resident_transport::{VlessCarrierIo, open_vless_carrier};
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
@@ -29,7 +30,7 @@ pub(super) enum VlessStandardUdpUnderlay {
         stream: UdpSharedIo<VlessEncryptedStream<tokio::net::TcpStream>>,
     },
     EncryptedTlsTcp {
-        client: UdpSharedIo<VlessEncryptedStream<AsyncResidentTlsClient>>,
+        client: UdpSharedIo<VlessEncryptedStream<Box<dyn VlessCarrierIo>>>,
         tls_underlay: &'static str,
     },
     WebSocketPlain {
@@ -86,6 +87,7 @@ impl VlessStandardUdpUnderlay {
         wrapper: VlessStandardUdpWrapperKind,
         binding: &ResidentProxyBinding,
         initial_packet: &[u8],
+        hysteria_owner: Option<&Hysteria2OwnerRegistryHandle>,
     ) -> Result<Self, String> {
         let proxy = binding.plan();
         match wrapper {
@@ -117,10 +119,13 @@ impl VlessStandardUdpUnderlay {
                 }
             }
             VlessStandardUdpWrapperKind::TlsTcp => {
-                let mut client =
-                    open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
-                let tls_underlay = async_resident_tls_underlay_name(&client);
                 if let Some(encryption) = proxy.vless_encryption()? {
+                    let (client, tls_underlay) = open_vless_carrier(
+                        binding,
+                        proxy.mptcp,
+                        hysteria_owner.map(|owner| (owner, QuicEndpointCallerClass::UdpData)),
+                    )
+                    .await?;
                     let mut client = VlessEncryptedStream::handshake(client, encryption)
                         .await
                         .map_err(|err| format!("VLESS Encryption TLS UDP handshake: {err}"))?;
@@ -135,6 +140,9 @@ impl VlessStandardUdpUnderlay {
                         tls_underlay,
                     })
                 } else {
+                    let mut client =
+                        open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
+                    let tls_underlay = async_resident_tls_underlay_name(&client);
                     write_vless_stream_bytes(
                         &mut client,
                         initial_packet,

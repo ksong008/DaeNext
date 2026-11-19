@@ -89,6 +89,7 @@ pub enum MaterializedWrapper {
     XhttpH3,
     FrameStream,
     QuicStream,
+    Mkcp,
     SimpleObfsHttp,
     SimpleObfsTls,
     LegacyObfs,

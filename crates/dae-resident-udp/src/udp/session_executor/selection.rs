@@ -115,7 +115,13 @@ impl UdpSessionExecutor {
                 ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
                 | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. },
                 ResidentUdpExecutorFactory::VlessStandard(transport),
-            ) => Self::new_vless_standard(transport),
+            ) => {
+                let mut executor = Self::new_vless_standard(transport);
+                if let Self::VlessStandard(session) = &mut executor {
+                    session.set_hysteria_owner(owner_registry);
+                }
+                executor
+            }
             (
                 ResidentProxyProtocolPlan::TrojanTcpTls { password },
                 ResidentUdpExecutorFactory::Trojan(transport),
