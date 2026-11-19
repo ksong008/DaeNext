@@ -1,10 +1,8 @@
 use super::*;
 use dae_outbound_stream::vless::VlessEncryptedStream;
 use tokio::io::AsyncWriteExt;
-use tokio_util::either::Either;
 
-type VlessXudpEncryptedIo =
-    VlessEncryptedStream<Either<tokio::net::TcpStream, AsyncResidentTlsClient>>;
+type VlessXudpEncryptedIo = VlessEncryptedStream<Box<dyn VlessCarrierIo>>;
 
 async fn write_vless_encrypted_xhttp_bytes(
     stream: &mut (impl tokio::io::AsyncWrite + Unpin),
@@ -90,6 +88,14 @@ impl VlessXudpStreamSession {
             );
         }
         let proxy = binding.plan();
+        if original_dst.port() == 443
+            && proxy.flow == dae_outbound_core::vless::contract::XTLS_RPRX_VISION
+        {
+            return Err(
+                "VLESS Vision rejected UDP/443 (use xtls-rprx-vision-udp443 to allow it)"
+                    .to_owned(),
+            );
+        }
         self.fixed_target
             .bind(original_dst, "VLESS Vision XUDP stream")?;
         let key = match self.key {
@@ -117,16 +123,8 @@ impl VlessXudpStreamSession {
                 false,
             ));
             if let Some(encryption) = proxy.vless_encryption()? {
-                let client = if binding.execution().security == ResidentSecurityUnderlayPlan::None {
-                    let stream = open_proxy_tcp_stream_with_binding(binding, proxy.mptcp).await?;
-                    self.tls_underlay = Some("none");
-                    Either::Left(stream)
-                } else {
-                    let client =
-                        open_async_resident_tls_client_with_binding(binding, proxy.mptcp).await?;
-                    self.tls_underlay = Some(async_resident_tls_underlay_name(&client));
-                    Either::Right(client)
-                };
+                let (client, underlay) = open_vless_carrier(binding, proxy.mptcp).await?;
+                self.tls_underlay = Some(underlay);
                 let mut encrypted = VlessEncryptedStream::handshake(client, encryption)
                     .await
                     .map_err(|err| format!("VLESS Encryption XUDP handshake: {err}"))?;

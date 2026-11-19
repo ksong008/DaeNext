@@ -11,6 +11,20 @@ pub async fn handle_proxy_tcp_connection_async(
     metrics: &ResidentDataplaneMetrics,
 ) -> Result<Value, String> {
     let execution = selection.proxy.execution_plan();
+    if execution.protocol == ResidentProtocolShape::VlessVision
+        && execution.wrapper != ResidentStreamWrapperPlan::None
+    {
+        return handle_vless_wrapped_vision(
+            inbound,
+            peer,
+            original_dst,
+            selection,
+            stop,
+            sniff,
+            metrics,
+        )
+        .await;
+    }
     if execution.wrapper == ResidentStreamWrapperPlan::Mux {
         return handle_vless_mux_tcp_connection_async(
             inbound,
@@ -202,6 +216,77 @@ pub async fn handle_proxy_tcp_connection_async(
         event["vless_encryption"] = json!(encryption_enabled);
         Ok::<Value, String>(event)
     })
+}
+
+async fn handle_vless_wrapped_vision(
+    inbound: &mut TokioTcpStream,
+    peer: SocketAddr,
+    original_dst: SocketAddr,
+    selection: TcpProxySelection,
+    stop: SharedResidentStopSignal,
+    mut sniff: TcpSniffReport,
+    metrics: &ResidentDataplaneMetrics,
+) -> Result<Value, String> {
+    let key = selection.proxy.vless_key()?;
+    let encryption = selection
+        .proxy
+        .vless_encryption()?
+        .ok_or_else(|| "wrapped VLESS Vision requires Encryption".to_owned())?;
+    let request = packet::first_write_bytes(
+        &key,
+        &selection.proxy.flow,
+        "tcp",
+        &selection.route.dial_target,
+        false,
+        &[],
+    )
+    .map_err(|err| format!("build wrapped VLESS Vision request: {err}"))?;
+    let (stream, underlay) = open_vless_carrier(&selection.proxy, selection.mptcp).await?;
+    let mut stream = VlessEncryptedStream::handshake(stream, encryption)
+        .await
+        .map_err(|err| format!("VLESS Encryption Vision handshake: {err}"))?;
+    stream
+        .write_all(&request)
+        .await
+        .map_err(|err| format!("write VLESS Vision request: {err}"))?;
+    stream
+        .flush()
+        .await
+        .map_err(|err| format!("flush VLESS Vision request: {err}"))?;
+    let result = relay_tcp_over_vless_vision_duplex(
+        inbound,
+        &mut stream,
+        stop,
+        key,
+        sniff.take_payload(),
+        Vec::new(),
+        metrics,
+    )
+    .await;
+    let executor = "async-proxy-wrapped-vision";
+    let mut event = match result {
+        Ok(stats) => proxy_tcp_finished_event(
+            peer,
+            original_dst,
+            &selection,
+            &sniff,
+            underlay,
+            &stats,
+            executor,
+        ),
+        Err(error) => proxy_tcp_failed_event(
+            peer,
+            original_dst,
+            &selection,
+            &sniff,
+            underlay,
+            &error,
+            executor,
+        ),
+    };
+    event["stream_wrapper"] = json!(selection.proxy.execution_plan().wrapper.graph_label());
+    event["vless_encryption"] = json!(true);
+    Ok(event)
 }
 
 #[allow(clippy::too_many_arguments)]

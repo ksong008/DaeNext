@@ -190,8 +190,14 @@ impl ResidentUdpExecutorFactory {
                 encryption: Some(_),
                 ..
             } if is_xtls_rprx_vision_flow(&proxy.flow)
-                && matches!(wrapper, ResidentStreamWrapperPlan::None)
-                && (security == ResidentSecurityUnderlayPlan::None || security.is_tls_stream()) =>
+                && matches!(
+                    wrapper,
+                    ResidentStreamWrapperPlan::None
+                        | ResidentStreamWrapperPlan::WebSocket
+                        | ResidentStreamWrapperPlan::HttpUpgrade
+                        | ResidentStreamWrapperPlan::Grpc
+                        | ResidentStreamWrapperPlan::Xhttp(_)
+                ) =>
             {
                 // Vision uses VLESS mux/XUDP inside the encrypted byte stream.
                 Self::VlessVisionXudp
