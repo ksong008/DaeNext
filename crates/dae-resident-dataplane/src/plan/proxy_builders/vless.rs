@@ -28,16 +28,12 @@ pub(crate) fn build_vless_proxy_plan(
             "resident dataplane keeps VLESS Encryption with legacy H2 and Meek policy-closed for node {node_tag}; neither is an admitted current-Xray transport"
         ));
     }
-    if encryption.is_some() && vless.mux && is_xtls_rprx_vision_flow(&vless.flow) {
-        return Err(format!(
-            "resident dataplane rejects VLESS Encryption + mux + xtls-rprx-vision for node {node_tag}; a Vision-aware mux/XUDP executor is not admitted"
-        ));
-    }
+    let vision = is_xtls_rprx_vision_flow(&vless.flow);
     let encrypted_wrapper = encryption.is_some()
         && matches!(net.as_str(), "grpc" | "websocket" | "httpupgrade" | "xhttp");
-    if vless.mux && net != "tcp" {
+    if vless.mux && net != "tcp" && !(encrypted_wrapper && (vision || net == "xhttp")) {
         return Err(format!(
-            "resident dataplane vless mux transport admits tcp carrier only for node {node_tag}; got {net}"
+            "resident dataplane vless mux requires TCP or encrypted XHTTP, or an encrypted Vision carrier for node {node_tag}; got {net}"
         ));
     }
     match net.as_str() {
@@ -232,7 +228,9 @@ pub(crate) fn build_vless_proxy_plan(
         String::new()
     };
     let graph = resident_graph_identity(&link);
-    let handler = if vless.mux {
+    // Vision uses standalone TCP and XUDP. The mux option cannot send a TCP
+    // substream under a Vision request.
+    let handler = if vless.mux && !vision {
         ResidentProxyProtocolPlan::VlessMuxTcpTls { key, encryption }
     } else {
         ResidentProxyProtocolPlan::VlessVisionTcpTls { key, encryption }

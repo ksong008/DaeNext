@@ -59,7 +59,7 @@ pub(super) async fn open_vless_native_tcp_tunnel(
             NativeTcpProbeError::Open(format!("build native VLESS TCP request: {err}"))
         })?;
 
-    if execution.protocol == ResidentProtocolShape::VlessMux {
+    if execution.wrapper == ResidentStreamWrapperPlan::Mux {
         return open_vless_mux_native_tcp_tunnel(selection, target, owner_deadline).await;
     }
     if execution.protocol == ResidentProtocolShape::VlessVision
