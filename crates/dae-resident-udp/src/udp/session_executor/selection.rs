@@ -112,7 +112,8 @@ impl UdpSessionExecutor {
                 ResidentUdpExecutorFactory::VlessMuxXudp,
             ) => Self::VlessVision(VlessXudpStreamSession::without_vision()),
             (
-                ResidentProxyProtocolPlan::VlessVisionTcpTls { .. },
+                ResidentProxyProtocolPlan::VlessVisionTcpTls { .. }
+                | ResidentProxyProtocolPlan::VlessMuxTcpTls { .. },
                 ResidentUdpExecutorFactory::VlessStandard(transport),
             ) => Self::new_vless_standard(transport),
             (
@@ -161,7 +162,7 @@ impl UdpSessionExecutor {
         }
     }
 
-    fn new_vless_standard(transport: ResidentStreamPacketTransport) -> Self {
+    pub(super) fn new_vless_standard(transport: ResidentStreamPacketTransport) -> Self {
         let session = match transport {
             ResidentStreamPacketTransport::PlainTcp => VlessStandardUdpOverStreamSession::plain(),
             ResidentStreamPacketTransport::TlsTcp => VlessStandardUdpOverStreamSession::tls(),

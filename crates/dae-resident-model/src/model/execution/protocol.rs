@@ -127,7 +127,8 @@ impl ResidentProtocolShape {
             Self::VlessMux if matches!(wrapper, ResidentStreamWrapperPlan::Xhttp(_)) => {
                 "resident-vless-xhttp-stream"
             }
-            Self::VlessMux => "resident-vless-mux-tcp",
+            Self::VlessMux if wrapper == ResidentStreamWrapperPlan::Mux => "resident-vless-mux-tcp",
+            Self::VlessMux => "resident-vless-tcp-stream",
             Self::Socks5 => "resident-socks5-connect",
             Self::HttpProxy => "resident-http-connect",
             Self::ShadowsocksAead => "resident-shadowsocks-aead-stream",

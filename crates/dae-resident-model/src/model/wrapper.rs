@@ -25,7 +25,7 @@ impl ResidentStreamWrapperPlan {
     pub(super) fn from_proxy(proxy: &ResidentProxyPlan) -> Self {
         match proxy.handler {
             ResidentProxyProtocolPlan::AnyTlsTcpTls { .. } => return Self::FrameStream,
-            ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } if proxy.net != "xhttp" => {
+            ResidentProxyProtocolPlan::VlessMuxTcpTls { .. } if proxy.vless_tcp_mux_enabled() => {
                 return Self::Mux;
             }
             ResidentProxyProtocolPlan::Hysteria2QuicTcp { .. }

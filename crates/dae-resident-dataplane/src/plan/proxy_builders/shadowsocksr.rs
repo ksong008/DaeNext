@@ -52,6 +52,7 @@ pub(crate) fn build_shadowsocksr_proxy_plan(
         xhttp_mode: ResidentXhttpMode::PacketUp,
         xhttp_settings: ResidentXhttpSettingsPlan::official_default(),
         xhttp_xmux: None,
+        vless_mux: None,
         tls: "legacy-cipher".to_owned(),
         allow_insecure: false,
         tls_fragment: None,

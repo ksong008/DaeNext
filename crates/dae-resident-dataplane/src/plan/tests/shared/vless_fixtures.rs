@@ -48,6 +48,7 @@ pub(crate) fn vless_fixture_url(
         ech: None,
         mldsa65_verify: None,
         mux: false,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }
@@ -88,6 +89,7 @@ fn vless_vision_fixture_url_with_allow_insecure(fingerprint: &str, allow_insecur
         ech: None,
         mldsa65_verify: None,
         mux: false,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }
@@ -134,6 +136,7 @@ pub(crate) fn vless_plain_tcp_none_fixture_url() -> String {
         ech: None,
         mldsa65_verify: None,
         mux: false,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }
@@ -193,6 +196,7 @@ fn vless_reality_fixture_url_with_allow_insecure(allow_insecure: bool) -> String
         ech: None,
         mldsa65_verify: None,
         mux: false,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }
@@ -225,6 +229,7 @@ pub(crate) fn vless_mux_fixture_url() -> String {
         ech: None,
         mldsa65_verify: None,
         mux: true,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }
@@ -264,6 +269,7 @@ pub(crate) fn vless_xhttp_parser_fixture_url(mode: &str, alpn: &str, extra: &str
         ech: None,
         mldsa65_verify: None,
         mux: false,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }

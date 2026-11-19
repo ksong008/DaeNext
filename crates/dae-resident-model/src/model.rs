@@ -1,5 +1,6 @@
 use super::*;
 use crate::executable_graph::ResidentExecutableGraphDescriptor;
+use dae_outbound_core::vless::mux::VlessMuxOptions;
 
 mod binding;
 mod execution;
@@ -87,6 +88,7 @@ pub struct ResidentProxyPlan {
     pub xhttp_mode: ResidentXhttpMode,
     pub xhttp_settings: ResidentXhttpSettingsPlan,
     pub xhttp_xmux: Option<ResidentXhttpXmuxPlan>,
+    pub vless_mux: Option<VlessMuxOptions>,
     pub tls: String,
     pub allow_insecure: bool,
     pub tls_fragment: Option<TlsFragmentOptions>,
@@ -101,6 +103,21 @@ pub struct ResidentProxyPlan {
 }
 
 impl ResidentProxyPlan {
+    pub fn vless_tcp_mux_enabled(&self) -> bool {
+        self.net != "xhttp"
+            && matches!(
+                self.handler,
+                ResidentProxyProtocolPlan::VlessMuxTcpTls { .. }
+            )
+            && self.vless_mux.unwrap_or_default().tcp_enabled()
+    }
+
+    pub fn vless_xudp_enabled(&self) -> bool {
+        self.vless_mux
+            .unwrap_or_default()
+            .xudp_enabled(self.vless_tcp_mux_enabled())
+    }
+
     pub fn executor_contract(&self) -> ResidentProtocolExecutorContract {
         self.execution_plan().executor_contract()
     }

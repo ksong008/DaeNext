@@ -77,7 +77,10 @@ impl VlessStandardUdpOverStreamSession {
         original_dst: SocketAddr,
         payload: &[u8],
     ) -> Result<UdpExchangeResult, String> {
-        if binding.execution().protocol != ResidentProtocolShape::VlessStandard {
+        if !matches!(
+            binding.execution().protocol,
+            ResidentProtocolShape::VlessStandard | ResidentProtocolShape::VlessMux
+        ) {
             return Err(
                 "VLESS standard UDP-over-stream requires an empty flow; Vision uses XUDP"
                     .to_owned(),

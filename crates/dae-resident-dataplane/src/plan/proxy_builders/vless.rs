@@ -230,7 +230,8 @@ pub(crate) fn build_vless_proxy_plan(
     let graph = resident_graph_identity(&link);
     // Vision uses standalone TCP and XUDP. The mux option cannot send a TCP
     // substream under a Vision request.
-    let handler = if vless.mux && !vision {
+    let tcp_mux = net == "tcp" && vless.mux_options.tcp_enabled();
+    let handler = if vless.mux && !vision && (tcp_mux || vless.mux_options.xudp_enabled(tcp_mux)) {
         ResidentProxyProtocolPlan::VlessMuxTcpTls { key, encryption }
     } else {
         ResidentProxyProtocolPlan::VlessVisionTcpTls { key, encryption }
@@ -266,6 +267,7 @@ pub(crate) fn build_vless_proxy_plan(
         xhttp_mode,
         xhttp_settings: xhttp_extra.settings,
         xhttp_xmux,
+        vless_mux: vless.mux.then_some(vless.mux_options),
         tls: vless.tls,
         allow_insecure,
         tls_fragment,

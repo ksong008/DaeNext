@@ -1,4 +1,5 @@
 use dae_outbound_core::tls_options::parse_allow_insecure;
+use dae_outbound_core::vless::mux::{VlessMuxOptions, VlessUdp443Policy};
 use serde_json::Value;
 use url::Url;
 
@@ -36,6 +37,7 @@ pub struct VLESSLink {
     pub ech: Option<EchConfigList>,
     pub mldsa65_verify: Option<Mldsa65VerifyKey>,
     pub mux: bool,
+    pub mux_options: VlessMuxOptions,
     /// Xray VLESS Encryption account string.  `none`/empty keeps the
     /// legacy unencrypted VLESS record path; any other value is parsed and
     /// validated by the resident builder before a connection is published.
@@ -86,6 +88,7 @@ impl VLESSLink {
             )
             .map_err(|err| OutboundError::BadVless(err.to_string()))?,
             mux: parse_mux_enabled(&query),
+            mux_options: parse_mux_options(&query)?,
             encryption: query_value(&query, "encryption").unwrap_or_default(),
             protocol: "vless".to_owned(),
         };
@@ -203,6 +206,15 @@ impl VLESSLink {
         if self.mux {
             query.push(("mux".to_owned(), "1".to_owned()));
         }
+        if let Some(value) = self.mux_options.concurrency {
+            query.push(("concurrency".to_owned(), value.to_string()));
+        }
+        if let Some(value) = self.mux_options.xudp_concurrency {
+            query.push(("xudpConcurrency".to_owned(), value.to_string()));
+        }
+        if let Some(value) = self.mux_options.udp443 {
+            query.push(("xudpProxyUDP443".to_owned(), value.as_str().to_owned()));
+        }
         push_if_non_empty(&mut query, "encryption", &self.encryption);
         query.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         let mut out = String::new();
@@ -240,6 +252,36 @@ fn parse_mux_enabled(query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, s
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
 }
 
+fn parse_mux_options(
+    query: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)],
+) -> Result<VlessMuxOptions, OutboundError> {
+    let concurrency = |field| {
+        query_value(query, field)
+            .map(|value| {
+                value.parse::<i16>().map_err(|_| {
+                    OutboundError::BadVless(format!(
+                        "invalid VLESS mux {field}: expected a signed 16-bit integer"
+                    ))
+                })
+            })
+            .transpose()
+    };
+    let udp443 = query_value(query, "xudpProxyUDP443")
+        .map(|value| {
+            VlessUdp443Policy::parse(&value).ok_or_else(|| {
+                OutboundError::BadVless(
+                    "invalid VLESS mux xudpProxyUDP443: expected reject, allow, or skip".to_owned(),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(VlessMuxOptions {
+        concurrency: concurrency("concurrency")?,
+        xudp_concurrency: concurrency("xudpConcurrency")?,
+        udp443,
+    })
+}
+
 fn canonical_flow(flow: &str) -> String {
     let flow = flow.trim();
     if flow.eq_ignore_ascii_case("none") {
@@ -252,6 +294,28 @@ fn canonical_flow(flow: &str) -> String {
 #[cfg(test)]
 mod transport_alias_tests {
     use super::VLESSLink;
+
+    #[test]
+    fn vless_mux_options_preserve_signed_values_and_udp443_on_export() {
+        use dae_outbound_core::vless::mux::VlessUdp443Policy;
+
+        let base = "vless://test@example.invalid:443?security=tls&mux=1";
+        let link = VLESSLink::parse(&format!(
+            "{base}&concurrency=-1&xudpConcurrency=0&xudpProxyUDP443=skip"
+        ))
+        .unwrap();
+        assert_eq!(link.mux_options.concurrency, Some(-1));
+        assert_eq!(link.mux_options.xudp_concurrency, Some(0));
+        assert_eq!(link.mux_options.udp443, Some(VlessUdp443Policy::Skip));
+        assert_eq!(VLESSLink::parse(&link.export_url()).unwrap(), link);
+        for invalid in [
+            "concurrency=32768",
+            "xudpConcurrency=1.5",
+            "xudpProxyUDP443=direct",
+        ] {
+            assert!(VLESSLink::parse(&format!("{base}&{invalid}")).is_err());
+        }
+    }
 
     #[test]
     fn xray_aliases_keep_vless_transport_fields() {

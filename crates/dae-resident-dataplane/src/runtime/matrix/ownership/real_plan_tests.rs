@@ -214,6 +214,7 @@ fn vless_link(net: &str, security: &str, alpn: &str, path: &str) -> VLESSLink {
         ech: None,
         mldsa65_verify: None,
         mux: false,
+        mux_options: Default::default(),
         encryption: String::new(),
         protocol: "vless".to_owned(),
     }
