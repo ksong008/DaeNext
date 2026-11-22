@@ -362,6 +362,7 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
             let mut next_periodic_evaluation = Instant::now();
             let mut next_deferred_evaluation = None;
             while !app.shutdown.is_requested() {
+                let wake_epoch = allocator_reclaim_request_wake_epoch();
                 let config = app.runtime.current_config();
                 let policy = AllocatorIdleReclaimPolicy::from_config(config.as_deref());
                 let now = Instant::now();
@@ -390,7 +391,6 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
                 if app.shutdown.is_requested() {
                     break;
                 }
-                let wake_epoch = allocator_reclaim_request_wake_epoch();
                 let now = Instant::now();
                 let deferred_wait = next_deferred_evaluation
                     .map(|deadline| deadline.saturating_duration_since(now))
