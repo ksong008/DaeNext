@@ -209,12 +209,8 @@ impl ResidentGenerationDrain {
         }
     }
 
-    pub fn prepare_publication(&self) -> Result<(), String> {
-        self.prepare_publication_at(Instant::now())
-    }
-
-    pub fn retire(&self, generation: Arc<dyn ResidentDrainableGeneration>) {
-        self.retire_shared_at(generation, Instant::now());
+    pub fn retire_before_commit(&self, generation: Arc<dyn ResidentDrainableGeneration>) {
+        self.retire_at(generation, Instant::now());
     }
 
     pub fn finalize_retirement(&self, generation_id: LogicalGenerationId) {
@@ -223,6 +219,19 @@ impl ResidentGenerationDrain {
 
     pub fn commit_retirements(&self) {
         self.reap(Instant::now());
+        let eviction = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (state.retired.len() > self.policy.maximum_retired)
+                .then(|| pressure_evict_oldest(&mut state))
+        };
+        if let Some((target, generation)) = eviction {
+            target.request_force_stop();
+            drop(generation);
+            self.hooks.request_reclaim();
+        }
     }
 
     fn finalize_matching_retirements(&self, generation_id: Option<LogicalGenerationId>) {
@@ -380,62 +389,31 @@ impl ResidentGenerationDrain {
         })
     }
 
-    pub fn prepare_publication_at(&self, now: Instant) -> Result<(), String> {
-        self.reap(now);
-        let pressure_eviction = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.retired.len() < self.policy.maximum_retired {
-                return Ok(());
-            }
-            pressure_evict_oldest(&mut state)
-        };
-        pressure_eviction.0.request_force_stop();
-        drop(pressure_eviction.1);
-        self.hooks.request_reclaim();
-        Ok(())
-    }
-
-    pub fn retire_shared_at(
-        &self,
-        generation: Arc<dyn ResidentDrainableGeneration>,
-        retired_at: Instant,
-    ) {
+    fn retire_at(&self, generation: Arc<dyn ResidentDrainableGeneration>, retired_at: Instant) {
         let control = generation.drain_control();
         control.close_admission();
         let deadline = retired_at
             .checked_add(self.policy.maximum_age)
             .unwrap_or(retired_at);
-        let pressure_eviction = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let pressure_eviction = (state.retired.len() >= self.policy.maximum_retired)
-                .then(|| pressure_evict_oldest(&mut state));
-            debug_assert!(
-                state
-                    .retired
-                    .iter()
-                    .all(|retired| retired.id() != control.id())
-            );
-            state.retired_total = state.retired_total.saturating_add(1);
-            state.retired.push(RetiredResidentGeneration {
-                generation: Some(generation),
-                control,
-                retired_at,
-                deadline,
-                stop_reason: None,
-            });
-            pressure_eviction
-        };
-        if let Some((target, retired)) = pressure_eviction {
-            target.request_force_stop();
-            drop(retired);
-            self.hooks.request_reclaim();
-        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        debug_assert!(
+            state
+                .retired
+                .iter()
+                .all(|retired| retired.id() != control.id())
+        );
+        state.retired_total = state.retired_total.saturating_add(1);
+        state.retired.push(RetiredResidentGeneration {
+            generation: Some(generation),
+            control,
+            retired_at,
+            deadline,
+            stop_reason: None,
+        });
+        drop(state);
         self.wake.notify_one();
     }
 

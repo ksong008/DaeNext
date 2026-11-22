@@ -111,7 +111,7 @@ fn retired_generation_survives_the_old_cleanup_grace() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
 
     drain.reap(now + Duration::from_secs(2));
 
@@ -122,11 +122,33 @@ fn retired_generation_survives_the_old_cleanup_grace() {
 }
 
 #[test]
+fn retirement_budget_only_evicts_after_successful_commit() {
+    let drain = test_drain(Duration::from_secs(60), 1);
+    let (old, old_stops) = TestGeneration::new(1);
+    let (active, active_stops) = TestGeneration::new(2);
+    drain.retire_before_commit(old.clone());
+    drain.commit_retirements();
+
+    drain.retire_before_commit(active.clone());
+    assert_eq!(drain.snapshot()["retired"], 2);
+    assert_eq!(old_stops.load(Ordering::Relaxed), 0);
+    drain.reactivate(active.control.id()).unwrap();
+    assert!(active.control.lifecycle.admission_is_open());
+    assert_eq!(old_stops.load(Ordering::Relaxed), 0);
+
+    drain.retire_before_commit(active.clone());
+    drain.commit_retirements();
+    assert_eq!(old_stops.load(Ordering::Relaxed), 1);
+    assert_eq!(active_stops.load(Ordering::Relaxed), 0);
+    assert_eq!(drain.snapshot()["retired"], 1);
+}
+
+#[test]
 fn idle_drain_only_polls_while_retirements_exist() {
     let drain = test_drain(Duration::from_secs(60), 2);
     assert!(!drain.has_pending_retirements());
     let (generation, _) = TestGeneration::new(1);
-    drain.retire_shared_at(generation, Instant::now());
+    drain.retire_at(generation, Instant::now());
     assert!(drain.has_pending_retirements());
     drain.stop_all();
     assert!(!drain.has_pending_retirements());
@@ -137,7 +159,7 @@ fn final_owner_release_reaps_generation_naturally() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
     drop(generation);
 
     drain.reap(now + Duration::from_secs(2));
@@ -155,7 +177,7 @@ fn maximum_age_requests_stop_without_losing_retirement_record() {
     let drain = test_drain(Duration::from_secs(10), 2);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
 
     drain.reap(now + Duration::from_secs(11));
 
@@ -172,7 +194,7 @@ fn rollback_reactivation_removes_stale_retirement_record() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(7);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
 
     drain.reactivate(generation.control.id).unwrap();
     drain.reap(now + Duration::from_secs(120));
@@ -191,13 +213,15 @@ fn stopped_generation_cannot_be_reactivated() {
     let drain = test_drain(Duration::from_secs(60), 1);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(3);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
 
-    assert!(drain.prepare_publication_at(now).is_ok());
+    let (next, _) = TestGeneration::new(4);
+    drain.retire_at(next.clone(), now);
+    drain.commit_retirements();
     assert_eq!(stop_requests.load(Ordering::Relaxed), 1);
     assert!(drain.reactivate(generation.control.id).is_err());
     assert!(!generation.control.lifecycle.admission_is_open());
-    assert_eq!(drain.snapshot()["retired"], 0);
+    assert_eq!(drain.snapshot()["retired"], 1);
 }
 
 #[test]
@@ -206,40 +230,39 @@ fn capacity_pressure_evicts_the_oldest_generation_and_keeps_publication_admitted
     let now = Instant::now();
     let (first, first_stop_requests) = TestGeneration::new(1);
     let (second, second_stop_requests) = TestGeneration::new(2);
-    drain.retire_shared_at(first.clone(), now);
-    drain.retire_shared_at(second.clone(), now + Duration::from_secs(1));
+    drain.retire_at(first.clone(), now);
+    drain.retire_at(second.clone(), now + Duration::from_secs(1));
 
-    assert!(
-        drain
-            .prepare_publication_at(now + Duration::from_secs(2))
-            .is_ok()
-    );
+    let (third, _) = TestGeneration::new(3);
+    drain.retire_at(third.clone(), now + Duration::from_secs(2));
+    drain.commit_retirements();
 
     assert_eq!(first_stop_requests.load(Ordering::Relaxed), 1);
     assert_eq!(second_stop_requests.load(Ordering::Relaxed), 0);
     let snapshot = drain.snapshot();
-    assert_eq!(snapshot["retired"], 1);
+    assert_eq!(snapshot["retired"], 2);
     assert_eq!(snapshot["pressureForcedTotal"], 1);
     assert_eq!(snapshot["pressureEvictedTotal"], 1);
     assert_eq!(snapshot["publicationRejectedTotal"], 0);
 }
 
 #[test]
-fn direct_retire_calls_remain_bounded_without_prepare_publication() {
+fn committed_retirements_remain_bounded_without_live_owners() {
     let drain = test_drain(Duration::from_secs(60), 1);
     let now = Instant::now();
     let (first, first_stop_requests) = TestGeneration::new(1);
     let (second, second_stop_requests) = TestGeneration::new(2);
 
-    drain.retire_shared_at(first, now);
-    drain.retire_shared_at(second, now + Duration::from_secs(1));
+    drain.retire_at(first, now);
+    drain.retire_at(second, now);
+    drain.commit_retirements();
 
     assert_eq!(first_stop_requests.load(Ordering::Relaxed), 1);
-    assert_eq!(second_stop_requests.load(Ordering::Relaxed), 0);
+    assert_eq!(second_stop_requests.load(Ordering::Relaxed), 1);
     let snapshot = drain.snapshot();
-    assert_eq!(snapshot["retired"], 1);
+    assert_eq!(snapshot["retired"], 0);
     assert_eq!(snapshot["maximumRetired"], 1);
-    assert_eq!(snapshot["pressureEvictedTotal"], 1);
+    assert_eq!(snapshot["pressureEvictedTotal"], 0);
 }
 
 #[test]
@@ -247,7 +270,7 @@ fn committed_publication_keeps_owned_retired_generation_draining() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
 
     drain.commit_retirements();
 
@@ -265,7 +288,7 @@ fn committed_publication_detaches_heavy_state_without_stopping_owned_flows() {
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
     let flow_owner = Arc::clone(&generation.control);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
     drop(generation);
 
     drain.commit_retirements();
@@ -287,7 +310,7 @@ fn committed_publication_does_not_stop_the_active_generation() {
     let now = Instant::now();
     let (retired, retired_stop_requests) = TestGeneration::new(1);
     let (active, active_stop_requests) = TestGeneration::new(2);
-    drain.retire_shared_at(retired.clone(), now);
+    drain.retire_at(retired.clone(), now);
 
     drain.commit_retirements();
 
@@ -306,8 +329,8 @@ fn process_shutdown_stops_every_retired_generation() {
     let now = Instant::now();
     let (first, first_stop_requests) = TestGeneration::new(1);
     let (second, second_stop_requests) = TestGeneration::new(2);
-    drain.retire_shared_at(first, now);
-    drain.retire_shared_at(second, now);
+    drain.retire_at(first, now);
+    drain.retire_at(second, now);
 
     drain.stop_all();
 
@@ -322,7 +345,7 @@ fn lightweight_drain_owner_does_not_retain_heavy_generation() {
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
     let drain_owner = Arc::clone(&generation.control);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
     drop(generation);
 
     drain.reap(now + Duration::from_secs(1));
@@ -355,7 +378,7 @@ fn detached_udp_owner_is_force_stopped_at_the_generation_deadline() {
     let now = Instant::now();
     let (generation, stop_requests) = TestGeneration::new(1);
     let drain_owner = Arc::clone(&generation.control);
-    drain.retire_shared_at(generation.clone(), now);
+    drain.retire_at(generation.clone(), now);
     drop(generation);
 
     drain.reap(now + Duration::from_secs(1));

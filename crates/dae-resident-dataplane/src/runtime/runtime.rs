@@ -202,7 +202,6 @@ impl ResidentDataplaneRuntime {
         dns_reload_snapshot: Option<&ResidentDnsReloadSnapshot>,
     ) -> Result<Value, String> {
         let started = Instant::now();
-        self.generation_drain.prepare_publication()?;
         let built = build_resident_dataplane_generation(ResidentGenerationBuildContext {
             owner: &mut self.owner,
             config,
@@ -224,7 +223,7 @@ impl ResidentDataplaneRuntime {
                 self.owner.tcp_admission().set_limit(next_limit);
             });
         let previous_id = previous.id;
-        self.generation_drain.retire(previous);
+        self.generation_drain.retire_before_commit(previous);
         Ok(json!({
             "status": "pass",
             "strategy": "process-owned-listeners-runtime-and-generation-slot",
@@ -265,8 +264,7 @@ impl ResidentDataplaneRuntime {
                 self.owner.tcp_admission().set_limit(restored_limit);
             });
         let displaced_id = displaced.id;
-        self.generation_drain.retire(displaced);
-        self.generation_drain.finalize_retirement(displaced_id);
+        displaced.request_stop();
         Ok(json!({
             "status": "pass",
             "strategy": "restore-previous-generation-slot",
