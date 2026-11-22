@@ -155,6 +155,27 @@ fn idle_drain_only_polls_while_retirements_exist() {
 }
 
 #[test]
+fn retirement_commit_evicts_all_generations_over_budget() {
+    let drain = test_drain(Duration::from_secs(60), 1);
+    let generations: Vec<_> = (1..=3).map(TestGeneration::new).collect();
+    for (generation, stops) in &generations {
+        drain.retire_before_commit(generation.clone());
+        assert_eq!(stops.load(Ordering::Relaxed), 0);
+    }
+    assert_eq!(drain.snapshot()["retired"], 3);
+
+    drain.commit_retirements();
+
+    assert_eq!(drain.snapshot()["retired"], 1);
+    assert_eq!(drain.snapshot()["pressureEvictedTotal"], 2);
+    let stops: Vec<_> = generations
+        .iter()
+        .map(|(_, stops)| stops.load(Ordering::Relaxed))
+        .collect();
+    assert_eq!(stops, [1, 1, 0]);
+}
+
+#[test]
 fn final_owner_release_reaps_generation_naturally() {
     let drain = test_drain(Duration::from_secs(60), 2);
     let now = Instant::now();

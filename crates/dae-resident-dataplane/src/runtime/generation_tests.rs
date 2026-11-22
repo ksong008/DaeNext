@@ -189,7 +189,6 @@ async fn retired_generation_pressure_and_age_do_not_stop_independent_tcp_leases(
             let drain = ResidentGenerationDrain::new(policy);
             let mut leases = Vec::new();
             let mut controls = Vec::new();
-            let now = Instant::now();
             for _ in 0..policy.maximum_retired + 3 {
                 let (epoch, current) = fixture.coordinator.load_versioned();
                 let mut reservation = Some(fixture.owner.tcp_admission().acquire().await.unwrap());
@@ -209,18 +208,15 @@ async fn retired_generation_pressure_and_age_do_not_stop_independent_tcp_leases(
                 leases.push(lease);
                 let next = fixture.next();
                 fixture.coordinator.publish(next.token(), next);
-                drain.retire_shared_at(current, now);
+                drain.retire_before_commit(current);
                 drain.commit_retirements();
-                drain.prepare_publication_at(now).unwrap();
                 assert!(
                     leases
                         .iter()
                         .all(|lease| !lease.stop_handle().load(Ordering::Acquire))
                 );
             }
-            drain
-                .prepare_publication_at(now + policy.maximum_age + Duration::from_secs(1))
-                .unwrap();
+            drain.commit_retirements_at(Instant::now() + policy.maximum_age);
             assert!(
                 controls
                     .iter()

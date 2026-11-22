@@ -121,7 +121,6 @@ struct ResidentGenerationDrainState {
 enum ResidentGenerationStopReason {
     Finalized,
     MaximumAge,
-    ResourcePressure,
 }
 
 #[derive(Debug)]
@@ -218,18 +217,31 @@ impl ResidentGenerationDrain {
     }
 
     pub fn commit_retirements(&self) {
-        self.reap(Instant::now());
-        let eviction = {
+        self.commit_retirements_at(Instant::now());
+    }
+
+    /// Apply the retirement deadline and capacity policy at the supplied time.
+    pub fn commit_retirements_at(&self, now: Instant) {
+        self.reap(now);
+        let evictions = {
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            (state.retired.len() > self.policy.maximum_retired)
-                .then(|| pressure_evict_oldest(&mut state))
+            let excess = state
+                .retired
+                .len()
+                .saturating_sub(self.policy.maximum_retired);
+            state.pressure_forced_total = state.pressure_forced_total.saturating_add(excess as u64);
+            state.pressure_evicted_total =
+                state.pressure_evicted_total.saturating_add(excess as u64);
+            state.retired.drain(..excess).collect::<Vec<_>>()
         };
-        if let Some((target, generation)) = eviction {
-            target.request_force_stop();
-            drop(generation);
+        let evicted = !evictions.is_empty();
+        for generation in evictions {
+            generation.force_stop_target().request_force_stop();
+        }
+        if evicted {
             self.hooks.request_reclaim();
         }
     }
@@ -477,17 +489,6 @@ impl ResidentGenerationDrain {
             self.hooks.request_reclaim();
         }
     }
-}
-
-fn pressure_evict_oldest(
-    state: &mut ResidentGenerationDrainState,
-) -> (ResidentGenerationStopTarget, RetiredResidentGeneration) {
-    let mut retired = state.retired.remove(0);
-    retired.stop_reason = Some(ResidentGenerationStopReason::ResourcePressure);
-    let target = retired.force_stop_target();
-    state.pressure_forced_total = state.pressure_forced_total.saturating_add(1);
-    state.pressure_evicted_total = state.pressure_evicted_total.saturating_add(1);
-    (target, retired)
 }
 
 #[cfg(test)]
