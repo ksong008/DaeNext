@@ -391,8 +391,24 @@ impl ResidentDnsRuntimeCache {
         udp_limit: bool,
         out: &mut Vec<u8>,
     ) -> Result<bool, String> {
+        if key.reuse != dae_dns::DnsRequestReuse::from_request(request) {
+            out.clear();
+            return Ok(false);
+        }
+        self.lookup_for_current_request(key, request, ignore_fixed_ttl, udp_limit, out)
+    }
+
+    /// The caller derived `key`, including its reuse attributes, from `request`.
+    pub(crate) fn lookup_for_current_request(
+        &self,
+        key: &ResidentDnsResponseCacheKey,
+        request: &DnsPacketView<'_>,
+        ignore_fixed_ttl: bool,
+        udp_limit: bool,
+        out: &mut Vec<u8>,
+    ) -> Result<bool, String> {
         out.clear();
-        if key.reuse.is_none() || key.reuse != dae_dns::DnsRequestReuse::from_request(request) {
+        if key.reuse.is_none() {
             return Ok(false);
         }
         let now_unix = unix_now();
@@ -421,7 +437,7 @@ impl ResidentDnsRuntimeCache {
             .map_err(|e| format!("age cached DNS TTLs: {e}"))?;
         if udp_limit {
             let response = std::mem::take(out);
-            *out = crate::udp_response::fit_dns_response_to_udp_request(request.packet(), response)
+            *out = crate::udp_response::fit_udp_response(request, response)
                 .map_err(|error| format!("fit cached DNS response to request: {error}"))?;
         }
         Ok(true)

@@ -15,17 +15,24 @@ pub fn fit_dns_response_to_udp_request(
     request: &[u8],
     response: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
+    let view = DnsPacketView::parse(request)
+        .map_err(|error| format!("parse DNS UDP request payload limit: {error}"))?;
+    fit_udp_response(&view, response)
+}
+
+pub(crate) fn fit_udp_response(
+    request: &DnsPacketView<'_>,
+    response: Vec<u8>,
+) -> Result<Vec<u8>, String> {
     let payload_limit = request_udp_payload_limit(request)?;
     if response.len() <= payload_limit {
         return Ok(response);
     }
-
     build_truncated_udp_response(request, &response, payload_limit)
 }
 
-fn request_udp_payload_limit(request: &[u8]) -> Result<usize, String> {
-    let view = DnsPacketView::parse(request)
-        .map_err(|error| format!("parse DNS UDP request payload limit: {error}"))?;
+fn request_udp_payload_limit(view: &DnsPacketView<'_>) -> Result<usize, String> {
+    let request = view.packet();
     let answer_count = read_u16(request, 6)? as usize;
     let authority_count = read_u16(request, 8)? as usize;
     let additional_count = read_u16(request, 10)? as usize;
@@ -57,15 +64,14 @@ fn request_udp_payload_limit(request: &[u8]) -> Result<usize, String> {
 }
 
 fn build_truncated_udp_response(
-    request: &[u8],
+    request_view: &DnsPacketView<'_>,
     response: &[u8],
     payload_limit: usize,
 ) -> Result<Vec<u8>, String> {
     if response.len() < DNS_HEADER_LEN {
         return Err("DNS UDP response is shorter than its header".to_owned());
     }
-    let request_view = DnsPacketView::parse(request)
-        .map_err(|error| format!("parse DNS UDP request for truncation: {error}"))?;
+    let request = request_view.packet();
     let question_end = request_view.answer_offset();
     let preserve_question = question_end <= payload_limit;
     let mut truncated = Vec::with_capacity(if preserve_question {
@@ -184,14 +190,14 @@ mod tests {
         duplicate[10..12].copy_from_slice(&2_u16.to_be_bytes());
         duplicate.extend_from_slice(&[0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0, 0, 0]);
         assert!(
-            request_udp_payload_limit(&duplicate)
+            request_udp_payload_limit(&DnsPacketView::parse(&duplicate).unwrap())
                 .unwrap_err()
                 .contains("more than one OPT")
         );
 
         let mut malformed = edns_query(1_232);
         malformed.pop();
-        assert!(request_udp_payload_limit(&malformed).is_err());
+        assert!(request_udp_payload_limit(&DnsPacketView::parse(&malformed).unwrap()).is_err());
     }
 
     fn edns_query(payload_size: u16) -> Vec<u8> {

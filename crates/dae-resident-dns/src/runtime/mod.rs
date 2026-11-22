@@ -149,7 +149,6 @@ pub use self::upstream_router::ResidentDnsUpstreamRouter;
 pub use self::upstream_router::ResidentDnsUpstreamSelection;
 pub(crate) use crate::{
     DNS_MAX_UDP_MESSAGE_SIZE, ResidentDnsDomainRouting, build_dns_server_failure_response,
-    fit_dns_response_to_udp_request,
 };
 use crate::{
     ResidentDnsDomainRoutingReloadSnapshot, ResidentDnsDomainRoutingRestoreReport,
@@ -735,14 +734,8 @@ pub async fn handle_resident_dns_udp_async(
     original_dst: SocketAddr,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let response = handle_resident_dns_request_async(
-        plan,
-        original_dst,
-        payload,
-        Some(ResidentDnsAsisTransport::Udp),
-    )
-    .await?;
-    fit_dns_response_to_udp_request(payload, response)
+    handle_resident_dns_request_async(plan, original_dst, payload, ResidentDnsAsisTransport::Udp)
+        .await
 }
 
 pub async fn handle_resident_dns_tcp_async(
@@ -750,19 +743,31 @@ pub async fn handle_resident_dns_tcp_async(
     original_dst: SocketAddr,
     payload: &[u8],
 ) -> Result<Vec<u8>, String> {
-    handle_resident_dns_request_async(
-        plan,
-        original_dst,
-        payload,
-        Some(ResidentDnsAsisTransport::Tcp),
-    )
-    .await
+    handle_resident_dns_request_async(plan, original_dst, payload, ResidentDnsAsisTransport::Tcp)
+        .await
 }
 
 pub async fn handle_resident_dns_local_trace_async(
     plan: &ResidentDnsPlan,
     original_dst: SocketAddr,
     payload: &[u8],
+) -> Result<ResidentDnsQueryResult, String> {
+    handle_resident_dns_bind_trace_async(plan, original_dst, payload, false).await
+}
+
+pub async fn handle_resident_dns_local_udp_trace_async(
+    plan: &ResidentDnsPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+) -> Result<ResidentDnsQueryResult, String> {
+    handle_resident_dns_bind_trace_async(plan, original_dst, payload, true).await
+}
+
+async fn handle_resident_dns_bind_trace_async(
+    plan: &ResidentDnsPlan,
+    original_dst: SocketAddr,
+    payload: &[u8],
+    udp: bool,
 ) -> Result<ResidentDnsQueryResult, String> {
     let request =
         DnsPacketView::parse(payload).map_err(|err| format!("parse DNS request: {err}"))?;
@@ -784,10 +789,12 @@ pub async fn handle_resident_dns_local_trace_async(
         ),
     ))
     .await;
-    result.map(|mut result| {
-        result.trace.transport_attempts = transport_attempts;
-        result
-    })
+    let mut result = result?;
+    if udp {
+        result.response = crate::udp_response::fit_udp_response(&request, result.response)?;
+    }
+    result.trace.transport_attempts = transport_attempts;
+    Ok(result)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -800,7 +807,7 @@ async fn handle_resident_dns_request_async(
     plan: &ResidentDnsPlan,
     original_dst: SocketAddr,
     payload: &[u8],
-    asis_transport: Option<ResidentDnsAsisTransport>,
+    asis_transport: ResidentDnsAsisTransport,
 ) -> Result<Vec<u8>, String> {
     let request =
         DnsPacketView::parse(payload).map_err(|err| format!("parse DNS request: {err}"))?;
@@ -810,14 +817,18 @@ async fn handle_resident_dns_request_async(
     if request.question_count() == 0 {
         return Err("DNS request has no question".to_owned());
     }
-    handle_resident_dns_request_without_preference(
+    let response = handle_resident_dns_request_without_preference(
         plan,
         original_dst,
         payload,
         &request,
-        asis_transport,
+        Some(asis_transport),
     )
-    .await
+    .await?;
+    if asis_transport == ResidentDnsAsisTransport::Udp {
+        return crate::udp_response::fit_udp_response(&request, response);
+    }
+    Ok(response)
 }
 
 async fn handle_resident_dns_request_without_preference(
@@ -843,9 +854,13 @@ async fn handle_resident_dns_request_without_preference(
     }
     let cache_key = dns_response_cache_key_for_request_action(request, &action, original_dst)?;
     let mut cached_response = Vec::new();
-    let cache_hit =
-        plan.cache
-            .lookup_response_into(&cache_key, request, false, &mut cached_response)?;
+    let cache_hit = plan.cache.lookup_for_current_request(
+        &cache_key,
+        request,
+        false,
+        false,
+        &mut cached_response,
+    )?;
     if cache_hit {
         return Ok(cached_response);
     }
@@ -940,10 +955,13 @@ async fn handle_resident_dns_request_without_preference_trace(
     let cache_key = dns_response_cache_key_for_request_action(request, &action, original_dst)?;
     let mut cached_response = Vec::new();
     let cache_started = Instant::now();
-    if plan
-        .cache
-        .lookup_response_into(&cache_key, request, false, &mut cached_response)?
-    {
+    if plan.cache.lookup_for_current_request(
+        &cache_key,
+        request,
+        false,
+        false,
+        &mut cached_response,
+    )? {
         trace.add_cache_elapsed(cache_started);
         trace.cache = DNS_TRACE_CACHE_HIT.to_owned();
         trace.response_routing = DNS_TRACE_ROUTING_CACHE.to_owned();

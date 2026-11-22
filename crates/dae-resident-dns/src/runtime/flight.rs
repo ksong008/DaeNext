@@ -27,7 +27,7 @@ pub(super) async fn acquire<'a>(
             let mut response = Vec::new();
             if plan
                 .cache
-                .lookup_response_into(key, request, false, &mut response)?
+                .lookup_for_current_request(key, request, false, false, &mut response)?
             {
                 return Ok(Acquired::Response {
                     response,

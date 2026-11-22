@@ -46,6 +46,7 @@ pub use runtime::{
     ResidentDnsUdpActorCompletion, ResidentDnsUdpActorExecutor, ResidentDnsUdpActorLifecycle,
     ResidentDnsUdpActorRegistration, ResidentDnsUpstreamRouter,
     build_resident_dns_plan_with_refresh_interval, handle_resident_dns_local_trace_async,
+    handle_resident_dns_local_udp_trace_async,
 };
 pub use udp_response::fit_dns_response_to_udp_request;
 pub use udp_runtime::ResidentDnsUdpRuntimeConfig;
