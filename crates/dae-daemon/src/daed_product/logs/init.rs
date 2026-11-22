@@ -47,9 +47,10 @@ pub(crate) fn refresh_resident_event_log_policy(config_dir: &Path, state: &Path)
     });
     let prefilter_policy = Arc::new(move |metadata: ResidentEventMetadata| {
         let level = resident_event_product_log_level_from_metadata(metadata);
+        let persist = log_level_enabled(level, &runtime_level);
         ResidentEventLogDecision {
-            persist: log_level_enabled(level, &runtime_level),
-            level: Some(level.to_owned()),
+            persist,
+            level: (persist || metadata.lossless()).then(|| level.to_owned()),
             max_entries: max_entries as usize,
             max_bytes: max_bytes as u64,
         }

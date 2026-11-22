@@ -120,7 +120,8 @@ impl ResidentEventMetadata {
         self.kind.severity()
     }
 
-    pub(super) const fn lossless(self) -> bool {
+    /// Whether the event is retained even when filtered by the log level.
+    pub const fn lossless(self) -> bool {
         self.class().is_lossless(self.severity())
     }
 }
