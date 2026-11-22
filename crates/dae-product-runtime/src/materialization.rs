@@ -20,8 +20,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    display_global_config_text, load_active_runtime_resources, render_group_policy,
-    render_runtime_config, runtime_group_node_tags,
+    ActiveRuntimeResources, display_global_config_text, load_active_runtime_resources,
+    render_group_policy, render_runtime_config, runtime_group_node_tags,
 };
 
 pub const RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY: &str = "runtime_active_fingerprint";
@@ -114,15 +114,23 @@ pub fn prepare_runtime_materialization_plan_with_modified_state(
     state: &Path,
     running: bool,
 ) -> io::Result<(RuntimeMaterializationPlan, bool)> {
+    let (inputs, modified) = prepare_runtime_inputs_with_modified_state(state, running)?;
+    Ok((inputs.materialize()?, modified))
+}
+
+pub fn prepare_runtime_inputs_with_modified_state(
+    state: &Path,
+    running: bool,
+) -> io::Result<(RuntimeInputs, bool)> {
     ensure_state_schema(state)?;
     let conn = open_state_connection(state)?;
-    let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
     let started = Instant::now();
-    let mut plan = prepare_runtime_materialization_plan_from_snapshot(&snapshot)?;
-    let modified = runtime_modified_with_prepared_plan(&snapshot, running, &plan)?;
+    let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
+    let mut inputs = RuntimeInputs::read(&snapshot)?;
+    let modified = running && inputs.differs_from_active(&snapshot)?;
     snapshot.commit().map_err(sqlite_io_error)?;
-    plan.timings.snapshot_ns = elapsed_nanos(started);
-    Ok((plan, modified))
+    inputs.timings.snapshot_ns = elapsed_nanos(started);
+    Ok((inputs, modified))
 }
 
 pub fn prepare_runtime_materialization_plan_with_connection(
@@ -130,70 +138,130 @@ pub fn prepare_runtime_materialization_plan_with_connection(
 ) -> io::Result<RuntimeMaterializationPlan> {
     let started = Instant::now();
     let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
-    let mut plan = prepare_runtime_materialization_plan_from_snapshot(&snapshot)?;
+    let mut inputs = RuntimeInputs::read(&snapshot)?;
     snapshot.commit().map_err(sqlite_io_error)?;
-    plan.timings.snapshot_ns = elapsed_nanos(started);
-    Ok(plan)
+    inputs.timings.snapshot_ns = elapsed_nanos(started);
+    inputs.materialize()
 }
 
 pub fn prepare_runtime_materialization_plan_from_snapshot(
     conn: &Connection,
 ) -> io::Result<RuntimeMaterializationPlan> {
-    let config = required_selected_section_raw(conn, SectionKind::Config)?;
-    let dns = required_selected_section_raw(conn, SectionKind::Dns)?;
-    let routing = required_selected_section_raw(conn, SectionKind::Routing)?;
-    let dependency_started = Instant::now();
-    let active = load_active_runtime_resources(conn, &routing.2)?;
-    let dependency_resolution_ns = elapsed_nanos(dependency_started);
-    let generated_at = now_text();
-    let group_ids = active
-        .group_ids
-        .iter()
-        .map(i64::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    let external_input_version = current_runtime_external_input_version(conn)?;
-    let geodata_input_version = current_runtime_geodata_input_version(conn)?;
-    let render_started = Instant::now();
-    let active_fingerprint = active_runtime_fingerprint(
-        &config,
-        &dns,
-        &routing,
-        &active.groups,
-        &active.nodes,
-        geodata_input_version,
-    )?;
-    let content = render_generated_config(
-        &generated_at,
-        Some(&config),
-        Some(&dns),
-        Some(&routing),
-        &active.groups,
-        &active.nodes,
-    )?;
-    let render_ns = elapsed_nanos(render_started);
-    Ok(RuntimeMaterializationPlan {
-        content,
-        generated_at,
-        config_id: config.0,
-        config_version: config.3,
-        dns_id: dns.0,
-        dns_version: dns.3,
-        routing_id: routing.0,
-        routing_version: routing.3,
-        group_version_sum: active.group_version_sum,
-        group_ids,
-        external_input_version,
-        geodata_input_version,
-        active_fingerprint,
-        group_count: active.groups["items"].as_array().map(Vec::len).unwrap_or(0),
-        node_count: active.nodes["items"].as_array().map(Vec::len).unwrap_or(0),
-        timings: RuntimeMaterializationTimings {
-            snapshot_ns: 0,
-            dependency_resolution_ns,
-            render_ns,
-        },
-    })
+    RuntimeInputs::read(conn)?.materialize()
+}
+
+pub struct RuntimeInputs {
+    config: (i64, String, String, i64),
+    dns: (i64, String, String, i64),
+    routing: (i64, String, String, i64),
+    resources: ActiveRuntimeResources,
+    group_ids: String,
+    external_input_version: i64,
+    pub geodata_input_version: i64,
+    pub active_fingerprint: ActiveRuntimeFingerprint,
+    timings: RuntimeMaterializationTimings,
+}
+
+impl RuntimeInputs {
+    /// Read all inputs through the caller's SQLite snapshot.
+    pub fn read(conn: &Connection) -> io::Result<Self> {
+        let config = required_selected_section_raw(conn, SectionKind::Config)?;
+        let dns = required_selected_section_raw(conn, SectionKind::Dns)?;
+        let routing = required_selected_section_raw(conn, SectionKind::Routing)?;
+        let dependency_started = Instant::now();
+        let resources = load_active_runtime_resources(conn, &routing.2)?;
+        let dependency_resolution_ns = elapsed_nanos(dependency_started);
+        let group_ids = resources
+            .group_ids
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let external_input_version = current_runtime_external_input_version(conn)?;
+        let geodata_input_version = current_runtime_geodata_input_version(conn)?;
+        let active_fingerprint = active_runtime_fingerprint(
+            &config,
+            &dns,
+            &routing,
+            &resources.groups,
+            &resources.nodes,
+            geodata_input_version,
+        )?;
+        Ok(Self {
+            config,
+            dns,
+            routing,
+            resources,
+            group_ids,
+            external_input_version,
+            geodata_input_version,
+            active_fingerprint,
+            timings: RuntimeMaterializationTimings {
+                dependency_resolution_ns,
+                ..RuntimeMaterializationTimings::default()
+            },
+        })
+    }
+
+    pub fn routing_version(&self) -> i64 {
+        self.routing.3
+    }
+
+    pub fn desired_report(&self) -> Value {
+        json!({
+            "config": {"id": self.config.0, "version": self.config.3},
+            "dns": {"id": self.dns.0, "version": self.dns.3},
+            "routing": {"id": self.routing.0, "version": self.routing.3},
+            "groupVersionSum": self.resources.group_version_sum,
+            "groupIds": self.group_ids,
+            "externalInputVersion": self.external_input_version,
+            "activeFingerprint": self.active_fingerprint.as_str(),
+        })
+    }
+
+    pub fn differs_from_active(&self, conn: &Connection) -> io::Result<bool> {
+        fingerprint_differs_from_active(conn, &self.active_fingerprint)
+    }
+
+    pub fn materialize(self) -> io::Result<RuntimeMaterializationPlan> {
+        let started = Instant::now();
+        let generated_at = now_text();
+        let content = render_generated_config(
+            &generated_at,
+            Some(&self.config),
+            Some(&self.dns),
+            Some(&self.routing),
+            &self.resources.groups,
+            &self.resources.nodes,
+        )?;
+        Ok(RuntimeMaterializationPlan {
+            content,
+            generated_at,
+            config_id: self.config.0,
+            config_version: self.config.3,
+            dns_id: self.dns.0,
+            dns_version: self.dns.3,
+            routing_id: self.routing.0,
+            routing_version: self.routing.3,
+            group_version_sum: self.resources.group_version_sum,
+            group_ids: self.group_ids,
+            external_input_version: self.external_input_version,
+            geodata_input_version: self.geodata_input_version,
+            active_fingerprint: self.active_fingerprint,
+            group_count: self.resources.groups["items"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0),
+            node_count: self.resources.nodes["items"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0),
+            timings: RuntimeMaterializationTimings {
+                render_ns: elapsed_nanos(started),
+                ..self.timings
+            },
+        })
+    }
 }
 
 fn active_runtime_fingerprint(
@@ -389,13 +457,16 @@ pub fn runtime_modified(conn: &Connection, running: bool) -> io::Result<bool> {
     if !running {
         return Ok(false);
     }
-    if let Some(active_fingerprint) =
-        metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
+    let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
+    let modified = if let Some(active_fingerprint) =
+        metadata_value_from_connection(&snapshot, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
     {
-        let desired = prepare_runtime_materialization_plan_with_connection(conn)?;
-        return Ok(desired.active_fingerprint.as_str() != active_fingerprint);
-    }
-    legacy_runtime_modified(conn)
+        RuntimeInputs::read(&snapshot)?.active_fingerprint.as_str() != active_fingerprint
+    } else {
+        legacy_runtime_modified(&snapshot)?
+    };
+    snapshot.commit().map_err(sqlite_io_error)?;
+    Ok(modified)
 }
 
 pub fn runtime_modified_with_prepared_plan(
@@ -403,13 +474,17 @@ pub fn runtime_modified_with_prepared_plan(
     running: bool,
     plan: &RuntimeMaterializationPlan,
 ) -> io::Result<bool> {
-    if !running {
-        return Ok(false);
-    }
+    Ok(running && fingerprint_differs_from_active(conn, &plan.active_fingerprint)?)
+}
+
+fn fingerprint_differs_from_active(
+    conn: &Connection,
+    desired: &ActiveRuntimeFingerprint,
+) -> io::Result<bool> {
     if let Some(active_fingerprint) =
         metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?
     {
-        return Ok(plan.active_fingerprint.as_str() != active_fingerprint);
+        return Ok(desired.as_str() != active_fingerprint);
     }
     legacy_runtime_modified(conn)
 }

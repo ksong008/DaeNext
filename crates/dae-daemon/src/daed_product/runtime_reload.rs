@@ -1,6 +1,5 @@
 use super::*;
 use dae_product_control::geodata::{lock_geodata_snapshot, read_runtime_input_versions};
-use dae_product_control::runtime::runtime_modified_with_prepared_plan;
 
 const RELOAD_CANCELLED: &str = "runtime reload request cancelled before commit";
 
@@ -147,8 +146,8 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_until(
     let _reclaim_busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::Publication);
     let request = runtime.begin_reconcile(intent);
     request.set_phase("reread-desired-state");
-    let (plan, modified) = match lock_geodata_snapshot().and_then(|_snapshot| {
-        prepare_runtime_materialization_plan_with_modified_state(state, runtime.is_running())
+    let (inputs, modified) = match lock_geodata_snapshot().and_then(|_snapshot| {
+        prepare_runtime_inputs_with_modified_state(state, runtime.is_running())
     }) {
         Ok(snapshot) => snapshot,
         Err(err) => {
@@ -158,7 +157,7 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_until(
         }
     };
     let admission = request
-        .admit(plan.active_fingerprint.as_str())
+        .admit(inputs.active_fingerprint.as_str())
         .map_err(CoordinatedRuntimeReloadError::Apply)?;
     let RuntimeReconcileAdmission::Lead(mut lead) = admission else {
         let RuntimeReconcileAdmission::Follow(follower) = admission else {
@@ -185,7 +184,7 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_until(
     }
     if runtime.is_running() && !modified && !system_ca_changed() {
         let geodata = match lock_geodata_snapshot().and_then(|snapshot| {
-            ensure_reload_geodata_current(state, &plan)?;
+            ensure_reload_geodata_current(state, inputs.geodata_input_version)?;
             Ok(snapshot)
         }) {
             Ok(snapshot) => snapshot,
@@ -201,9 +200,12 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_until(
         let permit = commit.expect("runtime commit admission success was checked");
         let still_active = open_state_connection(state).and_then(|conn| {
             Ok(runtime.is_running()
-                && !runtime_modified_with_prepared_plan(&conn, true, &plan)?
+                && !inputs.differs_from_active(&conn)?
                 && runtime_activation_identity_consistent_with_connection(&conn, runtime)?
-                && runtime.has_transition_identity(reload_transition_identity(&plan))
+                && runtime.has_transition_identity(RuntimeTransitionIdentity {
+                    routing_version: inputs.routing_version(),
+                    geodata_input_version: inputs.geodata_input_version,
+                })
                 && !system_ca_changed())
         });
         match still_active {
@@ -237,6 +239,14 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_until(
     if let Err(error) = lead.checkpoint("materializing") {
         return lead.finish(Err(error));
     }
+    let plan = match inputs.materialize() {
+        Ok(plan) => plan,
+        Err(error) => {
+            return lead.finish(Err(CoordinatedRuntimeReloadError::Prepare(
+                RuntimeReloadPrepareError::Materialize(error.to_string()),
+            )));
+        }
+    };
     // Legacy rebuilds the control plane on both startup and reload, so a
     // reload that will pull subscriptions must honor the selected network
     // waiting policy as well.  Dry previews still use the non-waiting helper.
@@ -266,7 +276,7 @@ pub(in crate::daed_product) fn coordinate_runtime_reload_until(
         )));
     }
     let _geodata = match lock_geodata_snapshot().and_then(|snapshot| {
-        ensure_reload_geodata_current(state, &plan)?;
+        ensure_reload_geodata_current(state, plan.geodata_input_version)?;
         Ok(snapshot)
     }) {
         Ok(geodata) => geodata,
@@ -429,12 +439,7 @@ pub(in crate::daed_product) fn coordinate_runtime_reload(
         reclaim_reason,
         || false,
     )?;
-    if applied.coalesced
-        && matches!(
-            intent,
-            RuntimeApplyIntent::StartupRestore | RuntimeApplyIntent::SubscriptionRefresh
-        )
-    {
+    if applied.coalesced && intent == RuntimeApplyIntent::StartupRestore {
         applied.runtime_report = runtime.summary();
     }
     Ok(applied)
@@ -458,11 +463,8 @@ fn transition_publishes_dataplane(transition: RuntimeTransitionClass) -> bool {
     )
 }
 
-fn ensure_reload_geodata_current(
-    state: &Path,
-    plan: &RuntimeMaterializationPlan,
-) -> io::Result<()> {
-    if read_runtime_input_versions(state)?.geodata != plan.geodata_input_version {
+fn ensure_reload_geodata_current(state: &Path, geodata_input_version: i64) -> io::Result<()> {
+    if read_runtime_input_versions(state)?.geodata != geodata_input_version {
         return Err(io::Error::other(
             "runtime reload preparation was superseded by a Geo update",
         ));

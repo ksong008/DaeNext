@@ -58,23 +58,17 @@ fn runtime_revision_report_from_connection(
     runtime: &ProductRuntimeManager,
     runtime_state: &Value,
 ) -> io::Result<Value> {
+    let snapshot = conn.unchecked_transaction().map_err(sqlite_io_error)?;
+    let conn = &snapshot;
     let desired_external_revision = current_runtime_external_input_version(conn)?;
     let active_fingerprint =
         metadata_value_from_connection(conn, RUNTIME_ACTIVE_FINGERPRINT_METADATA_KEY)?;
-    let desired_plan = active_fingerprint
+    let desired_inputs = active_fingerprint
         .as_ref()
-        .map(|_| prepare_runtime_materialization_plan_with_connection(conn))
+        .map(|_| dae_product_control::runtime::RuntimeInputs::read(conn))
         .transpose()?;
-    let desired = match desired_plan.as_ref() {
-        Some(plan) => json!({
-            "config": {"id": plan.config_id, "version": plan.config_version},
-            "dns": {"id": plan.dns_id, "version": plan.dns_version},
-            "routing": {"id": plan.routing_id, "version": plan.routing_version},
-            "groupVersionSum": plan.group_version_sum,
-            "groupIds": plan.group_ids,
-            "externalInputVersion": desired_external_revision,
-            "activeFingerprint": plan.active_fingerprint.as_str(),
-        }),
+    let desired = match desired_inputs.as_ref() {
+        Some(inputs) => inputs.desired_report(),
         None => json!({
             "config": section_revision_value(selected_section_state(conn, SectionKind::Config)?),
             "dns": section_revision_value(selected_section_state(conn, SectionKind::Dns)?),
@@ -92,12 +86,14 @@ fn runtime_revision_report_from_connection(
         .unwrap_or(Value::Null);
     let running = runtime_state["running"].as_bool().unwrap_or(false);
     let desired_matches_active = active_state.as_ref().is_some_and(|active| {
-        desired_plan
+        desired_inputs
             .as_ref()
             .zip(active_fingerprint.as_deref())
             .map_or_else(
                 || active_runtime_revision_matches(active, &desired),
-                |(plan, active_fingerprint)| plan.active_fingerprint.as_str() == active_fingerprint,
+                |(inputs, active_fingerprint)| {
+                    inputs.active_fingerprint.as_str() == active_fingerprint
+                },
             )
     });
     let runtime_product_generation = runtime_state["activeGeneration"].as_str();
@@ -109,6 +105,7 @@ fn runtime_revision_report_from_connection(
     let activation_identity_consistent =
         !running || (identity.product_generation_matches && identity.probe_generation_matches);
 
+    snapshot.commit().map_err(sqlite_io_error)?;
     Ok(json!({
         "desired": desired,
         "active": active,

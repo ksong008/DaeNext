@@ -10,28 +10,6 @@ pub(super) fn apply_runtime_after_subscription_change(
     if !runtime_input_changed || !runtime.is_running() {
         return SubscriptionRuntimeApplyResult::default();
     }
-    let conn = match open_state_connection(state) {
-        Ok(conn) => conn,
-        Err(error) => {
-            return SubscriptionRuntimeApplyResult {
-                requested: true,
-                error: Some(error.to_string()),
-                ..SubscriptionRuntimeApplyResult::default()
-            };
-        }
-    };
-    match runtime_modified(&conn, true) {
-        Ok(false) => return SubscriptionRuntimeApplyResult::default(),
-        Err(error) => {
-            return SubscriptionRuntimeApplyResult {
-                requested: true,
-                error: Some(error.to_string()),
-                ..SubscriptionRuntimeApplyResult::default()
-            };
-        }
-        Ok(true) => {}
-    }
-
     let reload_started_at = Instant::now();
     match restore_runtime_from_state(
         runtime,
@@ -39,6 +17,7 @@ pub(super) fn apply_runtime_after_subscription_change(
         Some(config_dir),
         ProductRuntimeLifecycleLogMode::ReloadSubscriptionRefresh,
     ) {
+        Ok(report) if report["coalesced"] == true => SubscriptionRuntimeApplyResult::default(),
         Ok(report) => {
             let applied = report["applied"].as_bool().unwrap_or(true);
             let mut fields = BTreeMap::new();
