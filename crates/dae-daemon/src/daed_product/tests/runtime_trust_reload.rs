@@ -37,7 +37,9 @@ fn changed_external_ca_prevents_unchanged_reload_coalescing() {
         product.seed_selected_resources();
         let config_dir = product.root().join("config");
         let runtime = ProductRuntimeManager::new();
-        dae_tls::system_ca_snapshot().unwrap();
+        let original = dae_tls::system_ca_snapshot().unwrap();
+        let refreshed = dae_tls::refresh_system_ca_snapshot().unwrap();
+        assert!(Arc::ptr_eq(&original, &refreshed));
         let reload = || {
             coordinate_runtime_reload(
                 &runtime,
@@ -56,11 +58,16 @@ fn changed_external_ca_prevents_unchanged_reload_coalescing() {
         fs::write(&bundle, changed).unwrap();
         let updated = reload();
         assert!(updated.applied && !updated.coalesced);
+        assert!(!Arc::ptr_eq(
+            &original,
+            &dae_tls::system_ca_snapshot().unwrap()
+        ));
         assert_eq!(updated.runtime_report["transition"], "GenerationSwap");
         assert_eq!(runtime.summary()["reloadCount"], json!(2));
         fs::remove_file(&bundle).unwrap();
         let missing = reload();
         assert!(missing.applied && !missing.coalesced);
+        assert!(dae_tls::system_ca_snapshot().is_err());
         assert_eq!(runtime.summary()["reloadCount"], json!(3));
         assert!(reload().coalesced, "unchanged missing CA should coalesce");
     });
