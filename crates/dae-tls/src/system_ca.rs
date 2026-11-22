@@ -7,11 +7,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use boring::error::ErrorStack;
+use boring::sha::sha256;
 use boring::ssl::{SslContext, SslContextBuilder};
 use boring::x509::X509;
 use boring::x509::store::{X509Store, X509StoreBuilder};
 use foreign_types::ForeignType;
-use sha2::{Digest, Sha256};
 
 pub const SYSTEM_CA_BUNDLE_PATHS: &[&str] = &[
     "/etc/ssl/certs/ca-certificates.crt",
@@ -64,13 +64,16 @@ impl SystemCaSnapshot {
     }
 
     fn load_from_environment() -> Result<Self, SystemCaError> {
+        Self::load_from_path(Self::environment_bundle_path()?)
+    }
+
+    fn environment_bundle_path() -> Result<PathBuf, SystemCaError> {
         let explicit = env::var_os("SSL_CERT_FILE").filter(|value| !value.is_empty());
         let candidates = SYSTEM_CA_BUNDLE_PATHS
             .iter()
             .map(PathBuf::from)
             .collect::<Vec<_>>();
-        let path = select_bundle_path(explicit.as_deref(), &candidates)?;
-        Self::load_from_path(path)
+        select_bundle_path(explicit.as_deref(), &candidates)
     }
 
     pub fn load_from_path(path: PathBuf) -> Result<Self, SystemCaError> {
@@ -78,11 +81,16 @@ impl SystemCaSnapshot {
             path: path.clone(),
             message: error.to_string(),
         })?;
+        let sha256 = encode_hex(&sha256(&bytes));
+        Self::parse_bundle(path, &bytes, sha256)
+    }
+
+    fn parse_bundle(path: PathBuf, bytes: &[u8], sha256: String) -> Result<Self, SystemCaError> {
         if bytes.is_empty() {
             return Err(SystemCaError::Empty { path });
         }
 
-        let certificates = X509::stack_from_pem(&bytes).map_err(|error| SystemCaError::Parse {
+        let certificates = X509::stack_from_pem(bytes).map_err(|error| SystemCaError::Parse {
             path: path.clone(),
             message: error.to_string(),
         })?;
@@ -115,7 +123,6 @@ impl SystemCaSnapshot {
         if certificate_count == 0 {
             return Err(SystemCaError::NoUsableCertificates { path });
         }
-        let sha256 = encode_hex(Sha256::digest(&bytes).as_ref());
 
         Ok(Self {
             identity: SystemCaIdentity {
@@ -209,9 +216,25 @@ fn cached_system_ca_snapshot(
 /// retain their trust; a failed reload leaves no stale success for new callers.
 pub fn refresh_system_ca_snapshot() -> Result<Arc<SystemCaSnapshot>, SystemCaError> {
     let cache = SYSTEM_CA_SNAPSHOT.get_or_init(|| Mutex::new(None));
-    refresh_cached_system_ca_snapshot(cache, SystemCaSnapshot::load_from_environment)
+    let mut cache = lock_system_ca_cache(cache);
+    let previous = cache.take();
+    let path = SystemCaSnapshot::environment_bundle_path()?;
+    let bytes = fs::read(&path).map_err(|error| SystemCaError::Read {
+        path: path.clone(),
+        message: error.to_string(),
+    })?;
+    let sha256 = encode_hex(&sha256(&bytes));
+    let snapshot = match previous {
+        Some(snapshot) if snapshot.identity.path == path && snapshot.identity.sha256 == sha256 => {
+            snapshot
+        }
+        _ => Arc::new(SystemCaSnapshot::parse_bundle(path, &bytes, sha256)?),
+    };
+    *cache = Some(Arc::clone(&snapshot));
+    Ok(snapshot)
 }
 
+#[cfg(test)]
 fn refresh_cached_system_ca_snapshot(
     cache: &Mutex<CachedSystemCaSnapshot>,
     load: impl FnOnce() -> Result<SystemCaSnapshot, SystemCaError>,
@@ -293,6 +316,7 @@ mod tests {
     };
     use boring::x509::{X509Builder, X509NameBuilder, X509StoreContext};
     use foreign_types::ForeignTypeRef;
+    use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
