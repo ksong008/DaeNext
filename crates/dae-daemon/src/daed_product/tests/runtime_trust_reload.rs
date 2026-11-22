@@ -56,6 +56,7 @@ fn changed_external_ca_prevents_unchanged_reload_coalescing() {
         fs::write(&bundle, changed).unwrap();
         let updated = reload();
         assert!(updated.applied && !updated.coalesced);
+        assert_eq!(updated.runtime_report["transition"], "GenerationSwap");
         assert_eq!(runtime.summary()["reloadCount"], json!(2));
         fs::remove_file(&bundle).unwrap();
         let missing = reload();

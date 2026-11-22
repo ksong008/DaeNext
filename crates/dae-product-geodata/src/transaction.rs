@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::{RwLock, RwLockReadGuard};
 use std::{fs, io};
 
 use dae_product_persistence::{
@@ -15,6 +16,13 @@ use serde::{Deserialize, Serialize};
 use crate::GeodataKind;
 
 const GEODATA_JOURNAL_FORMAT_VERSION: u32 = 1;
+pub(crate) static GEODATA_PUBLICATION: RwLock<()> = RwLock::new(());
+
+pub fn lock_geodata_snapshot() -> io::Result<RwLockReadGuard<'static, ()>> {
+    GEODATA_PUBLICATION
+        .read()
+        .map_err(|_| io::Error::other("geodata publication lock poisoned"))
+}
 const GEODATA_JOURNAL_MAX_BYTES: u64 = 64 * 1024;
 const GEODATA_INTERNAL_ARTIFACT_PURPOSES: [&str; 4] =
     ["download", "version", "data-backup", "version-backup"];
@@ -192,6 +200,9 @@ pub fn recover_geodata_transactions(dir: &Path, state: &Path) -> io::Result<()> 
 }
 
 pub fn recover_geodata_transaction(dir: &Path, state: &Path, kind: GeodataKind) -> io::Result<()> {
+    let _publication = GEODATA_PUBLICATION
+        .write()
+        .map_err(|_| io::Error::other("geodata publication lock poisoned"))?;
     let Some(mut journal) = read_geodata_journal(dir, kind)? else {
         remove_file_if_exists(&geodata_journal_next_path(dir, kind))?;
         return cleanup_orphaned_internal_artifacts(dir, kind);

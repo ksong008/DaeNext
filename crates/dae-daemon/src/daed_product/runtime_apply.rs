@@ -72,15 +72,26 @@ pub(in crate::daed_product) fn apply_runtime_generation(
     ) {
         Ok(report) => report,
         Err(err) => {
+            let recovery = runtime.reconcile_failed_activation(state, &snapshot);
+            let error = match &recovery {
+                Ok(()) => err,
+                Err(recovery_error) => {
+                    format!("{err}; runtime reconciliation is required: {recovery_error}")
+                }
+            };
             record_apply_failure(
                 runtime,
                 &generation,
                 "activate",
-                &err,
-                "runtime-manager-restored-or-unchanged",
-                false,
+                &error,
+                if recovery.is_ok() {
+                    "runtime-manager-restored-or-unchanged"
+                } else {
+                    "failed"
+                },
+                recovery.is_err(),
             );
-            return Err(err);
+            return Err(error);
         }
     };
     if let Value::Object(report) = &mut runtime_report {
@@ -130,6 +141,7 @@ pub(in crate::daed_product) fn apply_runtime_generation(
                 &snapshot,
                 &mut candidate,
                 latency_seed,
+                prepared.plan.geodata_input_version,
                 checkpoints,
             );
             match rollback {

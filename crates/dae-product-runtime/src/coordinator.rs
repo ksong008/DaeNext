@@ -99,6 +99,17 @@ impl RuntimeApplyCoordinator {
         &self,
         intent: RuntimeApplyIntent,
     ) -> Result<RuntimeApplyPermit<'_>, String> {
+        self.begin_apply_until(intent, || None)
+    }
+
+    pub(crate) fn begin_apply_until(
+        &self,
+        intent: RuntimeApplyIntent,
+        interrupted: impl Fn() -> Option<&'static str>,
+    ) -> Result<RuntimeApplyPermit<'_>, String> {
+        if let Some(reason) = interrupted() {
+            return Err(reason.to_owned());
+        }
         let intent_id = self.next_intent.fetch_add(1, Ordering::Relaxed);
         if self.stop_pending.load(Ordering::Acquire) != 0 {
             self.record_superseded();
@@ -108,7 +119,7 @@ impl RuntimeApplyCoordinator {
         let gate = match self.gate.try_lock() {
             Ok(gate) => gate,
             Err(TryLockError::WouldBlock) => {
-                lock_gate_with_timeout(&self.gate, self.gate_wait_timeout)?
+                lock_gate_with_timeout(&self.gate, self.gate_wait_timeout, interrupted)?
             }
             Err(TryLockError::Poisoned(_)) => {
                 return Err("runtime apply coordinator lock poisoned".to_owned());
@@ -136,9 +147,21 @@ impl RuntimeApplyCoordinator {
     }
 
     pub fn begin_stop(&self) -> Result<RuntimeStopPermit<'_>, String> {
+        self.begin_stop_with(|| {})
+    }
+
+    pub(crate) fn stop_is_pending(&self) -> bool {
+        self.stop_pending.load(Ordering::Acquire) != 0
+    }
+
+    pub(crate) fn begin_stop_with(
+        &self,
+        cancel_preparation: impl FnOnce(),
+    ) -> Result<RuntimeStopPermit<'_>, String> {
         let intent_id = self.next_intent.fetch_add(1, Ordering::Relaxed);
         self.stop_pending.fetch_add(1, Ordering::AcqRel);
         self.stop_epoch.fetch_add(1, Ordering::AcqRel);
+        cancel_preparation();
         let gate = match self.gate.lock() {
             Ok(gate) => gate,
             Err(_) => {
@@ -189,11 +212,15 @@ impl RuntimeApplyCoordinator {
 fn lock_gate_with_timeout(
     gate: &Mutex<()>,
     timeout: Duration,
+    interrupted: impl Fn() -> Option<&'static str>,
 ) -> Result<MutexGuard<'_, ()>, String> {
     let deadline = Instant::now()
         .checked_add(timeout)
         .unwrap_or_else(Instant::now);
     loop {
+        if let Some(reason) = interrupted() {
+            return Err(reason.to_owned());
+        }
         match gate.try_lock() {
             Ok(guard) => return Ok(guard),
             Err(TryLockError::WouldBlock) => {

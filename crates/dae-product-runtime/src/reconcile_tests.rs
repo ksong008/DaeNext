@@ -84,6 +84,52 @@ fn newer_desired_state_supersedes_an_older_lead() {
 }
 
 #[test]
+fn late_snapshot_cannot_supersede_an_admitted_newer_request() {
+    let reconciler = ProductRuntimeReconciler::new(RuntimeApplyCoordinator::new());
+    let old = reconciler.begin(RuntimeApplyIntent::ApiReload);
+    let mut new = lead(&reconciler, "new");
+
+    let Err(error) = old.admit("old") else {
+        panic!("old snapshot must be rejected");
+    };
+    assert!(error.contains("newer desired state"));
+    new.begin_commit().unwrap().finish("succeeded");
+    assert_eq!(new.finish(Ok(42)).unwrap(), 42);
+}
+
+#[test]
+fn reverting_desired_state_cannot_join_the_superseded_flight() {
+    let reconciler = ProductRuntimeReconciler::new(RuntimeApplyCoordinator::new());
+    let mut first = lead(&reconciler, "a");
+    let mut second = lead(&reconciler, "b");
+    let mut reverted = lead(&reconciler, "a");
+
+    assert!(first.checkpoint("prepared").is_err());
+    assert!(second.checkpoint("prepared").is_err());
+    reverted.begin_commit().unwrap().finish("succeeded");
+    assert_eq!(reverted.finish(Ok(1)).unwrap(), 1);
+}
+
+#[test]
+fn completed_stop_invalidates_snapshots_started_before_and_during_stop() {
+    let reconciler: ProductRuntimeReconciler<u64, String> =
+        ProductRuntimeReconciler::new(RuntimeApplyCoordinator::new());
+    let before = reconciler.begin(RuntimeApplyIntent::ApiReload);
+    let stop = reconciler.begin_stop().unwrap();
+    let during = reconciler.begin(RuntimeApplyIntent::ApiReload);
+    stop.finish("succeeded");
+
+    for request in [before, during] {
+        let Err(error) = request.admit("stale") else {
+            panic!("stale snapshot must be rejected");
+        };
+        assert!(error.contains("superseded by stop"));
+    }
+    let mut next = lead(&reconciler, "after");
+    next.begin_commit().unwrap().finish("succeeded");
+}
+
+#[test]
 fn stop_supersedes_preparation_but_waits_for_commit_gate() {
     let reconciler = ProductRuntimeReconciler::new(RuntimeApplyCoordinator::new());
     let mut preparing = lead(&reconciler, "preparing");

@@ -14,7 +14,7 @@
       "tests": 0
     },
     "dae-product-geodata": {
-      "production": 3600,
+      "production": 3609,
       "tests": 0
     },
     "dae-product-http": {
@@ -27,7 +27,7 @@
     },
     "dae-product-runtime": {
       "production": 6800,
-      "tests": 278
+      "tests": 310
     },
     "dae-product-subscription": {
       "production": 7800,
@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 23754
+      "tests": 23820
     },
     "dae-outbound": {
       "production": 9255,
@@ -80,7 +80,7 @@
   "subtrees": {
     "crates/dae-daemon/src/daed_product": {
       "production": 20300,
-      "tests": 17723
+      "tests": 17789
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,

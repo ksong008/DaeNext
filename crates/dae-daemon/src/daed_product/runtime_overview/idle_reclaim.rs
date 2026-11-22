@@ -656,8 +656,8 @@ fn evaluate_allocator_idle_reclaim_with_observers(
 
     let busy_count = allocator_reclaim_busy_count();
     let busy_completion_count = allocator_reclaim_busy_completion_count();
-    let busy_quiet_required = if cgroup_pressure.level.is_urgent() {
-        Duration::from_secs(5)
+    let busy_quiet_required = if required_reclaim || cgroup_pressure.level.is_urgent() {
+        ALLOCATOR_IDLE_RECLAIM_DEFERRED_SETTLE_INTERVAL
     } else {
         ALLOCATOR_IDLE_RECLAIM_HEAVY_TASK_QUIET
     };

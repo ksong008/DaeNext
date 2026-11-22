@@ -7,6 +7,11 @@ pub(in crate::daed_product) struct ProductRuntimeApplySnapshot {
     config_content: Option<Arc<str>>,
     resident_generation: Option<ResidentActiveGenerationSnapshot>,
     transition_identity: Option<RuntimeTransitionIdentity>,
+    transition: RuntimeTransitionClass,
+    probe_generation: Option<u64>,
+    reload_count: u64,
+    allocator_publication_id: u64,
+    last_report: Option<Arc<Value>>,
 }
 
 impl ProductRuntimeManager {
@@ -63,19 +68,12 @@ impl ProductRuntimeManager {
         &self,
         prepared: &PreparedProductRuntime,
     ) -> Result<ProductRuntimeApplySnapshot, String> {
+        let probe_generation = self.current_probe_generation();
         let inner = self
             .inner()
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-        let transition = match (inner.runtime.as_ref(), inner.config.as_deref()) {
-            (Some(_), Some(active)) => classify_runtime_transition(
-                active,
-                inner.transition_identity,
-                prepared.config(),
-                prepared.transition_identity(),
-            ),
-            (None, _) | (Some(_), None) => RuntimeTransitionClass::KernelRebind,
-        };
+        let transition = prepared.transition_from(&inner);
         // Only an in-place generation publication can reactivate the captured Arc. A physical
         // KernelRebind destroys the old runtime and rollback already rebuilds the prior config;
         // pinning its complete router/DNS/protocol graph serves no rollback purpose and retained
@@ -96,14 +94,74 @@ impl ProductRuntimeManager {
                 })
                 .flatten(),
             transition_identity: inner.transition_identity,
+            transition,
+            probe_generation,
+            reload_count: inner.reload_count,
+            allocator_publication_id: inner.allocator_publication_id,
+            last_report: inner.last_report.clone(),
         })
+    }
+
+    pub(in crate::daed_product) fn reconcile_failed_activation(
+        &self,
+        state: &Path,
+        snapshot: &ProductRuntimeApplySnapshot,
+    ) -> Result<(), String> {
+        let (running, identity) = {
+            let inner = self
+                .inner()
+                .lock()
+                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+            (inner.runtime.is_some(), inner.transition_identity)
+        };
+        if running != snapshot.was_running {
+            return Err("previous runtime is unavailable".to_owned());
+        }
+        let probe_generation = self.current_probe_generation();
+        if running
+            && probe_generation != snapshot.probe_generation
+            && let Some(product_generation) = self.active_generation()
+        {
+            super::activation_identity::persist_recovered_runtime_identity(
+                state,
+                &super::activation_identity::RuntimeActivationIdentity {
+                    product_generation,
+                    probe_generation,
+                },
+            )?;
+        }
+        if identity != snapshot.transition_identity {
+            return Err("previous runtime inputs changed during recovery".to_owned());
+        }
+        Ok(())
     }
 
     pub(in crate::daed_product) fn restore_after_failed_apply(
         &self,
         snapshot: &ProductRuntimeApplySnapshot,
         latency_seed: &[Value],
-    ) -> Result<(), String> {
+        current_geodata_version: i64,
+    ) -> Result<bool, String> {
+        if matches!(
+            snapshot.transition,
+            RuntimeTransitionClass::NoChange | RuntimeTransitionClass::ProcessRestart
+        ) {
+            let _lifecycle = self
+                .lifecycle()
+                .lock()
+                .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
+            let mut inner = self
+                .inner()
+                .lock()
+                .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
+            inner.config = snapshot.config.clone();
+            inner.config_content = snapshot.config_content.clone();
+            inner.transition_identity = snapshot.transition_identity;
+            inner.reload_count = snapshot.reload_count;
+            inner.allocator_publication_id = snapshot.allocator_publication_id;
+            inner.last_report = snapshot.last_report.clone();
+            return Ok(true);
+        }
         if let Some(generation) = snapshot.resident_generation.as_ref() {
             let _lifecycle = self
                 .lifecycle()
@@ -136,10 +194,10 @@ impl ProductRuntimeManager {
                 }
             };
             if restored.is_ok() {
-                return Ok(());
+                return Ok(true);
             }
             if same_physical_runtime {
-                return restored;
+                return restored.map(|()| true);
             }
         }
         if snapshot.was_running {
@@ -147,7 +205,13 @@ impl ProductRuntimeManager {
                 .config
                 .clone()
                 .ok_or_else(|| "running runtime snapshot has no config".to_owned())?;
-            let prepared = prepare_product_runtime_candidate(config)?;
+            let mut prepared = prepare_product_runtime_candidate(config)?;
+            let mut exact = true;
+            if let Some(mut identity) = snapshot.transition_identity {
+                exact = identity.geodata_input_version == current_geodata_version;
+                identity.geodata_input_version = current_geodata_version;
+                prepared = prepared.with_transition_identity(identity);
+            }
             reload_prepared_product_runtime_with_config_content(
                 self.lifecycle(),
                 self.inner(),
@@ -156,10 +220,10 @@ impl ProductRuntimeManager {
                 "runtime-apply-rollback",
                 latency_seed,
             )?;
-            Ok(())
+            Ok(exact)
         } else {
             self.discard_runtime_without_stop_gate("runtime-apply-rollback")?;
-            Ok(())
+            Ok(true)
         }
     }
 }

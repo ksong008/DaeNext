@@ -54,7 +54,8 @@ impl CoordinatedRuntimeReloadError {
     pub fn http_status(&self) -> u16 {
         match self {
             Self::Prepare(error) => error.http_status(),
-            Self::Apply(error) if error.contains("superseded by stop") => 409,
+            Self::Apply(error) if error.contains("superseded by") => 409,
+            Self::Apply(error) if error == "runtime reload request cancelled before commit" => 408,
             Self::Apply(_) => 500,
         }
     }

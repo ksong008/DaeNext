@@ -91,3 +91,14 @@ fn geodata_success_commits_status_version_and_runtime_pending_together() {
     );
     fixture.cleanup();
 }
+
+#[test]
+fn geodata_commit_while_stopped_advances_the_asset_revision() {
+    let fixture = GeodataTransactionFixture::new("stopped-commit");
+    let result = fixture.commit(None, &mut PassCheckpoints).unwrap();
+    assert!(!result.runtime_reload_required);
+    let conn = open_state_connection(&fixture.state).unwrap();
+    assert_eq!(current_runtime_geodata_input_version(&conn).unwrap(), 1);
+    fixture.assert_new_generation();
+    fixture.cleanup();
+}

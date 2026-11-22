@@ -76,6 +76,7 @@ pub fn commit_geodata_generation_with_checkpoints(
         sha256,
         input_versions_before,
     } = candidate;
+    let runtime_reload_required = input_versions_before.is_some();
     if let Err(error) = checkpoints.checkpoint(GeodataTransactionCheckpoint::WriteVersionStage) {
         remove_paths_best_effort([data_stage]);
         return Err(error);
@@ -95,6 +96,22 @@ pub fn commit_geodata_generation_with_checkpoints(
         &version,
     ) {
         Ok(status) => status,
+        Err(error) => {
+            remove_paths_best_effort([data_stage, version_stage]);
+            return Err(error);
+        }
+    };
+    let _publication = match crate::transaction::GEODATA_PUBLICATION.write() {
+        Ok(publication) => publication,
+        Err(_) => {
+            remove_paths_best_effort([data_stage, version_stage]);
+            return Err(io::Error::other("geodata publication lock poisoned"));
+        }
+    };
+    // Take the version under the same lock as the rename. GeoIP and GeoSite
+    // can download concurrently, including when the runtime is stopped.
+    let input_versions_before = match crate::read_runtime_input_versions(state) {
+        Ok(versions) => Some(versions),
         Err(error) => {
             remove_paths_best_effort([data_stage, version_stage]);
             return Err(error);
@@ -182,7 +199,7 @@ pub fn commit_geodata_generation_with_checkpoints(
     }
     Ok(GeodataCommitResult {
         status,
-        runtime_reload_required: input_versions_before.is_some(),
+        runtime_reload_required,
     })
 }
 

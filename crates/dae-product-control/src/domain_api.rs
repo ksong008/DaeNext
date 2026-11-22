@@ -41,8 +41,8 @@ pub mod geodata {
         encode_geodata_helper_failure, encode_geodata_helper_success, geodata_http_body,
         geodata_http_request, geodata_http_response_limit,
         geodata_http_response_to_file_from_bytes, geodata_resource_status, geodata_source,
-        geodata_source_status, geodata_sources_status, parse_geodata_latest_release,
-        prepare_geodata_with_helper, read_geodata_http_response,
+        geodata_source_status, geodata_sources_status, lock_geodata_snapshot,
+        parse_geodata_latest_release, prepare_geodata_with_helper, read_geodata_http_response,
         read_geodata_http_response_to_file, read_runtime_input_versions,
         recover_geodata_transaction, reset_geodata_source_url, set_geodata_source_url,
         set_geodata_source_use_proxy, sha256_file, summarize_geodata_file,
@@ -126,8 +126,8 @@ pub mod runtime {
         render_global_config_text, render_routing_section, resident_runtime_traffic_stats,
         resource_pool_policy_json, restore_runtime_database,
         runtime_desired_state_revision_from_connection, runtime_health_seed_snapshots,
-        runtime_modified, runtime_node_tag, runtime_traffic_observation,
-        runtime_traffic_stats_from_history, sync_directory,
+        runtime_modified, runtime_modified_with_prepared_plan, runtime_node_tag,
+        runtime_traffic_observation, runtime_traffic_stats_from_history, sync_directory,
     };
     #[cfg(feature = "benchmark-support")]
     pub use dae_product_runtime::{

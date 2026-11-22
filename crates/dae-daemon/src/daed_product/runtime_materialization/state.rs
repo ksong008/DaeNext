@@ -124,13 +124,11 @@ fn runtime_revision_report_from_connection(
     }))
 }
 
-pub(in crate::daed_product) fn runtime_activation_identity_consistent(
-    state: &Path,
+pub(in crate::daed_product) fn runtime_activation_identity_consistent_with_connection(
+    conn: &Connection,
     runtime: &ProductRuntimeManager,
 ) -> io::Result<bool> {
-    let conn = open_state_connection(state)?;
-    let identity =
-        compare_runtime_activation_identity(&conn, runtime, runtime.active_generation())?;
+    let identity = compare_runtime_activation_identity(conn, runtime, runtime.active_generation())?;
     Ok(identity.product_generation_matches && identity.probe_generation_matches)
 }
 

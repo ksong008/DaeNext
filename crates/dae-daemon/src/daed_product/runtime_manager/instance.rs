@@ -102,9 +102,30 @@ pub(in crate::daed_product) struct PreparedProductRuntime {
     config: Arc<Config>,
     resident: Option<ResidentPreparedGeneration>,
     transition_identity: Option<RuntimeTransitionIdentity>,
+    renew_transport_trust: bool,
 }
 
 impl PreparedProductRuntime {
+    pub(in crate::daed_product) fn from_config(config: Arc<Config>) -> Self {
+        Self {
+            config,
+            resident: None,
+            transition_identity: None,
+            renew_transport_trust: false,
+        }
+    }
+
+    pub(in crate::daed_product) fn prepare_generation(&mut self) -> Result<(), String> {
+        if self.resident.is_none() && !product_runtime_fake_start_enabled() {
+            crate::service_contract::validate_resident_runtime_reload_config(&self.config)?;
+            self.resident = Some(prepare_resident_production_generation(
+                Arc::clone(&self.config),
+                Vec::<PathBuf>::new(),
+            )?);
+        }
+        Ok(())
+    }
+
     pub(in crate::daed_product) fn config(&self) -> &Arc<Config> {
         &self.config
     }
@@ -123,6 +144,32 @@ impl PreparedProductRuntime {
         self.transition_identity
     }
 
+    pub(in crate::daed_product) fn with_trust_renewal(mut self, renew: bool) -> Self {
+        self.renew_transport_trust = renew;
+        self
+    }
+
+    pub(super) fn transition_from(&self, state: &ProductRuntimeState) -> RuntimeTransitionClass {
+        let transition = match (state.runtime.as_ref(), state.config.as_deref()) {
+            (Some(_), Some(active)) => classify_runtime_transition(
+                active,
+                state.transition_identity,
+                &self.config,
+                self.transition_identity,
+            ),
+            _ => RuntimeTransitionClass::KernelRebind,
+        };
+        if self.renew_transport_trust
+            && matches!(
+                transition,
+                RuntimeTransitionClass::NoChange | RuntimeTransitionClass::ProcessRestart
+            )
+        {
+            return RuntimeTransitionClass::GenerationSwap;
+        }
+        transition
+    }
+
     pub(in crate::daed_product) fn into_resident_generation(
         self,
     ) -> Result<ResidentPreparedGeneration, String> {
@@ -135,21 +182,9 @@ impl PreparedProductRuntime {
 pub(in crate::daed_product) fn prepare_product_runtime_candidate(
     config: Arc<Config>,
 ) -> Result<PreparedProductRuntime, String> {
-    if product_runtime_fake_start_enabled() {
-        return Ok(PreparedProductRuntime {
-            config,
-            resident: None,
-            transition_identity: None,
-        });
-    }
-    crate::service_contract::validate_resident_runtime_reload_config(&config)?;
-    let resident =
-        prepare_resident_production_generation(Arc::clone(&config), Vec::<PathBuf>::new())?;
-    Ok(PreparedProductRuntime {
-        config,
-        resident: Some(resident),
-        transition_identity: None,
-    })
+    let mut prepared = PreparedProductRuntime::from_config(config);
+    prepared.prepare_generation()?;
+    Ok(prepared)
 }
 
 pub(in crate::daed_product) fn start_prepared_product_runtime_instance(
@@ -162,6 +197,7 @@ pub(in crate::daed_product) fn start_prepared_product_runtime_instance(
         config,
         resident,
         transition_identity: _,
+        renew_transport_trust: _,
     } = prepared;
     if product_runtime_fake_start_enabled() {
         let started_at = now_text();

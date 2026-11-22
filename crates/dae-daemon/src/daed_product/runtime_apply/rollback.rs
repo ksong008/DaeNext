@@ -9,6 +9,7 @@ pub(super) fn rollback_runtime_generation(
     snapshot: &ProductRuntimeApplySnapshot,
     candidate: &mut PreparedRuntimeGeneration,
     latency_seed: &[Value],
+    current_geodata_version: i64,
     checkpoints: &mut dyn FaultCheckpoints<RuntimeApplyCheckpoint>,
 ) -> Result<(), String> {
     if let Err(err) = checkpoints.checkpoint(RuntimeApplyCheckpoint::Rollback) {
@@ -21,14 +22,21 @@ pub(super) fn rollback_runtime_generation(
     if let Err(err) = restore_previous_materialization(candidate) {
         errors.push(format!("restore materialization failed: {err}"));
     }
-    let restored_probe_generation = match runtime.restore_after_failed_apply(snapshot, latency_seed)
-    {
-        Ok(()) => Some(runtime.current_probe_generation()),
-        Err(err) => {
-            errors.push(format!("restore runtime failed: {err}"));
-            None
-        }
-    };
+    let restored_probe_generation =
+        match runtime.restore_after_failed_apply(snapshot, latency_seed, current_geodata_version) {
+            Ok(exact) => {
+                if !exact {
+                    errors.push(
+                        "previous config was rebuilt against the current Geo assets".to_owned(),
+                    );
+                }
+                Some(runtime.current_probe_generation())
+            }
+            Err(err) => {
+                errors.push(format!("restore runtime failed: {err}"));
+                None
+            }
+        };
     if let Err(err) = dae_product_control::runtime::restore_runtime_database(
         state,
         &candidate.database_snapshot,

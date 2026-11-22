@@ -1,4 +1,5 @@
 use super::*;
+use std::os::fd::AsRawFd;
 
 pub(super) fn serve_forever(
     listen: &str,
@@ -390,13 +391,20 @@ fn detach_runtime_reload_stream(
     let response_request = request.clone();
     let response_context = RuntimeReloadHttpContext::from_app(&app);
     let response_metrics = Arc::clone(&metrics);
+    let shutdown = Arc::clone(&app.shutdown);
+    let deadline = Instant::now() + Duration::from_secs(110);
     let submitted = app.control_runtime.submit(
         ProductControlTaskKind::RuntimeLifecycle,
-        move |_cancellation| async move {
+        move |cancellation| async move {
             let _completion = ProductDetachedHttpCompletion(response_metrics);
             let worker = tokio::task::spawn_blocking(move || {
                 let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    api_runtime_reload_with_context(&response_context, &response_request)
+                    api_runtime_reload_with_context(&response_context, &response_request, || {
+                        cancellation.is_requested()
+                            || shutdown.is_requested()
+                            || Instant::now() >= deadline
+                            || reload_peer_disconnected(&response_stream)
+                    })
                 })) {
                     Ok(response) => response,
                     Err(_) => {
@@ -421,6 +429,25 @@ fn detach_runtime_reload_stream(
             Ok(ProductHttpConnectionResult::Closed)
         }
     }
+}
+
+fn reload_peer_disconnected(stream: &TcpStream) -> bool {
+    let mut byte = 0u8;
+    // A nonblocking peek leaves socket timeouts and buffered data untouched.
+    let read = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            (&raw mut byte).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    // A peer can finish sending the request and still read the response.
+    read < 0
+        && matches!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECONNRESET | libc::ENOTCONN)
+        )
 }
 
 struct ProductDetachedHttpCompletion(Arc<ProductHttpMetrics>);

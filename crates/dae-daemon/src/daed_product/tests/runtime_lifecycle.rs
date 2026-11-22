@@ -39,7 +39,7 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
         control_runtime: product_test_control_runtime(),
     };
     set_metadata(&state, "runtime_log_level", "info").unwrap();
-    let request = HttpRequest {
+    let mut request = HttpRequest {
         method: "POST".to_owned(),
         path: "/api/runtime/reload".to_owned(),
         query: HashMap::new(),
@@ -47,6 +47,12 @@ pub(crate) fn runtime_reload_dry_preview_writes_unified_reload_logs() {
         body: br#"{"dry":true}"#.to_vec(),
     };
 
+    for body in [r#"{"dry":"true"}"#, r#"{"dry":"#, "null"] {
+        request.body = body.as_bytes().to_vec();
+        assert_eq!(api_runtime_reload(&app, &request).status, 400);
+        assert!(!app.runtime.is_running());
+    }
+    request.body = br#"{"dry":true}"#.to_vec();
     let response = api_runtime_reload(&app, &request);
     assert_eq!(
         response.status,

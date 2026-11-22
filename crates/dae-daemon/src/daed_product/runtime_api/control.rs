@@ -21,16 +21,27 @@ pub(in crate::daed_product) fn api_runtime_reload(
     app: &AppState,
     request: &HttpRequest,
 ) -> HttpResponse {
-    api_runtime_reload_with_context(&RuntimeReloadHttpContext::from_app(app), request)
+    api_runtime_reload_with_context(&RuntimeReloadHttpContext::from_app(app), request, || {
+        app.shutdown.is_requested()
+    })
 }
 
 pub(in crate::daed_product) fn api_runtime_reload_with_context(
     context: &RuntimeReloadHttpContext,
     request: &HttpRequest,
+    cancelled: impl Fn() -> bool,
 ) -> HttpResponse {
     let reload_started_at = Instant::now();
-    let body = json_body(request).unwrap_or_else(|_| json!({}));
-    let dry = body.get("dry").and_then(Value::as_bool).unwrap_or(false);
+    let body = match json_body(request) {
+        Ok(body) if body.is_object() => body,
+        Ok(_) => return HttpResponse::json(400, json!({"error": "reload body must be an object"})),
+        Err(error) => return HttpResponse::json(400, json!({"error": error})),
+    };
+    let dry = match body.get("dry") {
+        Some(Value::Bool(dry)) => *dry,
+        None => false,
+        _ => return HttpResponse::json(400, json!({"error": "dry must be a boolean"})),
+    };
     if dry {
         let plan = match prepare_runtime_reload_preview(&context.state) {
             Ok(plan) => plan,
@@ -73,13 +84,14 @@ pub(in crate::daed_product) fn api_runtime_reload_with_context(
     }
     let latency_seed =
         stored_successful_node_latency_seed_snapshots(&context.state).unwrap_or_default();
-    let applied = match coordinate_runtime_reload_inner(
+    let applied = match coordinate_runtime_reload_until(
         &context.runtime,
         &context.state,
         Some(&context.config_dir),
         RuntimeApplyIntent::ApiReload,
         &latency_seed,
         AllocatorReclaimReason::ReloadCompleted,
+        cancelled,
     ) {
         Ok(applied) => applied,
         Err(err) => {

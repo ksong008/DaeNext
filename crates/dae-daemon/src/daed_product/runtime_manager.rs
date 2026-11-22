@@ -60,6 +60,7 @@ pub(super) struct ProductRuntimeManager {
     startup_recovery: Mutex<ProductRuntimeStartupRecoverySupervisor>,
     process_http_config: Mutex<Option<ProductHttpWorkerConfig>>,
     pprof_runtime: Arc<ProductPprofRuntime>,
+    pub(super) active_system_ca: Mutex<Option<dae_tls::SystemCaIdentity>>,
     runtime_required_for_readiness: AtomicBool,
     #[cfg(test)]
     summary_render_barrier: Mutex<Option<Arc<std::sync::Barrier>>>,
@@ -330,6 +331,21 @@ const PRODUCT_RUNTIME_INTERFACE_RECOVERY_RETRY: Duration = Duration::from_secs(3
 const PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE: &str = "interface-monitor";
 
 impl ProductRuntimeManager {
+    pub(super) fn has_transition_identity(&self, identity: RuntimeTransitionIdentity) -> bool {
+        self.inner()
+            .lock()
+            .is_ok_and(|state| state.transition_identity == Some(identity))
+    }
+
+    pub(super) fn transition_for_reload(
+        &self,
+        prepared: &PreparedProductRuntime,
+    ) -> Result<RuntimeTransitionClass, String> {
+        self.inner()
+            .lock()
+            .map(|state| prepared.transition_from(&state))
+            .map_err(|_| "product runtime manager lock poisoned".to_owned())
+    }
     fn reconciler(&self) -> &RuntimeReconciler {
         self.domain.reconciler()
     }
@@ -366,6 +382,7 @@ impl ProductRuntimeManager {
             startup_recovery: Mutex::new(ProductRuntimeStartupRecoverySupervisor::default()),
             process_http_config: Mutex::new(None),
             pprof_runtime: Arc::new(ProductPprofRuntime::default()),
+            active_system_ca: Mutex::new(None),
             runtime_required_for_readiness: AtomicBool::new(false),
             #[cfg(test)]
             summary_render_barrier: Mutex::new(None),
@@ -461,15 +478,7 @@ fn reload_prepared_product_runtime_with_config_content(
         let state = inner
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-        match (state.runtime.as_ref(), state.config.as_deref()) {
-            (Some(_), Some(active)) => classify_runtime_transition(
-                active,
-                state.transition_identity,
-                &config,
-                desired_identity,
-            ),
-            (None, _) | (Some(_), None) => RuntimeTransitionClass::KernelRebind,
-        }
+        prepared.transition_from(&state)
     };
     match transition {
         RuntimeTransitionClass::NoChange | RuntimeTransitionClass::ProcessRestart => {
@@ -550,7 +559,11 @@ fn publish_resident_runtime_generation(
         let preserve_dns_cache = state
             .config
             .as_ref()
-            .is_some_and(|active| active.dns == config.dns);
+            .is_some_and(|active| active.dns == config.dns)
+            && state
+                .transition_identity
+                .map(|identity| identity.geodata_input_version)
+                == desired_identity.map(|identity| identity.geodata_input_version);
         let live_latency_seed = state
             .runtime
             .as_ref()
@@ -713,7 +726,9 @@ fn replace_prepared_product_runtime_with_config_content(
     let dns_config_unchanged = previous_config
         .as_ref()
         .map(|previous| previous.dns == config.dns)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        && previous_transition_identity.map(|identity| identity.geodata_input_version)
+            == desired_identity.map(|identity| identity.geodata_input_version);
     let dns_reload_plan = dae_runtime_control::ReloadDnsCachePlan::decide(
         dns_config_unchanged,
         previous_dns_reload_snapshot.is_some(),
@@ -808,6 +823,13 @@ fn replace_prepared_product_runtime_with_config_content(
             Ok(RuntimeStartOutcome { report })
         }
         Err(start_err) => {
+            let restored_transition_identity = previous_transition_identity.map(|mut identity| {
+                if let Some(desired) = desired_identity {
+                    identity.geodata_input_version = desired.geodata_input_version;
+                }
+                identity
+            });
+            let geo_changed = restored_transition_identity != previous_transition_identity;
             let should_restore = inner
                 .lock()
                 .map(|inner| inner.lifecycle_epoch == lifecycle_epoch)
@@ -818,7 +840,11 @@ fn replace_prepared_product_runtime_with_config_content(
                         previous,
                         "restore",
                         &latency_seed,
-                        previous_dns_reload_snapshot.clone(),
+                        if geo_changed {
+                            None
+                        } else {
+                            previous_dns_reload_snapshot.clone()
+                        },
                     )
                 })
             } else {
@@ -846,7 +872,7 @@ fn replace_prepared_product_runtime_with_config_content(
                         inner.runtime = Some(runtime);
                         inner.config = previous_config.clone();
                         inner.config_content = previous_config_content.clone();
-                        inner.transition_identity = previous_transition_identity;
+                        inner.transition_identity = restored_transition_identity;
                         inner.process_baseline_config = previous_process_baseline_config.clone();
                         inner.runtime_started_at = previous_runtime_started_at.clone();
                         inner.last_report = Some(Arc::new(report));
@@ -866,6 +892,11 @@ fn replace_prepared_product_runtime_with_config_content(
                     }
                 });
             let mut message = match restored {
+                Some(true) if geo_changed => {
+                    format!(
+                        "{start_err}\nrestore: rebuilt previous config against the current Geo assets"
+                    )
+                }
                 Some(true) => {
                     format!("{start_err}\nrestore: restored previous product runtime")
                 }

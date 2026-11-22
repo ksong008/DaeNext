@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
@@ -11,6 +11,7 @@ use crate::{RuntimeApplyCoordinator, RuntimeApplyIntent, RuntimeApplyPermit, Run
 struct RuntimeDesiredSignal {
     epoch: u64,
     stop_epoch: u64,
+    latest_request: u64,
 }
 
 pub struct ProductRuntimeReconciler<T, E> {
@@ -20,9 +21,8 @@ pub struct ProductRuntimeReconciler<T, E> {
 struct ProductRuntimeReconcilerInner<T, E> {
     coordinator: RuntimeApplyCoordinator,
     next_request: AtomicU64,
-    next_desired_epoch: AtomicU64,
     desired: tokio::sync::watch::Sender<RuntimeDesiredSignal>,
-    flights: Mutex<HashMap<String, Weak<ProductRuntimeReconcileFlight<T, E>>>>,
+    flight: Mutex<Option<RuntimeReconcileAdmissionState<T, E>>>,
     state: Mutex<RuntimeReconcileState>,
 }
 
@@ -62,9 +62,16 @@ struct ProductRuntimeReconcileFlight<T, E> {
     abandoned: std::sync::atomic::AtomicBool,
 }
 
+struct RuntimeReconcileAdmissionState<T, E> {
+    fingerprint: String,
+    flight: Weak<ProductRuntimeReconcileFlight<T, E>>,
+}
+
 pub struct ProductRuntimeReconcileRequest<T, E> {
     reconciler: ProductRuntimeReconciler<T, E>,
     request_id: u64,
+    accepted_stop_epoch: u64,
+    started_during_stop: bool,
     intent: RuntimeApplyIntent,
     admitted: bool,
 }
@@ -80,7 +87,6 @@ pub struct ProductRuntimeReconcileLead<T, E> {
     intent: RuntimeApplyIntent,
     desired_epoch: u64,
     accepted_stop_epoch: u64,
-    fingerprint: String,
     desired: tokio::sync::watch::Receiver<RuntimeDesiredSignal>,
     flight: Arc<ProductRuntimeReconcileFlight<T, E>>,
     finished: bool,
@@ -109,15 +115,16 @@ where
             inner: Arc::new(ProductRuntimeReconcilerInner {
                 coordinator,
                 next_request: AtomicU64::new(1),
-                next_desired_epoch: AtomicU64::new(1),
                 desired,
-                flights: Mutex::new(HashMap::new()),
+                flight: Mutex::new(None),
                 state: Mutex::new(RuntimeReconcileState::default()),
             }),
         }
     }
 
     pub fn begin(&self, intent: RuntimeApplyIntent) -> ProductRuntimeReconcileRequest<T, E> {
+        let accepted_stop_epoch = self.inner.desired.borrow().stop_epoch;
+        let started_during_stop = self.inner.coordinator.stop_is_pending();
         let request_id = self.inner.next_request.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut state) = self.inner.state.lock() {
             state.preparing.insert(
@@ -133,6 +140,8 @@ where
         ProductRuntimeReconcileRequest {
             reconciler: self.clone(),
             request_id,
+            accepted_stop_epoch,
+            started_during_stop,
             intent,
             admitted: false,
         }
@@ -146,11 +155,16 @@ where
     }
 
     pub fn cancel_preparation_for_stop(&self) {
-        let current = *self.inner.desired.borrow();
-        let desired_epoch = self.inner.next_desired_epoch.fetch_add(1, Ordering::AcqRel);
-        self.inner.desired.send_replace(RuntimeDesiredSignal {
-            epoch: desired_epoch,
-            stop_epoch: current.stop_epoch.wrapping_add(1),
+        let mut flight = self
+            .inner
+            .flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *flight = None;
+        let desired_epoch = self.inner.next_request.fetch_add(1, Ordering::Relaxed);
+        self.inner.desired.send_modify(|signal| {
+            signal.epoch = desired_epoch;
+            signal.stop_epoch = signal.stop_epoch.wrapping_add(1);
         });
         if let Ok(mut state) = self.inner.state.lock() {
             state.desired_epoch = desired_epoch;
@@ -160,7 +174,9 @@ where
     }
 
     pub fn begin_stop(&self) -> Result<RuntimeStopPermit<'_>, String> {
-        self.inner.coordinator.begin_stop()
+        self.inner
+            .coordinator
+            .begin_stop_with(|| self.cancel_preparation_for_stop())
     }
 
     pub fn summary(&self) -> serde_json::Value {
@@ -247,20 +263,48 @@ where
         mut self,
         fingerprint: &str,
     ) -> Result<ProductRuntimeReconcileAdmission<T, E>, String> {
-        let fingerprint = fingerprint.to_owned();
-        let mut flights = self
+        let mut active_flight = self
             .reconciler
             .inner
-            .flights
+            .flight
             .lock()
             .map_err(|_| "runtime reconcile flight lock poisoned".to_owned())?;
-        if let Some(flight) = flights.get(&fingerprint).and_then(Weak::upgrade)
+        let current = *self.reconciler.inner.desired.borrow();
+        let rejection = if self.started_during_stop
+            || self.reconciler.inner.coordinator.stop_is_pending()
+            || current.stop_epoch != self.accepted_stop_epoch
+        {
+            Some("runtime reload preparation was superseded by stop")
+        } else if self.request_id < current.latest_request {
+            Some("runtime reload preparation was superseded by newer desired state")
+        } else {
+            None
+        };
+        if let Some(error) = rejection {
+            self.admitted = true;
+            if let Ok(mut state) = self.reconciler.inner.state.lock() {
+                state.preparing.remove(&self.request_id);
+                state.superseded_count = state.superseded_count.saturating_add(1);
+                state.last_completed_request = Some(self.request_id);
+                state.last_result = Some("superseded".to_owned());
+                state.updated_at = Some(product_now_text());
+            }
+            return Err(error.to_owned());
+        }
+        if let Some(flight) = active_flight
+            .as_ref()
+            .filter(|entry| entry.fingerprint == fingerprint)
+            .and_then(|entry| entry.flight.upgrade())
+            && !flight.abandoned.load(Ordering::Acquire)
             && flight
                 .result
                 .lock()
                 .map_err(|_| "runtime reconcile result lock poisoned".to_owned())?
                 .is_none()
         {
+            self.reconciler.inner.desired.send_modify(|signal| {
+                signal.latest_request = self.request_id;
+            });
             self.admitted = true;
             if let Ok(mut state) = self.reconciler.inner.state.lock() {
                 state.preparing.remove(&self.request_id);
@@ -273,18 +317,14 @@ where
             ));
         }
 
-        let current = *self.reconciler.inner.desired.borrow();
-        let desired_epoch = self
-            .reconciler
-            .inner
-            .next_desired_epoch
-            .fetch_add(1, Ordering::AcqRel);
+        let desired_epoch = self.request_id;
         self.reconciler
             .inner
             .desired
             .send_replace(RuntimeDesiredSignal {
                 epoch: desired_epoch,
                 stop_epoch: current.stop_epoch,
+                latest_request: self.request_id,
             });
         let desired = self.reconciler.inner.desired.subscribe();
         let flight = Arc::new(ProductRuntimeReconcileFlight {
@@ -292,8 +332,10 @@ where
             completed: Condvar::new(),
             abandoned: std::sync::atomic::AtomicBool::new(false),
         });
-        flights.insert(fingerprint.clone(), Arc::downgrade(&flight));
-        drop(flights);
+        *active_flight = Some(RuntimeReconcileAdmissionState {
+            fingerprint: fingerprint.to_owned(),
+            flight: Arc::downgrade(&flight),
+        });
         self.admitted = true;
         if let Ok(mut state) = self.reconciler.inner.state.lock() {
             if let Some(preparing) = state.preparing.get_mut(&self.request_id) {
@@ -301,7 +343,7 @@ where
                 preparing.desired_epoch = Some(desired_epoch);
             }
             state.desired_epoch = desired_epoch;
-            state.desired_fingerprint = Some(fingerprint.clone());
+            state.desired_fingerprint = Some(fingerprint.to_owned());
             state.updated_at = Some(product_now_text());
         }
         Ok(ProductRuntimeReconcileAdmission::Lead(
@@ -311,7 +353,6 @@ where
                 intent: self.intent,
                 desired_epoch,
                 accepted_stop_epoch: current.stop_epoch,
-                fingerprint,
                 desired,
                 flight,
                 finished: false,
@@ -360,8 +401,35 @@ where
         Ok(())
     }
 
+    pub fn is_superseded(&self) -> bool {
+        let signal = *self.desired.borrow();
+        signal.stop_epoch != self.accepted_stop_epoch || signal.epoch != self.desired_epoch
+    }
+
     pub fn begin_commit(&mut self) -> Result<RuntimeApplyPermit<'_>, E> {
-        let permit = self.reconciler.inner.coordinator.begin_apply(self.intent)?;
+        self.begin_commit_until(|| false)
+    }
+
+    pub fn begin_commit_until(
+        &mut self,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<RuntimeApplyPermit<'_>, E> {
+        let permit = self
+            .reconciler
+            .inner
+            .coordinator
+            .begin_apply_until(self.intent, || {
+                let signal = *self.desired.borrow();
+                if signal.stop_epoch != self.accepted_stop_epoch {
+                    Some("runtime reload preparation was superseded by stop")
+                } else if signal.epoch != self.desired_epoch {
+                    Some("runtime reload preparation was superseded by newer desired state")
+                } else if cancelled() {
+                    Some("runtime reload request cancelled before commit")
+                } else {
+                    None
+                }
+            })?;
         let signal = *self.desired.borrow_and_update();
         if signal.stop_epoch != self.accepted_stop_epoch {
             drop(permit);
@@ -403,14 +471,14 @@ where
             *flight_result = Some(result.clone());
             self.flight.completed.notify_all();
         }
-        if let Ok(mut flights) = self.reconciler.inner.flights.lock()
-            && flights
-                .get(&self.fingerprint)
-                .and_then(Weak::upgrade)
+        if let Ok(mut active_flight) = self.reconciler.inner.flight.lock()
+            && active_flight
+                .as_ref()
+                .and_then(|entry| entry.flight.upgrade())
                 .as_ref()
                 .is_some_and(|flight| Arc::ptr_eq(flight, &self.flight))
         {
-            flights.remove(&self.fingerprint);
+            *active_flight = None;
         }
         if let Ok(mut state) = self.reconciler.inner.state.lock() {
             state.preparing.remove(&self.request_id);
@@ -447,6 +515,9 @@ impl<T, E> Drop for ProductRuntimeReconcileLead<T, E> {
             }
             if let Ok(mut state) = self.reconciler.inner.state.lock() {
                 state.preparing.remove(&self.request_id);
+                if state.committing_request == Some(self.request_id) {
+                    state.committing_request = None;
+                }
                 state.last_completed_request = Some(self.request_id);
                 state.last_result = Some("abandoned".to_owned());
                 state.updated_at = Some(product_now_text());
@@ -461,15 +532,28 @@ where
     E: Clone + Send + Sync + Display + From<String> + 'static,
 {
     pub fn wait(self) -> Result<T, E> {
+        self.wait_until(|| false)
+    }
+
+    pub fn wait_until(self, cancelled: impl Fn() -> bool) -> Result<T, E> {
         let mut result = self
             .flight
             .result
             .lock()
             .map_err(|_| E::from("runtime reconcile result lock poisoned".to_owned()))?;
         while result.is_none() && !self.flight.abandoned.load(Ordering::Acquire) {
-            result = self.flight.completed.wait(result).map_err(|_| {
-                E::from("runtime reconcile result lock poisoned while waiting".to_owned())
-            })?;
+            if cancelled() {
+                return Err(E::from(
+                    "runtime reload request cancelled before commit".to_owned(),
+                ));
+            }
+            (result, _) = self
+                .flight
+                .completed
+                .wait_timeout(result, std::time::Duration::from_millis(100))
+                .map_err(|_| {
+                    E::from("runtime reconcile result lock poisoned while waiting".to_owned())
+                })?;
         }
         result.clone().ok_or_else(|| {
             E::from(

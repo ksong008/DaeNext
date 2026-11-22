@@ -31,12 +31,23 @@ pub fn classify_runtime_transition(
     desired: &Config,
     desired_identity: Option<RuntimeTransitionIdentity>,
 ) -> RuntimeTransitionClass {
-    let identity_changed = active_identity != desired_identity;
-    if active == desired && !identity_changed {
+    if active == desired && active_identity == desired_identity {
         return RuntimeTransitionClass::NoChange;
     }
-    if identity_changed || kernel_ownership_changed(active, desired) {
+    let geodata_changed = match (active_identity, desired_identity) {
+        (Some(active), Some(desired)) if active.routing_version == desired.routing_version => {
+            active.geodata_input_version != desired.geodata_input_version
+        }
+        _ if active_identity == desired_identity => false,
+        _ => return RuntimeTransitionClass::KernelRebind,
+    };
+    if kernel_ownership_changed(active, desired)
+        || (geodata_changed && kernel_routing_uses_geodata(desired))
+    {
         return RuntimeTransitionClass::KernelRebind;
+    }
+    if geodata_changed {
+        return RuntimeTransitionClass::GenerationSwap;
     }
     if equivalent_without_generation_publication(active, desired) {
         if process_owned_fields_changed(active, desired) {
@@ -45,6 +56,16 @@ pub fn classify_runtime_transition(
         return RuntimeTransitionClass::NoChange;
     }
     RuntimeTransitionClass::GenerationSwap
+}
+
+fn kernel_routing_uses_geodata(config: &Config) -> bool {
+    config
+        .routing
+        .rules
+        .iter()
+        .flat_map(|rule| &rule.and_functions)
+        .flat_map(|function| &function.params)
+        .any(|param| matches!(param.key.as_str(), "geoip" | "geosite" | "ext"))
 }
 
 pub fn process_owned_field_changes(active: &Config, desired: &Config) -> Vec<&'static str> {
@@ -244,8 +265,8 @@ mod tests {
     }
 
     #[test]
-    fn geodata_revision_requires_kernel_rebind_until_atomic_maps_exist() {
-        let config = test_config();
+    fn geodata_revision_only_rebinds_for_kernel_routing_that_uses_geo_assets() {
+        let mut config = test_config();
         let active = RuntimeTransitionIdentity {
             routing_version: 1,
             geodata_input_version: 2,
@@ -254,6 +275,18 @@ mod tests {
             geodata_input_version: 3,
             ..active
         };
+        assert_eq!(
+            classify_runtime_transition(&config, Some(active), &config, Some(desired)),
+            RuntimeTransitionClass::GenerationSwap
+        );
+        let sections = dae_config::parser::parse_config(
+            "routing { dip(geoip:private) -> direct\n fallback: direct }",
+        )
+        .unwrap();
+        let dae_config::Item::RoutingRule(rule) = &sections[0].items[0] else {
+            panic!("expected routing rule");
+        };
+        config.routing.rules.push(rule.clone());
         assert_eq!(
             classify_runtime_transition(&config, Some(active), &config, Some(desired)),
             RuntimeTransitionClass::KernelRebind

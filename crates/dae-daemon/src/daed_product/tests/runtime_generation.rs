@@ -424,6 +424,54 @@ fn ordinary_unchanged_reload_coalesces_without_waiting() {
 }
 
 #[test]
+fn metadata_commit_failure_restores_config_without_replacing_runtime() {
+    with_product_runtime_fake_start_override(true, || {
+        let fixture = CommittedRuntimeFixture::new("metadata-rollback");
+        let active = fixture.runtime.current_config().unwrap();
+        let before = fixture.runtime.summary();
+        fixture
+            .product
+            .connection()
+            .execute(
+                "UPDATE configs SET global = 'global { log_level: debug }', version = version + 1
+             WHERE selected = 1",
+                [],
+            )
+            .unwrap();
+        let prepared = prepare_runtime_reload_config(fixture.product.state()).unwrap();
+        let mut checkpoints = RuntimeFaultFixture::default();
+        checkpoints.fail_next(RuntimeFaultPoint::CommitPostStart);
+        let error = apply_runtime_generation(
+            &fixture.runtime,
+            fixture.product.state(),
+            Some(&fixture.config_dir),
+            "metadata-rollback",
+            prepared,
+            &[],
+            &mut checkpoints,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("rollback restored previous runtime generation"),
+            "{error}"
+        );
+        assert!(Arc::ptr_eq(
+            &active,
+            &fixture.runtime.current_config().unwrap()
+        ));
+        assert_eq!(
+            fixture.runtime.summary()["runtimeStartedAt"],
+            before["runtimeStartedAt"]
+        );
+        assert_eq!(
+            fixture.runtime.summary()["reloadCount"],
+            before["reloadCount"]
+        );
+        fixture.assert_previous_generation_is_intact();
+    });
+}
+
+#[test]
 fn consecutive_generic_config_changes_do_not_leave_a_cleanup_interlock() {
     with_product_runtime_fake_start_override(true, || {
         let product = FreshProductState::new("consecutive-generic-config-reloads");
