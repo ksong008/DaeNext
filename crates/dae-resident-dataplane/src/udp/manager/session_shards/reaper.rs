@@ -27,7 +27,11 @@ impl UdpSessionReaper {
     }
 
     pub(super) fn has_capacity(&self) -> bool {
-        self.pending.len() < self.limit
+        self.remaining_capacity() != 0
+    }
+
+    pub(super) fn remaining_capacity(&self) -> usize {
+        self.limit.saturating_sub(self.pending.len())
     }
 
     pub(super) fn is_empty(&self) -> bool {

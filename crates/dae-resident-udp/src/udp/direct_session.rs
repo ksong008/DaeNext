@@ -120,26 +120,25 @@ pub fn spawn_udp_direct_session_actor(
     actor_id: u64,
     context: UdpDirectSessionActorContext,
     receiver: mpsc::Receiver<ManagedDirectUdpPacket>,
-    cleanup_tx: mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
+    cleanup_tx: impl Into<UdpSessionCleanupSender<UdpDirectSessionKey>>,
 ) -> JoinHandle<()> {
+    let cleanup = UdpSessionCleanupGuard::new(
+        key.clone(),
+        actor_id,
+        cleanup_tx.into(),
+        Arc::clone(&context.metrics),
+    );
     tokio::spawn(async move {
-        run_udp_direct_session_actor(key, actor_id, context, receiver, cleanup_tx).await;
+        let _cleanup = cleanup;
+        run_udp_direct_session_actor(key, context, receiver).await;
     })
 }
 
 async fn run_udp_direct_session_actor(
     key: UdpDirectSessionKey,
-    actor_id: u64,
     context: UdpDirectSessionActorContext,
     mut receiver: mpsc::Receiver<ManagedDirectUdpPacket>,
-    cleanup_tx: mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
 ) {
-    let _cleanup_guard = UdpSessionCleanupGuard::new(
-        key.clone(),
-        actor_id,
-        cleanup_tx,
-        Arc::clone(&context.metrics),
-    );
     let _guard = UdpManagedSessionGuard::new(
         Arc::clone(&context.active_sessions),
         Arc::clone(&context.metrics),

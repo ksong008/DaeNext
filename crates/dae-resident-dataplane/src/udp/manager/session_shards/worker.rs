@@ -1,5 +1,7 @@
 use super::*;
 
+const SHARD_DISPATCH_BATCH_LIMIT: usize = 8;
+
 struct ResidentUdpProxyShardEntry {
     actor_id: u64,
     session: UdpSessionEntry,
@@ -24,13 +26,24 @@ pub(super) async fn run_resident_udp_session_shard(
         mpsc::channel::<UdpSessionCleanup<UdpSessionKey>>(context.cleanup_queue_depth);
     let (direct_cleanup_tx, mut direct_cleanup_rx) =
         mpsc::channel::<UdpSessionCleanup<UdpDirectSessionKey>>(context.cleanup_queue_depth);
+    let (scan_needed, mut scan_state) = tokio::sync::watch::channel(false);
+    let (proxy_overflow_tx, mut proxy_overflow_rx) = mpsc::channel(context.cleanup_queue_depth);
+    let (direct_overflow_tx, mut direct_overflow_rx) = mpsc::channel(context.cleanup_queue_depth);
+    let proxy_cleanup_tx = UdpSessionCleanupSender::with_overflow(
+        proxy_cleanup_tx,
+        proxy_overflow_tx,
+        scan_needed.clone(),
+    );
+    let direct_cleanup_tx =
+        UdpSessionCleanupSender::with_overflow(direct_cleanup_tx, direct_overflow_tx, scan_needed);
     let mut retired_sessions = UdpSessionReaper::new(context.cleanup_queue_depth);
     let mut retired_joined = 0_usize;
     let mut next_actor_id = 0_u64;
     let mut reconcile_interval = time::interval(Duration::from_secs(1));
     reconcile_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
-    let shutdown_deadline = loop {
+    let shutdown_deadline = 'shard: loop {
+        let scan_needed = *scan_state.borrow();
         tokio::select! {
             biased;
             deadline = &mut stop => {
@@ -58,31 +71,53 @@ pub(super) async fn run_resident_udp_session_shard(
                     &mut retired_sessions,
                 );
             }
-            _ = reconcile_interval.tick() => {
+            Some(cleanup) = proxy_overflow_rx.recv(), if retired_sessions.has_capacity() => {
+                retire_proxy_session_if_current(cleanup, &mut proxy_sessions, &mut retired_sessions);
+            }
+            Some(cleanup) = direct_overflow_rx.recv(), if retired_sessions.has_capacity() => {
+                retire_direct_session_if_current(cleanup, &mut direct_sessions, &mut retired_sessions);
+            }
+            _ = scan_state.changed(), if !scan_needed => {}
+            _ = reconcile_interval.tick(), if scan_needed && retired_sessions.has_capacity() => {
+
                 reconcile_finished_proxy_sessions(&mut proxy_sessions, &mut retired_sessions);
                 reconcile_finished_direct_sessions(&mut direct_sessions, &mut retired_sessions);
             }
             packet = receiver.recv(), if retired_sessions.has_capacity() => {
-                let Some(packet) = packet else {
+                let Some(mut packet) = packet else {
                     break time::Instant::now();
                 };
-                match packet {
-                    ResidentUdpShardPacket::Proxy(packet) => handle_proxy_shard_packet(
-                        packet,
-                        &context,
-                        &proxy_cleanup_tx,
-                        &mut proxy_sessions,
-                        &mut retired_sessions,
-                        &mut next_actor_id,
-                    ).await,
-                    ResidentUdpShardPacket::Direct(packet) => handle_direct_shard_packet(
-                        packet,
-                        &context,
-                        &direct_cleanup_tx,
-                        &mut direct_sessions,
-                        &mut retired_sessions,
-                        &mut next_actor_id,
-                    ).await,
+                for index in 0..SHARD_DISPATCH_BATCH_LIMIT {
+                    match packet {
+                        ResidentUdpShardPacket::Proxy(packet) => handle_proxy_shard_packet(
+                            packet,
+                            &context,
+                            &proxy_cleanup_tx,
+                            &mut proxy_sessions,
+                            &mut retired_sessions,
+                            &mut next_actor_id,
+                        ).await,
+                        ResidentUdpShardPacket::Direct(packet) => handle_direct_shard_packet(
+                            packet,
+                            &context,
+                            &direct_cleanup_tx,
+                            &mut direct_sessions,
+                            &mut retired_sessions,
+                            &mut next_actor_id,
+                        ).await,
+                    }
+                    if index + 1 == SHARD_DISPATCH_BATCH_LIMIT || !retired_sessions.has_capacity() {
+                        break;
+                    }
+                    match stop.try_recv() {
+                        Ok(deadline) => break 'shard deadline,
+                        Err(oneshot::error::TryRecvError::Closed) => break 'shard time::Instant::now(),
+                        Err(oneshot::error::TryRecvError::Empty) => {}
+                    }
+                    let Ok(next) = receiver.try_recv() else {
+                        break;
+                    };
+                    packet = next;
                 }
             }
         }
@@ -91,6 +126,8 @@ pub(super) async fn run_resident_udp_session_shard(
     receiver.close();
     drop(proxy_cleanup_rx);
     drop(direct_cleanup_rx);
+    drop(proxy_overflow_rx);
+    drop(direct_overflow_rx);
     drop(proxy_cleanup_tx);
     drop(direct_cleanup_tx);
 
@@ -140,7 +177,7 @@ fn classify_session_send<Packet>(
 async fn handle_proxy_shard_packet(
     packet: ResidentUdpProxyShardPacket,
     context: &ResidentUdpSessionShardContext,
-    cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
+    cleanup_tx: &UdpSessionCleanupSender<UdpSessionKey>,
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
@@ -162,7 +199,7 @@ async fn handle_proxy_shard_packet(
 async fn handle_direct_shard_packet(
     packet: ResidentUdpDirectShardPacket,
     context: &ResidentUdpSessionShardContext,
-    cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
+    cleanup_tx: &UdpSessionCleanupSender<UdpDirectSessionKey>,
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
@@ -187,7 +224,7 @@ async fn dispatch_proxy_packet(
     route: ResidentUdpRouteSelection,
     sniffed_domain: SharedUdpSniffedDomain,
     context: &ResidentUdpSessionShardContext,
-    cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
+    cleanup_tx: &UdpSessionCleanupSender<UdpSessionKey>,
     sessions: &mut HashMap<UdpSessionKey, ResidentUdpProxyShardEntry>,
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
@@ -310,7 +347,7 @@ async fn dispatch_direct_packet(
     route: ResidentUdpRouteSelection,
     sniffed_domain: SharedUdpSniffedDomain,
     context: &ResidentUdpSessionShardContext,
-    cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
+    cleanup_tx: &UdpSessionCleanupSender<UdpDirectSessionKey>,
     sessions: &mut HashMap<UdpDirectSessionKey, ResidentUdpDirectShardEntry>,
     retired_sessions: &mut UdpSessionReaper,
     next_actor_id: &mut u64,
@@ -512,7 +549,7 @@ fn append_direct_route_event(
 fn create_proxy_session(
     key: &UdpSessionKey,
     context: &ResidentUdpSessionShardContext,
-    cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpSessionKey>>,
+    cleanup_tx: &UdpSessionCleanupSender<UdpSessionKey>,
     next_actor_id: &mut u64,
 ) -> Option<ResidentUdpProxyShardEntry> {
     let Ok(admission) = try_reserve_session(&context.admission) else {
@@ -540,7 +577,7 @@ fn create_proxy_session(
 fn create_direct_session(
     key: &UdpDirectSessionKey,
     context: &ResidentUdpSessionShardContext,
-    cleanup_tx: &mpsc::Sender<UdpSessionCleanup<UdpDirectSessionKey>>,
+    cleanup_tx: &UdpSessionCleanupSender<UdpDirectSessionKey>,
     next_actor_id: &mut u64,
 ) -> Option<ResidentUdpDirectShardEntry> {
     let Ok(admission) = try_reserve_session(&context.admission) else {
@@ -649,6 +686,7 @@ fn reconcile_finished_proxy_sessions(
     let finished: Vec<UdpSessionKey> = sessions
         .iter()
         .filter(|(_, entry)| entry.session.handle.is_finished())
+        .take(retired_sessions.remaining_capacity())
         .map(|(key, _)| key.clone())
         .collect();
     for key in finished {
@@ -665,6 +703,7 @@ fn reconcile_finished_direct_sessions(
     let finished: Vec<UdpDirectSessionKey> = sessions
         .iter()
         .filter(|(_, entry)| entry.session.handle.is_finished())
+        .take(retired_sessions.remaining_capacity())
         .map(|(key, _)| key.clone())
         .collect();
     for key in finished {

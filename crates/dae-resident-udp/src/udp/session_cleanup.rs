@@ -1,4 +1,4 @@
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use super::*;
 
@@ -8,9 +8,56 @@ pub struct UdpSessionCleanup<Key> {
     pub actor_id: u64,
 }
 
+#[derive(Clone)]
+pub struct UdpSessionCleanupSender<Key> {
+    primary: mpsc::Sender<UdpSessionCleanup<Key>>,
+    overflow: Option<(mpsc::Sender<UdpSessionCleanup<Key>>, watch::Sender<bool>)>,
+}
+
+impl<Key> From<mpsc::Sender<UdpSessionCleanup<Key>>> for UdpSessionCleanupSender<Key> {
+    fn from(primary: mpsc::Sender<UdpSessionCleanup<Key>>) -> Self {
+        Self {
+            primary,
+            overflow: None,
+        }
+    }
+}
+
+impl<Key> UdpSessionCleanupSender<Key> {
+    pub fn with_overflow(
+        primary: mpsc::Sender<UdpSessionCleanup<Key>>,
+        overflow: mpsc::Sender<UdpSessionCleanup<Key>>,
+        scan_needed: watch::Sender<bool>,
+    ) -> Self {
+        Self {
+            primary,
+            overflow: Some((overflow, scan_needed)),
+        }
+    }
+
+    fn send(&self, cleanup: UdpSessionCleanup<Key>) -> bool {
+        let Err(mpsc::error::TrySendError::Full(cleanup)) = self.primary.try_send(cleanup) else {
+            return true;
+        };
+        let Some((overflow, scan_needed)) = self.overflow.as_ref() else {
+            return false;
+        };
+        if matches!(
+            overflow.try_send(cleanup),
+            Err(mpsc::error::TrySendError::Full(_))
+        ) {
+            // The worker retries scans for the rest of this shard's lifetime.
+            // The task may still be running its destructor when this is set.
+            scan_needed.send_if_modified(|needed| !std::mem::replace(needed, true));
+            return false;
+        }
+        true
+    }
+}
+
 pub(super) struct UdpSessionCleanupGuard<Key> {
     cleanup: Option<UdpSessionCleanup<Key>>,
-    sender: mpsc::Sender<UdpSessionCleanup<Key>>,
+    sender: UdpSessionCleanupSender<Key>,
     metrics: Arc<ResidentDataplaneMetrics>,
 }
 
@@ -18,7 +65,7 @@ impl<Key> UdpSessionCleanupGuard<Key> {
     pub(super) fn new(
         key: Key,
         actor_id: u64,
-        sender: mpsc::Sender<UdpSessionCleanup<Key>>,
+        sender: UdpSessionCleanupSender<Key>,
         metrics: Arc<ResidentDataplaneMetrics>,
     ) -> Self {
         Self {
@@ -34,32 +81,11 @@ impl<Key> Drop for UdpSessionCleanupGuard<Key> {
         let Some(cleanup) = self.cleanup.take() else {
             return;
         };
-        if self.sender.try_send(cleanup).is_err() && !self.sender.is_closed() {
+        if !self.sender.send(cleanup) {
             self.metrics.udp_session_cleanup_notification_failed();
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn cleanup_guard_notifies_owner_during_unwind() {
-        let (sender, mut receiver) = mpsc::channel(1);
-        let metrics = Arc::new(ResidentDataplaneMetrics::default());
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = UdpSessionCleanupGuard::new(7_u64, 11, sender, Arc::clone(&metrics));
-            panic!("injected UDP actor panic");
-        }));
-        assert!(result.is_err());
-        assert_eq!(
-            receiver.recv().await,
-            Some(UdpSessionCleanup {
-                key: 7,
-                actor_id: 11,
-            })
-        );
-        assert_eq!(metrics.snapshot()["udpSessionCleanupNotificationFailed"], 0);
-    }
-}
+mod tests;
