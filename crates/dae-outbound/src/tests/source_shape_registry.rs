@@ -840,11 +840,16 @@ fn vless_mux_owner_records_generation_carrier_and_lightweight_stream_leases() {
             "{caller}"
         );
     }
-    for caller in ["dataUdp", "healthDns", "configuredDns", "forcedManagedDns"] {
-        assert_eq!(
-            ledger["callers"][caller]["admission"], "fail-closed",
-            "{caller}"
-        );
+    for (caller, owner) in [
+        ("dataUdp", "udp-session-manager"),
+        ("healthDns", "health-attempt"),
+        ("configuredDns", "configured-dns-forwarder"),
+        ("forcedManagedDns", "udp-session-manager"),
+    ] {
+        let route = &ledger["callers"][caller];
+        assert_eq!(route["admission"], "admitted", "{caller}");
+        assert_eq!(route["logicalLease"], "packet-session", "{caller}");
+        assert_eq!(route["lifecycleOwner"], owner, "{caller}");
     }
 }
 

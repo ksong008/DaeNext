@@ -263,7 +263,7 @@ pub(super) const REALITY_SECURITY_UNDERLAY_CAPABILITY: CapabilityLedger = Capabi
 
 pub(super) const MUX_TRANSPORT_CAPABILITY: CapabilityLedger = CapabilityLedger {
     graph_composition: "single-graph-admitted",
-    security_underlay: "tls-stream-variants",
+    security_underlay: "plain-or-tls-stream-variants-or-reality",
     stream_wrapper: "resident-vless-mux-framing",
     packet_semantics: "multiplexed-stream",
     plugin_wrapper: "none",

@@ -497,7 +497,8 @@
         "dae-outbound-stream",
         "dae-resident-core",
         "dae-resident-model",
-        "dae-runtime-control"
+        "dae-runtime-control",
+        "dae-tls"
       ],
       "build": [],
       "dev": ["dae-outbound", "dae-resident-core", "dae-resident-model"]

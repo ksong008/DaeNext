@@ -250,6 +250,7 @@ pub(super) const SHARED_REALITY_SECURITY_UNDERLAY: SourceShapeReconciliation = a
             SourceShapeProjection::Reality,
         ),
         aggregate_component("stream-wrapper-xhttp", SourceShapeProjection::Reality),
+        aggregate_component("mux-transport-wrapper", SourceShapeProjection::Reality),
     ],
 );
 

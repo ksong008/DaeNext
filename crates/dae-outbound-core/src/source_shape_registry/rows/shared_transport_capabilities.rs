@@ -133,7 +133,11 @@ pub(super) const SHARED_REALITY_SECURITY_UNDERLAY: SourceShapeRegistryRow =
 pub(super) const MUX_TRANSPORT_WRAPPER: SourceShapeRegistryRow =
     scoped_evidence_capability_admitted_row(
         registry_source("mux-transport-wrapper", "vless", &["vless"])
-            .with_transport("tls-stream-variants", "mux", "multiplexed-stream")
+            .with_transport(
+                "plain-or-tls-stream-variants-or-reality",
+                "mux",
+                "multiplexed-stream",
+            )
             .with_runtime(
                 GENERATION_OWNED_VLESS_MUX_OWNERSHIP,
                 "registry:mux-transport-wrapper",
