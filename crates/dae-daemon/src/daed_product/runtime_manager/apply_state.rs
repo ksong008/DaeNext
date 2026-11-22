@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone)]
 pub(in crate::daed_product) struct ProductRuntimeApplySnapshot {
     was_running: bool,
+    lifecycle_epoch: u64,
     config: Option<Arc<Config>>,
     config_content: Option<Arc<str>>,
     resident_generation: Option<ResidentActiveGenerationSnapshot>,
@@ -12,6 +13,27 @@ pub(in crate::daed_product) struct ProductRuntimeApplySnapshot {
     reload_count: u64,
     allocator_publication_id: u64,
     last_report: Option<Arc<Value>>,
+}
+
+impl ProductRuntimeApplySnapshot {
+    pub(super) fn transition_for_activation(
+        &self,
+        state: &ProductRuntimeState,
+    ) -> Result<RuntimeTransitionClass, String> {
+        let same_config = match (&self.config, &state.config) {
+            (Some(previous), Some(active)) => Arc::ptr_eq(previous, active),
+            (None, None) => true,
+            _ => false,
+        };
+        if self.lifecycle_epoch != state.lifecycle_epoch
+            || self.was_running != state.runtime.is_some()
+            || self.transition_identity != state.transition_identity
+            || !same_config
+        {
+            return Err("runtime changed between reload snapshot and activation".to_owned());
+        }
+        Ok(self.transition)
+    }
 }
 
 impl ProductRuntimeManager {
@@ -81,6 +103,7 @@ impl ProductRuntimeManager {
         let retain_resident_generation = transition == RuntimeTransitionClass::GenerationSwap;
         Ok(ProductRuntimeApplySnapshot {
             was_running: inner.runtime.is_some(),
+            lifecycle_epoch: inner.lifecycle_epoch,
             config: inner.config.clone(),
             config_content: inner.config_content.clone(),
             resident_generation: retain_resident_generation
@@ -219,6 +242,7 @@ impl ProductRuntimeManager {
                 snapshot.config_content.clone(),
                 "runtime-apply-rollback",
                 latency_seed,
+                None,
             )?;
             Ok(exact)
         } else {

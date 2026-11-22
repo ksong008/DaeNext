@@ -144,6 +144,31 @@ fn runtime_generation_prepare_faults_leave_running_generation_untouched() {
 }
 
 #[test]
+fn runtime_generation_activation_rejects_a_snapshot_after_stop() {
+    with_product_runtime_fake_start_override(true, || {
+        let fixture = CommittedRuntimeFixture::new("stale-activation-snapshot");
+        let prepared = fixture.prepare_changed_generation();
+        let snapshot = fixture
+            .runtime
+            .snapshot_for_apply(&prepared.runtime_candidate)
+            .unwrap();
+        fixture.runtime.stop_and_wait_for_cleanup("test").unwrap();
+        let result = fixture.runtime.reload_prepared_with_config_content(
+            prepared.runtime_candidate,
+            Some(prepared.plan.content),
+            "stale-activation-snapshot",
+            &[],
+            Some(&snapshot),
+        );
+        assert_eq!(
+            result.err().as_deref(),
+            Some("runtime changed between reload snapshot and activation")
+        );
+        assert!(!fixture.runtime.is_running());
+    });
+}
+
+#[test]
 fn runtime_generation_activation_fault_does_not_replace_running_generation() {
     with_product_runtime_fake_start_override(true, || {
         let fixture = CommittedRuntimeFixture::new("activation-fault");

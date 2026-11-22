@@ -181,6 +181,7 @@ fn reload_resident_interface_if_current(
         config_content,
         PRODUCT_RUNTIME_INTERFACE_RECOVERY_SOURCE,
         &[],
+        None,
     )?;
     let identity = recovered_runtime_identity(inner, request)?;
     if let Some(state) = state {

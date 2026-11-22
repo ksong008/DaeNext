@@ -398,7 +398,13 @@ impl ProductRuntimeManager {
         latency_seed: &[Value],
     ) -> Result<RuntimeStartOutcome, String> {
         let prepared = prepare_product_runtime_candidate(config.into())?;
-        self.reload_prepared_with_config_content(prepared, config_content, source, latency_seed)
+        self.reload_prepared_with_config_content(
+            prepared,
+            config_content,
+            source,
+            latency_seed,
+            None,
+        )
     }
 
     pub(super) fn reload_prepared_with_config_content(
@@ -407,6 +413,7 @@ impl ProductRuntimeManager {
         config_content: Option<String>,
         source: &str,
         latency_seed: &[Value],
+        snapshot: Option<&ProductRuntimeApplySnapshot>,
     ) -> Result<RuntimeStartOutcome, String> {
         reload_prepared_product_runtime_with_config_content(
             self.domain.lifecycle(),
@@ -415,6 +422,7 @@ impl ProductRuntimeManager {
             config_content.map(Arc::<str>::from),
             source,
             latency_seed,
+            snapshot,
         )
     }
 
@@ -471,19 +479,26 @@ fn reload_prepared_product_runtime_with_config_content(
     config_content: Option<Arc<str>>,
     source: &str,
     latency_seed: &[Value],
+    snapshot: Option<&ProductRuntimeApplySnapshot>,
 ) -> Result<RuntimeStartOutcome, String> {
+    let _lifecycle = lifecycle
+        .lock()
+        .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
     let config = Arc::clone(prepared.config());
     let desired_identity = prepared.transition_identity();
     let transition = {
         let state = inner
             .lock()
             .map_err(|_| "product runtime manager lock poisoned".to_owned())?;
-        prepared.transition_from(&state)
+        if let Some(snapshot) = snapshot {
+            snapshot.transition_for_activation(&state)?
+        } else {
+            prepared.transition_from(&state)
+        }
     };
     match transition {
         RuntimeTransitionClass::NoChange | RuntimeTransitionClass::ProcessRestart => {
             publish_runtime_metadata_transition(
-                lifecycle,
                 inner,
                 config,
                 config_content,
@@ -494,7 +509,6 @@ fn reload_prepared_product_runtime_with_config_content(
         }
         RuntimeTransitionClass::GenerationSwap if !product_runtime_fake_start_enabled() => {
             publish_resident_runtime_generation(
-                lifecycle,
                 inner,
                 prepared,
                 config_content,
@@ -505,7 +519,6 @@ fn reload_prepared_product_runtime_with_config_content(
         }
         RuntimeTransitionClass::GenerationSwap | RuntimeTransitionClass::KernelRebind => {
             replace_prepared_product_runtime_with_config_content(
-                lifecycle,
                 inner,
                 prepared,
                 config_content,
@@ -538,7 +551,6 @@ fn record_runtime_publication(state: &mut ProductRuntimeState) {
 
 #[allow(clippy::too_many_arguments)]
 fn publish_resident_runtime_generation(
-    lifecycle: &Arc<Mutex<()>>,
     inner: &Arc<Mutex<ProductRuntimeState>>,
     prepared: PreparedProductRuntime,
     config_content: Option<Arc<str>>,
@@ -548,9 +560,6 @@ fn publish_resident_runtime_generation(
 ) -> Result<RuntimeStartOutcome, String> {
     let config = Arc::clone(prepared.config());
     let resident = prepared.into_resident_generation()?;
-    let _lifecycle = lifecycle
-        .lock()
-        .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
     ensure_cleanup_allows_start_for_inner(inner)?;
     let (runtime, preserve_dns_cache, latency_seed) = {
         let state = inner
@@ -618,7 +627,6 @@ fn publish_resident_runtime_generation(
 
 #[allow(clippy::too_many_arguments)]
 fn publish_runtime_metadata_transition(
-    lifecycle: &Arc<Mutex<()>>,
     inner: &Arc<Mutex<ProductRuntimeState>>,
     config: Arc<Config>,
     config_content: Option<Arc<str>>,
@@ -626,9 +634,6 @@ fn publish_runtime_metadata_transition(
     transition: RuntimeTransitionClass,
     source: &str,
 ) -> Result<RuntimeStartOutcome, String> {
-    let _lifecycle = lifecycle
-        .lock()
-        .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
     ensure_cleanup_allows_start_for_inner(inner)?;
     let mut state = inner
         .lock()
@@ -659,7 +664,6 @@ fn publish_runtime_metadata_transition(
 
 #[allow(clippy::too_many_arguments)]
 fn replace_prepared_product_runtime_with_config_content(
-    lifecycle: &Arc<Mutex<()>>,
     inner: &Arc<Mutex<ProductRuntimeState>>,
     prepared: PreparedProductRuntime,
     config_content: Option<Arc<str>>,
@@ -669,9 +673,6 @@ fn replace_prepared_product_runtime_with_config_content(
 ) -> Result<RuntimeStartOutcome, String> {
     let config = Arc::clone(prepared.config());
     let desired_identity = prepared.transition_identity();
-    let _lifecycle = lifecycle
-        .lock()
-        .map_err(|_| "product runtime lifecycle lock poisoned".to_owned())?;
     ensure_cleanup_allows_start_for_inner(inner)?;
     let (
         previous_runtime,

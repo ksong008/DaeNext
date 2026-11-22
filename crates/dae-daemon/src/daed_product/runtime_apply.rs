@@ -65,6 +65,7 @@ pub(in crate::daed_product) fn apply_runtime_generation(
     let mut runtime_report = match activate_runtime_generation(
         runtime,
         prepared.runtime_candidate,
+        &snapshot,
         prepared.plan.content.clone(),
         source,
         latency_seed,
