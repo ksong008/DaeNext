@@ -1,6 +1,7 @@
 use super::*;
 use crate::allocator::{
-    AllocatorReclaimRequestBatch, allocator_pending_reclaim_requests,
+    AllocatorReclaimRequestBatch, allocator_pending_control_plane_reclaim,
+    allocator_pending_reclaim_requests, allocator_take_control_plane_reclaim,
     allocator_take_reclaim_requests,
 };
 use dae_product_control::runtime::RuntimeTrafficAvailability;
@@ -361,11 +362,30 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
             let _started = AllocatorIdleReclaimStartedGuard;
             let mut next_periodic_evaluation = Instant::now();
             let mut next_deferred_evaluation = None;
+            let mut next_control_plane_retry = Instant::now();
             while !app.shutdown.is_requested() {
                 let wake_epoch = allocator_reclaim_request_wake_epoch();
                 let config = app.runtime.current_config();
                 let policy = AllocatorIdleReclaimPolicy::from_config(config.as_deref());
                 let now = Instant::now();
+                if now >= next_control_plane_retry && allocator_pending_control_plane_reclaim() {
+                    next_control_plane_retry =
+                        match std::panic::catch_unwind(evaluate_control_plane_reclaim) {
+                            Ok(report) => {
+                                let reclaimed = report["status"] == "reclaimed";
+                                record_idle_reclaim_report(&report);
+                                if reclaimed {
+                                    now
+                                } else {
+                                    now + ALLOCATOR_IDLE_RECLAIM_DEFERRED_RETRY_INTERVAL
+                                }
+                            }
+                            Err(_) => {
+                                record_idle_reclaim_tick_panic();
+                                now + ALLOCATOR_IDLE_RECLAIM_DEFERRED_RETRY_INTERVAL
+                            }
+                        };
+                }
                 let periodic_due = now >= next_periodic_evaluation;
                 let deferred_due = deferred_reclaim_evaluation_due(
                     &mut next_deferred_evaluation,
@@ -395,9 +415,16 @@ pub(crate) fn spawn_allocator_idle_reclaim_monitor(
                 let deferred_wait = next_deferred_evaluation
                     .map(|deadline| deadline.saturating_duration_since(now))
                     .unwrap_or(ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL);
+                let control_plane_wait = if allocator_pending_control_plane_reclaim() {
+                    next_control_plane_retry.saturating_duration_since(now)
+                } else {
+                    ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL
+                };
                 allocator_wait_for_reclaim_request_since(
                     wake_epoch,
-                    deferred_wait.min(ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL),
+                    deferred_wait
+                        .min(control_plane_wait)
+                        .min(ALLOCATOR_IDLE_RECLAIM_MONITOR_WAKE_INTERVAL),
                 );
             }
         });
@@ -446,14 +473,18 @@ fn allocator_idle_reclaim_tick(
     admit_deferred_requests: bool,
 ) -> Value {
     let report = evaluate_allocator_idle_reclaim(app, policy, admit_deferred_requests);
-    record_idle_reclaim_evaluation(&report);
+    record_idle_reclaim_report(&report);
+    report
+}
+
+fn record_idle_reclaim_report(report: &Value) {
+    record_idle_reclaim_evaluation(report);
     if let Ok(mut state) = ALLOCATOR_IDLE_RECLAIM_STATE
         .get_or_init(|| Mutex::new(default_idle_reclaim_state()))
         .lock()
     {
         state.last_report = report.clone();
     }
-    report
 }
 
 fn record_idle_reclaim_evaluation(report: &Value) {
@@ -506,6 +537,32 @@ impl Drop for AllocatorReclaimEvaluationBatch {
     fn drop(&mut self) {
         allocator_restore_reclaim_requests(&self.0);
     }
+}
+
+fn evaluate_control_plane_reclaim() -> Value {
+    // The UI requested this purge after its owners and their caches drained.
+    // The allocator gate serializes it with any reclaim already executing.
+    let mut pending = AllocatorReclaimEvaluationBatch(allocator_take_control_plane_reclaim());
+    let reclaim_reason = AllocatorReclaimReason::ControlPlaneIdle;
+    let reclaim = allocator_reclaim_control_plane(reclaim_reason);
+    let status = match reclaim.get("status").and_then(Value::as_str) {
+        Some("pass" | "partial") => "reclaimed",
+        Some("subsumed") => "subsumed",
+        _ => "failed",
+    };
+    let deferred = if status == "reclaimed" {
+        pending.take()
+    } else {
+        pending.0.clone()
+    };
+    json!({
+        "status": status,
+        "state": "cold",
+        "reason": reclaim_reason.as_str(),
+        "scope": AllocatorReclaimScope::ControlPlane.as_str(),
+        "deferred": deferred.json(),
+        "reclaim": reclaim,
+    })
 }
 
 fn evaluate_allocator_idle_reclaim_with_observers(
@@ -624,36 +681,6 @@ fn evaluate_allocator_idle_reclaim_with_observers(
             "busyLeaseCount": busy_count,
             "quietElapsedMillis": busy_quiet.elapsed.as_millis().to_string(),
             "quietRequiredMillis": busy_quiet_required.as_millis().to_string(),
-            "cgroupPressure": cgroup_pressure.json(),
-        });
-    }
-    if deferred_pending
-        && pending.0.scope() == AllocatorReclaimScope::ControlPlane
-        && allocator_profile() == "jemalloc"
-    {
-        let reclaim_reason = pending
-            .0
-            .primary_reason()
-            .unwrap_or(AllocatorReclaimReason::ControlPlaneIdle);
-        let reclaim = allocator_reclaim_control_plane(reclaim_reason);
-        let reclaim_status = reclaim.get("status").and_then(Value::as_str);
-        let evaluation_status = match reclaim_status {
-            Some("pass" | "partial") => "reclaimed",
-            Some("subsumed") => "subsumed",
-            _ => "failed",
-        };
-        let deferred = if evaluation_status == "reclaimed" {
-            pending.take()
-        } else {
-            pending.0.clone()
-        };
-        return json!({
-            "status": evaluation_status,
-            "state": "cold",
-            "reason": reclaim_reason.as_str(),
-            "scope": AllocatorReclaimScope::ControlPlane.as_str(),
-            "deferred": deferred.json(),
-            "reclaim": reclaim,
             "cgroupPressure": cgroup_pressure.json(),
         });
     }

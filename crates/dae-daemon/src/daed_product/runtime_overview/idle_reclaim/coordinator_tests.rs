@@ -150,6 +150,7 @@ fn disabled_idle_reclaim_preserves_unadmitted_requests_and_executes_explicit_wor
 }
 
 #[test]
+#[cfg(not(feature = "allocator-jemalloc"))]
 fn stopped_runtime_reclaim_drains_stop_and_merged_control_plane_requests() {
     let _fixture = ReclaimFixture::new();
     allocator_request_reclaim(AllocatorReclaimReason::StopRuntime);
@@ -164,6 +165,30 @@ fn stopped_runtime_reclaim_drains_stop_and_merged_control_plane_requests() {
     assert_eq!(report["reclaim"]["scope"], "global");
     assert_eq!(report["deferred"]["requestCount"], 2);
     assert!(!allocator_pending_reclaim_requests());
+}
+
+#[cfg(feature = "allocator-jemalloc")]
+#[test]
+fn ui_reclaim_runs_with_a_global_publication_and_background_work_pending() {
+    let _fixture = ReclaimFixture::new();
+    let _busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::GroupHealth);
+    allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 42);
+    allocator_request_control_plane_reclaim();
+
+    assert!(allocator_pending_control_plane_reclaim());
+    let report = evaluate_control_plane_reclaim();
+    assert_eq!(report["status"], "reclaimed", "{report}");
+    assert_eq!(report["reclaim"]["scope"], "control-plane");
+    assert!(!allocator_pending_control_plane_reclaim());
+
+    let report = evaluate_allocator_idle_reclaim_with_observers(
+        policy(true),
+        true,
+        stopped,
+        CgroupReclaimPressure::default,
+    );
+    assert_eq!(report["reason"], "reclaim_busy_lease_active");
+    assert_eq!(allocator_take_reclaim_requests().publication_ids(), &[42]);
 }
 
 #[test]
@@ -244,19 +269,18 @@ fn normal_reclaim_keeps_low_yield_backoff_and_the_pending_batch() {
 
 #[cfg(feature = "allocator-jemalloc")]
 #[test]
-fn scoped_reclaim_does_not_consume_a_global_request_arriving_during_evaluation() {
+fn global_reclaim_does_not_consume_a_ui_request_arriving_during_evaluation() {
     let _fixture = ReclaimFixture::new();
-    allocator_request_control_plane_reclaim();
+    allocator_request_reclaim(AllocatorReclaimReason::StopRuntime);
     let report =
         evaluate_allocator_idle_reclaim_with_observers(policy(false), true, stopped, || {
-            allocator_request_reclaim(AllocatorReclaimReason::StopRuntime);
+            allocator_request_control_plane_reclaim();
             CgroupReclaimPressure::default()
         });
     assert_eq!(report["status"], "reclaimed", "{report}");
-    assert_eq!(report["scope"], "control-plane");
-    let remaining = allocator_take_reclaim_requests();
-    assert!(remaining.is_only(AllocatorReclaimReason::StopRuntime));
-    assert_eq!(remaining.scope(), AllocatorReclaimScope::Global);
+    assert_eq!(report["scope"], "global");
+    assert!(!allocator_pending_reclaim_requests());
+    assert!(allocator_pending_control_plane_reclaim());
 }
 
 #[test]

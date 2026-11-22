@@ -33,11 +33,12 @@ mod requests;
 pub(crate) use self::requests::allocator_reset_reclaim_requests_for_test;
 pub(crate) use self::requests::{
     AllocatorReclaimRequestBatch, AllocatorReclaimScope, allocator_discard_reclaim_requests,
-    allocator_notify_reclaim_monitor, allocator_pending_reclaim_requests,
-    allocator_reclaim_request_wake_epoch, allocator_record_publication_reclaim,
-    allocator_record_trailing_reclaim_evaluation, allocator_request_control_plane_reclaim,
-    allocator_request_reclaim, allocator_request_reclaim_for_publication,
-    allocator_restore_reclaim_requests, allocator_take_reclaim_requests,
+    allocator_notify_reclaim_monitor, allocator_pending_control_plane_reclaim,
+    allocator_pending_reclaim_requests, allocator_reclaim_request_wake_epoch,
+    allocator_record_publication_reclaim, allocator_record_trailing_reclaim_evaluation,
+    allocator_request_control_plane_reclaim, allocator_request_reclaim,
+    allocator_request_reclaim_for_publication, allocator_restore_reclaim_requests,
+    allocator_take_control_plane_reclaim, allocator_take_reclaim_requests,
     allocator_wait_for_reclaim_request_since,
 };
 

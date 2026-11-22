@@ -155,6 +155,7 @@ impl PendingAllocatorReclaimRequests {
 #[derive(Debug, Default)]
 struct AllocatorReclaimRequestRegistry {
     pending: PendingAllocatorReclaimRequests,
+    control_plane_pending: PendingAllocatorReclaimRequests,
     requested_total: u64,
     global_requested_total: u64,
     control_plane_requested_total: u64,
@@ -170,6 +171,19 @@ struct AllocatorReclaimRequestRegistry {
     // bounded diagnostic lists. Retired-generation releases have separate requests.
     publication_purged_through: Option<u64>,
     publication_in_flight_through: Option<u64>,
+}
+
+impl AllocatorReclaimRequestRegistry {
+    fn pending_for_scope(
+        &mut self,
+        scope: AllocatorReclaimScope,
+    ) -> &mut PendingAllocatorReclaimRequests {
+        if cfg!(feature = "allocator-jemalloc") && scope == AllocatorReclaimScope::ControlPlane {
+            &mut self.control_plane_pending
+        } else {
+            &mut self.pending
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -412,19 +426,18 @@ fn allocator_request_reclaim_with(
             });
         }
     }
-    if !registry.pending.is_empty() {
+    let pending = registry.pending_for_scope(scope);
+    let merged = !pending.is_empty();
+    let previous_overflow = pending.publication_overflow;
+    pending.merge_request(reason, scope, urgency, publication_id, requested_at);
+    let overflow = pending
+        .publication_overflow
+        .saturating_sub(previous_overflow);
+    if merged {
         registry.merged_total = registry.merged_total.saturating_add(1);
     }
-    let previous_overflow = registry.pending.publication_overflow;
-    registry
-        .pending
-        .merge_request(reason, scope, urgency, publication_id, requested_at);
-    registry.publication_overflow_total = registry.publication_overflow_total.saturating_add(
-        registry
-            .pending
-            .publication_overflow
-            .saturating_sub(previous_overflow),
-    );
+    registry.publication_overflow_total =
+        registry.publication_overflow_total.saturating_add(overflow);
     let receipt = json!({
         "status": "requested",
         "reason": reason.as_str(),
@@ -474,6 +487,14 @@ pub(crate) fn allocator_pending_reclaim_requests() -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn allocator_pending_control_plane_reclaim() -> bool {
+    RECLAIM_REQUEST_REGISTRY
+        .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
+        .lock()
+        .map(|registry| !registry.control_plane_pending.is_empty())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 fn allocator_pending_publication_reclaim() -> bool {
     RECLAIM_REQUEST_REGISTRY
@@ -515,13 +536,23 @@ fn allocator_pending_reclaim_scope() -> Option<AllocatorReclaimScope> {
 }
 
 pub(crate) fn allocator_take_reclaim_requests() -> AllocatorReclaimRequestBatch {
+    allocator_take_reclaim_requests_for_scope(AllocatorReclaimScope::Global)
+}
+
+pub(crate) fn allocator_take_control_plane_reclaim() -> AllocatorReclaimRequestBatch {
+    allocator_take_reclaim_requests_for_scope(AllocatorReclaimScope::ControlPlane)
+}
+
+fn allocator_take_reclaim_requests_for_scope(
+    scope: AllocatorReclaimScope,
+) -> AllocatorReclaimRequestBatch {
     let Ok(mut registry) = RECLAIM_REQUEST_REGISTRY
         .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
         .lock()
     else {
         return AllocatorReclaimRequestBatch::default();
     };
-    let batch = registry.pending.take();
+    let batch = registry.pending_for_scope(scope).take();
     registry.publication_in_flight_through = registry
         .publication_in_flight_through
         .max(batch.publication_through);
@@ -539,7 +570,7 @@ pub(crate) fn allocator_restore_reclaim_requests(batch: &AllocatorReclaimRequest
         .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
         .lock()
     {
-        registry.pending.merge_batch(batch);
+        registry.pending_for_scope(batch.scope).merge_batch(batch);
         if registry.publication_in_flight_through == batch.publication_through {
             registry.publication_in_flight_through = None;
         }
@@ -603,6 +634,10 @@ pub(super) fn allocator_reclaim_request_snapshot_json() -> Value {
     else {
         return json!({"status": "unavailable"});
     };
+    let mut control_plane = registry.control_plane_pending.clone();
+    let control_plane = control_plane.take();
+    let mut pending = registry.pending.clone();
+    pending.merge_batch(&control_plane);
     json!({
         "requestedTotal": registry.requested_total,
         "globalRequestedTotal": registry.global_requested_total,
@@ -615,16 +650,8 @@ pub(super) fn allocator_reclaim_request_snapshot_json() -> Value {
         "publicationOverflowTotal": registry.publication_overflow_total,
         "publicationPurgedThrough": registry.publication_purged_through,
         "publicationInFlightThrough": registry.publication_in_flight_through,
-        "pending": AllocatorReclaimRequestBatch {
-            reason_bits: registry.pending.reason_bits,
-            request_count: registry.pending.request_count,
-            scope: registry.pending.scope,
-            urgency: registry.pending.urgency,
-            publication_ids: registry.pending.publication_ids.clone(),
-            publication_overflow: registry.pending.publication_overflow,
-            publication_through: registry.pending.publication_through,
-            requested_at: registry.pending.requested_at,
-        }.json(),
+        "pending": pending.take().json(),
+        "controlPlanePending": control_plane.json(),
         "publicationPurges": registry.publication_purges.iter().map(|(publication_id, count)| {
             json!({"publicationId": publication_id, "purgeCount": count})
         }).collect::<Vec<_>>(),
@@ -663,17 +690,29 @@ mod tests {
         );
 
         let batch = allocator_take_reclaim_requests();
-        assert_eq!(batch.request_count(), 3);
         assert_eq!(batch.scope(), AllocatorReclaimScope::Global);
-        assert_eq!(
-            batch.reasons().collect::<Vec<_>>(),
-            vec![
-                AllocatorReclaimReason::ManualLatencyProbe,
-                AllocatorReclaimReason::GroupHealthProbe,
-                AllocatorReclaimReason::ControlPlaneIdle,
-            ]
-        );
+        let mut reasons = vec![
+            AllocatorReclaimReason::ManualLatencyProbe,
+            AllocatorReclaimReason::GroupHealthProbe,
+        ];
+        if cfg!(feature = "allocator-jemalloc") {
+            let scoped = allocator_take_control_plane_reclaim();
+            assert_eq!(scoped.scope(), AllocatorReclaimScope::ControlPlane);
+            assert_eq!(scoped.request_count(), 1);
+            assert!(scoped.is_only(AllocatorReclaimReason::ControlPlaneIdle));
+            allocator_restore_reclaim_requests(&scoped);
+            assert!(allocator_pending_control_plane_reclaim());
+            assert!(
+                allocator_take_control_plane_reclaim()
+                    .is_only(AllocatorReclaimReason::ControlPlaneIdle)
+            );
+        } else {
+            reasons.push(AllocatorReclaimReason::ControlPlaneIdle);
+        }
+        assert_eq!(batch.request_count(), reasons.len() as u64);
+        assert_eq!(batch.reasons().collect::<Vec<_>>(), reasons);
         assert!(!allocator_pending_reclaim_requests());
+        assert!(!allocator_pending_control_plane_reclaim());
     }
 
     #[test]
