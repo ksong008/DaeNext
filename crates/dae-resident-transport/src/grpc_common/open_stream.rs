@@ -190,9 +190,6 @@ pub(super) async fn drive_grpc_h2_payload_stream(
                     logical_write.write_all(payload).await.map_err(|error| {
                         format!("write VLESS Encryption gRPC logical stream: {error}")
                     })?;
-                    logical_write.flush().await.map_err(|error| {
-                        format!("flush VLESS Encryption gRPC logical stream: {error}")
-                    })?;
                 }
             }
         }

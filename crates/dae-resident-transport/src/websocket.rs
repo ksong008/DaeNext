@@ -300,9 +300,6 @@ where
                     logical_write.write_all(payload).await.map_err(|error| {
                         format!("write VLESS Encryption websocket logical stream: {error}")
                     })?;
-                    logical_write.flush().await.map_err(|error| {
-                        format!("flush VLESS Encryption websocket logical stream: {error}")
-                    })?;
                 }
             }
             queue_websocket_control_responses(

@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
@@ -16,7 +16,7 @@ pub const VLESS_WRAPPER_LOGICAL_STREAM_BUFFER_BYTES: usize = 64 * 1024;
 pub struct SpawnedLogicalStream {
     stream: DuplexStream,
     task: tokio::task::JoinHandle<()>,
-    terminal_error: Arc<Mutex<Option<String>>>,
+    terminal_error: Arc<OnceLock<String>>,
 }
 
 impl SpawnedLogicalStream {
@@ -26,13 +26,11 @@ impl SpawnedLogicalStream {
         Fut: Future<Output = Result<(), String>> + Send + 'static,
     {
         let (stream, transport_side) = tokio::io::duplex(VLESS_WRAPPER_LOGICAL_STREAM_BUFFER_BYTES);
-        let terminal_error = Arc::new(Mutex::new(None));
+        let terminal_error = Arc::new(OnceLock::new());
         let task_error = Arc::clone(&terminal_error);
         let task = tokio::spawn(async move {
-            if let Err(error) = driver(transport_side).await
-                && let Ok(mut terminal) = task_error.lock()
-            {
-                *terminal = Some(error);
+            if let Err(error) = driver(transport_side).await {
+                let _ = task_error.set(error);
             }
         });
         Self {
@@ -43,11 +41,7 @@ impl SpawnedLogicalStream {
     }
 
     fn terminal_io_error(&self) -> Option<io::Error> {
-        self.terminal_error
-            .lock()
-            .ok()
-            .and_then(|terminal| terminal.clone())
-            .map(io::Error::other)
+        self.terminal_error.get().cloned().map(io::Error::other)
     }
 }
 
@@ -102,39 +96,4 @@ impl Drop for SpawnedLogicalStream {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[tokio::test]
-    async fn spawned_logical_stream_is_bounded_and_duplex() {
-        let mut stream = SpawnedLogicalStream::spawn(|mut transport| async move {
-            let mut payload = [0_u8; 4];
-            transport
-                .read_exact(&mut payload)
-                .await
-                .map_err(|error| error.to_string())?;
-            transport
-                .write_all(&payload)
-                .await
-                .map_err(|error| error.to_string())?;
-            Ok(())
-        });
-        stream.write_all(b"ping").await.unwrap();
-        stream.flush().await.unwrap();
-        let mut response = [0_u8; 4];
-        stream.read_exact(&mut response).await.unwrap();
-        assert_eq!(&response, b"ping");
-    }
-
-    #[tokio::test]
-    async fn spawned_logical_stream_surfaces_driver_failure() {
-        let mut stream = SpawnedLogicalStream::spawn(|_transport| async move {
-            Err("wrapper driver failed".to_owned())
-        });
-        tokio::task::yield_now().await;
-        let mut byte = [0_u8; 1];
-        let error = stream.read(&mut byte).await.unwrap_err();
-        assert!(error.to_string().contains("wrapper driver failed"));
-    }
-}
+mod tests;

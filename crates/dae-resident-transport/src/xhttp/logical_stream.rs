@@ -61,9 +61,6 @@ async fn drive_xhttp_packet_up_payload_stream(
                 logical_write.write_all(&bytes).await.map_err(|error| {
                     format!("write VLESS Encryption xHTTP logical stream: {error}")
                 })?;
-                logical_write.flush().await.map_err(|error| {
-                    format!("flush VLESS Encryption xHTTP logical stream: {error}")
-                })?;
             }
         }
     };
@@ -107,9 +104,6 @@ async fn drive_xhttp_stream_payload_stream(
             if !bytes.is_empty() {
                 logical_write.write_all(&bytes).await.map_err(|error| {
                     format!("write VLESS Encryption xHTTP logical stream: {error}")
-                })?;
-                logical_write.flush().await.map_err(|error| {
-                    format!("flush VLESS Encryption xHTTP logical stream: {error}")
                 })?;
             }
         }
