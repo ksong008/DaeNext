@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     GeodataJournalPhase, GeodataKind, GeodataUpdateJournal, ProductGeodataUpdateCoordinator,
-    RuntimeInputVersions, ensure_runtime_input_versions_bumped, finalize_committed_geodata_journal,
+    ensure_runtime_input_versions_bumped, finalize_committed_geodata_journal,
     geodata_resource_status_from_staged_parts, is_valid_geodata_release_version,
     rollback_geodata_journal, write_geodata_journal,
 };
@@ -40,7 +40,6 @@ pub struct PreparedGeodataGeneration {
     pub version: String,
     pub summary: dae_geodata::GeoDataSummary,
     pub sha256: String,
-    pub input_versions_before: Option<RuntimeInputVersions>,
 }
 
 pub fn commit_geodata_generation(
@@ -49,6 +48,7 @@ pub fn commit_geodata_generation(
     dir: &Path,
     kind: GeodataKind,
     candidate: PreparedGeodataGeneration,
+    runtime_is_running: impl FnOnce() -> bool,
 ) -> io::Result<GeodataCommitResult> {
     let mut checkpoints = NoopFaultCheckpoints;
     commit_geodata_generation_with_checkpoints(
@@ -57,6 +57,7 @@ pub fn commit_geodata_generation(
         dir,
         kind,
         candidate,
+        runtime_is_running,
         &mut checkpoints,
     )
 }
@@ -67,6 +68,7 @@ pub fn commit_geodata_generation_with_checkpoints(
     dir: &Path,
     kind: GeodataKind,
     candidate: PreparedGeodataGeneration,
+    runtime_is_running: impl FnOnce() -> bool,
     checkpoints: &mut dyn FaultCheckpoints<GeodataTransactionCheckpoint>,
 ) -> io::Result<GeodataCommitResult> {
     let PreparedGeodataGeneration {
@@ -74,9 +76,7 @@ pub fn commit_geodata_generation_with_checkpoints(
         version,
         summary,
         sha256,
-        input_versions_before,
     } = candidate;
-    let runtime_reload_required = input_versions_before.is_some();
     if let Err(error) = checkpoints.checkpoint(GeodataTransactionCheckpoint::WriteVersionStage) {
         remove_paths_best_effort([data_stage]);
         return Err(error);
@@ -199,7 +199,7 @@ pub fn commit_geodata_generation_with_checkpoints(
     }
     Ok(GeodataCommitResult {
         status,
-        runtime_reload_required,
+        runtime_reload_required: runtime_is_running(),
     })
 }
 

@@ -4,8 +4,8 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::{
-    GeodataKind, GeodataPreparedDownload, ProductGeodataUpdateCoordinator, RuntimeInputVersions,
-    advise_file_dontneed, commit_geodata_generation,
+    GeodataKind, GeodataPreparedDownload, ProductGeodataUpdateCoordinator, advise_file_dontneed,
+    commit_geodata_generation,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,10 +33,7 @@ pub trait GeodataUpdateCallbacks {
         mode: GeodataPreparationMode,
     ) -> io::Result<GeodataPreparedDownload>;
 
-    fn runtime_input_versions_if_running(
-        &self,
-        state: &Path,
-    ) -> io::Result<Option<RuntimeInputVersions>>;
+    fn runtime_is_running(&self) -> bool;
 
     fn update_status_cache(&self, kind: GeodataKind, status: Value);
 }
@@ -61,13 +58,6 @@ pub fn update_geodata_with_lease_using<C: GeodataUpdateCallbacks>(
             return Err(error);
         }
     };
-    let input_versions_before = match callbacks.runtime_input_versions_if_running(state) {
-        Ok(version) => version,
-        Err(error) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(error);
-        }
-    };
     let committed = commit_geodata_generation(
         updates,
         state,
@@ -78,8 +68,8 @@ pub fn update_geodata_with_lease_using<C: GeodataUpdateCallbacks>(
             version: prepared.version,
             summary: prepared.summary,
             sha256: prepared.sha256,
-            input_versions_before,
         },
+        || callbacks.runtime_is_running(),
     )?;
     let path = dir.join(kind.file_name());
     let _ = advise_file_dontneed(&path);

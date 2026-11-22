@@ -40,7 +40,10 @@ impl FreshProductState {
     }
 
     pub(crate) fn seed_selected_resources(&self) {
-        let conn = self.connection();
+        Self::seed_selected_resources_in(&self.connection());
+    }
+
+    pub(crate) fn seed_selected_resources_in(conn: &Connection) {
         conn.execute_batch(
             r#"
             INSERT INTO configs(id, name, global, selected, version)

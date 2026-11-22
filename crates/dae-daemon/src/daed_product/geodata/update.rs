@@ -58,11 +58,8 @@ impl GeodataUpdateCallbacks for ProductGeodataUpdateContext {
         }
     }
 
-    fn runtime_input_versions_if_running(
-        &self,
-        _state: &Path,
-    ) -> io::Result<Option<dae_product_control::geodata::RuntimeInputVersions>> {
-        super::transaction::runtime_input_versions_if_running(self)
+    fn runtime_is_running(&self) -> bool {
+        self.runtime.is_running()
     }
 
     fn update_status_cache(&self, kind: GeodataKind, status: Value) {

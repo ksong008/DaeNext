@@ -102,3 +102,54 @@ fn geodata_commit_while_stopped_advances_the_asset_revision() {
     fixture.assert_new_generation();
     fixture.cleanup();
 }
+
+#[test]
+fn geodata_commit_reports_reload_when_runtime_starts_during_staging() {
+    use crate::daed_product::runtime_manager::with_product_runtime_fake_start_override;
+    use crate::daed_product::tests::support::FreshProductState;
+
+    struct StartRuntime<'a> {
+        runtime: &'a ProductRuntimeManager,
+        state: &'a Path,
+    }
+
+    impl FaultCheckpoints<GeodataTransactionCheckpoint> for StartRuntime<'_> {
+        fn checkpoint(&mut self, point: GeodataTransactionCheckpoint) -> io::Result<()> {
+            if point == GeodataTransactionCheckpoint::WriteVersionStage {
+                with_product_runtime_fake_start_override(true, || {
+                    let result = crate::daed_product::runtime_reload::coordinate_runtime_reload(
+                        self.runtime,
+                        self.state,
+                        None,
+                        RuntimeApplyIntent::StartupRestore,
+                        &[],
+                        AllocatorReclaimReason::ReloadCompleted,
+                    )
+                    .unwrap();
+                    assert!(result.applied);
+                });
+            }
+            Ok(())
+        }
+    }
+
+    let fixture = GeodataTransactionFixture::new("starts-during-staging");
+    FreshProductState::seed_selected_resources_in(&open_state_connection(&fixture.state).unwrap());
+    let runtime = ProductRuntimeManager::new();
+    assert!(!runtime.is_running());
+    let result = fixture
+        .commit_observing_runtime(
+            || runtime.is_running(),
+            &mut StartRuntime {
+                runtime: &runtime,
+                state: &fixture.state,
+            },
+        )
+        .unwrap();
+
+    assert!(runtime.is_running());
+    assert!(result.runtime_reload_required);
+    fixture.assert_new_generation();
+    drop(runtime);
+    fixture.cleanup();
+}

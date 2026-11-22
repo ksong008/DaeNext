@@ -40,6 +40,7 @@ impl ProductRuntimeInterfaceRecoverySupervisor {
                             &request,
                             Instant::now(),
                         )
+                        && let Ok(_geodata) = dae_product_control::geodata::lock_geodata_snapshot()
                         && let Ok(permit) =
                             coordinator.begin_apply(RuntimeApplyIntent::InterfaceRecovery)
                     {

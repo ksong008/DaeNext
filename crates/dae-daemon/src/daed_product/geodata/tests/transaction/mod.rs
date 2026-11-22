@@ -61,6 +61,14 @@ impl GeodataTransactionFixture {
         external_input_version_before: Option<i64>,
         checkpoints: &mut dyn FaultCheckpoints<GeodataTransactionCheckpoint>,
     ) -> io::Result<GeodataCommitResult> {
+        self.commit_observing_runtime(|| external_input_version_before.is_some(), checkpoints)
+    }
+
+    fn commit_observing_runtime(
+        &self,
+        runtime_is_running: impl FnOnce() -> bool,
+        checkpoints: &mut dyn FaultCheckpoints<GeodataTransactionCheckpoint>,
+    ) -> io::Result<GeodataCommitResult> {
         commit_geodata_generation_with_checkpoints(
             &self.coordinator,
             &self.state,
@@ -71,8 +79,8 @@ impl GeodataTransactionFixture {
                 version: "new-tag".to_owned(),
                 summary: self.summary,
                 sha256: self.sha256.clone(),
-                input_versions_before: self.input_versions(external_input_version_before),
             },
+            runtime_is_running,
             checkpoints,
         )
     }

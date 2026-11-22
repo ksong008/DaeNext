@@ -1,12 +1,7 @@
-use super::*;
-
-mod external_input;
-
 #[cfg(test)]
 pub(super) use dae_product_control::geodata::PreparedGeodataGeneration;
 #[cfg(test)]
 pub(super) use dae_product_control::geodata::recover_geodata_transaction;
-pub(super) use external_input::runtime_input_versions_if_running;
 
 #[cfg(test)]
 pub(super) use dae_product_control::geodata::RuntimeInputVersions;
