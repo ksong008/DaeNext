@@ -333,23 +333,11 @@ unsafe fn route_state_and(ctx: *mut RouteCtx, bits: u8) {
 
 #[inline(always)]
 unsafe fn names_equal(a: *const u8, b: *const u8) -> bool {
+    // A fixed-width comparison lets LLVM aggregate byte equality instead of
+    // propagating a separate verifier branch for each byte of the task name.
     unsafe {
-        a.add(0).read_volatile() == b.add(0).read_volatile()
-            && a.add(1).read_volatile() == b.add(1).read_volatile()
-            && a.add(2).read_volatile() == b.add(2).read_volatile()
-            && a.add(3).read_volatile() == b.add(3).read_volatile()
-            && a.add(4).read_volatile() == b.add(4).read_volatile()
-            && a.add(5).read_volatile() == b.add(5).read_volatile()
-            && a.add(6).read_volatile() == b.add(6).read_volatile()
-            && a.add(7).read_volatile() == b.add(7).read_volatile()
-            && a.add(8).read_volatile() == b.add(8).read_volatile()
-            && a.add(9).read_volatile() == b.add(9).read_volatile()
-            && a.add(10).read_volatile() == b.add(10).read_volatile()
-            && a.add(11).read_volatile() == b.add(11).read_volatile()
-            && a.add(12).read_volatile() == b.add(12).read_volatile()
-            && a.add(13).read_volatile() == b.add(13).read_volatile()
-            && a.add(14).read_volatile() == b.add(14).read_volatile()
-            && a.add(15).read_volatile() == b.add(15).read_volatile()
+        a.cast::<[u8; TASK_COMM_LEN]>().read_unaligned()
+            == b.cast::<[u8; TASK_COMM_LEN]>().read_unaligned()
     }
 }
 
@@ -642,6 +630,20 @@ mod tests {
             *dst = src as i8;
         }
         out
+    }
+
+    #[test]
+    fn process_name_comparison_covers_every_byte_without_alignment() {
+        let mut storage = [0u8; TASK_COMM_LEN + 1];
+        let name = b"1234567890123456";
+        let unaligned = &mut storage[1..];
+        unaligned.copy_from_slice(name);
+        assert!(unsafe { names_equal(unaligned.as_ptr(), name.as_ptr()) });
+        for index in 0..TASK_COMM_LEN {
+            unaligned[index] ^= 1;
+            assert!(!unsafe { names_equal(unaligned.as_ptr(), name.as_ptr()) });
+            unaligned[index] ^= 1;
+        }
     }
 
     #[test]
