@@ -175,8 +175,9 @@ impl Session {
                     if before(self.remote_window, window) {
                         self.remote_window = window;
                     }
-                    for number in frame[17..].chunks_exact(4) {
-                        self.pending.remove(&read_u32(number));
+                    let (numbers, _) = frame[17..].as_chunks::<4>();
+                    for number in numbers {
+                        self.pending.remove(&u32::from_be_bytes(*number));
                     }
                     self.acknowledge(read_u32(&frame[8..12]));
                 }
