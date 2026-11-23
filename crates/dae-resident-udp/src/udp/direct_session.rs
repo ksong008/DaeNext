@@ -506,15 +506,12 @@ impl DirectUdpSession {
 
     fn try_recv_response(&mut self) -> Result<Option<(SocketAddr, Vec<u8>)>, String> {
         let mut response_buf = std::mem::take(&mut self.response_buf);
-        if response_buf.len() < UDP_DIRECT_RESPONSE_CAPACITY {
-            response_buf.resize(UDP_DIRECT_RESPONSE_CAPACITY, 0);
-        }
+        debug_assert!(response_buf.is_empty());
+        // Keep room for a whole datagram without initializing unused bytes.
+        response_buf.reserve_exact(UDP_DIRECT_RESPONSE_CAPACITY);
         self.response_buffer_last_used = Some(time::Instant::now());
-        match self.socket.try_recv_from(&mut response_buf) {
-            Ok((read, peer)) => {
-                response_buf.truncate(read);
-                Ok(Some((peer, response_buf)))
-            }
+        match self.socket.try_recv_buf_from(&mut response_buf) {
+            Ok((_, peer)) => Ok(Some((peer, response_buf))),
             Err(err)
                 if matches!(
                     err.kind(),
@@ -722,6 +719,24 @@ mod tests {
         let (_, response) = session.try_recv_response().unwrap().unwrap();
         assert_eq!(response, expected);
         server.join().unwrap();
+        let allocation = response.as_ptr();
+        session.recycle_response_buffer(response);
+
+        let upstream = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        for payload in [b"short".as_slice(), b"".as_slice()] {
+            upstream
+                .send_to(payload, session.socket.local_addr().unwrap())
+                .unwrap();
+            time::timeout(Duration::from_secs(1), session.wait_readable())
+                .await
+                .unwrap()
+                .unwrap();
+            let (sender, response) = session.try_recv_response().unwrap().unwrap();
+            assert_eq!(sender, upstream.local_addr().unwrap());
+            assert_eq!(response, payload);
+            assert_eq!(response.as_ptr(), allocation);
+            session.recycle_response_buffer(response);
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
