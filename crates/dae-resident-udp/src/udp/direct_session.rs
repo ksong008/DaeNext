@@ -506,7 +506,7 @@ impl DirectUdpSession {
 
     fn try_recv_response(&mut self) -> Result<Option<(SocketAddr, Vec<u8>)>, String> {
         let mut response_buf = std::mem::take(&mut self.response_buf);
-        debug_assert!(response_buf.is_empty());
+        response_buf.clear();
         // Keep room for a whole datagram without initializing unused bytes.
         response_buf.reserve_exact(UDP_DIRECT_RESPONSE_CAPACITY);
         self.response_buffer_last_used = Some(time::Instant::now());
@@ -720,8 +720,8 @@ mod tests {
         assert_eq!(response, expected);
         server.join().unwrap();
         let allocation = response.as_ptr();
-        session.recycle_response_buffer(response);
-
+        // Simulate a buffer returned with the previous datagram still in it.
+        session.response_buf = response;
         let upstream = StdUdpSocket::bind("127.0.0.1:0").unwrap();
         for payload in [b"short".as_slice(), b"".as_slice()] {
             upstream
