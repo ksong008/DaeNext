@@ -92,9 +92,14 @@ Current limits:
 DaeNext is a Cargo workspace. Build, test, fixture, and release paths are rooted
 at the repository root.
 
-The native eBPF service uses Linux system calls and rtnetlink for network
-setup, interface discovery, and traffic control. Install `ip` and `tc` when
-running development network fixtures or legacy command-backend diagnostics.
+**The native eBPF service runs without the `ip` and `tc` executables.** It
+configures interfaces, addresses, routes, and policy rules through Linux
+kernel interfaces. Both TCX and TC netlink attach eBPF programs directly.
+
+For troubleshooting, `ip` shows interfaces, routes, and network namespaces.
+`tc` shows queueing disciplines, TC netlink filters, and their counters.
+Development network fixtures and legacy command-backend diagnostics still
+require these tools when they invoke them.
 
 The `dae` CLI uses Rust 1.100.0, pinned in `rust-toolchain.toml`, and requires a
 native C/C++ toolchain. The eBPF program and shared ABI use the same Rust 1.100
