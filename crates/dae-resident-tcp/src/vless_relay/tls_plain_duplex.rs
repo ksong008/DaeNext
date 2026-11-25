@@ -2,6 +2,60 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
 
+const TLS_DOWNLOAD_INITIAL_BYTES: usize = 16 * 1024;
+
+struct TlsDownloadBuffer {
+    bytes: Vec<u8>,
+    limit: usize,
+    end: Option<std::io::Result<()>>,
+}
+
+impl TlsDownloadBuffer {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: vec![0; TLS_DOWNLOAD_INITIAL_BYTES],
+            limit,
+            end: None,
+        }
+    }
+
+    async fn read(&mut self, stream: &mut (impl AsyncRead + Unpin)) -> std::io::Result<&[u8]> {
+        if self.limit <= TLS_DOWNLOAD_INITIAL_BYTES {
+            let read = stream.read(&mut self.bytes).await?;
+            return Ok(&self.bytes[..read]);
+        }
+        if let Some(end) = self.end.take() {
+            return end.map(|()| &self.bytes[..0]);
+        }
+        let read = std::future::poll_fn(|cx| {
+            let mut batch = ReadBuf::new(&mut self.bytes);
+            while batch.remaining() != 0 {
+                let before = batch.filled().len();
+                let end = match Pin::new(&mut *stream).poll_read(cx, &mut batch) {
+                    Poll::Ready(Ok(())) if batch.filled().len() != before => continue,
+                    Poll::Ready(end) => Some(end),
+                    Poll::Pending if batch.filled().is_empty() => return Poll::Pending,
+                    Poll::Pending => None,
+                };
+                if batch.filled().is_empty() {
+                    return Poll::Ready(end.unwrap_or(Ok(())).map(|()| 0));
+                }
+                self.end = end;
+                break;
+            }
+            Poll::Ready(Ok(batch.filled().len()))
+        })
+        .await?;
+        Ok(&self.bytes[..read])
+    }
+
+    fn grow_after_write(&mut self, read: usize) {
+        if read == self.bytes.len() && read < self.limit && self.end.is_none() {
+            self.bytes.resize(self.limit, 0);
+        }
+    }
+}
+
 pub async fn relay_tcp_over_vless_tls_plain_duplex(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
     client: &mut AsyncVlessTlsClient,
@@ -94,7 +148,10 @@ pub async fn relay_tcp_over_vless_tls_plain_duplex(
         let mut inbound_write = inbound_write;
         let mut client_read = client_read;
         let mut stripper = VlessResponseStripper::default();
-        let mut buffer = [0_u8; 16 * 1024];
+        static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let limit =
+            *LIMIT.get_or_init(|| TcpRelayResourceProfile::selected().tcp_relay_buffer_bytes());
+        let mut buffer = TlsDownloadBuffer::new(limit);
         if !response_prefix.is_empty() {
             let payload = stripper.consume(&response_prefix)?;
             download_header_state.store(stripper.done, Ordering::Release);
@@ -108,12 +165,12 @@ pub async fn relay_tcp_over_vless_tls_plain_duplex(
             }
         }
         loop {
-            let read = match client_read.read(&mut buffer).await {
-                Ok(0) => {
+            let batch = match buffer.read(&mut client_read).await {
+                Ok([]) => {
                     let _ = inbound_write.shutdown().await;
                     return Ok(());
                 }
-                Ok(read) => read,
+                Ok(batch) => batch,
                 Err(err) => {
                     let snapshot = download_progress.snapshot();
                     let current = RelayStats {
@@ -129,7 +186,8 @@ pub async fn relay_tcp_over_vless_tls_plain_duplex(
                     return Err(format!("read VLESS TLS plaintext: {err}"));
                 }
             };
-            let payload = stripper.consume(&buffer[..read])?;
+            let read = batch.len();
+            let payload = stripper.consume(batch)?;
             download_header_state.store(stripper.done, Ordering::Release);
             if !payload.is_empty() {
                 inbound_write
@@ -139,6 +197,7 @@ pub async fn relay_tcp_over_vless_tls_plain_duplex(
                 download_progress.record_download(payload.len());
                 metrics.add_download(payload.len());
             }
+            buffer.grow_after_write(read);
         }
     };
 
@@ -163,3 +222,6 @@ pub async fn relay_tcp_over_vless_tls_plain_duplex(
         .map(|_| stats.clone())
         .map_err(|error| RelayError::new(error, &stats))
 }
+
+#[cfg(test)]
+mod tests;

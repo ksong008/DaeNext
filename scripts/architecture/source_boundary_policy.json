@@ -63,7 +63,7 @@
     },
     "dae-resident-tcp": {
       "production": 14295,
-      "tests": 850
+      "tests": 886
     },
     "dae-resident-udp": {
       "production": 14136,
