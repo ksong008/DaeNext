@@ -24,18 +24,42 @@ pub fn load_attach_aya_sched_classifier(
     spec: &TcNativeAttachSpec,
     backend: AttachBackend,
 ) -> Result<AyaTcAttachDetachReport, String> {
+    load_attach_aya_sched_classifier_with_recovery(loaded, spec, backend, None)
+}
+
+/// Pin the program for a reserved host TC netlink slot before attaching it.
+pub fn load_attach_aya_sched_classifier_with_recovery(
+    loaded: &mut AyaUserspaceLoadedObject,
+    spec: &TcNativeAttachSpec,
+    backend: AttachBackend,
+    recovery_root: Option<&Path>,
+) -> Result<AyaTcAttachDetachReport, String> {
     if !matches!(backend, AttachBackend::TcNetlink | AttachBackend::Tcx) {
         return Err(format!(
             "aya sched classifier attach requires native backend, got {}",
             backend.as_str()
         ));
     }
+    if recovery_root.is_some()
+        && (spec.target.netns.is_some()
+            || !super::tc_netlink_query::HOST_TC_RECOVERY_SLOTS
+                .contains(&(spec.priority, spec.handle)))
+    {
+        return Err(format!(
+            "recoverable TC attach requires a reserved host slot: {} priority {} handle {:#010x}",
+            spec.target.iface, spec.priority, spec.handle
+        ));
+    }
     let mut report = with_optional_netns(spec.target.netns.as_deref(), || {
         // Open before attaching; retain even if restoring the caller namespace fails.
         let netns = fs::File::open("/proc/thread-self/ns/net")
             .map_err(|e| format!("retain attach namespace: {e}"))?;
-        let (mut report, link_id, program_fd) =
-            load_attach_aya_sched_classifier_in_current_netns(loaded, spec, backend)?;
+        let (mut report, link_id, program_fd) = load_attach_aya_sched_classifier_in_current_netns(
+            loaded,
+            spec,
+            backend,
+            recovery_root,
+        )?;
         super::retained_links::retain_tc_link(loaded, &mut report, link_id, program_fd, netns)?;
         Ok(report)
     })?;
@@ -69,7 +93,7 @@ pub(super) fn load_attach_detach_aya_sched_classifier_in_current_netns(
     spec: &TcNativeAttachSpec,
     backend: AttachBackend,
 ) -> Result<AyaTcAttachDetachReport, String> {
-    load_attach_aya_sched_classifier_in_current_netns(loaded, spec, backend).and_then(
+    load_attach_aya_sched_classifier_in_current_netns(loaded, spec, backend, None).and_then(
         |(mut report, link_id, _program_fd)| {
             let program = loaded.ebpf.program_mut(&spec.program_name).ok_or_else(|| {
                 format!(
@@ -93,6 +117,7 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
     loaded: &mut AyaUserspaceLoadedObject,
     spec: &TcNativeAttachSpec,
     backend: AttachBackend,
+    recovery_root: Option<&Path>,
 ) -> Result<
     (
         AyaTcAttachDetachReport,
@@ -134,6 +159,23 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
         .map_err(|e| e.to_string())?
         .try_clone()
         .map_err(|e| format!("retain classifier program fd: {e}"))?;
+    let attach_netlink = |classifier: &mut SchedClassifier| {
+        if let Some(root) = recovery_root {
+            let pin = recovery_pin_path(
+                root,
+                ifindex,
+                spec.target.direction,
+                spec.priority,
+                spec.handle,
+            );
+            fs::create_dir_all(pin.parent().unwrap())
+                .map_err(|error| format!("create TC recovery directory: {error}"))?;
+            classifier
+                .pin(&pin)
+                .map_err(|error| format!("pin TC program for {}: {error}", pin.display()))?;
+        }
+        attach_loaded_aya_sched_classifier(classifier, spec, attach_type, AttachBackend::TcNetlink)
+    };
     let requested_backend = backend;
     let (
         backend,
@@ -149,12 +191,7 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
         tcx_order_error,
     ) = match backend {
         AttachBackend::TcNetlink => {
-            let attached = attach_loaded_aya_sched_classifier(
-                classifier,
-                spec,
-                attach_type,
-                AttachBackend::TcNetlink,
-            )?;
+            let attached = attach_netlink(classifier)?;
             (
                 AttachBackend::TcNetlink,
                 attached.link_id,
@@ -197,12 +234,7 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                                     "aya tcx order verification failed after attach: {order_err}; tcx detach before tc-netlink backend switch failed: {detach_err:?}"
                                 )
                             })?;
-                            let fallback = attach_loaded_aya_sched_classifier(
-                                classifier,
-                                spec,
-                                attach_type,
-                                AttachBackend::TcNetlink,
-                            )
+                            let fallback = attach_netlink(classifier)
                             .map_err(|tc_err| {
                                 format!(
                                     "aya tcx order verification failed after attach: {order_err}; tc-netlink backend switch failed: {tc_err}"
@@ -230,12 +262,7 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                             "aya tcx query failed after attach: {query_err}; tcx detach before tc-netlink backend switch failed: {detach_err:?}"
                         )
                     })?;
-                    let fallback = attach_loaded_aya_sched_classifier(
-                        classifier,
-                        spec,
-                        attach_type,
-                        AttachBackend::TcNetlink,
-                    )
+                    let fallback = attach_netlink(classifier)
                     .map_err(|tc_err| {
                         format!(
                             "aya tcx query failed after attach: {query_err}; tc-netlink backend switch failed: {tc_err}"
@@ -257,12 +284,7 @@ pub(super) fn load_attach_aya_sched_classifier_in_current_netns(
                 }
             },
             Err(tcx_err) => {
-                let fallback = attach_loaded_aya_sched_classifier(
-                    classifier,
-                    spec,
-                    attach_type,
-                    AttachBackend::TcNetlink,
-                )
+                let fallback = attach_netlink(classifier)
                 .map_err(|tc_err| {
                     format!(
                         "aya sched classifier tcx attach failed: {tcx_err}; tc-netlink backend switch failed: {tc_err}"
@@ -526,12 +548,34 @@ pub fn query_aya_tc_netlink_binding(
     })
 }
 
+pub struct StaleTcOwner<'a> {
+    pub pin_root: &'a Path,
+    pub pid: u32,
+}
+
+/// Read the reserved TC netlink slots on both directions of a host interface.
+pub fn aya_host_tc_recovery_slots_occupied(ifindex: u32) -> Result<bool, String> {
+    use super::tc_netlink_query::reserved_slot_occupied;
+
+    for direction in [TcAttachType::Ingress, TcAttachType::Egress] {
+        let parent = TcHandle::from(direction).into();
+        if reserved_slot_occupied(ifindex, parent)
+            .map_err(|error| format!("observe reserved TC slots on ifindex {ifindex}: {error}"))?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Recover a stale TC netlink classifier at a known product attachment slot.
 pub fn detach_stale_aya_tc_filter(
     target: &crate::TcAttachTarget,
     priority: u16,
     handle: u32,
-    program_prefix: &str,
+    owners: &[StaleTcOwner<'_>],
+    legacy_program_name: &str,
+    dae0_ifindex: Option<u32>,
 ) -> Result<(), String> {
     use aya::programs::{links::Link, tc::SchedClassifierLink};
 
@@ -551,18 +595,143 @@ pub fn detach_stale_aya_tc_filter(
         let Some(identity) = super::tc_netlink_query::filter_identity(&location)? else {
             return Ok(());
         };
-        let belongs_to_product = identity.name.as_deref().is_some_and(|name| {
-            name.strip_prefix(program_prefix.as_bytes())
-                .is_some_and(|suffix| matches!(suffix, b"_l2" | b"_l3"))
+        // Hold a reference to the verified program through the detach.
+        let pin_path =
+            |root: &Path| recovery_pin_path(root, ifindex, target.direction, priority, handle);
+        let pinned_owner = owners.iter().find_map(|owner| {
+            let program = SchedClassifier::from_pin(pin_path(owner.pin_root)).ok()?;
+            let info = program.info().ok()?;
+            if !recovery_identity_matches(&identity, info.id(), info.tag()) {
+                return None;
+            }
+            program.fd().ok()?.try_clone().ok()
         });
-        if !belongs_to_product {
-            return Err(format!("foreign filter at {location:?}"));
-        }
+        let _owner_fd = match pinned_owner {
+            Some(fd) => fd,
+            None => legacy_tc_owner_fd(
+                &identity,
+                legacy_program_name,
+                dae0_ifindex,
+                owners,
+                pin_path,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "foreign or unverified filter at {location:?}: program {}",
+                    identity.program_id
+                )
+            })?,
+        };
         SchedClassifierLink::attached(ifindex, parent, priority, handle.into(), None)
             .map_err(|error| format!("recover stale classifier at {location:?}: {error}"))?
             .detach()
             .map_err(|error| format!("detach stale classifier at {location:?}: {error}"))
     })
+}
+
+fn legacy_tc_owner_fd(
+    filter: &super::tc_netlink_query::FilterIdentity,
+    program_name: &str,
+    dae0_ifindex: Option<u32>,
+    owners: &[StaleTcOwner<'_>],
+    pin_path: impl Fn(&Path) -> PathBuf,
+) -> Option<aya::programs::ProgramFd> {
+    if owners.is_empty() {
+        return None;
+    }
+    // Old builds pinned their maps but not the TC program. Its private frozen
+    // PARAM map is still referenced by the classifier after the owner exits.
+    let program = aya::programs::loaded_programs()
+        .filter_map(Result::ok)
+        .find(|info| recovery_identity_matches(filter, info.id(), info.tag()))?;
+    if program.name_as_str() != Some(crate::truncated_bpf_name(program_name)) {
+        return None;
+    }
+    let fd = program.fd().ok()?;
+    let pid = program.map_ids().ok()??.into_iter().find_map(|id| {
+        let map = crate::ValidatedRuntimeMapHandle::open_by_id(id).ok()?;
+        legacy_param_owner(&map, dae0_ifindex)
+    })?;
+    owners
+        .iter()
+        .any(|owner| owner.pid == pid && matches!(pin_path(owner.pin_root).try_exists(), Ok(false)))
+        .then_some(fd)
+}
+
+fn legacy_param_owner(
+    map: &crate::ValidatedRuntimeMapHandle,
+    dae0_ifindex: Option<u32>,
+) -> Option<u32> {
+    use aya::maps::MapType;
+    use std::mem::{offset_of, size_of};
+
+    const BPF_F_RDONLY_PROG: u32 = 1 << 7;
+    let info = map.info();
+    if info.name != ".rodata"
+        || info.map_type != MapType::Array as u32
+        || info.key_size != 4
+        || info.value_size as usize != size_of::<BpfDaeParam>()
+        || info.max_entries != 1
+        || info.flags & BPF_F_RDONLY_PROG == 0
+    {
+        return None;
+    }
+    let fdinfo = fs::read_to_string(format!("/proc/self/fdinfo/{}", map.as_raw_fd())).ok()?;
+    if !fdinfo.lines().any(|line| {
+        line.strip_prefix("frozen:")
+            .is_some_and(|value| value.trim() == "1")
+    }) {
+        return None;
+    }
+    let mut param = [0; size_of::<BpfDaeParam>()];
+    map.lookup_elem_bytes(&0u32.to_ne_bytes(), &mut param)
+        .ok()?;
+    let read = |offset| u32::from_le_bytes(param[offset..offset + 4].try_into().unwrap());
+    let pid = read(offset_of!(BpfDaeParam, control_plane_pid));
+    let ifindex = read(offset_of!(BpfDaeParam, dae0_ifindex));
+    (read(offset_of!(BpfDaeParam, abi_version)) == crate::BPF_DAE_PARAM_ABI_VERSION
+        && pid != 0
+        && ifindex != 0
+        && dae0_ifindex.is_none_or(|expected| expected == ifindex))
+    .then_some(pid)
+}
+
+fn recovery_pin_path(
+    root: &Path,
+    ifindex: u32,
+    direction: TcAttachDirection,
+    priority: u16,
+    handle: u32,
+) -> PathBuf {
+    root.join("tc-recovery").join(format!(
+        "{ifindex}-{}-{priority}-{handle:08x}",
+        direction.as_str()
+    ))
+}
+
+fn recovery_identity_matches(
+    observed: &super::tc_netlink_query::FilterIdentity,
+    program_id: u32,
+    tag: u64,
+) -> bool {
+    observed.program_id == program_id && observed.tag == Some(tag.to_be_bytes())
+}
+
+#[cfg(test)]
+#[test]
+fn tc_recovery_identity_requires_id_and_tag() {
+    use super::tc_netlink_query::FilterIdentity;
+
+    let tag = 0x0123_4567_89ab_cdef_u64;
+    let mut observed = FilterIdentity {
+        program_id: 42,
+        tag: Some(tag.to_be_bytes()),
+    };
+    assert!(recovery_identity_matches(&observed, 42, tag));
+    assert!(!recovery_identity_matches(&observed, 43, tag));
+    assert!(!recovery_identity_matches(&observed, 42, tag + 1));
+    observed.tag = None;
+    assert!(!recovery_identity_matches(&observed, 42, tag));
 }
 
 pub(super) fn current_netns_interface_index(iface: &str) -> Result<u32, String> {

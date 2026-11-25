@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io;
 use std::net::{TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -111,70 +112,201 @@ pub(super) fn production_resource_leftovers() -> Vec<String> {
 pub(super) fn cleanup_stale_production_owner_after_crash(
     lan_ifaces: &[String],
     wan_ifaces: &[String],
+    native: bool,
 ) -> Result<(), String> {
     let leftovers = production_resource_leftovers();
-    let pin_dirs = native_runtime_pin_dirs();
-    if !should_cleanup_stale_production_owner(&leftovers, &pin_dirs) {
-        return Ok(());
+    let mount = match dae_ebpf_support::default_bpffs_mount() {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("find bpffs for stale native cleanup: {error}")),
+    };
+    let pin_dirs = mount
+        .as_deref()
+        .map(native_runtime_pin_dirs)
+        .transpose()
+        .map_err(|error| format!("list stale native pins: {error}"))?
+        .unwrap_or_default();
+    let cleanup_topology = should_cleanup_stale_production_owner(&leftovers, &pin_dirs);
+    let owners = if cleanup_topology || leftovers.is_empty() {
+        pin_dirs.as_slice()
+    } else {
+        &[]
+    };
+    if native || (cleanup_topology && !owners.is_empty()) {
+        detach_stale_host_filters(lan_ifaces, wan_ifaces, owners)?;
     }
-    if !pin_dirs.is_empty() {
-        detach_stale_host_filters(lan_ifaces, wan_ifaces)?;
+    if cleanup_topology {
+        super::topology_netlink::delete_link(PRODUCTION_HOST_IFACE)
+            .map_err(|error| format!("remove stale host link {PRODUCTION_HOST_IFACE}: {error}"))?;
+        super::topology_netlink::delete_namespace(PRODUCTION_NETNS).map_err(|error| {
+            format!("remove stale network namespace {PRODUCTION_NETNS}: {error}")
+        })?;
+        let remaining = production_resource_leftovers();
+        if !remaining.is_empty() {
+            return Err(format!(
+                "stale production topology still present: {}",
+                remaining.join(", ")
+            ));
+        }
     }
-    let _ = super::topology_netlink::delete_link(PRODUCTION_HOST_IFACE);
-    let _ = super::topology_netlink::delete_namespace(PRODUCTION_NETNS);
-    for pin_dir in pin_dirs {
-        let _ = fs::remove_dir_all(pin_dir.path);
+    if cleanup_topology || (native && leftovers.is_empty()) {
+        remove_unused_stale_native_pins(owners)?;
+    }
+    if let Some(mount) = mount {
+        remove_obsolete_native_pin_markers(&mount);
     }
     Ok(())
 }
 
-#[cfg(feature = "native-ebpf")]
-fn detach_stale_host_filters(lan_ifaces: &[String], wan_ifaces: &[String]) -> Result<(), String> {
-    use dae_ebpf_support::{
-        TcAttachDirection, TcAttachTarget, detach_stale_aya_tc_filter, tc_handle,
-    };
+fn remove_obsolete_native_pin_markers(mount: &Path) {
+    use std::os::unix::fs::MetadataExt;
 
-    // The native LAN and WAN attach paths use these deterministic slots.
-    for (ifaces, prefix, direction, priority, minor) in [
-        (
-            lan_ifaces,
-            "tproxy_lan_ingress",
-            TcAttachDirection::Ingress,
-            2,
-            0b100,
-        ),
-        (
-            lan_ifaces,
-            "tproxy_lan_egress",
-            TcAttachDirection::Egress,
-            1,
-            0b010,
-        ),
-        (
-            wan_ifaces,
-            "tproxy_wan_ingress",
-            TcAttachDirection::Ingress,
-            1,
-            0b010,
-        ),
-        (
-            wan_ifaces,
-            "tproxy_wan_egress",
-            TcAttachDirection::Egress,
-            2,
-            0b100,
-        ),
-    ] {
-        for iface in ifaces {
-            let target = TcAttachTarget::host(iface, direction);
-            detach_stale_aya_tc_filter(&target, priority, tc_handle(0x2023, minor), prefix)?;
+    let Ok(netns) = fs::metadata("/proc/thread-self/ns/net") else {
+        return;
+    };
+    let path = mount.join(format!("dae-stale-native-pins-{}", netns.ino()));
+    let Ok(entries) = fs::read_dir(&path) else {
+        return;
+    };
+    // Legacy markers contain only empty directories. Prune those entries
+    // without traversing or deleting any owner pin directory.
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .and_then(native_runtime_pin_pid)
+            .is_some()
+        {
+            let _ = fs::remove_dir(entry.path());
+        }
+    }
+    let _ = fs::remove_dir(path);
+}
+
+#[cfg(feature = "native-ebpf")]
+fn remove_unused_stale_native_pins(owners: &[NativeRuntimePinDir]) -> Result<(), String> {
+    if !owners
+        .iter()
+        .any(|owner| owner.stale && !owner.cleanup_pending)
+    {
+        return Ok(());
+    }
+    // An owner can retain filters on interfaces removed from the new config.
+    // An incomplete dump also leaves the owner directories available to retry.
+    for ifindex in super::topology_netlink::interface_indices()
+        .map_err(|error| format!("list interfaces for stale native cleanup: {error}"))?
+    {
+        if dae_ebpf_support::aya_host_tc_recovery_slots_occupied(ifindex)? {
+            return Ok(());
+        }
+    }
+    for owner in owners
+        .iter()
+        .filter(|owner| owner.stale && !owner.cleanup_pending)
+    {
+        let pin = &owner.path;
+        let pending = pin
+            .join("cleanup-pending")
+            .try_exists()
+            .map_err(|error| format!("check pending native cleanup {}: {error}", pin.display()))?;
+        if pending
+            || !pid_has_exited(owner.pid)
+                .map_err(|error| format!("check stale native owner PID {}: {error}", owner.pid))?
+        {
+            continue;
+        }
+        if let Err(error) = fs::remove_dir_all(pin)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            return Err(format!(
+                "remove stale native pins {}: {error}",
+                pin.display()
+            ));
         }
     }
     Ok(())
 }
 
 #[cfg(not(feature = "native-ebpf"))]
-fn detach_stale_host_filters(_lan_ifaces: &[String], _wan_ifaces: &[String]) -> Result<(), String> {
+fn remove_unused_stale_native_pins(_owners: &[NativeRuntimePinDir]) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(feature = "native-ebpf")]
+fn detach_stale_host_filters(
+    lan_ifaces: &[String],
+    wan_ifaces: &[String],
+    pin_dirs: &[NativeRuntimePinDir],
+) -> Result<(), String> {
+    use dae_ebpf_support::{
+        StaleTcOwner, TcAttachDirection, TcAttachTarget, detach_stale_aya_tc_filter, tc_handle,
+    };
+
+    let owners: Vec<_> = pin_dirs
+        .iter()
+        .filter(|dir| dir.stale && !dir.cleanup_pending)
+        .map(|dir| StaleTcOwner {
+            pin_root: &dir.path,
+            pid: dir.pid,
+        })
+        .collect();
+    let dae0_ifindex = match super::topology_netlink::ifindex(PRODUCTION_HOST_IFACE) {
+        Ok(index) => Some(index),
+        Err(error) if matches!(error.raw_os_error(), Some(libc::ENODEV | libc::ENXIO)) => None,
+        Err(error) => return Err(format!("resolve stale dae0 interface: {error}")),
+    };
+    // These slots and classifier roles are used by the native LAN and WAN attach paths.
+    for (ifaces, direction, priority, minor, program) in [
+        (
+            lan_ifaces,
+            TcAttachDirection::Ingress,
+            2,
+            0b100,
+            "tproxy_lan_ingress_l2",
+        ),
+        (
+            lan_ifaces,
+            TcAttachDirection::Egress,
+            1,
+            0b010,
+            "tproxy_lan_egress_l2",
+        ),
+        (
+            wan_ifaces,
+            TcAttachDirection::Ingress,
+            1,
+            0b010,
+            "tproxy_wan_ingress_l2",
+        ),
+        (
+            wan_ifaces,
+            TcAttachDirection::Egress,
+            2,
+            0b100,
+            "tproxy_wan_egress_l2",
+        ),
+    ] {
+        for iface in ifaces {
+            let target = TcAttachTarget::host(iface, direction);
+            detach_stale_aya_tc_filter(
+                &target,
+                priority,
+                tc_handle(0x2023, minor),
+                &owners,
+                program,
+                dae0_ifindex,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "native-ebpf"))]
+fn detach_stale_host_filters(
+    _lan_ifaces: &[String],
+    _wan_ifaces: &[String],
+    _pin_dirs: &[NativeRuntimePinDir],
+) -> Result<(), String> {
     Err("stale native TC filters require a build with native eBPF support".to_owned())
 }
 
@@ -196,27 +328,36 @@ fn should_cleanup_stale_production_owner(
 }
 
 struct NativeRuntimePinDir {
+    pid: u32,
     path: PathBuf,
     stale: bool,
     cleanup_pending: bool,
 }
 
-fn native_runtime_pin_dirs() -> Vec<NativeRuntimePinDir> {
-    let Ok(entries) = fs::read_dir("/sys/fs/bpf") else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            let pid = native_runtime_pin_pid(&name)?;
-            Some(NativeRuntimePinDir {
-                cleanup_pending: entry.path().join("cleanup-pending").exists(),
+fn native_runtime_pin_dirs(mount: &Path) -> io::Result<Vec<NativeRuntimePinDir>> {
+    let mut owners = Vec::new();
+    for entry in fs::read_dir(mount)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(native_runtime_pin_pid) else {
+            continue;
+        };
+        if entry.file_type()?.is_dir() {
+            owners.push(NativeRuntimePinDir {
+                pid,
+                cleanup_pending: entry.path().join("cleanup-pending").try_exists()?,
                 path: entry.path(),
-                stale: !PathBuf::from(format!("/proc/{pid}")).exists(),
-            })
-        })
-        .collect()
+                stale: pid_has_exited(pid)?,
+            });
+        }
+    }
+    Ok(owners)
+}
+
+fn pid_has_exited(pid: u32) -> io::Result<bool> {
+    PathBuf::from(format!("/proc/{pid}"))
+        .try_exists()
+        .map(|exists| !exists)
 }
 
 fn native_runtime_pin_pid(name: &str) -> Option<u32> {
@@ -307,6 +448,7 @@ mod tests {
     #[test]
     fn stale_owner_cleanup_requires_leftovers_and_only_dead_native_pins() {
         let stale = NativeRuntimePinDir {
+            pid: 1,
             path: PathBuf::from("/tmp/dae-native-runtime-1-0"),
             stale: true,
             cleanup_pending: false,
@@ -314,12 +456,14 @@ mod tests {
         assert!(!should_cleanup_stale_production_owner(
             &[format!("iface:{PRODUCTION_HOST_IFACE}")],
             &[NativeRuntimePinDir {
+                pid: 4,
                 path: PathBuf::from("/tmp/dae-native-runtime-4-0"),
                 stale: true,
                 cleanup_pending: true,
             }],
         ));
         let active = NativeRuntimePinDir {
+            pid: 2,
             path: PathBuf::from("/tmp/dae-native-runtime-2-0"),
             stale: false,
             cleanup_pending: false,
@@ -341,6 +485,7 @@ mod tests {
         assert!(should_cleanup_stale_production_owner(
             &[format!("iface:{PRODUCTION_HOST_IFACE}")],
             &[NativeRuntimePinDir {
+                pid: 3,
                 path: PathBuf::from("/tmp/dae-native-runtime-3-0"),
                 stale: true,
                 cleanup_pending: false,

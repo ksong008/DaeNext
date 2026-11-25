@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 23914
+      "tests": 23965
     },
     "dae-outbound": {
       "production": 9255,
@@ -84,7 +84,7 @@
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,
-      "tests": 4139
+      "tests": 4190
     }
   },
   "dns_audit_regression_rationale": "2026-10-17: account only for new DNS audit regression test lines; production limits unchanged.",
@@ -100,5 +100,6 @@
   "listener_startup_failure_rationale": "2026-11-03: account only for measured test overages from real startup listener snapshot/corruption failure, exact rollback and foreign resource preservation regressions; no extra growth allowance or production budget changes.",
   "listener_duplicate_slot_rationale": "2026-11-03: account only for measured test growth covering live same-type replacement of every resident listener slot and paired TCP/UDP cookie consistency; production budgets unchanged, no extra growth allowance.",
   "resident_worker_park_regression_rationale": "2026-11-17: account only for production allocator adapter and distinct scheduler park/unpark wiring regression tests; no production limit changes or spare test allowance.",
-  "direct_udp_receive_buffer_rationale": "2026-11-24: cover the measured 13-line overage after adding 18 inline buffer reuse test lines and removing three runtime lines."
+  "direct_udp_receive_buffer_rationale": "2026-11-24: cover the measured 13-line overage after adding 18 inline buffer reuse test lines and removing three runtime lines.",
+  "stale_native_pins_rationale": "Account for regressions covering TC filters on omitted interfaces, obsolete retry markers and pending cleanup."
 }

@@ -44,52 +44,169 @@ fn original_ns() -> u64 {
 }
 
 #[test]
-fn stale_netlink_recovery_checks_classifier_name_at_the_exact_slot() {
-    let Some(mut loaded) = super::super::listener_lifecycle_tests::loaded_with_timeout(None) else {
+fn stale_netlink_recovery_requires_the_program_pinned_for_the_slot() {
+    let Some(mut stale) = super::super::listener_lifecycle_tests::loaded_with_timeout(None) else {
         return;
     };
     let ns = Namespace::new();
     ns.iface("owned0");
     let mut spec = spec(&ns, "owned0");
     spec.program_name = "tproxy_lan_ingress_l2".to_owned();
-    load_attach_aya_sched_classifier(&mut loaded, &spec, AttachBackend::TcNetlink).unwrap();
-
-    let filter_exists = || {
-        query_aya_tc_netlink_binding(&spec.target, spec.priority, spec.handle)
-            .unwrap()
-            .1
-            .is_some()
+    spec.priority = 2;
+    spec.handle = crate::tc_handle(0x2023, 4);
+    let mut host_spec = spec.clone();
+    host_spec.target.netns = None;
+    let stale_root = stale.report.map_pin_path.clone().unwrap();
+    let mut unreserved = host_spec.clone();
+    unreserved.priority = 1;
+    for backend in [AttachBackend::TcNetlink, AttachBackend::Tcx] {
+        let error = with_optional_netns(Some(&ns.0), || {
+            load_attach_aya_sched_classifier_with_recovery(
+                &mut stale,
+                &unreserved,
+                backend,
+                Some(&stale_root),
+            )
+        })
+        .unwrap_err();
+        assert!(error.contains("requires a reserved host slot"), "{error}");
+        assert!(!stale_root.join("tc-recovery").exists());
+        assert_eq!(stale.pending_attachment_count(), 0);
+    }
+    let attach = |loaded: &mut AyaUserspaceLoadedObject, root: &Path| {
+        with_optional_netns(Some(&ns.0), || {
+            load_attach_aya_sched_classifier_with_recovery(
+                loaded,
+                &host_spec,
+                AttachBackend::TcNetlink,
+                Some(root),
+            )
+        })
+        .unwrap()
     };
-    assert!(filter_exists());
-    assert!(
+    let query = || query_aya_tc_netlink_binding(&spec.target, spec.priority, spec.handle).unwrap();
+    let recover = |handle, owners: &[StaleTcOwner<'_>]| {
         detach_stale_aya_tc_filter(
             &spec.target,
             spec.priority,
-            spec.handle,
-            "tproxy_wan_ingress"
+            handle,
+            owners,
+            &spec.program_name,
+            Some(1),
         )
-        .is_err()
+    };
+    let stale_owner = || StaleTcOwner {
+        pin_root: &stale_root,
+        pid: 99,
+    };
+
+    let report = attach(&mut stale, &stale_root);
+    let (ifindex, old) = query();
+    assert_eq!(old.as_ref().map(|(id, _)| *id), report.program_id);
+    let pinned = SchedClassifier::from_pin(stale_root.join("tc-recovery").join(format!(
+        "{ifindex}-ingress-{}-{:08x}",
+        spec.priority, spec.handle,
+    )))
+    .unwrap();
+    let info = pinned.info().unwrap();
+    assert_eq!(
+        info.name_as_str(),
+        Some(crate::truncated_bpf_name(&spec.program_name))
     );
-    assert!(filter_exists());
-    detach_stale_aya_tc_filter(
-        &spec.target,
-        spec.priority,
-        spec.handle + 1,
-        "tproxy_lan_ingress",
+    assert_ne!(info.name_as_str(), Some(spec.program_name.as_str()));
+
+    assert!(
+        recover(spec.handle, &[])
+            .unwrap_err()
+            .contains("unverified")
+    );
+    recover(spec.handle + 1, &[stale_owner()]).unwrap();
+    assert_eq!(query().1, old);
+    recover(spec.handle, &[stale_owner()]).unwrap();
+    assert!(query().1.is_none());
+    recover(spec.handle, &[stale_owner()]).unwrap();
+    stale.cleanup_retained_links(None).unwrap();
+
+    let mut replacement =
+        super::super::listener_lifecycle_tests::loaded_with_timeout(None).unwrap();
+    let replacement_root = replacement.report.map_pin_path.clone().unwrap();
+    let replacement_report = attach(&mut replacement, &replacement_root);
+    assert_eq!(report.program_name, replacement_report.program_name);
+    assert_eq!(report.program_tag, replacement_report.program_tag);
+    assert_ne!(report.program_id, replacement_report.program_id);
+    let foreign = query().1.unwrap();
+    assert!(
+        recover(spec.handle, &[stale_owner()])
+            .unwrap_err()
+            .contains("foreign")
+    );
+    assert_eq!(query().1, Some(foreign));
+    recover(
+        spec.handle,
+        &[
+            stale_owner(),
+            StaleTcOwner {
+                pin_root: &replacement_root,
+                pid: 99,
+            },
+        ],
     )
     .unwrap();
-    assert!(filter_exists());
-    for _ in 0..2 {
-        detach_stale_aya_tc_filter(
-            &spec.target,
-            spec.priority,
-            spec.handle,
-            "tproxy_lan_ingress",
-        )
-        .unwrap();
-        assert!(!filter_exists());
+    replacement.cleanup_retained_links(None).unwrap();
+    assert!(query().1.is_none());
+}
+
+#[test]
+fn loaded_object_exercises_legacy_recovery_for_all_host_roles_without_program_pins() {
+    let Some(mut loaded) = super::super::listener_lifecycle_tests::loaded_with_timeout(None) else {
+        return;
+    };
+    let ns = Namespace::new();
+    ns.iface("owned0");
+    let root = loaded.report.map_pin_path.clone().unwrap();
+    let owner = |pid| StaleTcOwner {
+        pin_root: &root,
+        pid,
+    };
+    for (role, direction) in [
+        ("lan_ingress", TcAttachDirection::Ingress),
+        ("lan_egress", TcAttachDirection::Egress),
+        ("wan_ingress", TcAttachDirection::Ingress),
+        ("wan_egress", TcAttachDirection::Egress),
+    ] {
+        for layer in ["l2", "l3"] {
+            let mut spec = spec(&ns, "owned0");
+            spec.target.direction = direction;
+            spec.program_name = format!("tproxy_{role}_{layer}");
+            load_attach_aya_sched_classifier(&mut loaded, &spec, AttachBackend::TcNetlink).unwrap();
+            let expected_name = format!("tproxy_{role}_l2");
+            let filter = || {
+                query_aya_tc_netlink_binding(&spec.target, spec.priority, spec.handle)
+                    .unwrap()
+                    .1
+            };
+            let recover = |pid, dae0_ifindex, name| {
+                detach_stale_aya_tc_filter(
+                    &spec.target,
+                    spec.priority,
+                    spec.handle,
+                    &[owner(pid)],
+                    name,
+                    dae0_ifindex,
+                )
+            };
+            assert!(!root.join("tc-recovery").exists());
+            let before = filter().unwrap();
+            assert!(recover(100, Some(1), &expected_name).is_err());
+            assert!(recover(99, Some(2), &expected_name).is_err());
+            assert!(recover(99, Some(1), "foreign_l2").is_err());
+            assert_eq!(filter(), Some(before));
+            recover(99, Some(1), &expected_name)
+                .unwrap_or_else(|error| panic!("{role}/{layer}: {error}"));
+            assert!(filter().is_none());
+            loaded.cleanup_retained_links(None).unwrap();
+        }
     }
-    loaded.cleanup_retained_links(None).unwrap();
 }
 
 #[test]

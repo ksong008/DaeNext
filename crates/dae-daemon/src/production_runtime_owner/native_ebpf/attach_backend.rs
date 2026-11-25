@@ -121,8 +121,21 @@ impl NativeEbpfRuntimeState {
         } else {
             None
         };
-        let loaded = self.ensure_loaded(param_object)?;
-        let report = dae_ebpf_support::load_attach_aya_sched_classifier(loaded, &spec, backend)?;
+        self.ensure_loaded(param_object)?;
+        let recovery_root =
+            if spec.target.netns.is_none() && spec.target.iface != PRODUCTION_HOST_IFACE {
+                self.pin_root.as_deref()
+            } else {
+                None
+            };
+        let report = dae_ebpf_support::load_attach_aya_sched_classifier_with_recovery(
+            self.loaded
+                .as_mut()
+                .expect("ensure_loaded initialized the native owner"),
+            &spec,
+            backend,
+            recovery_root,
+        )?;
         if let Some(peer_netns) = peer_netns {
             self.peer_netns = Some(peer_netns);
         }

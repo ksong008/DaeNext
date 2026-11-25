@@ -120,7 +120,10 @@ pub(super) fn delete_namespace(name: &str) -> io::Result<()> {
             _ => return Err(error),
         }
     }
-    std::fs::remove_file(path)
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
 }
 
 pub(super) fn add_address(name: &str, address: IpAddr) -> io::Result<()> {
@@ -316,6 +319,18 @@ pub(super) fn ifindex(name: &str) -> io::Result<u32> {
         0 => Err(io::Error::last_os_error()),
         index => Ok(index),
     }
+}
+
+#[cfg(feature = "native-ebpf")]
+pub(super) fn interface_indices() -> io::Result<Vec<u32>> {
+    use dae_netutil::rtnetlink::{dump, read_u32};
+
+    let mut indices = Vec::new();
+    dump(libc::RTM_GETLINK, &[0; 16], libc::RTM_NEWLINK, |link| {
+        indices.push(read_u32(link.get(4..8).ok_or_else(malformed)?)?);
+        Ok(())
+    })?;
+    Ok(indices)
 }
 
 fn name_bytes(name: &str) -> io::Result<Vec<u8>> {

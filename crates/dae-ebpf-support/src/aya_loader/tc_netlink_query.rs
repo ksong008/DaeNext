@@ -1,6 +1,11 @@
 //! Read-only rtnetlink classifier metadata and ownership checks.
 use super::*;
 
+pub(super) const HOST_TC_RECOVERY_SLOTS: [(u16, u32); 2] = [
+    (1, crate::tc_handle(0x2023, 2)),
+    (2, crate::tc_handle(0x2023, 4)),
+];
+
 #[derive(Debug)]
 pub(super) struct FilterLocation {
     pub ifindex: u32,
@@ -13,7 +18,6 @@ pub(super) struct FilterLocation {
 pub(super) struct FilterIdentity {
     pub program_id: u32,
     pub tag: Option<[u8; 8]>,
-    pub name: Option<Vec<u8>>,
 }
 
 pub(super) fn filter_program_id(location: &FilterLocation) -> Result<Option<u32>, String> {
@@ -31,10 +35,67 @@ pub(super) fn filter_identity(location: &FilterLocation) -> Result<Option<Filter
         }
         return Err(format!("resolve netlink interface: {error}"));
     }
-    query(location).map_err(|e| format!("observe netlink {location:?}: {e}"))
+    let mut found = None;
+    visit_filters(location.ifindex, location.parent, |message| {
+        if filter_slot(message)? != (location.priority, location.handle) {
+            return Ok(());
+        }
+        let attributes = attrs(&message[36..])?;
+        let kind = attributes
+            .iter()
+            .find(|(kind, _)| *kind == 1)
+            .map(|(_, data)| *data);
+        if kind != Some(b"bpf\0".as_slice()) {
+            return Err(invalid("foreign non-BPF filter"));
+        }
+        let options = attributes
+            .iter()
+            .find(|(kind, _)| *kind == 2)
+            .ok_or_else(|| invalid("missing BPF options"))?
+            .1;
+        let nested = attrs(options)?;
+        let id = nested
+            .iter()
+            .find(|(kind, _)| *kind == 11)
+            .ok_or_else(|| invalid("missing BPF program ID"))?
+            .1;
+        let tag = nested
+            .iter()
+            .find(|(kind, _)| *kind == 10)
+            .map(|(_, data)| (*data).try_into())
+            .transpose()
+            .map_err(|_| invalid("invalid BPF program tag"))?;
+        let identity = FilterIdentity {
+            program_id: u32_at(id, 0)?,
+            tag,
+        };
+        if found.replace(identity).is_some() {
+            return Err(invalid("ambiguous TC filter location"));
+        }
+        Ok(())
+    })
+    .map_err(|e| format!("observe netlink {location:?}: {e}"))?;
+    Ok(found)
 }
 
-fn query(location: &FilterLocation) -> io::Result<Option<FilterIdentity>> {
+pub(super) fn reserved_slot_occupied(ifindex: u32, parent: u32) -> io::Result<bool> {
+    let mut occupied = false;
+    visit_filters(ifindex, parent, |message| {
+        occupied |= HOST_TC_RECOVERY_SLOTS.contains(&filter_slot(message)?);
+        Ok(())
+    })?;
+    Ok(occupied)
+}
+
+fn filter_slot(message: &[u8]) -> io::Result<(u16, u32)> {
+    Ok(((u32_at(message, 32)? >> 16) as u16, u32_at(message, 24)?))
+}
+
+fn visit_filters(
+    ifindex: u32,
+    parent: u32,
+    mut visit: impl FnMut(&[u8]) -> io::Result<()>,
+) -> io::Result<()> {
     // SAFETY: fresh datagram socket, exclusively owned below.
     let raw = unsafe {
         libc::socket(
@@ -79,8 +140,8 @@ fn query(location: &FilterLocation) -> io::Result<Option<FilterIdentity>> {
     request[4..6].copy_from_slice(&46_u16.to_ne_bytes()); // RTM_GETTFILTER
     request[6..8].copy_from_slice(&0x301_u16.to_ne_bytes()); // REQUEST | DUMP
     request[8..12].copy_from_slice(&1_u32.to_ne_bytes());
-    request[20..24].copy_from_slice(&location.ifindex.to_ne_bytes());
-    request[28..32].copy_from_slice(&location.parent.to_ne_bytes());
+    request[20..24].copy_from_slice(&ifindex.to_ne_bytes());
+    request[28..32].copy_from_slice(&parent.to_ne_bytes());
     if unsafe {
         libc::sendto(
             raw,
@@ -94,7 +155,6 @@ fn query(location: &FilterLocation) -> io::Result<Option<FilterIdentity>> {
     {
         return Err(io::Error::last_os_error());
     }
-    let mut found = None;
     let mut buffer = vec![0_u8; 65536];
     for _ in 0..256 {
         let count = unsafe {
@@ -130,7 +190,7 @@ fn query(location: &FilterLocation) -> io::Result<Option<FilterIdentity>> {
                             return Err(io::Error::from_raw_os_error(-error));
                         }
                     }
-                    return Ok(found);
+                    return Ok(());
                 }
                 2 => {
                     let error = u32_at(message, 16)? as i32;
@@ -140,49 +200,8 @@ fn query(location: &FilterLocation) -> io::Result<Option<FilterIdentity>> {
                 }
                 44 => {
                     // RTM_NEWTFILTER
-                    let info = u32_at(message, 32)?;
-                    if u32_at(message, 20)? == location.ifindex
-                        && u32_at(message, 28)? == location.parent
-                        && u32_at(message, 24)? == location.handle
-                        && (info >> 16) == u32::from(location.priority)
-                    {
-                        let attributes = attrs(&message[36..])?;
-                        let kind = attributes
-                            .iter()
-                            .find(|(kind, _)| *kind == 1)
-                            .map(|(_, data)| *data);
-                        if kind != Some(b"bpf\0".as_slice()) {
-                            return Err(invalid("foreign non-BPF filter"));
-                        }
-                        let options = attributes
-                            .iter()
-                            .find(|(kind, _)| *kind == 2)
-                            .ok_or_else(|| invalid("missing BPF options"))?
-                            .1;
-                        let nested = attrs(options)?;
-                        let id = nested
-                            .iter()
-                            .find(|(kind, _)| *kind == 11)
-                            .ok_or_else(|| invalid("missing BPF program ID"))?
-                            .1;
-                        let tag = nested
-                            .iter()
-                            .find(|(kind, _)| *kind == 10) // TCA_BPF_TAG
-                            .map(|(_, data)| (*data).try_into())
-                            .transpose()
-                            .map_err(|_| invalid("invalid BPF program tag"))?;
-                        let identity = FilterIdentity {
-                            program_id: u32_at(id, 0)?,
-                            tag,
-                            name: nested
-                                .iter()
-                                .find(|(kind, _)| *kind == 7) // TCA_BPF_NAME
-                                .and_then(|(_, name)| name.strip_suffix(&[0]))
-                                .map(<[u8]>::to_vec),
-                        };
-                        if found.replace(identity).is_some() {
-                            return Err(invalid("ambiguous TC filter location"));
-                        }
+                    if u32_at(message, 20)? == ifindex && u32_at(message, 28)? == parent {
+                        visit(message)?;
                     }
                 }
                 _ => {}

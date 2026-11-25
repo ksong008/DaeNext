@@ -27,11 +27,40 @@ deletion is not an atomic conditional delete against another privileged process.
 Coordinate external TC writers; the runtime does not guarantee protection from
 an arbitrary concurrent privileged replacement between these operations.
 
-After a crash, the native startup path checks for stale runtime pins before
-recovering host filters through rtnetlink. It checks the configured LAN and WAN
-interfaces for the native classifier at each expected direction, priority and
-handle. Recovery accepts the expected L2 or L3 classifier name and stops if a
-foreign filter occupies the slot.
+Before attaching a host TC netlink filter, the resident runtime pins its
+program under the owner directory for that interface index, direction,
+priority and handle. Recovery-enabled attach accepts priority 1 with handle
+`0x2023:2` or priority 2 with handle `0x2023:4`. After a crash, startup reads
+the program ID and tag from stale owner pins and verifies both against the
+kernel filter at the slot before detaching. Absent slots already satisfy
+recovery. With older builds, startup can identify a filter by the referenced
+frozen PARAM map. The classifier role,
+program ID and tag must agree with the kernel observations. The map must be a
+single-entry `.rodata` array with a 4-byte key, a 48-byte PARAM value and
+`BPF_F_RDONLY_PROG`. PARAM must use the current ABI (2) and carry a nonzero
+owner PID and dae0 interface index. The PID must match a stale native owner
+directory. The index must match dae0 when the interface still exists. A
+program pin for the same slot takes precedence over the fallback. Recovery
+from the packaged rb96 was verified after a forced exit. A filter in a
+configured LAN or WAN recovery slot with unverifiable ownership blocks
+startup and remains attached.
+
+Native startup checks the reserved TC netlink slots on the configured LAN and
+WAN interfaces even when the production link, namespace and pins are absent.
+Crash recovery removes stale native pins after the topology is absent and a
+fresh dump finds every reserved TC netlink slot empty on every interface in
+the current network namespace. Occupancy on an interface outside the
+configuration keeps the pins available and allows startup to continue.
+Failed detach, failed topology cleanup, an incomplete dump, and
+`cleanup-pending` also keep the affected pins available. The next native startup checks these
+conditions again after a failed pin removal. Startup also prunes empty legacy
+retry marker directories for the current namespace independently of the owner
+pins.
+
+Normal production topology removal releases its peer filter. The TC slot dump
+covers the current network namespace. A surviving peer namespace
+without its named mount or an interface moved to another network namespace
+falls outside that scan.
 
 Permanent permission or kernel errors can leave attachments pending. Cleanup
 retains recovery evidence and refuses to report success; it does not guarantee

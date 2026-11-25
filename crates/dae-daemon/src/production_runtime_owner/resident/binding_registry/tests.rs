@@ -148,3 +148,29 @@ fn tcx_and_tc_netlink_identity_checks_are_exact() {
     assert!(!observe::ordered_subsequence(&[7, 9], &[9, 7]));
     assert!(!observe::ordered_subsequence(&[7, 9], &[7]));
 }
+
+#[test]
+fn tc_netlink_postflight_requires_an_empty_slot_after_detach() {
+    let binding = tc_binding("first");
+    let owned = Some((binding.program_id, binding.program_tag.clone()));
+    let foreign = Some((binding.program_id + 1, "ffeeddccbbaa0099".to_owned()));
+    let report = |expected, ifindex, filter| {
+        observe::tc_netlink_observation(&binding, expected, ifindex, filter)
+    };
+
+    let occupied = report(false, binding.ifindex, foreign.clone());
+    assert_eq!(occupied["status"], "fail");
+    assert_eq!(occupied["observedPresent"], true);
+    assert_eq!(occupied["identityMatches"], false);
+    assert_eq!(
+        report(false, binding.ifindex, owned.clone())["status"],
+        "fail"
+    );
+    assert_eq!(report(false, binding.ifindex, None)["status"], "pass");
+    assert_eq!(report(true, binding.ifindex, foreign)["status"], "fail");
+    assert_eq!(
+        report(true, binding.ifindex + 1, owned.clone())["status"],
+        "fail"
+    );
+    assert_eq!(report(true, binding.ifindex, owned)["status"], "pass");
+}

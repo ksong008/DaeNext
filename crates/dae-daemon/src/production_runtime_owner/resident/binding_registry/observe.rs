@@ -173,9 +173,19 @@ fn observe_tc_netlink_binding(binding: &ResidentTcBinding, expected_present: boo
             &observed.unwrap_err(),
         );
     };
-    let present = tc_identity_matches_binding(observed.as_ref(), binding);
+    tc_netlink_observation(binding, expected_present, ifindex, observed)
+}
+
+pub(super) fn tc_netlink_observation(
+    binding: &ResidentTcBinding,
+    expected_present: bool,
+    ifindex: u32,
+    observed: Option<(u32, String)>,
+) -> Value {
+    let occupied = observed.is_some();
+    let owned = tc_identity_matches_binding(observed.as_ref(), binding);
     let ifindex_matches = ifindex == binding.ifindex;
-    let pass = present == expected_present && (!expected_present || ifindex_matches);
+    let pass = occupied == expected_present && (!expected_present || (owned && ifindex_matches));
     json!({
         "status": if pass { "pass" } else { "fail" },
         "backend": "tc_netlink",
@@ -184,7 +194,8 @@ fn observe_tc_netlink_binding(binding: &ResidentTcBinding, expected_present: boo
         "netns": binding.netns,
         "direction": binding.direction.as_str(),
         "expectedPresent": expected_present,
-        "observedPresent": present,
+        "observedPresent": occupied,
+        "identityMatches": owned,
         "expectedIfindex": binding.ifindex,
         "observedIfindex": ifindex,
         "ifindexMatches": ifindex_matches,

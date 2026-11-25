@@ -67,6 +67,62 @@ pub(super) fn enter_private_namespace(test_name: &str) -> bool {
 }
 
 #[test]
+fn stale_pin_cleanup_checks_omitted_interfaces_and_pending_owners() {
+    let test_name = concat!(
+        module_path!(),
+        "::stale_pin_cleanup_checks_omitted_interfaces_and_pending_owners"
+    );
+    if !enter_private_namespace(test_name.split_once("::").unwrap().1) {
+        return;
+    }
+    use dae_ebpf_support::{
+        AyaUserspaceBytesLoaderOptions, TcAttachDirection, TcAttachTarget, TcBpfAttachSpec,
+        load_attach_aya_sched_classifier, load_aya_userspace_object_bytes, tc_handle,
+    };
+
+    let owner = Command::new("true").spawn().unwrap();
+    let pid = owner.id();
+    assert!(owner.wait_with_output().unwrap().status.success());
+    let pin_root = dae_ebpf_support::default_bpffs_mount().unwrap();
+    let stale = pin_root.join(format!("dae-native-runtime-{pid}-0"));
+    let pending = pin_root.join(format!("dae-native-runtime-{pid}-1"));
+    fs::create_dir(&stale).unwrap();
+    fs::create_dir_all(pending.join("cleanup-pending")).unwrap();
+    use std::os::unix::fs::MetadataExt;
+    let netns = fs::metadata("/proc/thread-self/ns/net").unwrap().ino();
+    let old_marker = pin_root.join(format!("dae-stale-native-pins-{netns}"));
+    fs::create_dir_all(old_marker.join(stale.file_name().unwrap())).unwrap();
+    fs::create_dir(old_marker.join(pending.file_name().unwrap())).unwrap();
+    let mut options = AyaUserspaceBytesLoaderOptions::new(
+        EMBEDDED_NATIVE_OBJECT_IDENTITY,
+        dae_ebpf_loader::embedded_native_aya_object(),
+    );
+    options.map_pin_path = Some(&stale);
+    let mut loaded = load_aya_userspace_object_bytes(options).unwrap();
+    let spec = TcBpfAttachSpec::new(
+        TcAttachTarget::host("route-lan1", TcAttachDirection::Egress),
+        "1",
+        "unused",
+        "classifier/lan_egress_l2",
+    )
+    .native_attach_spec("tproxy_lan_egress_l2", 1, tc_handle(0x2023, 2));
+    load_attach_aya_sched_classifier(&mut loaded, &spec, AttachBackend::TcNetlink).unwrap();
+
+    let cleanup = || {
+        cleanup_stale_production_owner_after_crash(&["route-lan0".into()], &[], true).unwrap();
+    };
+    cleanup();
+    assert!(stale.exists());
+    assert!(pending.exists());
+    assert!(!old_marker.exists());
+
+    loaded.cleanup_retained_links(None).unwrap();
+    cleanup();
+    assert!(!stale.exists());
+    assert!(pending.join("cleanup-pending").exists());
+}
+
+#[test]
 fn real_resident_start_prepares_before_attach_and_reuses_the_kernel_map_cache() {
     let test_name = concat!(
         module_path!(),

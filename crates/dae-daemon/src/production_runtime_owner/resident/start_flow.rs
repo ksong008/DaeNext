@@ -63,9 +63,16 @@ pub(super) fn start_with_options(
             blockers.join("; ")
         ));
     }
-    if options.execute && production_names_check_failed(&checks) {
-        cleanup_stale_production_owner_after_crash(&lan_ifaces, &wan_ifaces)?;
-        refresh_production_names_check(&mut checks, &options);
+    let names_in_use = production_names_check_failed(&checks);
+    if options.execute && (options.native_ebpf_requested || names_in_use) {
+        cleanup_stale_production_owner_after_crash(
+            &lan_ifaces,
+            &wan_ifaces,
+            options.native_ebpf_requested,
+        )?;
+        if names_in_use {
+            refresh_production_names_check(&mut checks, &options);
+        }
     }
     let blockers = preflight_blockers(&checks, true);
     if !blockers.is_empty() {

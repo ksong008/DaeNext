@@ -114,7 +114,7 @@ run_listener_lifecycle_test() {
     exit 1
   fi
 }
-run_listener_lifecycle_test retained-cleanup 4 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
+run_listener_lifecycle_test retained-cleanup 5 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader retained_links::tests
 run_listener_lifecycle_test retained-netns 1 DAE_RUN_LISTENER_LIFECYCLE_SMOKE \
   dae-ebpf-support aya-loader retained_netns_tests
@@ -122,7 +122,7 @@ run_listener_lifecycle_test listener-negative 4 DAE_RUN_LISTENER_LIFECYCLE_SMOKE
   dae-ebpf-support aya-loader listener_lifecycle_tests
 run_listener_lifecycle_test startup-routing 6 DAE_RUN_STARTUP_ROUTING_TESTS \
   dae-daemon native-ebpf startup_routing_tests
-run_listener_lifecycle_test resident-startup 1 DAE_RUN_RESIDENT_STARTUP_SMOKE \
+run_listener_lifecycle_test resident-startup 2 DAE_RUN_RESIDENT_STARTUP_SMOKE \
   dae-daemon native-ebpf startup_routing_kernel_tests
 run_listener_lifecycle_test resident-listener-failure 1 DAE_RUN_RESIDENT_STARTUP_SMOKE \
   dae-daemon native-ebpf startup_listener_kernel_tests
