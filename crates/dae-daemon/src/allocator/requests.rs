@@ -662,20 +662,11 @@ pub(super) fn allocator_reclaim_request_snapshot_json() -> Value {
 mod tests {
     use super::*;
 
-    static REQUEST_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    fn reset_requests() {
-        let mut registry = RECLAIM_REQUEST_REGISTRY
-            .get_or_init(|| Mutex::new(AllocatorReclaimRequestRegistry::default()))
-            .lock()
-            .unwrap();
-        *registry = AllocatorReclaimRequestRegistry::default();
-    }
-
     #[test]
     fn deferred_reclaim_requests_merge_scope_urgency_reasons_and_count() {
-        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
-        reset_requests();
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
 
         let _ = allocator_request_control_plane_reclaim();
         allocator_request_reclaim(AllocatorReclaimReason::GroupHealthProbe);
@@ -717,8 +708,9 @@ mod tests {
 
     #[test]
     fn same_publication_is_pending_once_and_purged_at_most_once() {
-        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
-        reset_requests();
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
 
         let first =
             allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 42);
@@ -744,8 +736,9 @@ mod tests {
 
     #[test]
     fn publication_reclaim_overflow_remains_deduplicated_during_retry_and_after_purge() {
-        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
-        reset_requests();
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
         for id in 1..=256 {
             assert_eq!(
                 allocator_request_reclaim_for_publication(
@@ -787,13 +780,13 @@ mod tests {
             assert_eq!(receipt["alreadyPurged"], true);
         }
         assert!(!allocator_pending_reclaim_requests());
-        reset_requests();
     }
 
     #[test]
     fn publication_reclaim_history_eviction_does_not_forget_successful_purges() {
-        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
-        reset_requests();
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
         for id in 1..=(MAX_PUBLICATION_PURGE_HISTORY as u64 + 2) {
             allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, id);
             allocator_record_publication_reclaim(&allocator_take_reclaim_requests());
@@ -808,13 +801,13 @@ mod tests {
             true
         );
         assert!(!allocator_pending_reclaim_requests());
-        reset_requests();
     }
 
     #[test]
     fn retired_generation_only_detection_does_not_hide_a_merged_reload() {
-        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
-        reset_requests();
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
 
         allocator_request_reclaim(AllocatorReclaimReason::RetiredGenerationReleased);
         assert!(allocator_pending_reclaim_is_only(
@@ -830,8 +823,9 @@ mod tests {
 
     #[test]
     fn a_taken_batch_can_be_restored_without_losing_metadata() {
-        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
-        reset_requests();
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
         let _ =
             allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 7);
         let batch = allocator_take_reclaim_requests();
@@ -844,8 +838,9 @@ mod tests {
 
     #[test]
     fn a_new_request_wakes_the_event_driven_coordinator_wait() {
-        let _guard = REQUEST_TEST_LOCK.lock().unwrap();
-        reset_requests();
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
         let epoch = allocator_reclaim_request_wake_epoch();
         let requested = std::thread::spawn(|| {
             std::thread::sleep(Duration::from_millis(10));

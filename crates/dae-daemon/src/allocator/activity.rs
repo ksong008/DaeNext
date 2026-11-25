@@ -134,6 +134,9 @@ mod tests {
 
     #[test]
     fn busy_lease_is_released_by_raii() {
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
         let before = allocator_reclaim_busy_count();
         {
             let _lease = allocator_reclaim_busy(AllocatorReclaimBusyKind::Geodata);

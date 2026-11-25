@@ -4,22 +4,7 @@ use crate::allocator::mallctl::fault::{Operation, fail_once};
 fn on_worker(
     test: impl FnOnce(AllocatorRuntimeReclaimHooks, Arc<AllocatorWorkerState>) + Send + 'static,
 ) {
-    // Each scenario observes process-wide diagnostics. A subprocess isolates
-    // its epochs/counters from other allocator tests run in parallel by CI.
-    let current = std::thread::current();
-    let name = current.name().unwrap();
-    if std::env::var("DAED_ALLOCATOR_CACHE_TEST").as_deref() != Ok(name) {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([name, "--exact", "--test-threads=1"])
-            .env("DAED_ALLOCATOR_CACHE_TEST", name)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+    if !crate::tests::in_isolated_process() {
         return;
     }
     std::thread::spawn(move || {

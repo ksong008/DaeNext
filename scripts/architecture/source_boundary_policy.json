@@ -35,7 +35,7 @@
     },
     "dae-daemon": {
       "production": 50814,
-      "tests": 23965
+      "tests": 24018
     },
     "dae-outbound": {
       "production": 9255,
@@ -80,7 +80,7 @@
   "subtrees": {
     "crates/dae-daemon/src/daed_product": {
       "production": 20300,
-      "tests": 17883
+      "tests": 17922
     },
     "crates/dae-daemon/src/production_runtime_owner": {
       "production": 17646,
@@ -101,5 +101,6 @@
   "listener_duplicate_slot_rationale": "2026-11-03: account only for measured test growth covering live same-type replacement of every resident listener slot and paired TCP/UDP cookie consistency; production budgets unchanged, no extra growth allowance.",
   "resident_worker_park_regression_rationale": "2026-11-17: account only for production allocator adapter and distinct scheduler park/unpark wiring regression tests; no production limit changes or spare test allowance.",
   "direct_udp_receive_buffer_rationale": "2026-11-24: cover the measured 13-line overage after adding 18 inline buffer reuse test lines and removing three runtime lines.",
-  "stale_native_pins_rationale": "Account for regressions covering TC filters on omitted interfaces, obsolete retry markers and pending cleanup."
+  "stale_native_pins_rationale": "2026-11-25: account for the measured 51-line test overage covering TC filters on omitted interfaces, obsolete retry markers and pending cleanup.",
+  "allocator_test_isolation_rationale": "2026-11-25: account for the measured test overages from isolating process-wide allocator state in daemon library tests."
 }

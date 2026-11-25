@@ -818,6 +818,9 @@ pub(crate) fn runtime_overview_reports_process_metrics_and_stream_retry_delta() 
 
 #[test]
 pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let before = allocator_reclaim_snapshot_json();
     let before_total = before["total"].as_u64().unwrap_or(0);
     let before_reload_completed = before["reasons"]["reload_completed"].as_u64().unwrap_or(0);
@@ -870,6 +873,9 @@ pub(crate) fn runtime_reclaim_tracks_single_completed_reload_reason() {
 
 #[test]
 pub(crate) fn runtime_prepare_failure_preserves_active_runtime_without_cleanup_reclaim() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let manager = ProductRuntimeManager::new();
     {
         let mut inner = manager.inner().lock().unwrap();

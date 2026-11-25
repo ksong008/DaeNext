@@ -154,20 +154,12 @@ mod tests {
 
     #[test]
     fn generic_reclaim_purges_every_initialized_arena() {
-        let (status, report) = (0..200)
-            .find_map(|_| {
-                let result = allocator_reclaim_impl(AllocatorReclaimReason::IdleMemoryPressure);
-                if result.0 == "merged_pending" {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    None
-                } else {
-                    Some(result)
-                }
-            })
-            .expect("allocator reclaim gate remained occupied");
-        let _ = allocator_take_reclaim_requests();
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
+        let (status, report) = allocator_reclaim_impl(AllocatorReclaimReason::IdleMemoryPressure);
 
-        assert_eq!(status, "pass");
+        assert_eq!(status, "pass", "{report}");
         assert_eq!(report["arenaPurgeScope"], json!("all-initialized-arenas"));
         assert!(report["arenasObserved"].as_u64().unwrap_or(0) > 0);
         assert!(report["arenasAttempted"].as_u64().unwrap_or(0) > 0);
@@ -180,28 +172,21 @@ mod tests {
 
     #[test]
     fn scoped_and_global_reclaim_never_overlap() {
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
         let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
         let global = std::thread::spawn(move || {
-            (0..200)
-                .find_map(|_| {
-                    let result = allocator_with_reclaim_gate(
-                        "global",
-                        || {},
-                        || {
-                            entered_tx.send(()).unwrap();
-                            release_rx.recv().unwrap();
-                            ("pass", json!({"operation": "test-global"}))
-                        },
-                    );
-                    if result.0 == "merged_pending" {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                        None
-                    } else {
-                        Some(result)
-                    }
-                })
-                .expect("allocator reclaim gate remained occupied")
+            allocator_with_reclaim_gate(
+                "global",
+                || {},
+                || {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    ("pass", json!({"operation": "test-global"}))
+                },
+            )
         });
 
         entered_rx

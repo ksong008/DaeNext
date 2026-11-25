@@ -160,6 +160,9 @@ pub(crate) fn empty_latency_probe_ids_select_all_nodes() {
 
 #[test]
 pub(crate) fn latency_snapshot_setup_failure_is_one_job_failure_without_node_poisoning() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let dir = std::env::temp_dir().join(format!("daed-product-latency-job-{}", fastrand::u64(..)));
     fs::create_dir_all(&dir).unwrap();
     let state = dir.join("state.db");

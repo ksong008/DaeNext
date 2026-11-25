@@ -118,20 +118,13 @@ mod tests {
 
     #[test]
     fn control_plane_thread_binds_flushes_and_purges_only_its_arena() {
+        if !crate::tests::in_isolated_process() {
+            return;
+        }
         let arena = allocator_bind_control_plane_thread().unwrap().unwrap();
         assert_eq!(mallctl::read_u32(b"thread.arena\0").unwrap(), arena);
         allocator_flush_current_thread_cache().unwrap();
-        let (status, report) = (0..200)
-            .find_map(|_| {
-                let result = allocator_purge_control_plane_arena();
-                if result.0 == "subsumed" {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    None
-                } else {
-                    Some(result)
-                }
-            })
-            .expect("allocator reclaim gate remained occupied");
+        let (status, report) = allocator_purge_control_plane_arena();
         assert_eq!(status, "pass");
         assert_eq!(report["arena"], json!(arena));
         assert_eq!(report["arenaPurgeScope"], json!("control-plane-only"));

@@ -1,7 +1,5 @@
 use super::*;
 
-static PRESSURE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 #[test]
 fn resident_pressure_uses_finite_cgroup_limit_and_recovers_without_a_purge() {
     let mut snapshot = json!({
@@ -21,7 +19,9 @@ fn resident_pressure_uses_finite_cgroup_limit_and_recovers_without_a_purge() {
 
 #[test]
 fn cgroup_pressure_uses_finite_high_before_max() {
-    let _guard = PRESSURE_TEST_LOCK.lock().unwrap();
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let pressure = cgroup_reclaim_pressure_from_snapshot(
         &json!({
             "available": true,
@@ -38,7 +38,9 @@ fn cgroup_pressure_uses_finite_high_before_max() {
 
 #[test]
 fn cgroup_pressure_uses_lower_finite_max_when_high_is_larger() {
-    let _guard = PRESSURE_TEST_LOCK.lock().unwrap();
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let pressure = cgroup_reclaim_pressure_from_snapshot(
         &json!({
             "available": true,
@@ -56,7 +58,9 @@ fn cgroup_pressure_uses_lower_finite_max_when_high_is_larger() {
 
 #[test]
 fn cgroup_pressure_detects_new_high_event_without_near_limit_usage() {
-    let _guard = PRESSURE_TEST_LOCK.lock().unwrap();
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let state_lock =
         ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
     state_lock.lock().unwrap().last_cgroup_high_events = Some(4);
@@ -76,7 +80,9 @@ fn cgroup_pressure_detects_new_high_event_without_near_limit_usage() {
 
 #[test]
 fn cgroup_high_event_stays_latched_until_allocator_decision() {
-    let _guard = PRESSURE_TEST_LOCK.lock().unwrap();
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let state_lock =
         ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
     {

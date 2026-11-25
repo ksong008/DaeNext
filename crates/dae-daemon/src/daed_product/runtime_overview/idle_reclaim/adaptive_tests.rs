@@ -1,7 +1,5 @@
 use super::*;
 
-static ADAPTIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 #[test]
 fn pressure_threshold_tracks_live_working_set_and_cgroup_tier() {
     let mib = 1024 * 1024;
@@ -39,7 +37,9 @@ fn pressure_threshold_tracks_live_working_set_and_cgroup_tier() {
 
 #[test]
 fn reclaim_outcome_resets_backoff_after_meaningful_release() {
-    let _guard = ADAPTIVE_TEST_LOCK.lock().unwrap();
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let state_lock =
         ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
     let mut state = state_lock.lock().unwrap();
@@ -63,7 +63,9 @@ fn reclaim_outcome_resets_backoff_after_meaningful_release() {
 
 #[test]
 fn high_yield_reclaim_uses_the_short_default_cooldown() {
-    let _guard = ADAPTIVE_TEST_LOCK.lock().unwrap();
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let state_lock =
         ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
     state_lock.lock().unwrap().low_yield_streak = 0;
@@ -88,7 +90,9 @@ fn high_yield_reclaim_uses_the_short_default_cooldown() {
 
 #[test]
 fn reclaim_outcome_applies_bounded_backoff_after_low_yield() {
-    let _guard = ADAPTIVE_TEST_LOCK.lock().unwrap();
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let state_lock =
         ALLOCATOR_IDLE_RECLAIM_STATE.get_or_init(|| Mutex::new(default_idle_reclaim_state()));
     let mut state = state_lock.lock().unwrap();

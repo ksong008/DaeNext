@@ -739,7 +739,7 @@ pub(crate) fn product_package_reports_runtime_memory_defaults() {
     );
     assert_eq!(
         defaults["allocator"]["jemallocPolicy"]["runtimeOverride"],
-        json!(true)
+        json!(cfg!(feature = "allocator-jemalloc"))
     );
     assert_eq!(
         defaults["allocator"]["jemallocPolicy"]["serviceUnitSetsEnv"],

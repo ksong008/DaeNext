@@ -4,7 +4,7 @@ use crate::allocator::{
 };
 use dae_product_control::runtime::RuntimeTrafficRead;
 
-// The release gate runs daemon tests serially because allocator state is process-wide.
+// Reset state between scenarios within an isolated test.
 struct ReclaimFixture;
 
 impl ReclaimFixture {
@@ -49,6 +49,9 @@ fn warm_traffic() {
 
 #[test]
 fn startup_reclaim_runs_before_traffic_samples_despite_background_work_and_cooldown() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     for enabled in [true, false] {
         let _fixture = ReclaimFixture::new();
         {
@@ -75,6 +78,9 @@ fn startup_reclaim_runs_before_traffic_samples_despite_background_work_and_coold
 
 #[test]
 fn reload_reclaim_still_waits_for_background_work() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     let _busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::GroupHealth);
     allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 42);
@@ -91,6 +97,9 @@ fn reload_reclaim_still_waits_for_background_work() {
 #[cfg(feature = "allocator-jemalloc")]
 #[test]
 fn startup_reclaim_retries_publication_after_a_partial_worker_flush() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     let (ready, wait_ready) = std::sync::mpsc::channel();
     let (release, wait_release) = std::sync::mpsc::channel::<()>();
@@ -126,6 +135,9 @@ fn startup_reclaim_retries_publication_after_a_partial_worker_flush() {
 
 #[test]
 fn disabled_idle_reclaim_preserves_unadmitted_requests_and_executes_explicit_work() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     allocator_request_reclaim(AllocatorReclaimReason::GeodataUpdate);
     let report = evaluate_allocator_idle_reclaim_with_observers(
@@ -152,6 +164,9 @@ fn disabled_idle_reclaim_preserves_unadmitted_requests_and_executes_explicit_wor
 #[test]
 #[cfg(not(feature = "allocator-jemalloc"))]
 fn stopped_runtime_reclaim_drains_stop_and_merged_control_plane_requests() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     allocator_request_reclaim(AllocatorReclaimReason::StopRuntime);
     allocator_request_control_plane_reclaim();
@@ -170,6 +185,9 @@ fn stopped_runtime_reclaim_drains_stop_and_merged_control_plane_requests() {
 #[cfg(feature = "allocator-jemalloc")]
 #[test]
 fn ui_reclaim_runs_with_a_global_publication_and_background_work_pending() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     let _busy = allocator_reclaim_busy(AllocatorReclaimBusyKind::GroupHealth);
     allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 42);
@@ -193,6 +211,9 @@ fn ui_reclaim_runs_with_a_global_publication_and_background_work_pending() {
 
 #[test]
 fn unavailable_runtime_reclaim_keeps_requests_for_a_later_observation() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     allocator_request_reclaim(AllocatorReclaimReason::StopRuntime);
     let report = evaluate_allocator_idle_reclaim_with_observers(
@@ -221,6 +242,9 @@ fn unavailable_runtime_reclaim_keeps_requests_for_a_later_observation() {
 
 #[test]
 fn emergency_reclaim_ignores_low_yield_backoff_without_memory_high_events() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     {
         let mut state = ALLOCATOR_IDLE_RECLAIM_STATE.get().unwrap().lock().unwrap();
@@ -249,6 +273,9 @@ fn emergency_reclaim_ignores_low_yield_backoff_without_memory_high_events() {
 
 #[test]
 fn normal_reclaim_keeps_low_yield_backoff_and_the_pending_batch() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     {
         let mut state = ALLOCATOR_IDLE_RECLAIM_STATE.get().unwrap().lock().unwrap();
@@ -270,6 +297,9 @@ fn normal_reclaim_keeps_low_yield_backoff_and_the_pending_batch() {
 #[cfg(feature = "allocator-jemalloc")]
 #[test]
 fn global_reclaim_does_not_consume_a_ui_request_arriving_during_evaluation() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     allocator_request_reclaim(AllocatorReclaimReason::StopRuntime);
     let report =
@@ -285,6 +315,9 @@ fn global_reclaim_does_not_consume_a_ui_request_arriving_during_evaluation() {
 
 #[test]
 fn reclaim_batch_is_restored_when_an_observer_panics() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     allocator_request_reclaim_for_publication(AllocatorReclaimReason::ReloadCompleted, 42);
     let result = std::panic::catch_unwind(|| {
@@ -309,6 +342,9 @@ fn reclaim_batch_is_restored_when_an_observer_panics() {
 ))]
 #[test]
 fn system_control_plane_reclaim_reaches_trim_without_jemalloc_statistics() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     let _fixture = ReclaimFixture::new();
     assert!(allocator_stats_snapshot().is_none());
     allocator_request_control_plane_reclaim();
@@ -326,26 +362,7 @@ fn system_control_plane_reclaim_reaches_trim_without_jemalloc_statistics() {
 #[cfg(not(feature = "allocator-jemalloc"))]
 #[test]
 fn system_reclaim_opt_out_finishes_requests_without_recording_a_purge() {
-    const CHILD: &str = "DAENEXT_TEST_SYSTEM_RECLAIM_OPT_OUT";
-    if std::env::var_os(CHILD).is_none() {
-        // Set the opt-out before process start; do not mutate another test's
-        // environment while runtime threads may be reading it.
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "daed_product::runtime_overview::idle_reclaim::coordinator_tests::system_reclaim_opt_out_finishes_requests_without_recording_a_purge",
-                "--test-threads=1",
-            ])
-            .env(CHILD, "1")
-            .env("ALLOCATOR_SYSTEM_TRIM", "0")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+    if !crate::tests::in_isolated_process_with_env(&[("ALLOCATOR_SYSTEM_TRIM", "0")]) {
         return;
     }
     let _fixture = ReclaimFixture::new();
@@ -369,6 +386,9 @@ fn system_reclaim_opt_out_finishes_requests_without_recording_a_purge() {
 
 #[test]
 fn downstream_packets_and_stable_udp_backlog_defer_ordinary_reclaim() {
+    if !crate::tests::in_isolated_process() {
+        return;
+    }
     for scenario in 0..3 {
         let _fixture = ReclaimFixture::new();
         let mut observation = stopped().unwrap();
