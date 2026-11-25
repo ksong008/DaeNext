@@ -1,4 +1,5 @@
 use super::*;
+use crate::tls_download::{TLS_DOWNLOAD_INITIAL_BYTES, TlsDownloadBuffer};
 
 pub const TLS_PLAIN_RELAY_FLUSH_BYTES: usize = 128 * 1024;
 pub const TLS_PLAIN_RELAY_FLUSH_DELAY: Duration = Duration::from_millis(1);
@@ -9,6 +10,25 @@ pub async fn relay_tcp_over_resident_tls_plain_async(
     stop: SharedResidentStopSignal,
     metrics: &ResidentDataplaneMetrics,
     leftover: Vec<u8>,
+) -> Result<DirectTcpRelayStats, String> {
+    relay_tcp_over_resident_tls_plain_with_limit(
+        inbound,
+        client,
+        stop,
+        metrics,
+        leftover,
+        TLS_DOWNLOAD_INITIAL_BYTES,
+    )
+    .await
+}
+
+pub(crate) async fn relay_tcp_over_resident_tls_plain_with_limit(
+    inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
+    client: &mut AsyncResidentTlsClient,
+    stop: SharedResidentStopSignal,
+    metrics: &ResidentDataplaneMetrics,
+    leftover: Vec<u8>,
+    download_limit: usize,
 ) -> Result<DirectTcpRelayStats, String> {
     let (progress, activity) = resident_duplex_progress();
     let (inbound_read, inbound_write) = tokio::io::split(&mut *inbound);
@@ -78,7 +98,7 @@ pub async fn relay_tcp_over_resident_tls_plain_async(
     let download = async move {
         let mut inbound_write = inbound_write;
         let mut client_read = client_read;
-        let mut buffer = [0_u8; 16 * 1024];
+        let mut buffer = TlsDownloadBuffer::new(download_limit);
         if !leftover.is_empty() {
             inbound_write
                 .write_all(&leftover)
@@ -86,24 +106,26 @@ pub async fn relay_tcp_over_resident_tls_plain_async(
                 .map_err(|err| format!("write proxy TLS leftover to client: {err}"))?;
         }
         loop {
-            let read = match client_read.read(&mut buffer).await {
-                Ok(0) => {
+            let batch = match buffer.read(&mut client_read).await {
+                Ok([]) => {
                     let _ = inbound_write.shutdown().await;
                     return Ok(());
                 }
-                Ok(read) => read,
+                Ok(batch) => batch,
                 Err(err) if is_graceful_tls_plain_close_error(&err) => {
                     let _ = inbound_write.shutdown().await;
                     return Ok(());
                 }
                 Err(err) => return Err(format!("read proxy TLS plaintext: {err}")),
             };
-            if let Err(err) = inbound_write.write_all(&buffer[..read]).await {
+            if let Err(err) = inbound_write.write_all(batch).await {
                 if is_graceful_stream_close_error(&err) {
                     return Ok(());
                 }
                 return Err(format!("write proxy TLS payload to client: {err}"));
             }
+            let read = batch.len();
+            buffer.grow_after_write(read);
             download_progress.record_download(read);
             metrics.add_download(read);
         }

@@ -1,60 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
-
-const TLS_DOWNLOAD_INITIAL_BYTES: usize = 16 * 1024;
-
-struct TlsDownloadBuffer {
-    bytes: Vec<u8>,
-    limit: usize,
-    end: Option<std::io::Result<()>>,
-}
-
-impl TlsDownloadBuffer {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: vec![0; TLS_DOWNLOAD_INITIAL_BYTES],
-            limit,
-            end: None,
-        }
-    }
-
-    async fn read(&mut self, stream: &mut (impl AsyncRead + Unpin)) -> std::io::Result<&[u8]> {
-        if self.limit <= TLS_DOWNLOAD_INITIAL_BYTES {
-            let read = stream.read(&mut self.bytes).await?;
-            return Ok(&self.bytes[..read]);
-        }
-        if let Some(end) = self.end.take() {
-            return end.map(|()| &self.bytes[..0]);
-        }
-        let read = std::future::poll_fn(|cx| {
-            let mut batch = ReadBuf::new(&mut self.bytes);
-            while batch.remaining() != 0 {
-                let before = batch.filled().len();
-                let end = match Pin::new(&mut *stream).poll_read(cx, &mut batch) {
-                    Poll::Ready(Ok(())) if batch.filled().len() != before => continue,
-                    Poll::Ready(end) => Some(end),
-                    Poll::Pending if batch.filled().is_empty() => return Poll::Pending,
-                    Poll::Pending => None,
-                };
-                if batch.filled().is_empty() {
-                    return Poll::Ready(end.unwrap_or(Ok(())).map(|()| 0));
-                }
-                self.end = end;
-                break;
-            }
-            Poll::Ready(Ok(batch.filled().len()))
-        })
-        .await?;
-        Ok(&self.bytes[..read])
-    }
-
-    fn grow_after_write(&mut self, read: usize) {
-        if read == self.bytes.len() && read < self.limit && self.end.is_none() {
-            self.bytes.resize(self.limit, 0);
-        }
-    }
-}
+use crate::tls_download::{TlsDownloadBuffer, tls_download_buffer_limit};
 
 pub async fn relay_tcp_over_vless_tls_plain_duplex(
     inbound: &mut (impl AsyncRead + AsyncWrite + Unpin + Send),
@@ -148,10 +95,7 @@ pub async fn relay_tcp_over_vless_tls_plain_duplex(
         let mut inbound_write = inbound_write;
         let mut client_read = client_read;
         let mut stripper = VlessResponseStripper::default();
-        static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-        let limit =
-            *LIMIT.get_or_init(|| TcpRelayResourceProfile::selected().tcp_relay_buffer_bytes());
-        let mut buffer = TlsDownloadBuffer::new(limit);
+        let mut buffer = TlsDownloadBuffer::new(tls_download_buffer_limit());
         if !response_prefix.is_empty() {
             let payload = stripper.consume(&response_prefix)?;
             download_header_state.store(stripper.done, Ordering::Release);
@@ -222,6 +166,3 @@ pub async fn relay_tcp_over_vless_tls_plain_duplex(
         .map(|_| stats.clone())
         .map_err(|error| RelayError::new(error, &stats))
 }
-
-#[cfg(test)]
-mod tests;

@@ -383,8 +383,15 @@ pub async fn handle_trojan_tls_tcp_connection_async(
         metrics.add_upload(initial_payload_len);
     }
     drop((request, initial_payload));
-    match relay_tcp_over_resident_tls_plain_async(inbound, &mut client, stop, metrics, Vec::new())
-        .await
+    match crate::transport_helpers::relay_tcp_over_resident_tls_plain_with_limit(
+        inbound,
+        &mut client,
+        stop,
+        metrics,
+        Vec::new(),
+        crate::tls_download::tls_download_buffer_limit(),
+    )
+    .await
     {
         Ok(mut stats) => {
             stats.client_to_direct += initial_stats.client_to_direct;

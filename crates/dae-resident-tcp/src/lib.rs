@@ -105,6 +105,7 @@ pub use self::plain_handlers::http_proxy_connect_async;
 use self::plain_handlers::*;
 mod vmess_handlers;
 use self::vmess_handlers::*;
+mod tls_download;
 mod transport_helpers;
 mod xhttp_relay;
 #[cfg(test)]
