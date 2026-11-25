@@ -1,4 +1,5 @@
 use super::*;
+use aya::programs::tc::TcHandle;
 pub fn load_attach_detach_aya_sched_classifier(
     loaded: &mut AyaUserspaceLoadedObject,
     spec: &TcNativeAttachSpec,
@@ -490,6 +491,38 @@ pub fn query_aya_tcx_binding(
 pub fn query_aya_interface_index(target: &crate::TcAttachTarget) -> Result<u32, String> {
     with_optional_netns(target.netns.as_deref(), || {
         current_netns_interface_index(&target.iface)
+    })
+}
+
+pub fn query_aya_tc_netlink_binding(
+    target: &crate::TcAttachTarget,
+    priority: u16,
+    handle: u32,
+) -> Result<(u32, Option<(u32, String)>), String> {
+    with_optional_netns(target.netns.as_deref(), || {
+        let ifindex = current_netns_interface_index(&target.iface)?;
+        let direction = match target.direction {
+            TcAttachDirection::Ingress => TcAttachType::Ingress,
+            TcAttachDirection::Egress => TcAttachType::Egress,
+        };
+        let location = super::tc_netlink_query::FilterLocation {
+            ifindex,
+            parent: TcHandle::from(direction).into(),
+            priority,
+            handle,
+        };
+        let identity = super::tc_netlink_query::filter_identity(&location)?
+            .map(|filter| {
+                let tag = filter
+                    .tag
+                    .ok_or("TC netlink filter did not report the program tag")?;
+                Ok::<_, String>((
+                    filter.program_id,
+                    format!("{:016x}", u64::from_be_bytes(tag)),
+                ))
+            })
+            .transpose()?;
+        Ok((ifindex, identity))
     })
 }
 

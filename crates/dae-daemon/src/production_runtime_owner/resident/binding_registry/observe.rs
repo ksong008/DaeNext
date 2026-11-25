@@ -1,5 +1,4 @@
 use super::*;
-use crate::production_runtime_owner::host_ops::{HostOpSpec, HostOps};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn active_postflight(registry: &ResidentDatapathBindingRegistry) -> Value {
@@ -158,15 +157,25 @@ fn observe_tcx_binding(
 
 fn observe_tc_netlink_binding(binding: &ResidentTcBinding, expected_present: bool) -> Value {
     let target = tc_target(binding);
-    let ifindex = dae_ebpf_support::query_aya_interface_index(&target);
-    let command = target.filter_show_command(false);
-    let result = HostOps::observe(HostOpSpec::new(command.program, command.args));
-    let step = result.to_step_json();
-    let stdout = step["stdout"].as_str().unwrap_or_default();
-    let present = tc_output_matches_binding(stdout, binding);
-    let ifindex_matches = ifindex.as_ref().ok() == Some(&binding.ifindex);
-    let state_matches = present == expected_present;
-    let pass = result.passed() && state_matches && (!expected_present || ifindex_matches);
+    let priority = if binding.priority == 0 {
+        49_152
+    } else {
+        binding.priority
+    };
+    let observed =
+        dae_ebpf_support::query_aya_tc_netlink_binding(&target, priority, binding.handle);
+    let Ok((ifindex, observed)) = observed else {
+        return observation_error_value(
+            "tc_netlink",
+            binding.role.as_str(),
+            &binding.interface,
+            expected_present,
+            &observed.unwrap_err(),
+        );
+    };
+    let present = tc_identity_matches_binding(observed.as_ref(), binding);
+    let ifindex_matches = ifindex == binding.ifindex;
+    let pass = present == expected_present && (!expected_present || ifindex_matches);
     json!({
         "status": if pass { "pass" } else { "fail" },
         "backend": "tc_netlink",
@@ -177,12 +186,12 @@ fn observe_tc_netlink_binding(binding: &ResidentTcBinding, expected_present: boo
         "expectedPresent": expected_present,
         "observedPresent": present,
         "expectedIfindex": binding.ifindex,
-        "observedIfindex": ifindex.ok(),
+        "observedIfindex": ifindex,
         "ifindexMatches": ifindex_matches,
         "programId": binding.program_id,
         "priority": binding.priority,
         "handle": binding.handle,
-        "observation": step,
+        "observation": { "backend": "rtnetlink", "filter": observed },
     })
 }
 
@@ -293,23 +302,11 @@ pub(super) fn tcx_anchor_matches(
     }
 }
 
-pub(super) fn tc_output_matches_binding(stdout: &str, binding: &ResidentTcBinding) -> bool {
-    let expected_priority = if binding.priority == 0 {
-        49_152
-    } else {
-        u32::from(binding.priority)
-    };
-    let pref = format!("pref {expected_priority}");
-    let id = format!("id {}", binding.program_id);
-    let handle_hex = format!("0x{:x}", binding.handle);
-    let handle_plain = format!("handle {:x}", binding.handle);
-    stdout.lines().any(|line| {
-        let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
-        normalized.contains(&pref)
-            && normalized.contains(&id)
-            && normalized.contains(&binding.program_tag)
-            && (normalized.contains(&handle_hex) || normalized.contains(&handle_plain))
-    })
+pub(super) fn tc_identity_matches_binding(
+    filter: Option<&(u32, String)>,
+    binding: &ResidentTcBinding,
+) -> bool {
+    filter.is_some_and(|(id, tag)| *id == binding.program_id && tag == &binding.program_tag)
 }
 
 pub(super) fn ordered_subsequence(expected: &[u32], observed: &[u32]) -> bool {

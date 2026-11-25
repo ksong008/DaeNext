@@ -12,17 +12,16 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
         json!({"execute": options.execute, "ack_root_gate": options.ack_root_gate}),
         "production runtime owner root-gated smoke requires --ack-root-gate",
     );
-    for tool in ["ip", "tc"] {
-        push_check(
-            &mut checks,
-            match tool {
-                "ip" => "tool-ip-available",
-                _ => "tool-tc-available",
-            },
-            command_exists(tool),
-            json!({"tool": tool}),
-            "required host tool is missing",
-        );
+    if !options.native_ebpf_requested {
+        for (tool, name) in [("ip", "tool-ip-available"), ("tc", "tool-tc-available")] {
+            push_check(
+                &mut checks,
+                name,
+                command_exists(tool),
+                json!({"tool": tool}),
+                "required host tool is missing",
+            );
+        }
     }
     push_check(
         &mut checks,
@@ -46,7 +45,7 @@ pub(crate) fn preflight_checks(options: &ProductionRuntimeOwnerOptions) -> Vec<V
             "embedded_object": options.native_ebpf_embedded_object,
             "native_loader_compiled": cfg!(feature = "native-ebpf"),
             "automatic_enable_allowed": false,
-            "tc_command_backend_required": true,
+            "tc_command_backend_required": !options.native_ebpf_requested,
             "native_bpf_external_path_absent": true,
             "topology_link_mode": {
                 "env": netns_link_env_name(),

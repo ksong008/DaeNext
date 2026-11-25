@@ -342,6 +342,7 @@
       "layer": "product-coordinator",
       "normal": [
         "dae-config",
+        "dae-netutil",
         "dae-product-identity",
         "dae-product-core",
         "dae-product-geodata",

@@ -92,6 +92,10 @@ Current limits:
 DaeNext is a Cargo workspace. Build, test, fixture, and release paths are rooted
 at the repository root.
 
+The native eBPF service uses Linux system calls and rtnetlink for network
+setup, interface discovery, and traffic control. Install `ip` and `tc` when
+running development network fixtures or legacy command-backend diagnostics.
+
 The `dae` CLI uses Rust 1.100.0, pinned in `rust-toolchain.toml`, and requires a
 native C/C++ toolchain. The eBPF program and shared ABI use the same Rust 1.100
 minimum. A production `daed` build with the default features additionally requires:

@@ -9,7 +9,17 @@ pub(super) struct FilterLocation {
     pub handle: u32,
 }
 
+#[derive(Debug)]
+pub(super) struct FilterIdentity {
+    pub program_id: u32,
+    pub tag: Option<[u8; 8]>,
+}
+
 pub(super) fn filter_program_id(location: &FilterLocation) -> Result<Option<u32>, String> {
+    filter_identity(location).map(|identity| identity.map(|filter| filter.program_id))
+}
+
+pub(super) fn filter_identity(location: &FilterLocation) -> Result<Option<FilterIdentity>, String> {
     let mut name = [0 as libc::c_char; libc::IF_NAMESIZE];
     // A removed interface cannot retain a filter. Other lookup failures remain
     // errors; an ifindex reused by another interface is checked by program ID.
@@ -23,7 +33,7 @@ pub(super) fn filter_program_id(location: &FilterLocation) -> Result<Option<u32>
     query(location).map_err(|e| format!("observe netlink {location:?}: {e}"))
 }
 
-fn query(location: &FilterLocation) -> io::Result<Option<u32>> {
+fn query(location: &FilterLocation) -> io::Result<Option<FilterIdentity>> {
     // SAFETY: fresh datagram socket, exclusively owned below.
     let raw = unsafe {
         libc::socket(
@@ -154,7 +164,17 @@ fn query(location: &FilterLocation) -> io::Result<Option<u32>> {
                             .find(|(kind, _)| *kind == 11)
                             .ok_or_else(|| invalid("missing BPF program ID"))?
                             .1;
-                        if found.replace(u32_at(id, 0)?).is_some() {
+                        let tag = nested
+                            .iter()
+                            .find(|(kind, _)| *kind == 10) // TCA_BPF_TAG
+                            .map(|(_, data)| (*data).try_into())
+                            .transpose()
+                            .map_err(|_| invalid("invalid BPF program tag"))?;
+                        let identity = FilterIdentity {
+                            program_id: u32_at(id, 0)?,
+                            tag,
+                        };
+                        if found.replace(identity).is_some() {
                             return Err(invalid("ambiguous TC filter location"));
                         }
                     }

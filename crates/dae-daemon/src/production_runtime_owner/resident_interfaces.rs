@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use dae_config::Config;
 use dae_ebpf_support::{FeatureGateReport, TcAttachLayer, kernel::current_kernel_version};
@@ -403,66 +402,27 @@ fn configured_wan_ifaces_from_values<'a>(
 fn default_route_wan_ifaces() -> Result<Vec<String>, String> {
     let mut ifaces = Vec::new();
     let mut errors = Vec::new();
-    for family in ["-4", "-6"] {
-        match default_route_ifaces_from_ip(family) {
+    for family in [libc::AF_INET as u8, libc::AF_INET6 as u8] {
+        match super::topology_netlink::default_route_interfaces(family) {
             Ok(route_ifaces) => {
                 for iface in route_ifaces {
                     push_unique_iface(&mut ifaces, &iface);
                 }
             }
-            Err(err) => errors.push(err),
+            Err(err) => errors.push(err.to_string()),
         }
     }
     if !ifaces.is_empty() {
         return Ok(ifaces);
     }
     if errors.is_empty() {
-        Err("wan_interface auto found no default route in ip route output".to_owned())
+        Err("wan_interface auto found no default route".to_owned())
     } else {
         Err(format!(
             "wan_interface auto could not resolve default route interface: {}",
             errors.join("; ")
         ))
     }
-}
-
-fn default_route_ifaces_from_ip(family: &str) -> Result<Vec<String>, String> {
-    let output = Command::new("ip")
-        .args([family, "-o", "route", "show", "default"])
-        .output()
-        .map_err(|err| format!("failed to run ip {family} route show default: {err}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(format!(
-            "ip {family} route show default exited with status {}{}",
-            output.status,
-            if stderr.is_empty() {
-                String::new()
-            } else {
-                format!(": {stderr}")
-            }
-        ));
-    }
-    Ok(parse_default_route_ifaces(&String::from_utf8_lossy(
-        &output.stdout,
-    )))
-}
-
-fn parse_default_route_ifaces(output: &str) -> Vec<String> {
-    let mut ifaces = Vec::new();
-    for line in output.lines() {
-        let mut tokens = line.split_whitespace();
-        while let Some(token) = tokens.next() {
-            if token != "dev" {
-                continue;
-            }
-            if let Some(iface) = tokens.next() {
-                push_unique_iface(&mut ifaces, iface);
-            }
-            break;
-        }
-    }
-    ifaces
 }
 
 fn push_unique_iface(ifaces: &mut Vec<String>, iface: &str) {
@@ -600,19 +560,6 @@ mod tests {
         assert_eq!(link_layer_from_arphrd(ARPHRD_TUNNEL6), TcAttachLayer::L3);
         assert_eq!(link_layer_from_arphrd(ARPHRD_NONE), TcAttachLayer::L3);
         assert_eq!(link_layer_from_arphrd(ARPHRD_LOOPBACK), TcAttachLayer::L2);
-    }
-
-    #[test]
-    fn default_route_parser_extracts_ipv4_and_ipv6_devices() {
-        let output = "\
-default via 192.0.2.1 dev wan_primary proto dhcp src 192.0.2.10 metric 100
-default dev wan_tunnel scope link metric 200
-default via fe80::1 dev wan_ipv6 proto ra metric 1024 expires 1771sec pref medium
-";
-        assert_eq!(
-            parse_default_route_ifaces(output),
-            ["wan_primary", "wan_tunnel", "wan_ipv6"]
-        );
     }
 
     #[test]

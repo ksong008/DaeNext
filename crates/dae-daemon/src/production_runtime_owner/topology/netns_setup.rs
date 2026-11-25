@@ -1,3 +1,4 @@
+use super::super::topology_netlink;
 use super::*;
 pub(crate) fn setup_production_topology(
     steps: &mut Vec<Value>,
@@ -36,148 +37,61 @@ pub(crate) fn setup_production_topology_with_link_mode(
     ) {
         return false;
     }
-    if !run_step(
-        steps,
-        "create-production-netns",
-        CommandSpec::new("ip", ["netns", "add", PRODUCTION_NETNS]),
-    ) {
+    if topology_netlink::step(steps, "create-production-netns", || {
+        topology_netlink::create_namespace(PRODUCTION_NETNS)?;
+        Ok(json!({"netns": PRODUCTION_NETNS}))
+    })["status"]
+        != "pass"
+    {
         return false;
     }
-    if !assign_production_netns_id(steps, options.dae_netns_id) {
-        return false;
-    }
-    if !run_step(
-        steps,
-        "move-production-peer-into-netns",
-        CommandSpec::new(
-            "ip",
-            [
-                "link",
-                "set",
-                PRODUCTION_PEER_IFACE,
-                "netns",
-                PRODUCTION_NETNS,
-            ],
-        ),
-    ) {
-        return false;
-    }
-    if !run_step(
-        steps,
-        "bring-production-host-link-up",
-        CommandSpec::new("ip", ["link", "set", PRODUCTION_HOST_IFACE, "up"]),
-    ) {
-        return false;
-    }
-    if !run_step(
-        steps,
-        "bring-production-netns-loopback-up",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns",
-                "exec",
-                PRODUCTION_NETNS,
-                "ip",
-                "link",
-                "set",
-                "lo",
-                "up",
-            ],
-        ),
-    ) {
-        return false;
-    }
-    run_step(
-        steps,
-        "bring-production-peer-link-up",
-        CommandSpec::new(
-            "ip",
-            [
-                "netns",
-                "exec",
-                PRODUCTION_NETNS,
-                "ip",
-                "link",
-                "set",
-                PRODUCTION_PEER_IFACE,
-                "up",
-            ],
-        ),
-    )
-}
-
-pub(crate) fn assign_production_netns_id(
-    steps: &mut Vec<Value>,
-    configured_dae_netns_id: u32,
-) -> bool {
-    let before_step = run_observation_step(
-        steps,
-        "list-production-netns-id-before-auto",
-        CommandSpec::new("ip", ["netns", "list-id"]),
-    );
-    let before = parse_used_netns_ids(before_step["stdout"].as_str().unwrap_or_default());
-    let assign_step = run_observation_step(
-        steps,
-        "assign-production-netns-id-auto",
-        CommandSpec::new("ip", ["netns", "set", PRODUCTION_NETNS, "auto"]),
-    );
-    if assign_step["status"].as_str() != Some("pass") {
-        steps.push(json!({
-            "name": "assign-production-netns-id-summary",
-            "status": "fail",
-            "netns": PRODUCTION_NETNS,
-            "configured_dae_netns_id": configured_dae_netns_id,
-            "strategy": "auto",
-            "reason": "kernel auto netns id assignment failed",
-        }));
-        return false;
-    }
-    let after_step = run_observation_step(
-        steps,
-        "list-production-netns-id-after-auto",
-        CommandSpec::new("ip", ["netns", "list-id"]),
-    );
-    let after = parse_used_netns_ids(after_step["stdout"].as_str().unwrap_or_default());
-    let Some(effective_id) = new_netns_id_after_auto(&before, &after) else {
-        steps.push(json!({
-            "name": "assign-production-netns-id-summary",
-            "status": "fail",
-            "netns": PRODUCTION_NETNS,
-            "configured_dae_netns_id": configured_dae_netns_id,
-            "strategy": "auto",
-            "reason": "kernel auto netns id assignment succeeded but the effective nsid could not be determined from ip netns list-id",
-        }));
-        return false;
+    let namespace = match topology_netlink::open_namespace(PRODUCTION_NETNS) {
+        Ok(namespace) => namespace,
+        Err(error) => {
+            topology_netlink::step(steps, "open-production-netns", || Err(error));
+            return false;
+        }
     };
-    steps.push(json!({
-        "name": "assign-production-netns-id-summary",
-        "status": "pass",
-        "netns": PRODUCTION_NETNS,
-        "configured_dae_netns_id": configured_dae_netns_id,
-        "effective_dae_netns_id": effective_id,
-        "strategy": "auto",
-        "reason": "dae netns id was assigned by the kernel and will be propagated into BPF PARAM, matching native runtime netns id behavior",
-    }));
-    true
-}
-
-pub(crate) fn parse_used_netns_ids(stdout: &str) -> BTreeSet<u32> {
-    stdout
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let rest = line.strip_prefix("nsid ")?;
-            rest.split_whitespace().next()?.parse::<u32>().ok()
+    let assigned = topology_netlink::step(steps, "assign-production-netns-id-summary", || {
+        topology_netlink::assign_namespace_id(&namespace).map(|id| {
+            json!({
+                "netns": PRODUCTION_NETNS,
+                "configured_dae_netns_id": options.dae_netns_id,
+                "effective_dae_netns_id": id,
+                "strategy": "auto",
+            })
         })
-        .collect()
-}
-
-pub(crate) fn new_netns_id_after_auto(
-    before: &BTreeSet<u32>,
-    after: &BTreeSet<u32>,
-) -> Option<u32> {
-    after.difference(before).next().copied()
+    });
+    if assigned["status"] != "pass" {
+        return false;
+    }
+    if topology_netlink::step(steps, "move-production-peer-into-netns", || {
+        topology_netlink::move_link(PRODUCTION_PEER_IFACE, &namespace)?;
+        Ok(json!({"interface": PRODUCTION_PEER_IFACE, "netns": PRODUCTION_NETNS}))
+    })["status"]
+        != "pass"
+    {
+        return false;
+    }
+    for (name, interface, target) in [
+        ("bring-production-host-link-up", PRODUCTION_HOST_IFACE, None),
+        ("bring-production-netns-loopback-up", "lo", Some(&namespace)),
+        (
+            "bring-production-peer-link-up",
+            PRODUCTION_PEER_IFACE,
+            Some(&namespace),
+        ),
+    ] {
+        if topology_netlink::step(steps, name, || {
+            topology_netlink::bring_up(interface, target)?;
+            Ok(json!({"interface": interface}))
+        })["status"]
+            != "pass"
+        {
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn effective_dae_netns_id(steps: &[Value], requested_dae_netns_id: u32) -> u32 {
@@ -188,7 +102,7 @@ pub(crate) fn effective_dae_netns_id(steps: &[Value], requested_dae_netns_id: u3
             step["name"].as_str() == Some("assign-production-netns-id-summary")
                 && step["status"].as_str() == Some("pass")
         })
-        .and_then(|step| step["effective_dae_netns_id"].as_u64())
+        .and_then(|step| step["detail"]["effective_dae_netns_id"].as_u64())
         .and_then(|id| u32::try_from(id).ok())
         .unwrap_or(requested_dae_netns_id)
 }

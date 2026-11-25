@@ -783,6 +783,7 @@ version = "3.1.0"
 dependencies = [
  "dae-golden",
  "getrandom 0.3.4",
+ "libc",
  "serde_json",
 ]
 
@@ -910,6 +911,7 @@ version = "3.1.0"
 dependencies = [
  "argon2",
  "dae-config",
+ "dae-netutil",
  "dae-product-core",
  "dae-product-geodata",
  "dae-product-http",

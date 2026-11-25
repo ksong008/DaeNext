@@ -450,6 +450,7 @@ pub(super) fn execute_owner_smoke(
         &mut evidence.cleanup_steps,
         native_peer_attached,
         native_host_attached,
+        options.native_ebpf_requested,
     );
     let after_pin_snapshot = bpf_dae_snapshot();
     let (after_map_ids, loaded_map_cleaned) = wait_for_loaded_map_cleanup(&[

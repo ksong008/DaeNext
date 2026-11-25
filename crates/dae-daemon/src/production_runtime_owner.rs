@@ -19,6 +19,7 @@ mod reload_runtime;
 mod report;
 mod resident;
 mod resident_allocator;
+mod topology_netlink;
 pub(crate) use resident_lan::configured_lan_ifaces;
 mod resident_interfaces;
 pub(crate) use resident_interfaces::{configured_wan_ifaces, validate_resident_runtime_interfaces};

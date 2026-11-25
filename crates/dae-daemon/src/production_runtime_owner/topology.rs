@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::Path};
+use std::path::Path;
 
 use dae_ebpf_support::{
     DaeParamInput, TcAttachDirection, TcAttachTarget, TcBpfAttachSpec, TcCommandSpec,
@@ -7,8 +7,8 @@ use dae_ebpf_support::{
 use serde_json::{Value, json};
 
 use super::command::{
-    CommandSpec, command_exists, iface_exists, mac_string, netns_exists, parse_step_mac,
-    parse_step_u32, path_string, push_check, run_observation_step, run_step, tproxy_port_available,
+    CommandSpec, command_exists, iface_exists, mac_string, netns_exists, path_string, push_check,
+    run_observation_step, run_step, tproxy_port_available,
 };
 use super::native_ebpf::{NativeEbpfAttachRole, NativeEbpfRuntimeState};
 use super::netns_link::{

@@ -86,11 +86,7 @@ pub(super) fn command_exists(command: &str) -> bool {
 }
 
 pub(super) fn iface_exists(iface: &str) -> bool {
-    Command::new("ip")
-        .args(["link", "show", "dev", iface])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    super::topology_netlink::ifindex(iface).is_ok()
 }
 
 pub(super) fn netns_exists(name: &str) -> bool {
@@ -126,26 +122,8 @@ pub(super) fn cleanup_stale_production_owner_after_crash(lan_ifaces: &[String]) 
         );
         run_cleanup_command("tc", ["filter", "del", "dev", iface, "egress", "pref", "1"]);
     }
-    run_cleanup_command(
-        "tc",
-        ["qdisc", "del", "dev", PRODUCTION_HOST_IFACE, "clsact"],
-    );
-    run_cleanup_command(
-        "ip",
-        [
-            "netns",
-            "exec",
-            PRODUCTION_NETNS,
-            "tc",
-            "qdisc",
-            "del",
-            "dev",
-            PRODUCTION_PEER_IFACE,
-            "clsact",
-        ],
-    );
-    run_cleanup_command("ip", ["link", "del", PRODUCTION_HOST_IFACE]);
-    run_cleanup_command("ip", ["netns", "del", PRODUCTION_NETNS]);
+    let _ = super::topology_netlink::delete_link(PRODUCTION_HOST_IFACE);
+    let _ = super::topology_netlink::delete_namespace(PRODUCTION_NETNS);
     for pin_dir in pin_dirs {
         let _ = fs::remove_dir_all(pin_dir.path);
     }
@@ -233,56 +211,6 @@ pub(super) fn bpf_dae_snapshot() -> Vec<String> {
 
 pub(super) fn tproxy_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok() && UdpSocket::bind(("127.0.0.1", port)).is_ok()
-}
-
-pub(super) fn parse_step_u32(step: &Value) -> Result<u32, String> {
-    if step["status"].as_str() != Some("pass") {
-        return Err(step["stderr"]
-            .as_str()
-            .unwrap_or("command failed")
-            .to_owned());
-    }
-    step["stdout"]
-        .as_str()
-        .unwrap_or_default()
-        .trim()
-        .parse::<u32>()
-        .map_err(|err| err.to_string())
-        .and_then(|value| {
-            if value == 0 {
-                Err("value must be non-zero".to_owned())
-            } else {
-                Ok(value)
-            }
-        })
-}
-
-pub(super) fn parse_step_mac(step: &Value) -> Result<[u8; 6], String> {
-    if step["status"].as_str() != Some("pass") {
-        return Err(step["stderr"]
-            .as_str()
-            .unwrap_or("command failed")
-            .to_owned());
-    }
-    parse_mac(step["stdout"].as_str().unwrap_or_default())
-}
-
-fn parse_mac(value: &str) -> Result<[u8; 6], String> {
-    let parts = value.trim().split(':').collect::<Vec<_>>();
-    if parts.len() != 6 {
-        return Err("expected six colon-separated hex octets".to_owned());
-    }
-    let mut mac = [0_u8; 6];
-    for (index, part) in parts.iter().enumerate() {
-        if part.len() != 2 {
-            return Err("each octet must have two hex digits".to_owned());
-        }
-        mac[index] = u8::from_str_radix(part, 16).map_err(|err| err.to_string())?;
-    }
-    if mac == [0; 6] {
-        return Err("mac must be non-zero".to_owned());
-    }
-    Ok(mac)
 }
 
 pub(super) fn mac_string(mac: [u8; 6]) -> String {

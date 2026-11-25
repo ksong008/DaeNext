@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::command::{CommandSpec, run_step};
+use super::topology_netlink;
 
 const NETNS_LINK_ENV: &str = "NETNS_LINK";
 const NETNS_LINK_LEGACY_ENV: &str = "DAE_NETNS_LINK";
@@ -110,16 +110,13 @@ pub(super) fn create_link_pair(
     mode: NetnsLinkMode,
 ) -> bool {
     match mode {
-        NetnsLinkMode::Veth => run_step(
-            steps,
-            &format!("create-{step_scope}-veth-pair"),
-            CommandSpec::new(
-                "ip",
-                [
-                    "link", "add", host_iface, "type", "veth", "peer", "name", peer_iface,
-                ],
-            ),
-        ),
+        NetnsLinkMode::Veth => {
+            topology_netlink::step(steps, &format!("create-{step_scope}-veth-pair"), || {
+                topology_netlink::create_pair(host_iface, peer_iface, false, false)?;
+                Ok(json!({"host": host_iface, "peer": peer_iface}))
+            })["status"]
+                == "pass"
+        }
         NetnsLinkMode::Netkit => create_netkit_link_pair(steps, step_scope, host_iface, peer_iface),
         NetnsLinkMode::Auto => unreachable!("auto mode must be resolved before creating a link"),
     }
@@ -131,31 +128,26 @@ fn create_netkit_link_pair(
     host_iface: &str,
     peer_iface: &str,
 ) -> bool {
-    let modern_ok = run_step(
-        steps,
-        &format!("create-{step_scope}-netkit-pair"),
-        CommandSpec::new(
-            "ip",
-            [
-                "link", "add", host_iface, "type", "netkit", "mode", "l2", "scrub", "none", "peer",
-                "scrub", "none", "name", peer_iface,
-            ],
-        ),
-    );
-    if modern_ok {
+    let modern = topology_netlink::step(steps, &format!("create-{step_scope}-netkit-pair"), || {
+        topology_netlink::create_pair(host_iface, peer_iface, true, true)?;
+        Ok(json!({"host": host_iface, "peer": peer_iface, "scrub": "none"}))
+    });
+    if modern["status"] == "pass" {
         return true;
     }
-    run_step(
+    if !matches!(modern["errno"].as_i64(), Some(errno) if matches!(errno as i32, libc::EINVAL | libc::EOPNOTSUPP))
+    {
+        return false;
+    }
+    topology_netlink::step(
         steps,
         &format!("create-{step_scope}-netkit-pair-legacy-no-scrub"),
-        CommandSpec::new(
-            "ip",
-            [
-                "link", "add", host_iface, "type", "netkit", "mode", "l2", "peer", "name",
-                peer_iface,
-            ],
-        ),
-    )
+        || {
+            topology_netlink::create_pair(host_iface, peer_iface, true, false)?;
+            Ok(json!({"host": host_iface, "peer": peer_iface, "scrub": "kernel-default"}))
+        },
+    )["status"]
+        == "pass"
 }
 
 pub(super) fn cleanup_partial_link_setup(
@@ -166,17 +158,23 @@ pub(super) fn cleanup_partial_link_setup(
     peer_iface: &str,
 ) {
     if let Some(netns) = netns {
-        let _ = run_step(
+        topology_netlink::step(
             steps,
             &format!("cleanup-{step_scope}-netns-after-netkit-failure"),
-            CommandSpec::new("ip", ["netns", "del", netns]),
+            || {
+                topology_netlink::delete_namespace(netns)?;
+                Ok(json!({"netns": netns}))
+            },
         );
     }
     for iface in [host_iface, peer_iface] {
-        let _ = run_step(
+        topology_netlink::step(
             steps,
             &format!("cleanup-{step_scope}-{iface}-after-netkit-failure"),
-            CommandSpec::new("ip", ["link", "del", iface]),
+            || {
+                topology_netlink::delete_link(iface)?;
+                Ok(json!({"interface": iface}))
+            },
         );
     }
 }

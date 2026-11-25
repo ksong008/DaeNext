@@ -12,6 +12,7 @@ pub struct ResidentProductionRuntime {
     pub(super) interface_monitor: Option<ResidentInterfaceMonitorRuntime>,
     pub(super) lan_ifaces: Vec<String>,
     pub(super) native_lan_ifaces: Vec<String>,
+    pub(super) native_backend_requested: bool,
     pub(super) cleanup_steps: Vec<Value>,
     pub(super) discovered_map_id: Option<u32>,
     pub(super) discovered_routing_map_ids: Vec<Option<u32>>,
@@ -291,11 +292,13 @@ impl ResidentProductionRuntime {
         );
 
         let phase_started = Instant::now();
-        cleanup_resident_lan_programs(
-            &mut self.cleanup_steps,
-            &self.lan_ifaces,
-            &self.native_lan_ifaces,
-        );
+        if !self.native_backend_requested {
+            cleanup_resident_lan_programs(
+                &mut self.cleanup_steps,
+                &self.lan_ifaces,
+                &self.native_lan_ifaces,
+            );
+        }
         push_cleanup_phase_timing(
             &mut phase_timings,
             "resident_lan_cleanup",
@@ -308,6 +311,7 @@ impl ResidentProductionRuntime {
             &mut self.cleanup_steps,
             native_peer_attached,
             native_host_attached,
+            self.native_backend_requested,
         );
         push_cleanup_phase_timing(
             &mut phase_timings,

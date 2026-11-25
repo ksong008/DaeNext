@@ -83,10 +83,10 @@ pub use aya_loader::{
     load_attach_detach_aya_sched_classifier, load_aya_cgroup_program_for_admission,
     load_aya_userspace_object, load_aya_userspace_object_bytes, load_pin_aya_trace_object,
     pin_aya_loaded_object_for_native_runtime, preflight_aya_cgroup_programs,
-    query_aya_interface_index, query_aya_tcx_binding, read_aya_tproxy_metrics,
-    read_aya_tproxy_metrics_by_id, read_aya_udp_state_metrics, read_aya_udp_state_metrics_by_id,
-    resolve_pname_btf_offsets, resolve_pname_btf_offsets_from_path,
-    unload_aya_sched_classifier_in_netns,
+    query_aya_interface_index, query_aya_tc_netlink_binding, query_aya_tcx_binding,
+    read_aya_tproxy_metrics, read_aya_tproxy_metrics_by_id, read_aya_udp_state_metrics,
+    read_aya_udp_state_metrics_by_id, resolve_pname_btf_offsets,
+    resolve_pname_btf_offsets_from_path, unload_aya_sched_classifier_in_netns,
 };
 pub use bpf_error::{BpfErrorClass, classify_bpf_io_error, format_bpf_io_error};
 pub use capability::{EbpfBackendCapabilityReport, report_only_ebpf_backend_capability};

@@ -129,33 +129,19 @@ fn tcx_and_tc_netlink_identity_checks_are_exact() {
     assert!(observe::tcx_anchor_matches(&last, 2, &[7, 9, 42]));
     assert!(!observe::tcx_anchor_matches(&last, 0, &[42, 7, 9]));
 
-    assert!(observe::tc_output_matches_binding(
-        "filter protocol all pref 1 bpf chain 0 handle 0x20230002 direct-action id 42 tag 0011223344556677",
+    assert!(observe::tc_identity_matches_binding(
+        Some(&(42, "0011223344556677".to_owned())),
         &first,
     ));
-    let mut default_priority = first.clone();
-    default_priority.priority = 0;
-    default_priority.handle = 0x2022_0002;
-    assert!(observe::tc_output_matches_binding(
-        "filter protocol all pref 49152 bpf chain 0 handle 0x20220002 direct-action id 42 tag 0011223344556677",
-        &default_priority,
-    ));
-    assert!(!observe::tc_output_matches_binding(
-        "filter protocol all pref 49151 bpf chain 0 handle 0x20220002 direct-action id 42 tag 0011223344556677",
-        &default_priority,
-    ));
-    assert!(!observe::tc_output_matches_binding(
-        "filter protocol all pref 1 bpf chain 0 handle 0x20230002 direct-action id 41 tag 0011223344556677",
+    assert!(!observe::tc_identity_matches_binding(
+        Some(&(41, "0011223344556677".to_owned())),
         &first,
     ));
-    assert!(!observe::tc_output_matches_binding(
-        "filter protocol all pref 1 bpf chain 0 handle 0x20230002 direct-action id 42 tag ffeeddccbbaa0099",
+    assert!(!observe::tc_identity_matches_binding(
+        Some(&(42, "ffeeddccbbaa0099".to_owned())),
         &first,
     ));
-    assert!(!observe::tc_output_matches_binding(
-        "filter protocol all pref 1 bpf chain 0 handle 0x20230002\nfilter protocol all pref 1 bpf chain 0 direct-action id 42 tag 0011223344556677",
-        &first,
-    ));
+    assert!(!observe::tc_identity_matches_binding(None, &first));
 
     assert!(observe::ordered_subsequence(&[7, 9], &[7, 9]));
     assert!(observe::ordered_subsequence(&[7, 9], &[3, 7, 8, 9, 11]));

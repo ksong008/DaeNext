@@ -179,7 +179,11 @@ pub(super) fn start_with_options(
                 &mut native_runtime,
             );
         }
-        let peer_attach_show = show_peer_program(&mut executed_steps);
+        let peer_attach_show = if options.native_ebpf_requested {
+            json!({"status": "skipped", "reason": "native binding registry verifies attachment"})
+        } else {
+            show_peer_program(&mut executed_steps)
+        };
 
         let loaded_map_handoff = if ok {
             match dae_ebpf_support::stage_live_loaded_tproxy_listen_socket_map_in_netns(
@@ -339,7 +343,11 @@ pub(super) fn start_with_options(
                                 "reason": "LAN egress Aya attach is required only for native resident mode after native ingress passes",
                             })
                         };
-                        let show = show_resident_lan_program(executed_steps, iface);
+                        let show = if options.native_ebpf_requested {
+                            json!({"status": "skipped", "reason": "native binding registry verifies attachment"})
+                        } else {
+                            show_resident_lan_program(executed_steps, iface)
+                        };
                         let routing = if ok {
                             let routing_update = if lan_attach.native_attached {
                                 native_runtime
@@ -578,7 +586,11 @@ pub(super) fn start_with_options(
                 &mut native_runtime,
             );
         }
-        let host_attach_show = show_host_program(&mut executed_steps);
+        let host_attach_show = if options.native_ebpf_requested {
+            json!({"status": "skipped", "reason": "native binding registry verifies attachment"})
+        } else {
+            show_host_program(&mut executed_steps)
+        };
         let resident_outbound_connectivity = if ok {
             let connectivity_candidate_map_ids = map_ids()
                 .map(|ids| {
@@ -801,11 +813,14 @@ pub(super) fn start_with_options(
                 );
             }
         }
-        cleanup_resident_lan_programs(&mut cleanup_steps, &lan_ifaces, &native_lan_ifaces);
+        if !options.native_ebpf_requested {
+            cleanup_resident_lan_programs(&mut cleanup_steps, &lan_ifaces, &native_lan_ifaces);
+        }
         cleanup_production_topology(
             &mut cleanup_steps,
             native_peer_attached,
             native_host_attached,
+            options.native_ebpf_requested,
         );
         #[cfg(all(test, feature = "native-ebpf"))]
         startup_listener_kernel_tests::observe_rollback(&executed_steps, &cleanup_steps);
@@ -836,6 +851,7 @@ pub(super) fn start_with_options(
         interface_monitor,
         lan_ifaces,
         native_lan_ifaces,
+        native_backend_requested: options.native_ebpf_requested,
         cleanup_steps,
         discovered_map_id,
         discovered_routing_map_ids,
