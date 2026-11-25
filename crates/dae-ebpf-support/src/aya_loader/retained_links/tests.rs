@@ -44,6 +44,55 @@ fn original_ns() -> u64 {
 }
 
 #[test]
+fn stale_netlink_recovery_checks_classifier_name_at_the_exact_slot() {
+    let Some(mut loaded) = super::super::listener_lifecycle_tests::loaded_with_timeout(None) else {
+        return;
+    };
+    let ns = Namespace::new();
+    ns.iface("owned0");
+    let mut spec = spec(&ns, "owned0");
+    spec.program_name = "tproxy_lan_ingress_l2".to_owned();
+    load_attach_aya_sched_classifier(&mut loaded, &spec, AttachBackend::TcNetlink).unwrap();
+
+    let filter_exists = || {
+        query_aya_tc_netlink_binding(&spec.target, spec.priority, spec.handle)
+            .unwrap()
+            .1
+            .is_some()
+    };
+    assert!(filter_exists());
+    assert!(
+        detach_stale_aya_tc_filter(
+            &spec.target,
+            spec.priority,
+            spec.handle,
+            "tproxy_wan_ingress"
+        )
+        .is_err()
+    );
+    assert!(filter_exists());
+    detach_stale_aya_tc_filter(
+        &spec.target,
+        spec.priority,
+        spec.handle + 1,
+        "tproxy_lan_ingress",
+    )
+    .unwrap();
+    assert!(filter_exists());
+    for _ in 0..2 {
+        detach_stale_aya_tc_filter(
+            &spec.target,
+            spec.priority,
+            spec.handle,
+            "tproxy_lan_ingress",
+        )
+        .unwrap();
+        assert!(!filter_exists());
+    }
+    loaded.cleanup_retained_links(None).unwrap();
+}
+
+#[test]
 fn pending_namespace_failure_does_not_skip_other_links_and_can_retry() {
     let Some(mut loaded) = super::super::listener_lifecycle_tests::loaded_with_timeout(None) else {
         return;

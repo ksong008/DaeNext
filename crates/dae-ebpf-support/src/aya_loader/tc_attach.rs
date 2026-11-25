@@ -526,6 +526,45 @@ pub fn query_aya_tc_netlink_binding(
     })
 }
 
+/// Recover a stale TC netlink classifier at a known product attachment slot.
+pub fn detach_stale_aya_tc_filter(
+    target: &crate::TcAttachTarget,
+    priority: u16,
+    handle: u32,
+    program_prefix: &str,
+) -> Result<(), String> {
+    use aya::programs::{links::Link, tc::SchedClassifierLink};
+
+    with_optional_netns(target.netns.as_deref(), || {
+        let ifindex = current_netns_interface_index(&target.iface)?;
+        let direction = match target.direction {
+            TcAttachDirection::Ingress => TcAttachType::Ingress,
+            TcAttachDirection::Egress => TcAttachType::Egress,
+        };
+        let parent = TcHandle::from(direction);
+        let location = super::tc_netlink_query::FilterLocation {
+            ifindex,
+            parent: parent.into(),
+            priority,
+            handle,
+        };
+        let Some(identity) = super::tc_netlink_query::filter_identity(&location)? else {
+            return Ok(());
+        };
+        let belongs_to_product = identity.name.as_deref().is_some_and(|name| {
+            name.strip_prefix(program_prefix.as_bytes())
+                .is_some_and(|suffix| matches!(suffix, b"_l2" | b"_l3"))
+        });
+        if !belongs_to_product {
+            return Err(format!("foreign filter at {location:?}"));
+        }
+        SchedClassifierLink::attached(ifindex, parent, priority, handle.into(), None)
+            .map_err(|error| format!("recover stale classifier at {location:?}: {error}"))?
+            .detach()
+            .map_err(|error| format!("detach stale classifier at {location:?}: {error}"))
+    })
+}
+
 pub(super) fn current_netns_interface_index(iface: &str) -> Result<u32, String> {
     let iface = CString::new(iface)
         .map_err(|_| "interface name contains an interior NUL byte".to_owned())?;

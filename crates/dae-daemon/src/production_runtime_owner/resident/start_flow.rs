@@ -64,7 +64,7 @@ pub(super) fn start_with_options(
         ));
     }
     if options.execute && production_names_check_failed(&checks) {
-        cleanup_stale_production_owner_after_crash(&lan_ifaces);
+        cleanup_stale_production_owner_after_crash(&lan_ifaces, &wan_ifaces)?;
         refresh_production_names_check(&mut checks, &options);
     }
     let blockers = preflight_blockers(&checks, true);

@@ -1,4 +1,4 @@
-//! Read-only rtnetlink ownership check. No shell commands or name matching.
+//! Read-only rtnetlink classifier metadata and ownership checks.
 use super::*;
 
 #[derive(Debug)]
@@ -13,6 +13,7 @@ pub(super) struct FilterLocation {
 pub(super) struct FilterIdentity {
     pub program_id: u32,
     pub tag: Option<[u8; 8]>,
+    pub name: Option<Vec<u8>>,
 }
 
 pub(super) fn filter_program_id(location: &FilterLocation) -> Result<Option<u32>, String> {
@@ -173,6 +174,11 @@ fn query(location: &FilterLocation) -> io::Result<Option<FilterIdentity>> {
                         let identity = FilterIdentity {
                             program_id: u32_at(id, 0)?,
                             tag,
+                            name: nested
+                                .iter()
+                                .find(|(kind, _)| *kind == 7) // TCA_BPF_NAME
+                                .and_then(|(_, name)| name.strip_suffix(&[0]))
+                                .map(<[u8]>::to_vec),
                         };
                         if found.replace(identity).is_some() {
                             return Err(invalid("ambiguous TC filter location"));

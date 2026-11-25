@@ -2,7 +2,6 @@ use std::env;
 use std::fs;
 use std::net::{TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
@@ -109,25 +108,74 @@ pub(super) fn production_resource_leftovers() -> Vec<String> {
     leftovers
 }
 
-pub(super) fn cleanup_stale_production_owner_after_crash(lan_ifaces: &[String]) -> bool {
+pub(super) fn cleanup_stale_production_owner_after_crash(
+    lan_ifaces: &[String],
+    wan_ifaces: &[String],
+) -> Result<(), String> {
     let leftovers = production_resource_leftovers();
     let pin_dirs = native_runtime_pin_dirs();
     if !should_cleanup_stale_production_owner(&leftovers, &pin_dirs) {
-        return false;
+        return Ok(());
     }
-    for iface in lan_ifaces {
-        run_cleanup_command(
-            "tc",
-            ["filter", "del", "dev", iface, "ingress", "pref", "1"],
-        );
-        run_cleanup_command("tc", ["filter", "del", "dev", iface, "egress", "pref", "1"]);
+    if !pin_dirs.is_empty() {
+        detach_stale_host_filters(lan_ifaces, wan_ifaces)?;
     }
     let _ = super::topology_netlink::delete_link(PRODUCTION_HOST_IFACE);
     let _ = super::topology_netlink::delete_namespace(PRODUCTION_NETNS);
     for pin_dir in pin_dirs {
         let _ = fs::remove_dir_all(pin_dir.path);
     }
-    true
+    Ok(())
+}
+
+#[cfg(feature = "native-ebpf")]
+fn detach_stale_host_filters(lan_ifaces: &[String], wan_ifaces: &[String]) -> Result<(), String> {
+    use dae_ebpf_support::{
+        TcAttachDirection, TcAttachTarget, detach_stale_aya_tc_filter, tc_handle,
+    };
+
+    // The native LAN and WAN attach paths use these deterministic slots.
+    for (ifaces, prefix, direction, priority, minor) in [
+        (
+            lan_ifaces,
+            "tproxy_lan_ingress",
+            TcAttachDirection::Ingress,
+            2,
+            0b100,
+        ),
+        (
+            lan_ifaces,
+            "tproxy_lan_egress",
+            TcAttachDirection::Egress,
+            1,
+            0b010,
+        ),
+        (
+            wan_ifaces,
+            "tproxy_wan_ingress",
+            TcAttachDirection::Ingress,
+            1,
+            0b010,
+        ),
+        (
+            wan_ifaces,
+            "tproxy_wan_egress",
+            TcAttachDirection::Egress,
+            2,
+            0b100,
+        ),
+    ] {
+        for iface in ifaces {
+            let target = TcAttachTarget::host(iface, direction);
+            detach_stale_aya_tc_filter(&target, priority, tc_handle(0x2023, minor), prefix)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "native-ebpf"))]
+fn detach_stale_host_filters(_lan_ifaces: &[String], _wan_ifaces: &[String]) -> Result<(), String> {
+    Err("stale native TC filters require a build with native eBPF support".to_owned())
 }
 
 fn should_cleanup_stale_production_owner(
@@ -175,10 +223,6 @@ fn native_runtime_pin_pid(name: &str) -> Option<u32> {
     let rest = name.strip_prefix("dae-native-runtime-")?;
     let (pid, _) = rest.split_once('-')?;
     pid.parse().ok()
-}
-
-fn run_cleanup_command<const N: usize>(program: &str, args: [&str; N]) {
-    let _ = Command::new(program).args(args).output();
 }
 
 pub(super) fn runtime_resource_leftovers(include_active_tcp: bool) -> Vec<String> {

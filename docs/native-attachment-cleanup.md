@@ -27,6 +27,12 @@ deletion is not an atomic conditional delete against another privileged process.
 Coordinate external TC writers; the runtime does not guarantee protection from
 an arbitrary concurrent privileged replacement between these operations.
 
+After a crash, the native startup path checks for stale runtime pins before
+recovering host filters through rtnetlink. It checks the configured LAN and WAN
+interfaces for the native classifier at each expected direction, priority and
+handle. Recovery accepts the expected L2 or L3 classifier name and stops if a
+foreign filter occupies the slot.
+
 Permanent permission or kernel errors can leave attachments pending. Cleanup
 retains recovery evidence and refuses to report success; it does not guarantee
 eventual removal. Restore the required permissions and retry explicit cleanup,
