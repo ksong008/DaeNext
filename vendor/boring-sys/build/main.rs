@@ -696,6 +696,8 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
+    println!("cargo:rerun-if-changed=deps/boringssl");
+    println!("cargo:rerun-if-changed=patches");
     ensure_patches_applied(&config)?;
     if !config.env.docs_rs {
         emit_link_directives(&config);

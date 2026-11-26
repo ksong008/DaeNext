@@ -992,13 +992,15 @@ static bool ext_sigalgs_add_clienthello(const SSL_HANDSHAKE *hs, CBB *out,
   CBB contents, sigalgs_cbb;
   if (!CBB_add_u16(out_compressible, TLSEXT_TYPE_signature_algorithms) ||
       !CBB_add_u16_length_prefixed(out_compressible, &contents) ||
-      !CBB_add_u16_length_prefixed(&contents, &sigalgs_cbb) ||
-      !tls12_add_verify_sigalgs(hs, &sigalgs_cbb) ||
-      !CBB_flush(out_compressible)) {
+      !CBB_add_u16_length_prefixed(&contents, &sigalgs_cbb)) {
     return false;
   }
-
-  return true;
+  if (hs->ssl->ctx->grease_sigalgs_enabled &&
+      !CBB_add_u16(&sigalgs_cbb,
+                   ssl_get_grease_value(hs, ssl_grease_signature_algorithm))) {
+    return false;
+  }
+  return tls12_add_verify_sigalgs(hs, &sigalgs_cbb) && CBB_flush(out_compressible);
 }
 
 static bool ext_sigalgs_parse_clienthello(SSL_HANDSHAKE *hs, uint8_t *out_alert,
@@ -2666,6 +2668,36 @@ bool ssl_is_valid_trust_anchor_list(Span<const uint8_t> in) {
   return true;
 }
 
+// Chrome can signal support for server padding while requesting zero bytes.
+static bool ext_server_padding_add_clienthello(const SSL_HANDSHAKE *hs,
+                                               CBB *out, CBB *out_compressible,
+                                               ssl_client_hello_type_t type) {
+  if (!hs->ssl->ctx->zero_server_padding_enabled ||
+      hs->max_version < TLS1_3_VERSION) {
+    return true;
+  }
+  return CBB_add_u16(out_compressible, TLSEXT_TYPE_server_padding) &&
+         CBB_add_u16(out_compressible, 2) &&
+         CBB_add_u16(out_compressible, 0);
+}
+
+static bool ext_server_padding_parse_serverhello(SSL_HANDSHAKE *hs,
+                                                 uint8_t *out_alert,
+                                                 CBS *contents) {
+  if (contents == nullptr) {
+    return true;
+  }
+  if (ssl_protocol_version(hs->ssl) < TLS1_3_VERSION) {
+    *out_alert = SSL_AD_UNSUPPORTED_EXTENSION;
+    return false;
+  }
+  if (CBS_len(contents) != 0) {
+    *out_alert = SSL_AD_DECODE_ERROR;
+    return false;
+  }
+  return true;
+}
+
 static bool ext_trust_anchors_add_clienthello(const SSL_HANDSHAKE *hs, CBB *out,
                                               CBB *out_compressible,
                                               ssl_client_hello_type_t type) {
@@ -3725,6 +3757,13 @@ static const struct tls_extension kExtensions[] = {
         // ServerHello is handled elsewhere.
         forbid_parse_serverhello,
         ext_pake_parse_clienthello,
+        dont_add_serverhello,
+    },
+    {
+        TLSEXT_TYPE_server_padding,
+        ext_server_padding_add_clienthello,
+        ext_server_padding_parse_serverhello,
+        ignore_parse_clienthello,
         dont_add_serverhello,
     },
     {

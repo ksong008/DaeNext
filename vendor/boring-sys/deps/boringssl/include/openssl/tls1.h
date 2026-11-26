@@ -136,6 +136,7 @@ extern "C" {
 // TODO(crbug.com/398275713): Replace with the final codepoint once
 // standardization completes.
 #define TLSEXT_TYPE_trust_anchors 0xca34
+#define TLSEXT_TYPE_server_padding 0x12e0
 
 // ExtensionType value from draft-ietf-tls-tlsflags.
 #define TLSEXT_TYPE_tls_flags 62

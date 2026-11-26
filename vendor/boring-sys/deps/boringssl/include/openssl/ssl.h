@@ -1139,6 +1139,9 @@ OPENSSL_EXPORT int SSL_set_ocsp_response(SSL *ssl, const uint8_t *response,
 #define SSL_SIGN_RSA_PSS_RSAE_SHA384 0x0805
 #define SSL_SIGN_RSA_PSS_RSAE_SHA512 0x0806
 #define SSL_SIGN_ED25519 0x0807
+#define SSL_SIGN_ML_DSA_44 0x0904
+#define SSL_SIGN_ML_DSA_65 0x0905
+#define SSL_SIGN_ML_DSA_87 0x0906
 
 // SSL_SIGN_RSA_PKCS1_SHA256_LEGACY is a backport of RSASSA-PKCS1-v1_5 with
 // SHA-256 to TLS 1.3. It is disabled by default and only defined for client
@@ -5278,6 +5281,13 @@ OPENSSL_EXPORT void SSL_CTX_set_retain_only_sha256_of_client_certs(SSL_CTX *ctx,
 // SSL_CTX_set_grease_enabled configures whether sockets on |ctx| should enable
 // GREASE. See RFC 8701.
 OPENSSL_EXPORT void SSL_CTX_set_grease_enabled(SSL_CTX *ctx, int enabled);
+
+// SSL_CTX_set_grease_sigalgs_enabled adds a GREASE value to the client's
+// signature_algorithms extension without adding it to verification preferences.
+OPENSSL_EXPORT void SSL_CTX_set_grease_sigalgs_enabled(SSL_CTX *ctx, int enabled);
+
+// DAE_SSL_CTX_enable_zero_server_padding requests zero bytes of server padding.
+OPENSSL_EXPORT void DAE_SSL_CTX_enable_zero_server_padding(SSL_CTX *ctx);
 
 // SSL_CTX_set_permute_extensions configures whether sockets on |ctx| should
 // permute extensions. For now, this is only implemented for the ClientHello.

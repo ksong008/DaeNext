@@ -403,7 +403,9 @@ ssl_ctx_st::ssl_ctx_st(const SSL_METHOD *ssl_method)
       enable_early_data(false),
       aes_hw_override(false),
       aes_hw_override_value(false),
-      resumption_across_names_enabled(false) {
+      resumption_across_names_enabled(false),
+      grease_sigalgs_enabled(false),
+      zero_server_padding_enabled(false) {
   CRYPTO_MUTEX_init(&lock);
   CRYPTO_new_ex_data(&ex_data);
 }
@@ -3399,6 +3401,14 @@ void SSL_CTX_set_retain_only_sha256_of_client_certs(SSL_CTX *ctx, int enabled) {
 
 void SSL_CTX_set_grease_enabled(SSL_CTX *ctx, int enabled) {
   ctx->grease_enabled = !!enabled;
+}
+
+void SSL_CTX_set_grease_sigalgs_enabled(SSL_CTX *ctx, int enabled) {
+  ctx->grease_sigalgs_enabled = !!enabled;
+}
+
+void DAE_SSL_CTX_enable_zero_server_padding(SSL_CTX *ctx) {
+  ctx->zero_server_padding_enabled = true;
 }
 
 void SSL_CTX_set_permute_extensions(SSL_CTX *ctx, int enabled) {

@@ -1612,7 +1612,8 @@ enum ssl_grease_index_t {
   ssl_grease_version,
   ssl_grease_ticket_extension,
   ssl_grease_ech_config_id,
-  ssl_grease_last_index = ssl_grease_ech_config_id,
+  ssl_grease_signature_algorithm,
+  ssl_grease_last_index = ssl_grease_signature_algorithm,
 };
 
 enum tls12_server_hs_state_t {
@@ -4083,6 +4084,8 @@ struct ssl_ctx_st : public bssl::RefCounted<ssl_ctx_st> {
   // resumption_across_names_enabled indicates whether a TLS 1.3 server should
   // signal its sessions may be resumed across names in the server certificate.
   bool resumption_across_names_enabled : 1;
+  bool grease_sigalgs_enabled : 1;
+  bool zero_server_padding_enabled : 1;
 
  private:
   friend RefCounted;
