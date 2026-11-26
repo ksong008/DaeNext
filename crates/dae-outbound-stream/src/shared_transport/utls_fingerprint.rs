@@ -406,6 +406,15 @@ pub const SUPPORTED_UTLS_FINGERPRINTS: &[UtlsFingerprint] = &[
         UTLS_ALPN_POLICY_FIXED,
     ),
     fp(
+        "safari_27_2",
+        "safari_27_2",
+        "safari",
+        "Safari",
+        false,
+        false,
+        UTLS_ALPN_POLICY_FIXED,
+    ),
+    fp(
         "360",
         "360_auto",
         "360",

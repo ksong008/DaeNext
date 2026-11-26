@@ -84,6 +84,9 @@ Current limits:
 - Fingerprint-aware TLS is supported through the resident underlay, but this
   project does not claim complete Go-uTLS wire parity for every fingerprint
   mode.
+- Explicit `safari_27_2` selects a TCP TLS profile with X25519MLKEM768 and
+  zlib certificate compression. It uses BoringSSL's native handshake and
+  session resumption.
 - Explicit `chrome_152` profiles support locally configured trust anchor
   groups and Merkle Tree Certificate checkpoints. See the
   [trust metadata configuration](docs/tls-trust-metadata.md).

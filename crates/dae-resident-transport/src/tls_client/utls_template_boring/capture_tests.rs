@@ -272,6 +272,52 @@ async fn firefox_150_reality_uses_the_authentication_key_share_and_signature() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn safari_27_2_clienthello_uses_observed_groups_and_zlib() {
+    let fingerprint = resolve_utls_client_hello_id(SAFARI_27_2_FINGERPRINT).unwrap();
+    let record = capture_client_hello_record(test_tls_proxy(&fingerprint))
+        .await
+        .unwrap();
+    let profile = parse_utls_client_hello_record(&record).unwrap();
+    assert_eq!(
+        normalized_optional_u16_values(&profile.supported_groups),
+        [0x0a0a, 0x11ec, 0x001d, 0x0017, 0x0018, 0x0019]
+    );
+    assert_eq!(
+        normalized_optional_u16_values(&profile.key_share_groups),
+        [0x0a0a, 0x11ec, 0x001d]
+    );
+    assert_eq!(
+        normalized_optional_u16_values(&profile.signature_schemes),
+        [
+            0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601, 0x0201
+        ]
+    );
+    assert_eq!(
+        &normalized_u16_values(&profile.cipher_suites)[4..],
+        [
+            0xc02c, 0xc02b, 0xcca9, 0xc030, 0xc02f, 0xcca8, 0xc00a, 0xc009, 0xc014, 0xc013, 0x009d,
+            0x009c, 0x0035, 0x002f
+        ]
+    );
+    assert_eq!(profile.alpn.as_deref().unwrap(), ["h2", "http/1.1"]);
+    assert_eq!(extension_body(&record, 0x001b), [2, 0, 1]);
+    let extensions = normalized_u16_values(&profile.extension_types);
+    assert!(extensions.contains(&0x0012));
+    assert!(!extensions.contains(&0x44cd));
+    assert!(!extensions.contains(&0xfe0d));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn safari_27_2_verifies_zlib_certificates_and_resumes_tls13() {
+    verify_certificate_and_resumption(SAFARI_27_2_FINGERPRINT, None).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn safari_27_2_negotiates_tls12_and_a_tls13_retry_group() {
+    verify_tls12_and_retry_group(SAFARI_27_2_FINGERPRINT).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn chrome_132_verifies_certificate_and_resumes_tls13() {
     verify_certificate_and_resumption(CHROME_132_FINGERPRINT, None).await;
 }
@@ -333,6 +379,12 @@ async fn verify_certificate_and_resumption(
         .unwrap();
     if let Some((signatures, _)) = signature {
         acceptor.set_sigalgs_list(signatures).unwrap();
+    }
+    let zlib_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    if name == SAFARI_27_2_FINGERPRINT {
+        acceptor
+            .add_certificate_compression_algorithm(TestZlibCompressor(Arc::clone(&zlib_calls)))
+            .unwrap();
     }
     acceptor.set_session_cache_mode(SslSessionCacheMode::SERVER);
     acceptor
@@ -429,6 +481,9 @@ async fn verify_certificate_and_resumption(
     })
     .await
     .unwrap();
+    if name == SAFARI_27_2_FINGERPRINT {
+        assert_eq!(zlib_calls.load(std::sync::atomic::Ordering::Relaxed), 4);
+    }
 }
 
 fn browser_test_connector(
@@ -451,6 +506,24 @@ fn browser_test_connector(
 }
 
 struct TestBrotliCompressor(Arc<std::sync::atomic::AtomicUsize>);
+
+struct TestZlibCompressor(Arc<std::sync::atomic::AtomicUsize>);
+
+impl CertificateCompressor for TestZlibCompressor {
+    const ALGORITHM: CertificateCompressionAlgorithm = CertificateCompressionAlgorithm::ZLIB;
+    const CAN_COMPRESS: bool = true;
+    const CAN_DECOMPRESS: bool = false;
+
+    fn compress<W: std::io::Write>(&self, input: &[u8], output: &mut W) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let mut encoder = flate2::write::ZlibEncoder::new(output, flate2::Compression::fast());
+        encoder.write_all(input)?;
+        encoder.finish()?;
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+}
 
 impl CertificateCompressor for TestBrotliCompressor {
     const ALGORITHM: CertificateCompressionAlgorithm = CertificateCompressionAlgorithm::BROTLI;

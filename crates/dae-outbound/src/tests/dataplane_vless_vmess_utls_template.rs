@@ -97,12 +97,16 @@ fn case_utls_template_normalizer_preserves_family_without_string_matching_runtim
 fn case_runtime_utls_template_coverage_reports_exact_and_non_exact_modes_honestly() {
     let coverage = utls_template_coverage();
 
-    assert_eq!(coverage.supported_fingerprints, 48);
+    assert_eq!(coverage.supported_fingerprints, 49);
     assert!(coverage.exact_fixtures > 0);
     assert!(coverage.family_approximations > 0);
     assert!(coverage.randomized > 0);
     assert_eq!(coverage.exact_fixtures, 16);
     assert_eq!(coverage.unsupported_exact_templates, 0);
+    assert_eq!(
+        resolve_utls_template_mode("safari_27_2").unwrap(),
+        UtlsTemplateMode::FamilyApproximation
+    );
     assert_eq!(
         resolve_utls_template_mode("chrome_102").unwrap(),
         UtlsTemplateMode::ExactFixture

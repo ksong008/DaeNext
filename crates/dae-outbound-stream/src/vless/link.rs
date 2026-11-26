@@ -312,56 +312,6 @@ fn canonical_flow(flow: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod transport_alias_tests {
-    use super::VLESSLink;
-
-    #[test]
-    fn vless_mux_options_preserve_signed_values_and_udp443_on_export() {
-        use dae_outbound_core::vless::mux::VlessUdp443Policy;
-
-        let base = "vless://test@example.invalid:443?security=tls&mux=1";
-        let link = VLESSLink::parse(&format!(
-            "{base}&concurrency=-1&xudpConcurrency=0&xudpProxyUDP443=skip"
-        ))
-        .unwrap();
-        assert_eq!(link.mux_options.concurrency, Some(-1));
-        assert_eq!(link.mux_options.xudp_concurrency, Some(0));
-        assert_eq!(link.mux_options.udp443, Some(VlessUdp443Policy::Skip));
-        assert_eq!(VLESSLink::parse(&link.export_url()).unwrap(), link);
-        for invalid in [
-            "concurrency=32768",
-            "xudpConcurrency=1.5",
-            "xudpProxyUDP443=direct",
-        ] {
-            assert!(VLESSLink::parse(&format!("{base}&{invalid}")).is_err());
-        }
-    }
-
-    #[test]
-    fn xray_aliases_keep_vless_transport_fields() {
-        let link = "vless://test@example.invalid:443?security=tls&mode=stream-up&path=%2Froute&extra=%7B%22noSSEHeader%22%3Atrue%7D&encryption=mlkem768x25519plus.native.1rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let parsed = VLESSLink::parse(&format!("{link}&type=splithttp")).unwrap();
-        assert_eq!(
-            parsed,
-            VLESSLink::parse(&format!("{link}&type=xhttp")).unwrap()
-        );
-        assert_eq!(parsed.xhttp_mode, "stream-up");
-        assert_eq!(parsed.path, "/route");
-        assert_eq!(VLESSLink::parse(&parsed.export_url()).unwrap(), parsed);
-        assert_eq!(
-            VLESSLink::parse(&format!("{link}&type=raw")).unwrap().net,
-            "tcp"
-        );
-        assert_eq!(
-            VLESSLink::parse(&format!("{link}&type=xdrive"))
-                .unwrap()
-                .net,
-            "xdrive"
-        );
-    }
-}
-
 fn canonical_xhttp_mode(mode: &str) -> String {
     let mode = mode.trim().to_ascii_lowercase();
     match mode.as_str() {
@@ -454,5 +404,55 @@ fn format_authority(host: &str, port: &str) -> String {
         format!("[{host}]:{port}")
     } else {
         format!("{host}:{port}")
+    }
+}
+
+#[cfg(test)]
+mod transport_alias_tests {
+    use super::VLESSLink;
+
+    #[test]
+    fn vless_mux_options_preserve_signed_values_and_udp443_on_export() {
+        use dae_outbound_core::vless::mux::VlessUdp443Policy;
+
+        let base = "vless://test@example.invalid:443?security=tls&mux=1";
+        let link = VLESSLink::parse(&format!(
+            "{base}&concurrency=-1&xudpConcurrency=0&xudpProxyUDP443=skip"
+        ))
+        .unwrap();
+        assert_eq!(link.mux_options.concurrency, Some(-1));
+        assert_eq!(link.mux_options.xudp_concurrency, Some(0));
+        assert_eq!(link.mux_options.udp443, Some(VlessUdp443Policy::Skip));
+        assert_eq!(VLESSLink::parse(&link.export_url()).unwrap(), link);
+        for invalid in [
+            "concurrency=32768",
+            "xudpConcurrency=1.5",
+            "xudpProxyUDP443=direct",
+        ] {
+            assert!(VLESSLink::parse(&format!("{base}&{invalid}")).is_err());
+        }
+    }
+
+    #[test]
+    fn xray_aliases_keep_vless_transport_fields() {
+        let link = "vless://test@example.invalid:443?security=tls&mode=stream-up&path=%2Froute&extra=%7B%22noSSEHeader%22%3Atrue%7D&encryption=mlkem768x25519plus.native.1rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let parsed = VLESSLink::parse(&format!("{link}&type=splithttp")).unwrap();
+        assert_eq!(
+            parsed,
+            VLESSLink::parse(&format!("{link}&type=xhttp")).unwrap()
+        );
+        assert_eq!(parsed.xhttp_mode, "stream-up");
+        assert_eq!(parsed.path, "/route");
+        assert_eq!(VLESSLink::parse(&parsed.export_url()).unwrap(), parsed);
+        assert_eq!(
+            VLESSLink::parse(&format!("{link}&type=raw")).unwrap().net,
+            "tcp"
+        );
+        assert_eq!(
+            VLESSLink::parse(&format!("{link}&type=xdrive"))
+                .unwrap()
+                .net,
+            "xdrive"
+        );
     }
 }

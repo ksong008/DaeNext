@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn case_utls_fingerprint_map_covers_native_client_hello_ids() {
-    assert_eq!(shared_transport::supported_utls_fingerprint_count(), 48);
+    assert_eq!(shared_transport::supported_utls_fingerprint_count(), 49);
     let names = shared_transport::utls_fingerprint_names();
     for expected in [
         "random",
@@ -25,6 +25,7 @@ fn case_utls_fingerprint_map_covers_native_client_hello_ids() {
         "edge_106",
         "safari",
         "safari_16_0",
+        "safari_27_2",
         "360",
         "360_11_0",
         "qq",

@@ -4,6 +4,25 @@ use foreign_types::ForeignTypeRef;
 const CHROME_132_FINGERPRINT: &str = "chrome_132";
 const CHROME_152_FINGERPRINT: &str = "chrome_152";
 const FIREFOX_150_FINGERPRINT: &str = "firefox_150";
+const SAFARI_27_2_FINGERPRINT: &str = "safari_27_2";
+
+// Safari 27.2 TCP ClientHello. Keep BoringSSL's native handshake and omit
+// 3DES and the duplicate rsa_pss_rsae_sha384 from the browser's lists.
+const SAFARI_27_2_TLS12_CIPHERS: &str = concat!(
+    "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:",
+    "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:",
+    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:",
+    "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:",
+    "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:",
+    "TLS_RSA_WITH_AES_256_GCM_SHA384:TLS_RSA_WITH_AES_128_GCM_SHA256:",
+    "TLS_RSA_WITH_AES_256_CBC_SHA:TLS_RSA_WITH_AES_128_CBC_SHA",
+);
+const SAFARI_27_2_SIGNATURES: &str = concat!(
+    "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:",
+    "ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:",
+    "rsa_pss_rsae_sha512:rsa_pkcs1_sha512:rsa_pkcs1_sha1",
+);
+
 const FIREFOX_150_TLS12_CIPHERS: &str = concat!(
     "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:",
     "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:",
@@ -98,6 +117,11 @@ pub(super) fn configure_utls_template_boring_context(
             FIREFOX_150_TLS12_CIPHERS,
             FIREFOX_150_SIGNATURES,
         )),
+        SAFARI_27_2_FINGERPRINT => Some((
+            "X25519MLKEM768:X25519:P-256:P-384:P-521",
+            SAFARI_27_2_TLS12_CIPHERS,
+            SAFARI_27_2_SIGNATURES,
+        )),
         _ => None,
     };
     if let Some((groups, ciphers, signatures)) = browser_options {
@@ -121,7 +145,13 @@ pub(super) fn configure_utls_template_boring_context(
                     })?;
             }
         }
-        return configure_brotli_certificate_compression(builder);
+        return if fingerprint.name == SAFARI_27_2_FINGERPRINT {
+            builder
+                .add_certificate_compression_algorithm(ResidentZlibCertCompressor)
+                .map_err(|err| format!("enable BoringSSL zlib cert compression: {err}"))
+        } else {
+            configure_brotli_certificate_compression(builder)
+        };
     }
     let Some(template) = utls_template_for_plan(fingerprint) else {
         return Ok(());
@@ -349,6 +379,7 @@ impl<W: std::io::Write> std::io::Write for BoundedCertWriter<'_, W> {
 }
 
 struct ResidentBrotliCertCompressor;
+struct ResidentZlibCertCompressor;
 
 /// Application-layer bound for the decompressed certificate chain.
 ///
@@ -359,6 +390,49 @@ struct ResidentBrotliCertCompressor;
 /// Rust-side decompression work (and the memory it touches) bounded even
 /// before the buffer contract is enforced.
 const RESIDENT_MAX_DECOMPRESSED_CERTIFICATE_BYTES: usize = 16 * 1024 * 1024;
+
+impl CertificateCompressor for ResidentZlibCertCompressor {
+    const ALGORITHM: CertificateCompressionAlgorithm = CertificateCompressionAlgorithm::ZLIB;
+    const CAN_COMPRESS: bool = false;
+    const CAN_DECOMPRESS: bool = true;
+
+    fn decompress<W: std::io::Write>(&self, input: &[u8], output: &mut W) -> std::io::Result<()> {
+        decompress_zlib_certificate(input, output, RESIDENT_MAX_DECOMPRESSED_CERTIFICATE_BYTES)
+    }
+}
+
+fn decompress_zlib_certificate(
+    input: &[u8],
+    output: &mut impl std::io::Write,
+    limit: usize,
+) -> std::io::Result<()> {
+    use flate2::{Decompress, FlushDecompress, Status};
+    use std::io::{Error, ErrorKind, Write};
+
+    let mut decoder = Decompress::new(true);
+    let mut bounded = BoundedCertWriter::new(output, limit);
+    let mut chunk = [0; 8192];
+    loop {
+        let read = decoder.total_in() as usize;
+        let written = decoder.total_out() as usize;
+        let status = decoder
+            .decompress(&input[read..], &mut chunk, FlushDecompress::None)
+            .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
+        let size = decoder.total_out() as usize - written;
+        if size != 0 {
+            bounded.write_all(&chunk[..size])?;
+        }
+        if status == Status::StreamEnd && decoder.total_in() as usize == input.len() {
+            return Ok(());
+        }
+        if status == Status::StreamEnd || (decoder.total_in() as usize == read && size == 0) {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "invalid zlib certificate stream length",
+            ));
+        }
+    }
+}
 
 impl CertificateCompressor for ResidentBrotliCertCompressor {
     const ALGORITHM: CertificateCompressionAlgorithm = CertificateCompressionAlgorithm::BROTLI;
@@ -387,6 +461,36 @@ impl CertificateCompressor for ResidentBrotliCertCompressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zlib_certificate_decoder_requires_a_complete_bounded_stream() {
+        use std::io::Write;
+
+        let plaintext = vec![b'a'; 16_384];
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&plaintext).unwrap();
+        let encoded = encoder.finish().unwrap();
+        let mut output = Vec::new();
+        decompress_zlib_certificate(&encoded, &mut output, plaintext.len()).unwrap();
+        assert_eq!(output, plaintext);
+        assert!(
+            decompress_zlib_certificate(&encoded, &mut Vec::new(), plaintext.len() - 1).is_err()
+        );
+        assert!(
+            decompress_zlib_certificate(
+                &encoded[..encoded.len() - 1],
+                &mut Vec::new(),
+                plaintext.len()
+            )
+            .is_err()
+        );
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(decompress_zlib_certificate(&trailing, &mut Vec::new(), plaintext.len()).is_err());
+        let mut corrupt = encoded;
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(decompress_zlib_certificate(&corrupt, &mut Vec::new(), plaintext.len()).is_err());
+    }
 
     #[test]
     fn bounded_cert_writer_accepts_writes_within_the_budget() {
