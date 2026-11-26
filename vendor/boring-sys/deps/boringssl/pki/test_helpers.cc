@@ -58,7 +58,7 @@ bool GetValue(std::string_view prefix, std::string_view line,
   return true;
 }
 
-// Returns a string containing the dotted numeric form of |oid|, or a
+// Returns a string containing the dotted numeric form of `oid`, or a
 // hex-encoded string on error.
 std::string OidToString(der::Input oid) {
   CBS cbs;
@@ -144,12 +144,12 @@ der::Input SequenceValueFromString(std::string_view s) {
   std::string file_data = ReadTestFileToString(file_path_ascii);
 
   // mappings_copy is used to keep track of which mappings have already been
-  // satisfied (by nulling the |value| field). This is used to track when
+  // satisfied (by nulling the `value` field). This is used to track when
   // blocks are multiply defined.
   std::vector<PemBlockMapping> mappings_copy(mappings,
                                              mappings + mappings_length);
 
-  // Build the |pem_headers| vector needed for PEMTokenzier.
+  // Build the `pem_headers` vector needed for PEMTokenzier.
   std::vector<std::string> pem_headers;
   for (const auto &mapping : mappings_copy) {
     pem_headers.push_back(mapping.block_name);
@@ -185,19 +185,15 @@ der::Input SequenceValueFromString(std::string_view s) {
   return ::testing::AssertionSuccess();
 }
 
-VerifyCertChainTest::VerifyCertChainTest()
-    : user_initial_policy_set{der::Input(kAnyPolicyOid)} {}
-VerifyCertChainTest::~VerifyCertChainTest() = default;
-
 bool VerifyCertChainTest::HasHighSeverityErrors() const {
   // This function assumes that high severity warnings are prefixed with
   // "ERROR: " and warnings are prefixed with "WARNING: ". This is an
   // implementation detail of CertError::ToDebugString).
   //
   // Do a quick sanity-check to confirm this.
-  CertError error(CertError::SEVERITY_HIGH, "unused", nullptr);
+  CertError error{CertError::SEVERITY_HIGH, "unused", nullptr};
   EXPECT_EQ("ERROR: unused\n", error.ToDebugString());
-  CertError warning(CertError::SEVERITY_WARNING, "unused", nullptr);
+  CertError warning{CertError::SEVERITY_WARNING, "unused", nullptr};
   EXPECT_EQ("WARNING: unused\n", warning.ToDebugString());
 
   // Do a simple substring test (not perfect, but good enough for our test
@@ -288,7 +284,7 @@ bool ReadVerifyCertChainTestFromFile(const std::string &file_path_ascii,
     // For details on the file format refer to:
     // net/data/verify_certificate_chain_unittest/README.
     if (GetValue("chain: ", line_piece, &value, &has_chain)) {
-      // Interpret the |chain| path as being relative to the .test file.
+      // Interpret the `chain` path as being relative to the .test file.
       size_t slash = file_path_ascii.rfind('/');
       if (slash == std::string::npos) {
         ADD_FAILURE() << "Bad path - expecting slashes";

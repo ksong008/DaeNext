@@ -95,8 +95,8 @@ aya-ebpf = { version = "0.2.1", default-features = false }
 base64 = "0.22"
 blake2 = "0.10"
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
-boring = "5.1"
-boring-sys = { version = "5.1", features = ["mlkem"] }
+boring = "5.6"
+boring-sys = { version = "5.6", features = ["mlkem"] }
 boring-v4-compat = { package = "boring", path = "vendor/boring-v4-compat" }
 brotli = "8"
 bytes = "1"
@@ -170,7 +170,7 @@ sha2 = "0.10"
 sha3 = "0.10"
 socket2 = "0.6"
 tokio = { version = "1.52.3", default-features = false, features = ["rt", "net", "time", "io-util", "sync", "macros"] }
-tokio-boring = "5.0"
+tokio-boring = "5.6"
 tokio-util = { version = "0.7", default-features = false }
 tls-parser = "0.12.2"
 tikv-jemallocator = { version = "0.7", default-features = false, features = ["background_threads_runtime_support", "stats"] }

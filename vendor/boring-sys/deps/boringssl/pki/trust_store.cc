@@ -12,19 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cassert>
-#include <cstring>
-#include <optional>
-
 #include "trust_store.h"
 
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+
+#include <openssl/base.h>
+#include <openssl/bytestring.h>
+#include <openssl/mem.h>
+#include <openssl/pool.h>
+#include <openssl/span.h>
+
 #include "merkle_tree.h"
-#include "openssl/base.h"
-#include "openssl/bytestring.h"
-#include "openssl/mem.h"
-#include "openssl/pool.h"
 #include "parse_certificate.h"
 #include "parsed_certificate.h"
+#include "signature_algorithm.h"
 #include "string_util.h"
 
 BSSL_NAMESPACE_BEGIN
@@ -44,6 +52,92 @@ constexpr char kRequireAnchorBasicConstraints[] =
 constexpr char kRequireLeafSelfsigned[] = "require_leaf_selfsigned";
 
 }  // namespace
+
+TrustedSubtreeSet::TrustedSubtreeSet(
+    TrustedSubtreeSet::Token, std::vector<LogTrustedSubtrees> trusted_subtrees)
+    : trusted_subtrees_(std::move(trusted_subtrees)) {}
+
+// static
+std::shared_ptr<const TrustedSubtreeSet> TrustedSubtreeSet::Create(
+    std::vector<LogTrustedSubtrees> trusted_subtrees) {
+  if (!IsValid(trusted_subtrees)) {
+    return nullptr;
+  }
+  return std::make_shared<TrustedSubtreeSet>(Token(),
+                                             std::move(trusted_subtrees));
+}
+
+std::optional<TreeHashConstSpan> TrustedSubtreeSet::LookupSubtreeHash(
+    uint16_t log_number, Subtree target_range) const {
+  // The `trusted_subtrees_` is generally expected to have one, or rarely two,
+  // elements, so just using a simple find rather than a binary search.
+  auto subtrees_it =
+      std::find_if(trusted_subtrees_.begin(), trusted_subtrees_.end(),
+                   [log_number](const LogTrustedSubtrees &logsubtree) -> bool {
+                     return logsubtree.log_number == log_number;
+                   });
+  if (subtrees_it == trusted_subtrees_.end()) {
+    return std::nullopt;
+  }
+
+  const auto &subtrees = subtrees_it->trusted_subtrees;
+  auto it = std::lower_bound(
+      subtrees.begin(), subtrees.end(), target_range,
+      [](const TrustedSubtree &subtree, Subtree range) -> bool {
+        return subtree.range < range;
+      });
+  if (it == subtrees.end() || it->range != target_range) {
+    return std::nullopt;
+  }
+  return it->hash;
+}
+
+std::string TrustedSubtreeSet::DebugString() const {
+  if (trusted_subtrees_.empty()) {
+    return "none";
+  }
+  std::string result;
+
+  for (const auto &[log_number, subtrees] : trusted_subtrees_) {
+    if (!result.empty()) {
+      result += ", ";
+    }
+    result += "log " + std::to_string(log_number) + ":";
+    if (subtrees.empty()) {
+      result += "empty";
+    } else {
+      // Just showing the start of first range to end of last range is an
+      // oversimplification, but showing every single range is probably too
+      // verbose.
+      result += std::to_string(subtrees.size()) + " subtrees(" +
+                std::to_string(subtrees.front().range.start) + ".." +
+                std::to_string(subtrees.back().range.end) + ")";
+    }
+  }
+  return result;
+}
+
+// static
+bool TrustedSubtreeSet::IsValid(
+    const std::vector<LogTrustedSubtrees> &trusted_subtrees) {
+  uint16_t min_log_number = 0;
+  for (const auto &[log_number, subtrees] : trusted_subtrees) {
+    if (log_number <= min_log_number) {
+      // Log numbers must be greater than zero, and `trusted_subtrees` must be
+      // in sorted order without repeated log numbers.
+      return false;
+    }
+    min_log_number = log_number;
+    Subtree min_subtree;
+    for (const auto &subtree : subtrees) {
+      if (!subtree.range.IsValid() || subtree.range < min_subtree) {
+        return false;
+      }
+      min_subtree = subtree.range;
+    }
+  }
+  return true;
+}
 
 bool CertificateTrust::IsTrustAnchor() const {
   switch (type) {
@@ -140,6 +234,11 @@ std::string CertificateTrust::ToDebugString() const {
     result += '+';
     result += kRequireLeafSelfsigned;
   }
+  if (trusted_subtrees != nullptr) {
+    result += "+trusted_subtrees(";
+    result += trusted_subtrees->DebugString();
+    result += ')';
+  }
   return result;
 }
 
@@ -186,24 +285,52 @@ std::optional<CertificateTrust> CertificateTrust::FromDebugString(
   return trust;
 }
 
-MTCAnchor::MTCAnchor(bssl::Span<const uint8_t> log_id,
-                     Span<const TrustedSubtree> trusted_subtrees)
-    : trusted_subtrees_(trusted_subtrees.begin(), trusted_subtrees.end()) {
-  CreateSyntheticCert(log_id);
+MTCAnchor::MTCAnchor(Span<const uint8_t> ca_id,
+                     SignatureAlgorithm ca_signature_algorithm,
+                     UniquePtr<CRYPTO_BUFFER> ca_key,
+                     std::vector<LogTrustedSubtrees> log_trusted_subtrees)
+    : MTCAnchor(Token(), kPlants04, ca_id, ca_signature_algorithm,
+                std::move(ca_key), std::move(log_trusted_subtrees)) {}
+
+std::shared_ptr<const MTCAnchor> MTCAnchor::CreateDaeDavidben08(
+    Span<const uint8_t> ca_id, std::vector<TrustedSubtree> trusted_subtrees) {
+  std::vector<LogTrustedSubtrees> logs;
+  logs.push_back({1, std::move(trusted_subtrees)});
+  auto anchor = std::make_shared<MTCAnchor>(
+      Token(), kDaeDavidben08, ca_id, SignatureAlgorithm::kMtcProofDraftPlants04,
+      nullptr, std::move(logs));
+  return anchor->IsValid() ? anchor : nullptr;
+}
+
+std::shared_ptr<const MTCAnchor> MTCAnchor::CreatePlants07(
+    Span<const uint8_t> ca_id, SignatureAlgorithm ca_signature_algorithm,
+    UniquePtr<CRYPTO_BUFFER> ca_key,
+    std::vector<LogTrustedSubtrees> log_trusted_subtrees) {
+  std::shared_ptr<const MTCAnchor> mtc_anchor = std::make_shared<MTCAnchor>(
+      Token(), kPlants07, ca_id, ca_signature_algorithm, std::move(ca_key),
+      std::move(log_trusted_subtrees));
+  if (!mtc_anchor->IsValid()) {
+    return nullptr;
+  }
+  return mtc_anchor;
+}
+
+MTCAnchor::MTCAnchor(Token, MtcSpecVersion spec_version,
+                     Span<const uint8_t> ca_id,
+                     SignatureAlgorithm ca_signature_algorithm,
+                     UniquePtr<CRYPTO_BUFFER> ca_key,
+                     std::vector<LogTrustedSubtrees> log_trusted_subtrees)
+    : spec_version_(spec_version),
+      ca_id_(ca_id.begin(), ca_id.end()),
+      ca_signature_algorithm_(ca_signature_algorithm),
+      ca_key_(std::move(ca_key)),
+      trusted_subtrees_(
+          TrustedSubtreeSet::Create(std::move(log_trusted_subtrees))) {
+  CreateSyntheticCert(ca_id);
 }
 
 bool MTCAnchor::IsValid() const {
-  if (!synthetic_cert_) {
-    return false;
-  }
-  Subtree min_subtree;
-  for (const auto &subtree : trusted_subtrees_) {
-    if (!subtree.range.IsValid() || subtree.range < min_subtree) {
-      return false;
-    }
-    min_subtree = subtree.range;
-  }
-  return true;
+  return synthetic_cert_ != nullptr && trusted_subtrees_ != nullptr;
 }
 
 der::Input MTCAnchor::NormalizedSubject() const {
@@ -213,6 +340,7 @@ der::Input MTCAnchor::NormalizedSubject() const {
 CertificateTrust MTCAnchor::CertTrust() const {
   CertificateTrust trust;
   trust.type = CertificateTrustType::TRUSTED_ANCHOR;
+  trust.trusted_subtrees = trusted_subtrees_;
   return trust;
 }
 
@@ -221,19 +349,21 @@ std::shared_ptr<const ParsedCertificate> MTCAnchor::AsCert() const {
 }
 
 std::optional<TreeHashConstSpan> MTCAnchor::SubtreeHash(
-    Subtree target_range) const {
-  auto it = std::lower_bound(
-      trusted_subtrees_.begin(), trusted_subtrees_.end(), target_range,
-      [](const TrustedSubtree &subtree, Subtree range) -> bool {
-        return subtree.range < range;
-      });
-  if (it == trusted_subtrees_.end() || it->range != target_range) {
+    uint16_t log_number, Subtree target_range) const {
+  if (trusted_subtrees_ == nullptr) {
     return std::nullopt;
   }
-  return it->hash;
+  return trusted_subtrees_->LookupSubtreeHash(log_number, target_range);
 }
 
-void MTCAnchor::CreateSyntheticCert(bssl::Span<const uint8_t> log_id) {
+std::string MTCAnchor::TrustedSubtreesDebugString() const {
+  if (trusted_subtrees_ == nullptr) {
+    return "Invalid";
+  }
+  return trusted_subtrees_->DebugString();
+}
+
+void MTCAnchor::CreateSyntheticCert(bssl::Span<const uint8_t> ca_id) {
   bssl::ScopedCBB cbb;
   CBB cert, tbs_cert, version, validity, subject_seq, subject_set, subject_log,
       signature;
@@ -266,27 +396,48 @@ void MTCAnchor::CreateSyntheticCert(bssl::Span<const uint8_t> log_id) {
   BSSL_CHECK(CBB_add_asn1(&subject_seq, &subject_set, CBS_ASN1_SET));
   BSSL_CHECK(CBB_add_asn1(&subject_set, &subject_log, CBS_ASN1_SEQUENCE));
 
-  // Section 5.2: Use OID 1.3.6.1.4.1.44363.47.1 as the attribute type for the
-  // log ID's name. Note that this is the early experimentation OID in the
-  // draft rather than the real value of `id-rdna-trustAnchorID`.
-  static uint8_t log_attr_oid[] = {0x2b, 0x06, 0x01, 0x04, 0x01,
-                                   0x82, 0xda, 0x4b, 0x2f, 0x01};
-  BSSL_CHECK(CBB_add_asn1_element(&subject_log, CBS_ASN1_OBJECT, log_attr_oid,
-                                  sizeof(log_attr_oid)));
+  if (spec_version() != kPlants07) {
+    // Section 5.1: Use OID 1.3.6.1.4.1.44363.47.1 as the attribute type for the
+    // CA ID's name. Note that this is the early experimentation OID in the
+    // draft rather than the real value of `id-rdna-trustAnchorID`.
+    static const uint8_t tai_attr_oid[] = {0x2b, 0x06, 0x01, 0x04, 0x01,
+                                           0x82, 0xda, 0x4b, 0x2f, 0x01};
+    BSSL_CHECK(CBB_add_asn1_element(&subject_log, CBS_ASN1_OBJECT, tai_attr_oid,
+                                    sizeof(tai_attr_oid)));
 
-  // Section 5.2's note for initial experimentation also says to use UTF8String
-  // to represent the attribute's value rather than RELATIVE-OID.
+    // Section 5.1's note for initial experimentation also says to use
+    // UTF8String to represent the attribute's value rather than RELATIVE-OID.
 
-  //  Convert the relative OID |log_id| to a string. This can fail.
-  CBS log_id_oid(log_id);
-  bssl::UniquePtr<char> log_id_text(CBS_asn1_relative_oid_to_text(&log_id_oid));
-  if (!log_id_text) {
-    return;
+    //  Convert the relative OID `ca_id` to a string. This can fail.
+    CBS ca_id_oid(ca_id);
+    bssl::UniquePtr<char> ca_id_text(CBS_asn1_relative_oid_to_text(&ca_id_oid));
+    if (!ca_id_text) {
+      return;
+    }
+    BSSL_CHECK(CBB_add_asn1_element(
+        &subject_log, CBS_ASN1_UTF8STRING,
+        reinterpret_cast<const uint8_t *>(ca_id_text.get()),
+        strlen(ca_id_text.get())));
+  } else {
+    // A CA ID determines a PKIX distinguished name (Section 4.1.2.4 of
+    // [RFC5280]) that can be used in the issuer or subject field of an X.509
+    // TBSCertificate. This distinguished name has a single relative
+    // distinguished name, which has a single attribute. The attribute has type
+    // id-rdna-trustAnchorID, defined below:
+    //
+    // id-rdna-trustAnchorID OBJECT IDENTIFIER ::= {
+    //     iso(1) identified-organization(3) dod(6) internet(1) security(5)
+    //     mechanisms(5) pkix(7) rdna(25) 3 }
+    static const uint8_t tai_attr_oid[] = {0x2b, 0x06, 0x01, 0x05,
+                                           0x05, 0x07, 0x19, 0x03};
+    BSSL_CHECK(CBB_add_asn1_element(&subject_log, CBS_ASN1_OBJECT, tai_attr_oid,
+                                    sizeof(tai_attr_oid)));
+
+    // The attribute's value is a RELATIVE-OID containing the trust anchor ID's
+    // ASN.1 representation.
+    BSSL_CHECK(CBB_add_asn1_element(&subject_log, CBS_ASN1_RELATIVE_OID,
+                                    ca_id.data(), ca_id.size()));
   }
-  BSSL_CHECK(
-      CBB_add_asn1_element(&subject_log, CBS_ASN1_UTF8STRING,
-                           reinterpret_cast<const uint8_t *>(log_id_text.get()),
-                           strlen(log_id_text.get())));
 
   // subjectPublicKeyInfo
   BSSL_CHECK(CBB_add_asn1_element(&tbs_cert, CBS_ASN1_SEQUENCE, nullptr, 0));
@@ -304,23 +455,15 @@ void MTCAnchor::CreateSyntheticCert(bssl::Span<const uint8_t> log_id) {
       ParseCertificateOptions{}, nullptr);
 }
 
-TrustAnchor::TrustAnchor(CertificateTrust trust)
-    : TrustAnchor(trust, nullptr) {}
-TrustAnchor::TrustAnchor(CertificateTrust trust,
-                         std::shared_ptr<const bssl::MTCAnchor> mtc_anchor)
-    : trust_(trust), mtc_anchor_(mtc_anchor) {}
-
 void TrustAnchor::OverrideCertTrust(CertificateTrust new_trust) {
   trust_ = new_trust;
 }
 
-CertificateTrust TrustAnchor::CertTrust() const { return trust_; }
+const CertificateTrust &TrustAnchor::CertTrust() const { return trust_; }
 
 std::shared_ptr<const MTCAnchor> TrustAnchor::MTCAnchor() const {
   return mtc_anchor_;
 }
-
-TrustStore::TrustStore() = default;
 
 std::shared_ptr<const MTCAnchor> TrustStore::GetTrustedMTCIssuerOf(
     const ParsedCertificate *cert) {

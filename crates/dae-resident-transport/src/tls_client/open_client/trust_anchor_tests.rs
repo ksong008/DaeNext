@@ -406,7 +406,7 @@ async fn trust_anchor_mtc_checks_proof_name_time_and_revocations() {
                 (Err(ResidentBoringTlsConnectError::Handshake(err)), Some(expected)) => {
                     assert_eq!(
                         err.ssl().unwrap().verify_result().unwrap_err().as_raw(),
-                        expected as i32,
+                        expected,
                         "{case}"
                     );
                     assert!(server.is_err());

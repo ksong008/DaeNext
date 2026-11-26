@@ -15,6 +15,7 @@
 #include "cert_error_params.h"
 
 #include <memory>
+#include <string>
 
 #include <openssl/base.h>
 
@@ -43,7 +44,7 @@ class CertErrorParams2Der : public CertErrorParams {
     std::string result;
     AppendDer(name1_, der1_, &result);
     if (name2_) {
-      result += "\n";
+      result += '\n';
       AppendDer(name2_, der2_, &result);
     }
     return result;
@@ -74,8 +75,7 @@ class CertErrorParams1SizeT : public CertErrorParams {
   CertErrorParams1SizeT &operator=(const CertErrorParams1SizeT &) = delete;
 
   std::string ToDebugString() const override {
-    return name_ + std::string(": ") +
-           bssl::string_util::NumberToDecimalString(value_);
+    return name_ + std::string(": ") + std::to_string(value_);
   }
 
  private:
@@ -95,10 +95,8 @@ class CertErrorParams2SizeT : public CertErrorParams {
   CertErrorParams2SizeT &operator=(const CertErrorParams2SizeT &) = delete;
 
   std::string ToDebugString() const override {
-    return name1_ + std::string(": ") +
-           bssl::string_util::NumberToDecimalString(value1_) + "\n" + name2_ +
-           std::string(": ") +
-           bssl::string_util::NumberToDecimalString(value2_);
+    return name1_ + std::string(": ") + std::to_string(value1_) + "\n" +
+           name2_ + std::string(": ") + std::to_string(value2_);
   }
 
  private:
@@ -109,9 +107,6 @@ class CertErrorParams2SizeT : public CertErrorParams {
 };
 
 }  // namespace
-
-CertErrorParams::CertErrorParams() = default;
-CertErrorParams::~CertErrorParams() = default;
 
 std::unique_ptr<CertErrorParams> CreateCertErrorParams1Der(const char *name,
                                                            der::Input der) {

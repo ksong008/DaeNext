@@ -21,13 +21,14 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <openssl/bytestring.h>
 #include <openssl/pki/verify.h>
 #include <openssl/pki/verify_error.h>
+#include <openssl/pool.h>
 #include <openssl/sha2.h>
 
 #include "encode_values.h"
 #include "merkle_tree.h"
-#include "openssl/pool.h"
 #include "parse_certificate.h"
 #include "parsed_certificate.h"
 #include "string_util.h"
@@ -50,6 +51,15 @@ using ::testing::UnorderedElementsAre;
 static std::string GetTestdata(std::string_view filename) {
   return bssl::ReadTestFileToString("testdata/verify_unittest/" +
                                     std::string(filename));
+}
+
+static ::testing::AssertionResult ReadTestCertPem(const std::string &file_name,
+                                                  std::string *out_cert) {
+  PemBlockMapping mappings[] = {
+      {"CERTIFICATE", out_cert},
+  };
+  return ReadTestDataFromPemFile("testdata/verify_unittest/" + file_name,
+                                 mappings);
 }
 
 TEST(VerifyTest, GoogleChain) {
@@ -131,7 +141,7 @@ TEST(VerifyTest, DepthLimit) {
   opts.leaf_cert = leaf;
   opts.intermediates = {intermediate1, intermediate2};
   opts.time = 1499727444;
-  // Set the |max_path_building_depth| explicitly to test the non-default case.
+  // Set the `max_path_building_depth` explicitly to test the non-default case.
   // Depth of 5 is enough to successfully find a path.
   opts.max_path_building_depth = 5;
   std::unique_ptr<VerifyTrustStore> roots = MozillaRootStore();
@@ -147,34 +157,78 @@ TEST(VerifyTest, DepthLimit) {
       << error.DiagnosticString();
 }
 
+TEST(VerifyTest, MldsaAlgorithms) {
+  std::string root, intermediate, leaf;
+  ASSERT_TRUE(ReadTestCertPem("mldsa-root.pem", &root));
+  ASSERT_TRUE(ReadTestCertPem("mldsa-intermediate.pem", &intermediate));
+  ASSERT_TRUE(ReadTestCertPem("mldsa-leaf.pem", &leaf));
+
+  std::string diagnostic;
+  std::unique_ptr<VerifyTrustStore> trust_store =
+      VerifyTrustStore::FromDER(root, &diagnostic);
+  ASSERT_TRUE(trust_store) << diagnostic;
+
+  CertificateVerifyOptions opts;
+  opts.leaf_cert = leaf;
+  opts.intermediates = {intermediate};
+  opts.trust_store = trust_store.get();
+  // April 6, 2026 (00:00Z) is the time used to generate the test certs; use
+  // that time for verification.
+  opts.time = 1775458800;
+
+  VerifyError error;
+  ASSERT_TRUE(CertificateVerify(opts, &error)) << error.DiagnosticString();
+}
+
+namespace {
+UniquePtr<CRYPTO_BUFFER> ExportPublicKeyFromSeed(Span<const uint8_t> seed) {
+  UniquePtr<EVP_PKEY> pkey(EVP_PKEY_from_private_seed(
+      EVP_pkey_ml_dsa_44(), seed.data(), seed.size()));
+  if (!pkey) {
+    return nullptr;
+  }
+
+  ScopedCBB cbb;
+  if (!CBB_init(cbb.get(), 0) ||
+      !EVP_marshal_public_key(cbb.get(), pkey.get())) {
+    return nullptr;
+  }
+  return UniquePtr<CRYPTO_BUFFER>(
+      CRYPTO_BUFFER_new(CBB_data(cbb.get()), CBB_len(cbb.get()), nullptr));
+}
+}  // namespace
+
+// TODO(crbug.com/452986180): These MTC tests only test the landmark relative
+// path, the standalone MTC tests all ended up in path_builder_unittest. Should
+// probably have at least one or two standalone tests that go through this
+// interface.
 class VerifyMTCTest : public ::testing::Test {
  public:
   VerifyMTCTest() = default;
 
   void SetUp() override {
-    ASSERT_TRUE(ReadTestCert("mtc-leaf.pem", &generic_cert_));
-    ASSERT_TRUE(ReadTestCert("mtc-leaf-bitflip.pem", &bitflip_cert_));
-    ASSERT_TRUE(ReadTestCert("mtc-leaf-b.pem", &leaf_b_));
-    ASSERT_TRUE(ReadTestCert("mtc-leaf-c.pem", &leaf_c_));
+    static constexpr uint8_t kCaPrivateKeySeed[] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+        0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+        0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};
+    ca_spki_ = ExportPublicKeyFromSeed(kCaPrivateKeySeed);
+    ASSERT_TRUE(ca_spki_);
+
+    ASSERT_TRUE(ReadTestCertPem("mtc-leaf.pem", &generic_cert_));
+    ASSERT_TRUE(ReadTestCertPem("mtc-leaf-bitflip.pem", &bitflip_cert_));
+    ASSERT_TRUE(ReadTestCertPem("mtc-leaf-unused-bit.pem", &unused_bit_cert_));
+    ASSERT_TRUE(ReadTestCertPem("mtc-leaf-b.pem", &leaf_b_));
+    ASSERT_TRUE(ReadTestCertPem("mtc-leaf-c.pem", &leaf_c_));
 
     ASSERT_TRUE(
-        CreateTrustedSubtree("Rrynt7BBSfI4WMZ1u1+XOJSNaWnYOdUDjn7VbdF+kQY=", 8,
+        CreateTrustedSubtree("+g71+77yhXVIT2NWwsHWnTz8TFyJ6yT9TLDGOW+Vi6k=", 8,
                              13, &generic_cert_subtree_));
     ASSERT_TRUE(
-        CreateTrustedSubtree("S92aoQXoNnSPJ37X1zY5InskJPTpzUs6LRr3TOwInvo=", 8,
+        CreateTrustedSubtree("sj2WUzCsih+fREf46unoF/8kyGr6tEpL/hlzn9D9994=", 8,
                              16, &leaf_b_subtree_));
     ASSERT_TRUE(
-        CreateTrustedSubtree("FxyVwc4letskl3WVKXWqlPBvUZsl5NiD5sW7Wr50k+4=", 16,
+        CreateTrustedSubtree("bGiRKKU8PI5RTxSYgzL2nGvnUE4d/l09y6JaLCbqgy8=", 16,
                              24, &leaf_c_subtree_));
-  }
-
-  ::testing::AssertionResult ReadTestCert(const std::string &file_name,
-                                          std::string *out_cert) {
-    PemBlockMapping mappings[] = {
-        {"CERTIFICATE", out_cert},
-    };
-    return ReadTestDataFromPemFile("testdata/verify_unittest/" + file_name,
-                                   mappings);
   }
 
   bool CreateTrustedSubtree(const std::string &hash_b64, uint64_t start,
@@ -224,32 +278,39 @@ class VerifyMTCTest : public ::testing::Test {
   }
 
  protected:
+  UniquePtr<CRYPTO_BUFFER> ca_spki_;
+
   std::string generic_cert_;
   std::string bitflip_cert_;
+  std::string unused_bit_cert_;
   std::string leaf_b_;
   std::string leaf_c_;
 
-  // the trusted subtree for [8, 13) that is used in |generic_cert_|,
-  // |bitflip_cert_|.
+  // the trusted subtree for [8, 13) that is used in `generic_cert_`,
+  // `bitflip_cert_`.
   TrustedSubtree generic_cert_subtree_;
-  // Subtree for |leaf_b_| which overlaps with |generic_cert_subtree_|.
+  // Subtree for `leaf_b_` which overlaps with `generic_cert_subtree_`.
   TrustedSubtree leaf_b_subtree_;
-  // Subtree for |leaf_c_| which does not overlap with any other subtrees.
+  // Subtree for `leaf_c_` which does not overlap with any other subtrees.
   TrustedSubtree leaf_c_subtree_;
 
-  // Relative OID encoding of 32473.1, the log ID used for the MTC Anchor that
+  // Relative OID encoding of 32473.1, the CA ID used for the MTC Anchor that
   // issued the test MTCs in this test fixture.
-  static constexpr uint8_t kAnchorLogId[] = {0x81, 0xfd, 0x59, 0x01};
-  static constexpr uint8_t kAnchorLogIdBitflip[] = {0x81, 0xfd, 0x59, 0x00};
+  static constexpr uint8_t kCaId[] = {0x81, 0xfd, 0x59, 0x01};
+  static constexpr uint8_t kCaBitflipId[] = {0x81, 0xfd, 0x59, 0x00};
+  // The test certs for this test all use log number 1.
+  static constexpr uint16_t kLogNumber = 1;
 };
 
 TEST_F(VerifyMTCTest, SignaturelessMTC) {
   // Configure the trust store to trust the MTC anchor with the landmark subtree
-  // for |generic_cert_|.
+  // for `generic_cert_`.
   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
-  std::vector<TrustedSubtree> trusted_subtrees = {generic_cert_subtree_};
-  auto mtc_anchor = std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogId),
-                                                MakeSpan(trusted_subtrees));
+  std::vector<LogTrustedSubtrees> subtrees = {
+      {kLogNumber, {generic_cert_subtree_}},
+  };
+  auto mtc_anchor = std::make_shared<MTCAnchor>(
+      MakeSpan(kCaId), SignatureAlgorithm::kMldsa44, UpRef(ca_spki_), subtrees);
   ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(mtc_anchor));
 
   CertificateVerifyOptions opts;
@@ -259,7 +320,7 @@ TEST_F(VerifyMTCTest, SignaturelessMTC) {
 }
 
 TEST_F(VerifyMTCTest, ExplicitlyTrustedLeaf) {
-  // Configure the trust store to directly trust the |generic_cert_| leaf.
+  // Configure the trust store to directly trust the `generic_cert_` leaf.
   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
   trust_store->trust_store->AddCertificate(CertFromString(generic_cert_),
                                            CertificateTrust::ForTrustedLeaf());
@@ -271,14 +332,16 @@ TEST_F(VerifyMTCTest, ExplicitlyTrustedLeaf) {
 }
 
 TEST_F(VerifyMTCTest, ExplicitlyDistrustedLeaf) {
-  // Configure the trust store to trust the MTC anchor for |generic_cert_|, but
+  // Configure the trust store to trust the MTC anchor for `generic_cert_`, but
   // also to explicitly distrust that leaf.
   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
   trust_store->trust_store->AddCertificate(CertFromString(generic_cert_),
                                            CertificateTrust::ForDistrusted());
-  std::vector<TrustedSubtree> trusted_subtrees = {generic_cert_subtree_};
-  auto mtc_anchor = std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogId),
-                                                MakeSpan(trusted_subtrees));
+  std::vector<LogTrustedSubtrees> subtrees = {
+      {kLogNumber, {generic_cert_subtree_}},
+  };
+  auto mtc_anchor = std::make_shared<MTCAnchor>(
+      MakeSpan(kCaId), SignatureAlgorithm::kMldsa44, UpRef(ca_spki_), subtrees);
   ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(mtc_anchor));
 
   CertificateVerifyOptions opts;
@@ -290,9 +353,11 @@ TEST_F(VerifyMTCTest, ExplicitlyDistrustedLeaf) {
 
 TEST_F(VerifyMTCTest, WrongProof) {
   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
-  std::vector<TrustedSubtree> trusted_subtrees = {generic_cert_subtree_};
-  auto mtc_anchor = std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogId),
-                                                MakeSpan(trusted_subtrees));
+  std::vector<LogTrustedSubtrees> subtrees = {
+      {kLogNumber, {generic_cert_subtree_}},
+  };
+  auto mtc_anchor = std::make_shared<MTCAnchor>(
+      MakeSpan(kCaId), SignatureAlgorithm::kMldsa44, UpRef(ca_spki_), subtrees);
   ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(mtc_anchor));
 
   CertificateVerifyOptions opts;
@@ -303,14 +368,34 @@ TEST_F(VerifyMTCTest, WrongProof) {
             VerifyError::StatusCode::CERTIFICATE_INVALID_SIGNATURE);
 }
 
-TEST_F(VerifyMTCTest, WrongLogID) {
-  // Trust the correct subtree for |generic_cert_| but with the wrong log ID.
+TEST_F(VerifyMTCTest, UnusedBit) {
+  std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
+  std::vector<LogTrustedSubtrees> subtrees = {
+      {kLogNumber, {generic_cert_subtree_}},
+  };
+  auto mtc_anchor = std::make_shared<MTCAnchor>(
+      MakeSpan(kCaId), SignatureAlgorithm::kMldsa44, UpRef(ca_spki_), subtrees);
+  ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(mtc_anchor));
+
+  CertificateVerifyOptions opts;
+  VerifyError error;
+  ASSERT_TRUE(PrepareOptsForVerify(unused_bit_cert_, trust_store.get(), &opts));
+  EXPECT_FALSE(CertificateVerify(opts, &error)) << error.DiagnosticString();
+  EXPECT_EQ(error.Code(),
+            VerifyError::StatusCode::CERTIFICATE_INVALID_SIGNATURE);
+}
+
+TEST_F(VerifyMTCTest, WrongCaId) {
+  // Trust the correct subtree for `generic_cert_` but with the wrong CA ID.
   // Verifying the cert should fail because even though the proof evaluates to a
   // valid hash, the hash is for the wrong issuer.
   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
-  std::vector<TrustedSubtree> trusted_subtrees = {generic_cert_subtree_};
-  auto mtc_anchor = std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogIdBitflip),
-                                                MakeSpan(trusted_subtrees));
+  std::vector<LogTrustedSubtrees> subtrees = {
+      {kLogNumber, {generic_cert_subtree_}},
+  };
+  auto mtc_anchor = std::make_shared<MTCAnchor>(MakeSpan(kCaBitflipId),
+                                                SignatureAlgorithm::kMldsa44,
+                                                UpRef(ca_spki_), subtrees);
   ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(mtc_anchor));
 
   CertificateVerifyOptions opts;
@@ -322,11 +407,13 @@ TEST_F(VerifyMTCTest, WrongLogID) {
 
 TEST_F(VerifyMTCTest, ExpiredMTC) {
   // Configure the trust store to trust the MTC anchor with the landmark subtree
-  // for |generic_cert_|.
+  // for `generic_cert_`.
   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
-  std::vector<TrustedSubtree> trusted_subtrees = {generic_cert_subtree_};
-  auto mtc_anchor = std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogId),
-                                                MakeSpan(trusted_subtrees));
+  std::vector<LogTrustedSubtrees> subtrees = {
+      {kLogNumber, {generic_cert_subtree_}},
+  };
+  auto mtc_anchor = std::make_shared<MTCAnchor>(
+      MakeSpan(kCaId), SignatureAlgorithm::kMldsa44, UpRef(ca_spki_), subtrees);
   ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(mtc_anchor));
 
   CertificateVerifyOptions opts;
@@ -360,12 +447,14 @@ TEST_F(VerifyMTCTest, TrustStoreConfiguration) {
 TEST_F(VerifyMTCTest, BadMTCAnchorHash) {
   // Test that an MTC isn't trusted if the MTCAnchor's TrustedSubtree has the
   // wrong hash. Configure the trust store to trust the MTC anchor with the
-  // landmark subtree for |generic_cert_|.
+  // landmark subtree for `generic_cert_`.
   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
-  std::vector<TrustedSubtree> trusted_subtrees = {generic_cert_subtree_};
-  trusted_subtrees[0].hash[0] ^= 1;
-  auto mtc_anchor = std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogId),
-                                                MakeSpan(trusted_subtrees));
+  std::vector<LogTrustedSubtrees> subtrees = {
+      {kLogNumber, {generic_cert_subtree_}},
+  };
+  subtrees[0].trusted_subtrees[0].hash[0] ^= 1;
+  auto mtc_anchor = std::make_shared<MTCAnchor>(
+      MakeSpan(kCaId), SignatureAlgorithm::kMldsa44, UpRef(ca_spki_), subtrees);
   ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(mtc_anchor));
 
   CertificateVerifyOptions opts;
@@ -380,13 +469,19 @@ TEST_F(VerifyMTCTest, SubtreeRangesMatch) {
   // generic_cert_ and leaf_b_ have proofs to subtree ranges with the same start
   // but different ends. Check that CertificateVerify only succeeds if the trust
   // store has the right MTCAnchor.
-  std::vector<TrustedSubtree> trusted_subtrees_a = {generic_cert_subtree_};
-  std::vector<TrustedSubtree> trusted_subtrees_b = {leaf_b_subtree_};
+  std::vector<LogTrustedSubtrees> trusted_subtrees_a = {
+      {kLogNumber, {generic_cert_subtree_}},
+  };
+  std::vector<LogTrustedSubtrees> trusted_subtrees_b = {
+      {kLogNumber, {leaf_b_subtree_}},
+  };
 
-  auto mtc_anchor_a = std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogId),
-                                                  MakeSpan(trusted_subtrees_a));
-  auto mtc_anchor_b = std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogId),
-                                                  MakeSpan(trusted_subtrees_b));
+  auto mtc_anchor_a =
+      std::make_shared<MTCAnchor>(MakeSpan(kCaId), SignatureAlgorithm::kMldsa44,
+                                  UpRef(ca_spki_), trusted_subtrees_a);
+  auto mtc_anchor_b =
+      std::make_shared<MTCAnchor>(MakeSpan(kCaId), SignatureAlgorithm::kMldsa44,
+                                  UpRef(ca_spki_), trusted_subtrees_b);
 
   std::unique_ptr<VerifyTrustStore> trust_store_a = EmptyTrustStore();
   ASSERT_TRUE(trust_store_a->trust_store->AddMTCTrustAnchor(mtc_anchor_a));
@@ -402,6 +497,8 @@ TEST_F(VerifyMTCTest, SubtreeRangesMatch) {
     VerifyError error;
     ASSERT_TRUE(PrepareOptsForVerify(leaf_b_, trust_store_a.get(), &opts));
     EXPECT_FALSE(CertificateVerify(opts, &error)) << error.DiagnosticString();
+    EXPECT_EQ(error.Code(),
+              VerifyError::StatusCode::CERTIFICATE_INVALID_SIGNATURE);
   }
 
   std::unique_ptr<VerifyTrustStore> trust_store_b = EmptyTrustStore();
@@ -418,14 +515,18 @@ TEST_F(VerifyMTCTest, SubtreeRangesMatch) {
     ASSERT_TRUE(
         PrepareOptsForVerify(generic_cert_, trust_store_b.get(), &opts));
     EXPECT_FALSE(CertificateVerify(opts, &error)) << error.DiagnosticString();
+    EXPECT_EQ(error.Code(),
+              VerifyError::StatusCode::CERTIFICATE_INVALID_SIGNATURE);
   }
 }
 
 TEST_F(VerifyMTCTest, MultipleSubtrees) {
-  std::vector<TrustedSubtree> subtrees = {generic_cert_subtree_,
-                                          leaf_b_subtree_, leaf_c_subtree_};
-  auto mtc_anchor =
-      std::make_shared<MTCAnchor>(MakeSpan(kAnchorLogId), MakeSpan(subtrees));
+  std::vector<LogTrustedSubtrees> subtrees = {
+      {kLogNumber,
+       {generic_cert_subtree_, leaf_b_subtree_, leaf_c_subtree_}},
+  };
+  auto mtc_anchor = std::make_shared<MTCAnchor>(
+      MakeSpan(kCaId), SignatureAlgorithm::kMldsa44, UpRef(ca_spki_), subtrees);
   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
   ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(mtc_anchor));
 

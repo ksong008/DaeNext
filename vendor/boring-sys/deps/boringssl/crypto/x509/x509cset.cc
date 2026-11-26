@@ -21,6 +21,9 @@
 #include "../internal.h"
 #include "internal.h"
 
+
+using namespace bssl;
+
 int X509_CRL_set_version(X509_CRL *x, long version) {
   if (x == nullptr) {
     return 0;
@@ -98,6 +101,15 @@ int X509_CRL_sort(X509_CRL *c) {
 int X509_CRL_up_ref(X509_CRL *crl) {
   CRYPTO_refcount_inc(&crl->references);
   return 1;
+}
+
+X509_CRL *X509_CRL_dup_ref(const X509_CRL *crl) {
+  if (crl == nullptr) {
+    return nullptr;
+  }
+  auto *ptr = const_cast<X509_CRL *>(crl);
+  CRYPTO_refcount_inc(&ptr->references);
+  return ptr;
 }
 
 long X509_CRL_get_version(const X509_CRL *crl) {
@@ -204,7 +216,7 @@ int i2d_re_X509_CRL_tbs(X509_CRL *crl, unsigned char **outp) {
   return i2d_X509_CRL_INFO(crl->crl, outp);
 }
 
-int i2d_X509_CRL_tbs(X509_CRL *crl, unsigned char **outp) {
+int i2d_X509_CRL_tbs(const X509_CRL *crl, unsigned char **outp) {
   return i2d_X509_CRL_INFO(crl->crl, outp);
 }
 
@@ -215,10 +227,5 @@ int X509_CRL_set1_signature_algo(X509_CRL *crl, const X509_ALGOR *algo) {
 
 int X509_CRL_set1_signature_value(X509_CRL *crl, const uint8_t *sig,
                                   size_t sig_len) {
-  if (!ASN1_STRING_set(crl->signature, sig, sig_len)) {
-    return 0;
-  }
-  crl->signature->flags &= ~(ASN1_STRING_FLAG_BITS_LEFT | 0x07);
-  crl->signature->flags |= ASN1_STRING_FLAG_BITS_LEFT;
-  return 1;
+  return ASN1_STRING_set(crl->signature, sig, sig_len);
 }

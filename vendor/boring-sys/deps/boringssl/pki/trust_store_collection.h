@@ -28,14 +28,12 @@ BSSL_NAMESPACE_BEGIN
 // the order the stores were added.
 class OPENSSL_EXPORT TrustStoreCollection : public TrustStore {
  public:
-  TrustStoreCollection();
+  TrustStoreCollection() = default;
 
   TrustStoreCollection(const TrustStoreCollection &) = delete;
   TrustStoreCollection &operator=(const TrustStoreCollection &) = delete;
 
-  ~TrustStoreCollection() override;
-
-  // Includes results from |store| in the combined output. |store| must
+  // Includes results from `store` in the combined output. `store` must
   // outlive the TrustStoreCollection.
   void AddTrustStore(TrustStore *store);
 
@@ -43,9 +41,8 @@ class OPENSSL_EXPORT TrustStoreCollection : public TrustStore {
   void SyncGetIssuersOf(const ParsedCertificate *cert,
                         ParsedCertificateList *issuers) override;
   CertificateTrust GetTrust(const ParsedCertificate *cert) override;
-
-  // TODO(nharper): Add override of GetTrustedMTCIssuerOf; see
-  // https://boringssl-review.googlesource.com/c/boringssl/+/82727/comment/9657a5fb_d10cf988/.
+  std::shared_ptr<const MTCAnchor> GetTrustedMTCIssuerOf(
+      const ParsedCertificate *cert) override;
 
  private:
   std::vector<TrustStore *> stores_;

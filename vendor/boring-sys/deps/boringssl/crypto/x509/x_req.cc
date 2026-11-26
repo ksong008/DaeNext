@@ -17,8 +17,13 @@
 #include <openssl/asn1t.h>
 #include <openssl/x509.h>
 
+#include "../asn1/internal.h"
 #include "internal.h"
 
+
+using namespace bssl;
+
+namespace {
 
 // X509_REQ_INFO is handled in an unusual way to get round invalid encodings.
 // Some broken certificate requests don't encode the attributes field if it
@@ -26,10 +31,9 @@
 // do this by making the attributes field OPTIONAL then using the callback to
 // initialise it to an empty STACK. This means that the field will be
 // correctly encoded unless we NULL out the field.
-
-static int rinf_cb(int operation, ASN1_VALUE **pval, const ASN1_ITEM *it,
-                   void *exarg) {
-  X509_REQ_INFO *rinf = (X509_REQ_INFO *)*pval;
+int rinf_cb(int operation, ASN1_VALUE **pval, const ASN1_ITEM *it,
+            void *exarg) {
+  X509_REQ_INFO *rinf = asn1_load_ptr_as<X509_REQ_INFO>(pval);
 
   if (operation == ASN1_OP_NEW_POST) {
     rinf->attributes = sk_X509_ATTRIBUTE_new_null();
@@ -52,6 +56,10 @@ static int rinf_cb(int operation, ASN1_VALUE **pval, const ASN1_ITEM *it,
   return 1;
 }
 
+}  // namespace
+
+BSSL_NAMESPACE_BEGIN
+
 ASN1_SEQUENCE_enc(X509_REQ_INFO, enc, rinf_cb) = {
     ASN1_SIMPLE(X509_REQ_INFO, version, ASN1_INTEGER),
     ASN1_SIMPLE(X509_REQ_INFO, subject, X509_NAME),
@@ -63,10 +71,12 @@ ASN1_SEQUENCE_enc(X509_REQ_INFO, enc, rinf_cb) = {
 IMPLEMENT_ASN1_FUNCTIONS_const(X509_REQ_INFO)
 
 ASN1_SEQUENCE(X509_REQ) = {
-    ASN1_SIMPLE(X509_REQ, req_info, X509_REQ_INFO),
+    ASN1_SIMPLE(X509_REQ, req_info, bssl::X509_REQ_INFO),
     ASN1_SIMPLE(X509_REQ, sig_alg, X509_ALGOR),
     ASN1_SIMPLE(X509_REQ, signature, ASN1_BIT_STRING),
 } ASN1_SEQUENCE_END(X509_REQ)
+
+BSSL_NAMESPACE_END
 
 IMPLEMENT_ASN1_FUNCTIONS_const(X509_REQ)
 

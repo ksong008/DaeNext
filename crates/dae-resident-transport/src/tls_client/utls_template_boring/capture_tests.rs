@@ -309,7 +309,7 @@ async fn safari_27_2_clienthello_uses_observed_groups_and_zlib() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn safari_27_2_verifies_zlib_certificates_and_resumes_tls13() {
-    verify_certificate_and_resumption(SAFARI_27_2_FINGERPRINT, None).await;
+    verify_certificate_and_resumption(SAFARI_27_2_FINGERPRINT, None, false).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -319,12 +319,12 @@ async fn safari_27_2_negotiates_tls12_and_a_tls13_retry_group() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn chrome_132_verifies_certificate_and_resumes_tls13() {
-    verify_certificate_and_resumption(CHROME_132_FINGERPRINT, None).await;
+    verify_certificate_and_resumption(CHROME_132_FINGERPRINT, None, false).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn firefox_150_verifies_certificate_and_resumes_tls13() {
-    verify_certificate_and_resumption(FIREFOX_150_FINGERPRINT, None).await;
+    verify_certificate_and_resumption(FIREFOX_150_FINGERPRINT, None, false).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -343,13 +343,20 @@ async fn chrome_152_verifies_mldsa_certificates_and_resumes_tls13() {
             unsafe { boring_sys::EVP_PKEY_from_private_seed(algorithm, seed.as_ptr(), seed.len()) };
         assert!(!key.is_null(), "construct {name} key");
         let key = unsafe { PKey::from_ptr(key) };
-        verify_certificate_and_resumption(CHROME_152_FINGERPRINT, Some((key, name, scheme))).await;
+        verify_certificate_and_resumption(CHROME_152_FINGERPRINT, Some((key, name, scheme)), false)
+            .await;
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exact_template_resumption_recomputes_binders_after_client_hello_rewrite() {
+    verify_certificate_and_resumption("chrome_102", None, true).await;
 }
 
 async fn verify_certificate_and_resumption(
     name: &str,
     algorithm: Option<(PKey<Private>, &str, u16)>,
+    exact_template_psk: bool,
 ) {
     let (chain, signature) = if let Some((leaf_key, algorithm, scheme)) = algorithm {
         (
@@ -439,6 +446,43 @@ async fn verify_certificate_and_resumption(
                         let tcp = TcpStream::connect(addr).await.unwrap();
                         let mut config = entry.configure().unwrap();
                         configure_utls_template_boring_ssl(&mut config, &proxy).unwrap();
+                        if exact_template_psk && handshake == 1 {
+                            let template = resolve_utls_runtime_template(&fingerprint).unwrap();
+                            let mut extensions = template.extension_order.to_vec();
+                            extensions.retain(|&extension| extension != 21);
+                            extensions.push(41);
+                            // PSK must remain last, and its binder must authenticate
+                            // the rewritten cipher and extension lists.
+                            assert_eq!(
+                                unsafe {
+                                    DAE_SSL_set1_utls_template(
+                                        config.as_ptr(),
+                                        template.cipher_suites.as_ptr(),
+                                        template.cipher_suites.len(),
+                                        extensions.as_ptr(),
+                                        extensions.len(),
+                                        template.supported_versions.as_ptr(),
+                                        template.supported_versions.len(),
+                                        template.supported_groups.as_ptr(),
+                                        template.supported_groups.len(),
+                                        template.key_share_groups.as_ptr(),
+                                        template.key_share_groups.len(),
+                                        template.signature_schemes.as_ptr(),
+                                        template.signature_schemes.len(),
+                                        template.delegated_credential_signature_schemes.as_ptr(),
+                                        template.delegated_credential_signature_schemes.len(),
+                                        template.record_size_limit.unwrap_or(0),
+                                        template.empty_extensions.as_ptr(),
+                                        template.empty_extensions.len(),
+                                        dae_outbound_stream::shared_transport::UTLS_TEMPLATE_GREASE,
+                                        template.session_id_len,
+                                        0,
+                                        i32::from(template.capabilities.grease),
+                                    )
+                                },
+                                1
+                            );
+                        }
                         let result = entry
                             .connect(config, ResidentBoringTlsSessionKey::new(name), name, tcp)
                             .await;

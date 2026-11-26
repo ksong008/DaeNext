@@ -14,4 +14,4 @@ default = []
 fips = ["boring-upstream/fips"]
 
 [dependencies]
-boring-upstream = { package = "boring", version = "5.1" }
+boring-upstream = { package = "boring", version = "5.6" }

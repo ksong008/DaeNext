@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gtest/gtest.h>
 #include <stdlib.h>
+#include <gtest/gtest.h>
 
 #include <optional>
 
@@ -25,12 +25,10 @@
 #include "../fipsmodule/rand/internal.h"
 #include "../internal.h"
 #include "internal.h"
-#include "getrandom_fillin.h"
 
 
-#if (defined(OPENSSL_X86_64) || defined(OPENSSL_AARCH64)) &&               \
-    !defined(BORINGSSL_SHARED_LIBRARY) && defined(OPENSSL_RAND_URANDOM) && \
-    defined(USE_NR_getrandom)
+#if (defined(OPENSSL_X86_64) || defined(OPENSSL_AARCH64)) && \
+    !defined(BORINGSSL_SHARED_LIBRARY) && defined(OPENSSL_RAND_URANDOM)
 
 #include <elf.h>
 #include <linux/random.h>
@@ -41,6 +39,7 @@
 #include <sys/un.h>
 #include <sys/user.h>
 
+BSSL_NAMESPACE_BEGIN
 namespace {
 
 #if !defined(PTRACE_O_EXITKILL)
@@ -68,7 +67,7 @@ static const size_t kDaemonWriteLength = 496;
 // simulate the absence of RDRAND of machines that have it.
 
 // Event represents a system call from urandom.c that is observed by the ptrace
-// code in |GetTrace|.
+// code in `GetTrace`.
 struct Event {
   enum class Syscall {
     kGetRandom,
@@ -177,7 +176,7 @@ struct Event {
   std::string filename;
 };
 
-static std::string ToString(const std::vector<Event> &trace) {
+std::string ToString(const std::vector<Event> &trace) {
   std::string ret;
   for (const auto &event : trace) {
     if (!ret.empty()) {
@@ -188,18 +187,18 @@ static std::string ToString(const std::vector<Event> &trace) {
   return ret;
 }
 
-// The following are flags to tell |GetTrace| to inject faults, using ptrace,
+// The following are flags to tell `GetTrace` to inject faults, using ptrace,
 // into the entropy-related system calls.
 
-// getrandom gives |ENOSYS|.
+// getrandom gives `ENOSYS`.
 static const unsigned NO_GETRANDOM = 1;
 // opening /dev/urandom fails.
 static const unsigned NO_URANDOM = 2;
-// getrandom always returns |EAGAIN| if given |GRNG_NONBLOCK|.
+// getrandom always returns `EAGAIN` if given `GRNG_NONBLOCK`.
 static const unsigned GETRANDOM_NOT_READY = 4;
-// getrandom gives |EINVAL| unless |NO_GETRANDOM| is set.
+// getrandom gives `EINVAL` unless `NO_GETRANDOM` is set.
 static const unsigned GETRANDOM_ERROR = 8;
-// Reading from /dev/urandom gives |EINVAL|.
+// Reading from /dev/urandom gives `EINVAL`.
 static const unsigned URANDOM_ERROR = 16;
 static const unsigned SOCKET_ERROR = 32;
 static const unsigned CONNECT_ERROR = 64;
@@ -207,7 +206,7 @@ static const unsigned SOCKET_READ_ERROR = 128;
 static const unsigned SOCKET_READ_SHORT = 256;
 static const unsigned NEXT_FLAG = 512;
 
-// regs_read fetches the registers of |child_pid| and writes them to |out_regs|.
+// regs_read fetches the registers of `child_pid` and writes them to `out_regs`.
 // That structure will contain at least the following members:
 //   syscall: the syscall number, if registers were read just before entering
 //       one.
@@ -217,15 +216,15 @@ static const unsigned NEXT_FLAG = 512;
 //       one.
 //
 // This call returns true on success and false otherwise.
-static bool regs_read(struct regs *out_regs, int child_pid);
+bool regs_read(struct regs *out_regs, int child_pid);
 
-// regs_set_ret sets the return value of the system call that |child_pid| has
-// just finished, to |ret|. It returns true on success and false otherwise.
-static bool regs_set_ret(int child_pid, int ret);
+// regs_set_ret sets the return value of the system call that `child_pid` has
+// just finished, to `ret`. It returns true on success and false otherwise.
+bool regs_set_ret(int child_pid, int ret);
 
-// regs_break_syscall causes the system call that |child_pid| is about to enter
+// regs_break_syscall causes the system call that `child_pid` is about to enter
 // to fail to run.
-static bool regs_break_syscall(int child_pid, const struct regs *orig_regs);
+bool regs_break_syscall(int child_pid, const struct regs *orig_regs);
 
 struct regs {
   uintptr_t syscall;
@@ -236,7 +235,7 @@ struct regs {
 
 #if defined(OPENSSL_X86_64)
 
-static bool regs_read(struct regs *out_regs, int child_pid) {
+bool regs_read(struct regs *out_regs, int child_pid) {
   if (ptrace(PTRACE_GETREGS, child_pid, nullptr, &out_regs->regs) != 0) {
     return false;
   }
@@ -249,7 +248,7 @@ static bool regs_read(struct regs *out_regs, int child_pid) {
   return true;
 }
 
-static bool regs_set_ret(int child_pid, int ret) {
+bool regs_set_ret(int child_pid, int ret) {
   struct regs regs;
   if (!regs_read(&regs, child_pid)) {
     return false;
@@ -258,7 +257,7 @@ static bool regs_set_ret(int child_pid, int ret) {
   return ptrace(PTRACE_SETREGS, child_pid, nullptr, &regs.regs) == 0;
 }
 
-static bool regs_break_syscall(int child_pid, const struct regs *orig_regs) {
+bool regs_break_syscall(int child_pid, const struct regs *orig_regs) {
   // Replace the syscall number with -1 to cause the kernel to fail the call.
   struct user_regs_struct regs = orig_regs->regs;
   regs.orig_rax = -1;
@@ -267,7 +266,7 @@ static bool regs_break_syscall(int child_pid, const struct regs *orig_regs) {
 
 #elif defined(OPENSSL_AARCH64)
 
-static bool regs_read(struct regs *out_regs, int child_pid) {
+bool regs_read(struct regs *out_regs, int child_pid) {
   struct iovec io;
   io.iov_base = &out_regs->regs;
   io.iov_len = sizeof(out_regs->regs);
@@ -284,8 +283,7 @@ static bool regs_read(struct regs *out_regs, int child_pid) {
   return true;
 }
 
-static bool set_regset(int child_pid, int regset, const void *data,
-                       size_t len) {
+bool set_regset(int child_pid, int regset, const void *data, size_t len) {
   struct iovec io;
   io.iov_base = const_cast<void *>(data);
   io.iov_len = len;
@@ -293,7 +291,7 @@ static bool set_regset(int child_pid, int regset, const void *data,
                 &io) == 0;
 }
 
-static bool regs_set_ret(int child_pid, int ret) {
+bool regs_set_ret(int child_pid, int ret) {
   struct regs regs;
   if (!regs_read(&regs, child_pid)) {
     return false;
@@ -302,7 +300,7 @@ static bool regs_set_ret(int child_pid, int ret) {
   return set_regset(child_pid, NT_PRSTATUS, &regs.regs, sizeof(regs.regs));
 }
 
-static bool regs_break_syscall(int child_pid, const struct regs *orig_regs) {
+bool regs_break_syscall(int child_pid, const struct regs *orig_regs) {
   // Replace the syscall number with -1 to cause the kernel to fail the call.
   int syscall = -1;
   return set_regset(child_pid, NT_ARM_SYSTEM_CALL, &syscall, sizeof(syscall));
@@ -310,10 +308,10 @@ static bool regs_break_syscall(int child_pid, const struct regs *orig_regs) {
 
 #endif
 
-// memcpy_to_remote copies |n| bytes from |in_src| in the local address space,
-// to |dest| in the address space of |child_pid|.
-static void memcpy_to_remote(int child_pid, uint64_t dest, const void *in_src,
-                             size_t n) {
+// memcpy_to_remote copies `n` bytes from `in_src` in the local address space,
+// to `dest` in the address space of `child_pid`.
+void memcpy_to_remote(int child_pid, uint64_t dest, const void *in_src,
+                      size_t n) {
   const uint8_t *src = reinterpret_cast<const uint8_t *>(in_src);
 
   // ptrace always works with ill-defined "words", which appear to be 64-bit
@@ -353,7 +351,7 @@ static void memcpy_to_remote(int child_pid, uint64_t dest, const void *in_src,
   }
 }
 
-static uint8_t get_byte_from_remote(int child_pid, uint64_t ptr) {
+uint8_t get_byte_from_remote(int child_pid, uint64_t ptr) {
   // ptrace always works with ill-defined "words", which appear to be 64-bit
   // on 64-bit systems.
 #if !defined(OPENSSL_64_BIT)
@@ -370,7 +368,7 @@ static uint8_t get_byte_from_remote(int child_pid, uint64_t ptr) {
   return bytes[offset];
 }
 
-static std::string get_string_from_remote(int child_pid, uint64_t ptr) {
+std::string get_string_from_remote(int child_pid, uint64_t ptr) {
   std::string ret;
 
   for (;;) {
@@ -385,11 +383,11 @@ static std::string get_string_from_remote(int child_pid, uint64_t ptr) {
   return ret;
 }
 
-// GetTrace runs |thunk| in a forked process and observes the resulting system
+// GetTrace runs `thunk` in a forked process and observes the resulting system
 // calls using ptrace. It simulates a variety of failures based on the contents
-// of |flags| and records the observed events by appending to |out_trace|.
-static void GetTrace(std::vector<Event> *out_trace, unsigned flags,
-                     std::function<void()> thunk) {
+// of `flags` and records the observed events by appending to `out_trace`.
+void GetTrace(std::vector<Event> *out_trace, unsigned flags,
+              std::function<void()> thunk) {
   const int child_pid = fork();
   ASSERT_NE(-1, child_pid);
 
@@ -597,16 +595,16 @@ static void GetTrace(std::vector<Event> *out_trace, unsigned flags,
   }
 }
 
-// TestFunction is the function that |GetTrace| is asked to trace.
-static void TestFunction() {
+// TestFunction is the function that `GetTrace` is asked to trace.
+void TestFunction() {
   uint8_t byte;
   RAND_bytes(&byte, sizeof(byte));
   RAND_bytes(&byte, sizeof(byte));
 }
 
-static bool have_fork_detection() { return CRYPTO_get_fork_generation() != 0; }
+bool have_fork_detection() { return bssl::CRYPTO_get_fork_generation() != 0; }
 
-static bool AppendDaemonEvents(std::vector<Event> *events, unsigned flags) {
+bool AppendDaemonEvents(std::vector<Event> *events, unsigned flags) {
   events->push_back(Event::Socket());
   if (flags & SOCKET_ERROR) {
     return false;
@@ -635,20 +633,18 @@ out:
 }
 
 // TestFunctionPRNGModel is a model of how the urandom.c code will behave when
-// |TestFunction| is run. It should return the same trace of events that
-// |GetTrace| will observe the real code making.
-static std::vector<Event> TestFunctionPRNGModel(unsigned flags) {
+// `TestFunction` is run. It should return the same trace of events that
+// `GetTrace` will observe the real code making.
+std::vector<Event> TestFunctionPRNGModel(unsigned flags) {
   std::vector<Event> ret;
-  bool getrandom_ready = false;
-  bool used_daemon = false;
 
-  if (have_fork_detection()) {
-    used_daemon = kUsesDaemon && AppendDaemonEvents(&ret, flags);
+  bool daemon_failed = false;
+  if (have_fork_detection() && kUsesDaemon) {
+    daemon_failed = !AppendDaemonEvents(&ret, flags);
   }
 
   // Probe for getrandom support
   ret.push_back(Event::GetRandom(1, GRND_NONBLOCK));
-  std::function<void()> wait_for_entropy;
   std::function<bool(size_t)> sysrand;
 
   if (flags & NO_GETRANDOM) {
@@ -678,25 +674,16 @@ static std::vector<Event> TestFunctionPRNGModel(unsigned flags) {
       return ret;
     }
 
-    getrandom_ready = (flags & GETRANDOM_NOT_READY) == 0;
-    wait_for_entropy = [&ret, &getrandom_ready] {
-      if (getrandom_ready) {
-        return;
-      }
-
-      ret.push_back(Event::GetRandom(1, GRND_NONBLOCK));
-      ret.push_back(Event::GetRandom(1, 0));
-      getrandom_ready = true;
-    };
-    sysrand = [&ret, &wait_for_entropy](size_t len) {
-      wait_for_entropy();
+    sysrand = [&ret](size_t len) {
       ret.push_back(Event::GetRandom(len, 0));
       return true;
     };
   }
 
-  const size_t kSeedLength =
-      CTR_DRBG_SEED_LEN * (kIsFIPS ? 10 : 1) + (kIsFIPS ? 16 : 0);
+  if (daemon_failed && !sysrand(48)) {
+    return ret;
+  }
+
   const size_t kAdditionalDataLength = 32;
 
   if (!have_rdrand()) {
@@ -704,12 +691,15 @@ static std::vector<Event> TestFunctionPRNGModel(unsigned flags) {
       if (!sysrand(kAdditionalDataLength)) {
         return ret;
       }
-      used_daemon = kUsesDaemon && AppendDaemonEvents(&ret, flags);
+      if (kUsesDaemon && !AppendDaemonEvents(&ret, flags) && !sysrand(48)) {
+        return ret;
+      }
     }
-    if (// Initialise CRNGT. If the daemon is used, the OS is used for the
-        // personalisation data of length |CTR_DRBG_SEED_LEN|. Otherwise, it
-        // used for the seed itself, including FIPS overread.
-        !sysrand(used_daemon ? CTR_DRBG_SEED_LEN : kSeedLength) ||
+    if (  // Initialise thread-local DRBG. In FIPS mode, the jitter source
+          // will be used, but we cannot observe that. Either way,
+          // CTR_DRBG_SEED_LEN will be drawn from sysrand, either as the
+          // additional data in FIPS mode, or as the seed otherwise.
+        !sysrand(CTR_DRBG_SEED_LEN) ||
         // Second additional data, when other fork-safety measures have failed.
         (!have_fork_detection() && !sysrand(kAdditionalDataLength))) {
       return ret;
@@ -730,8 +720,8 @@ static std::vector<Event> TestFunctionPRNGModel(unsigned flags) {
   return ret;
 }
 
-// Tests that |TestFunctionPRNGModel| is a correct model for the code in
-// urandom.c, at least to the limits of the the |Event| type.
+// Tests that `TestFunctionPRNGModel` is a correct model for the code in
+// urandom.c, at least to the limits of the `Event` type.
 TEST(URandomTest, Test) {
   char buf[256];
 
@@ -779,14 +769,15 @@ TEST(URandomTest, Test) {
 }
 
 }  // namespace
+BSSL_NAMESPACE_END
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
 
   if (getenv("BORINGSSL_IGNORE_MADV_WIPEONFORK")) {
-    CRYPTO_fork_detect_force_madv_wipeonfork_for_testing(0);
+    bssl::CRYPTO_fork_detect_force_madv_wipeonfork_for_testing(0);
   } else {
-    CRYPTO_fork_detect_force_madv_wipeonfork_for_testing(1);
+    bssl::CRYPTO_fork_detect_force_madv_wipeonfork_for_testing(1);
   }
 
   return RUN_ALL_TESTS();
@@ -799,5 +790,4 @@ int main(int argc, char **argv) {
   return 0;
 }
 
-#endif  // (X86_64 || AARCH64) && !SHARED_LIBRARY &&
-        // !UNSAFE_DETERMINISTIC_MODE && USE_NR_getrandom
+#endif  // (X86_64 || AARCH64) && !SHARED_LIBRARY && !UNSAFE_DETERMINISTIC_MODE

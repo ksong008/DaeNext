@@ -23,13 +23,17 @@
 #include "internal.h"
 
 
+using namespace bssl;
+
 // TODO(crbug.com/42290422): Rewrite this logic to recognize signature
 // algorithms without pulling in the OID table. We can enumerate every supported
-// signature algorithm into a small enum and convert them to/from |EVP_PKEY_CTX|
-// and |X509_ALGOR|.
+// signature algorithm into a small enum and convert them to/from `EVP_PKEY_CTX`
+// and `X509_ALGOR`.
+
+namespace {
 
 // Restrict the digests that are allowed in X509 certificates
-static int x509_digest_nid_ok(const int digest_nid) {
+int x509_digest_nid_ok(const int digest_nid) {
   switch (digest_nid) {
     case NID_md4:
     case NID_md5:
@@ -38,7 +42,9 @@ static int x509_digest_nid_ok(const int digest_nid) {
   return 1;
 }
 
-int x509_digest_sign_algorithm(EVP_MD_CTX *ctx, X509_ALGOR *algor) {
+}  // namespace
+
+int bssl::x509_digest_sign_algorithm(EVP_MD_CTX *ctx, X509_ALGOR *algor) {
   EVP_PKEY *pkey = EVP_PKEY_CTX_get0_pkey(ctx->pctx);
   if (pkey == nullptr) {
     OPENSSL_PUT_ERROR(ASN1, ASN1_R_CONTEXT_NOT_INITIALISED);
@@ -100,8 +106,8 @@ int x509_digest_sign_algorithm(EVP_MD_CTX *ctx, X509_ALGOR *algor) {
   return X509_ALGOR_set0(algor, OBJ_nid2obj(sign_nid), paramtype, nullptr);
 }
 
-int x509_digest_verify_init(EVP_MD_CTX *ctx, const X509_ALGOR *sigalg,
-                            EVP_PKEY *pkey) {
+int bssl::x509_digest_verify_init(EVP_MD_CTX *ctx, const X509_ALGOR *sigalg,
+                                  const EVP_PKEY *pkey) {
   // Convert the signature OID into digest and public key OIDs.
   int sigalg_nid = OBJ_obj2nid(sigalg->algorithm);
   int digest_nid, pkey_nid;

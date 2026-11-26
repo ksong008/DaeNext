@@ -210,12 +210,12 @@ impl BodyCodec {
     }
 
     fn seal_payload(&mut self, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
-        match &self.cipher {
+        match &mut self.cipher {
             BodyCipher::Aes128Gcm(cipher) => {
                 let mut output = payload.to_vec();
                 let mut authentication = [0_u8; MAX_CHUNK_AUTHENTICATION_SIZE];
                 cipher
-                    .seal_in_place(&self.nonce.next(), &mut output, &mut authentication, &[])
+                    .seal_in_place_mut(&self.nonce.next(), &mut output, &mut authentication, &[])
                     .map_err(|_| {
                         OutboundError::BadVmess("VMess AES-GCM body encryption failed".to_owned())
                     })?;
@@ -231,7 +231,7 @@ impl BodyCodec {
     }
 
     fn open_payload(&mut self, payload: &[u8]) -> Result<Vec<u8>, OutboundError> {
-        match &self.cipher {
+        match &mut self.cipher {
             BodyCipher::Aes128Gcm(cipher) => {
                 let plain_len = payload
                     .len()
@@ -243,7 +243,7 @@ impl BodyCodec {
                     })?;
                 let mut output = payload[..plain_len].to_vec();
                 cipher
-                    .open_in_place(&self.nonce.next(), &mut output, &payload[plain_len..], &[])
+                    .open_in_place_mut(&self.nonce.next(), &mut output, &payload[plain_len..], &[])
                     .map_err(|_| {
                         OutboundError::BadVmess("VMess AES-GCM body decryption failed".to_owned())
                     })?;

@@ -25,10 +25,12 @@
 
 #include <string>
 
-#include "../internal.h"
 #include "../test/test_data.h"
 #include "../test/test_util.h"
 
+
+BSSL_NAMESPACE_BEGIN
+namespace {
 
 // kPEMCert is the result of exporting the mail.google.com certificate from
 // Chrome and then running it through:
@@ -84,7 +86,7 @@ static const char kPEMCRL[] =
     "fNQMQoI9So4Vdy88Kow6BBBV3Lu6sZHue+cjxXETrmshNdNk8ABUMQA=\n"
     "-----END PKCS7-----\n";
 
-static void TestCertReparse(bssl::Span<const uint8_t> der) {
+void TestCertReparse(bssl::Span<const uint8_t> der) {
   bssl::UniquePtr<STACK_OF(X509)> certs(sk_X509_new_null());
   ASSERT_TRUE(certs);
   bssl::UniquePtr<STACK_OF(X509)> certs2(sk_X509_new_null());
@@ -106,7 +108,7 @@ static void TestCertReparse(bssl::Span<const uint8_t> der) {
   ASSERT_TRUE(PKCS7_get_certificates(certs2.get(), &pkcs7));
   EXPECT_EQ(0u, CBS_len(&pkcs7));
 
-  // PKCS#7 stores certificates in a SET OF, so |PKCS7_bundle_certificates| may
+  // PKCS#7 stores certificates in a SET OF, so `PKCS7_bundle_certificates` may
   // not preserve the original order. All of our test inputs are already sorted,
   // but this check should be relaxed if we add others.
   ASSERT_EQ(sk_X509_num(certs.get()), sk_X509_num(certs2.get()));
@@ -168,7 +170,7 @@ static void TestCertReparse(bssl::Span<const uint8_t> der) {
   EXPECT_EQ(Bytes(result_data, result_len), Bytes(result4_data, result4_len));
 }
 
-static void TestCRLReparse(bssl::Span<const uint8_t> der) {
+void TestCRLReparse(bssl::Span<const uint8_t> der) {
   bssl::UniquePtr<STACK_OF(X509_CRL)> crls(sk_X509_CRL_new_null());
   ASSERT_TRUE(crls);
   bssl::UniquePtr<STACK_OF(X509_CRL)> crls2(sk_X509_CRL_new_null());
@@ -190,7 +192,7 @@ static void TestCRLReparse(bssl::Span<const uint8_t> der) {
   ASSERT_TRUE(PKCS7_get_CRLs(crls2.get(), &pkcs7));
   EXPECT_EQ(0u, CBS_len(&pkcs7));
 
-  // PKCS#7 stores CRLs in a SET OF, so |PKCS7_bundle_CRLs| may not preserve the
+  // PKCS#7 stores CRLs in a SET OF, so `PKCS7_bundle_CRLs` may not preserve the
   // original order. All of our test inputs are already sorted, but this check
   // should be relaxed if we add others.
   ASSERT_EQ(sk_X509_CRL_num(crls.get()), sk_X509_CRL_num(crls.get()));
@@ -237,7 +239,7 @@ static void TestCRLReparse(bssl::Span<const uint8_t> der) {
   }
 }
 
-static void TestPEMCerts(const char *pem) {
+void TestPEMCerts(const char *pem) {
   bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(pem, strlen(pem)));
   ASSERT_TRUE(bio);
   bssl::UniquePtr<STACK_OF(X509)> certs(sk_X509_new_null());
@@ -247,7 +249,7 @@ static void TestPEMCerts(const char *pem) {
   ASSERT_EQ(1u, sk_X509_num(certs.get()));
 }
 
-static void TestPEMCRLs(const char *pem) {
+void TestPEMCRLs(const char *pem) {
   bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(pem, strlen(pem)));
   ASSERT_TRUE(bio);
   bssl::UniquePtr<STACK_OF(X509_CRL)> crls(sk_X509_CRL_new_null());
@@ -277,13 +279,9 @@ TEST(PKCS7Test, CrlReparse) {
       bssl::StringAsBytes(GetTestData("crypto/pkcs7/test/openssl_crl.p7c")));
 }
 
-TEST(PKCS7Test, PEMCerts) {
-  TestPEMCerts(kPEMCert);
-}
+TEST(PKCS7Test, PEMCerts) { TestPEMCerts(kPEMCert); }
 
-TEST(PKCS7Test, PEMCRLs) {
-  TestPEMCRLs(kPEMCRL);
-}
+TEST(PKCS7Test, PEMCRLs) { TestPEMCRLs(kPEMCRL); }
 
 // Test that we output certificates in the canonical DER order.
 TEST(PKCS7Test, SortCerts) {
@@ -420,8 +418,8 @@ xzfKY2TzxLiOmctG0hXFkH5J
       PEM_read_bio_X509_CRL(bio.get(), nullptr, nullptr, nullptr));
   ASSERT_TRUE(crl2);
 
-  // DER's SET OF ordering sorts by tag, then length, so |crl1| comes before
-  // |crl2|.
+  // DER's SET OF ordering sorts by tag, then length, so `crl1` comes before
+  // `crl2`.
   auto check_order = [&](X509_CRL *new_crl1, X509_CRL *new_crl2) {
     // Bundle the CRLs in the new order.
     bssl::UniquePtr<STACK_OF(X509_CRL)> new_crls(sk_X509_CRL_new_null());
@@ -480,18 +478,29 @@ TEST(PKCS7Test, KernelModuleSigning) {
   EXPECT_EQ(Bytes(pkcs7_bytes, pkcs7_len), Bytes(expected));
 
   // Other option combinations should fail.
-  EXPECT_FALSE(
-      PKCS7_sign(cert.get(), key.get(), /*certs=*/nullptr, data_bio.get(),
-                 PKCS7_NOATTR | PKCS7_BINARY | PKCS7_NOCERTS));
-  EXPECT_FALSE(
-      PKCS7_sign(cert.get(), key.get(), /*certs=*/nullptr, data_bio.get(),
-                 PKCS7_BINARY | PKCS7_NOCERTS | PKCS7_DETACHED));
+  EXPECT_FALSE(PKCS7_sign(cert.get(), key.get(), /*certs=*/nullptr,
+                          data_bio.get(),
+                          PKCS7_NOATTR | PKCS7_BINARY | PKCS7_NOCERTS));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_PKCS7, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
+  EXPECT_FALSE(PKCS7_sign(cert.get(), key.get(), /*certs=*/nullptr,
+                          data_bio.get(),
+                          PKCS7_BINARY | PKCS7_NOCERTS | PKCS7_DETACHED));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_PKCS7, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
   EXPECT_FALSE(
       PKCS7_sign(cert.get(), key.get(), /*certs=*/nullptr, data_bio.get(),
                  PKCS7_NOATTR | PKCS7_TEXT | PKCS7_NOCERTS | PKCS7_DETACHED));
-  EXPECT_FALSE(
-      PKCS7_sign(cert.get(), key.get(), /*certs=*/nullptr, data_bio.get(),
-                 PKCS7_NOATTR | PKCS7_BINARY | PKCS7_DETACHED));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_PKCS7, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
+  EXPECT_FALSE(PKCS7_sign(cert.get(), key.get(), /*certs=*/nullptr,
+                          data_bio.get(),
+                          PKCS7_NOATTR | PKCS7_BINARY | PKCS7_DETACHED));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_PKCS7, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
 
   ERR_clear_error();
 }
+
+}  // namespace
+BSSL_NAMESPACE_END

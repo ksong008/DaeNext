@@ -88,6 +88,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "antidote"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "307f1158c6f649671b2c5b2939b7513de520500dfe92913a49d5d313e44a6ee7"
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -296,17 +302,17 @@ dependencies = [
 name = "boring"
 version = "4.99.0"
 dependencies = [
- "boring 5.1.0",
+ "boring 5.6.0",
 ]
 
 [[package]]
 name = "boring"
-version = "5.1.0"
+version = "5.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b573999d5cb0fdb9e9bb495058981752547b6475ba5e346247ebbd329917549"
+checksum = "78768ebbcd8b284d61c52e2058a4de72e61015aa2b41da2489b29a5211c7a2d5"
 dependencies = [
  "bitflags",
- "boring-sys 5.1.0",
+ "boring-sys 5.6.0",
  "foreign-types",
  "libc",
  "openssl-macros",
@@ -316,12 +322,12 @@ dependencies = [
 name = "boring-sys"
 version = "4.99.0"
 dependencies = [
- "boring-sys 5.1.0",
+ "boring-sys 5.6.0",
 ]
 
 [[package]]
 name = "boring-sys"
-version = "5.1.0"
+version = "5.6.0"
 dependencies = [
  "bindgen",
  "cmake",
@@ -659,7 +665,7 @@ name = "dae-daemon"
 version = "3.1.0"
 dependencies = [
  "base64",
- "boring 5.1.0",
+ "boring 5.6.0",
  "brotli",
  "bytes",
  "dae-config",
@@ -796,8 +802,8 @@ dependencies = [
  "base64",
  "blake3",
  "boring 4.99.0",
- "boring 5.1.0",
- "boring-sys 5.1.0",
+ "boring 5.6.0",
+ "boring-sys 5.6.0",
  "brotli",
  "bytes",
  "chacha20poly1305",
@@ -853,8 +859,8 @@ name = "dae-outbound-quic"
 version = "3.1.0"
 dependencies = [
  "boring 4.99.0",
- "boring 5.1.0",
- "boring-sys 5.1.0",
+ "boring 5.6.0",
+ "boring-sys 5.6.0",
  "brotli",
  "bytes",
  "chacha20poly1305",
@@ -883,8 +889,8 @@ dependencies = [
  "aes-gcm",
  "base64",
  "blake3",
- "boring 5.1.0",
- "boring-sys 5.1.0",
+ "boring 5.6.0",
+ "boring-sys 5.6.0",
  "bytes",
  "chacha20poly1305",
  "dae-core-types",
@@ -1045,7 +1051,7 @@ name = "dae-resident-dataplane"
 version = "3.1.0"
 dependencies = [
  "base64",
- "boring 5.1.0",
+ "boring 5.6.0",
  "bytes",
  "dae-config",
  "dae-core-types",
@@ -1089,7 +1095,7 @@ dependencies = [
 name = "dae-resident-dns"
 version = "3.1.0"
 dependencies = [
- "boring 5.1.0",
+ "boring 5.6.0",
  "bytes",
  "dae-config",
  "dae-datapath",
@@ -1185,8 +1191,8 @@ version = "3.1.0"
 dependencies = [
  "base64",
  "blake2",
- "boring 5.1.0",
- "boring-sys 5.1.0",
+ "boring 5.6.0",
+ "boring-sys 5.6.0",
  "brotli",
  "bytes",
  "dae-datapath",
@@ -1302,8 +1308,8 @@ dependencies = [
 name = "dae-tls"
 version = "3.1.0"
 dependencies = [
- "boring 5.1.0",
- "boring-sys 5.1.0",
+ "boring 5.6.0",
+ "boring-sys 5.6.0",
  "foreign-types",
  "serde",
  "serde_json",
@@ -1915,6 +1921,21 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "linked-hash-map"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
+
+[[package]]
+name = "linked_hash_set"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "984fb35d06508d1e69fc91050cceba9c0b748f983e6739fa2c7a9237154c52c8"
+dependencies = [
+ "linked-hash-map",
 ]
 
 [[package]]
@@ -2757,12 +2778,14 @@ dependencies = [
 
 [[package]]
 name = "tokio-boring"
-version = "5.0.0"
+version = "5.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "888f55b68689784b01b8625c9c1486080d8a790972355d45a1bef231b5f5aa83"
+checksum = "c708fb8a3aad6d0c88f3740dc0c62b239253112789228dd2927d09ff6ea2d8f0"
 dependencies = [
- "boring 5.1.0",
- "boring-sys 5.1.0",
+ "antidote",
+ "boring 5.6.0",
+ "boring-sys 5.6.0",
+ "linked_hash_set",
  "tokio",
 ]
 

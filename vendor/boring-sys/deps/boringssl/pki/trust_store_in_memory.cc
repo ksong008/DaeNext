@@ -13,12 +13,10 @@
 // limitations under the License.
 
 #include "trust_store_in_memory.h"
-#include "openssl/span.h"
+
+#include <openssl/span.h>
 
 BSSL_NAMESPACE_BEGIN
-
-TrustStoreInMemory::TrustStoreInMemory() = default;
-TrustStoreInMemory::~TrustStoreInMemory() = default;
 
 bool TrustStoreInMemory::IsEmpty() const {
   return entries_.empty() && trusted_mtc_anchors_.empty();
@@ -112,10 +110,6 @@ bool TrustStoreInMemory::ContainsMTCAnchor(const MTCAnchor *anchor) const {
       trusted_mtc_anchors_.find(BytesAsStringView(anchor->NormalizedSubject()));
   return entry != trusted_mtc_anchors_.end();
 }
-
-TrustStoreInMemory::Entry::Entry() = default;
-TrustStoreInMemory::Entry::Entry(const Entry &other) = default;
-TrustStoreInMemory::Entry::~Entry() = default;
 
 void TrustStoreInMemory::AddCertificate(
     std::shared_ptr<const ParsedCertificate> cert,

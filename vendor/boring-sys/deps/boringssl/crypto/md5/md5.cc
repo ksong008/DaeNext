@@ -24,6 +24,8 @@
 #include "internal.h"
 
 
+using namespace bssl;
+
 uint8_t *MD5(const uint8_t *data, size_t len, uint8_t out[MD5_DIGEST_LENGTH]) {
   MD5_CTX ctx;
   MD5_Init(&ctx);
@@ -66,17 +68,59 @@ struct MD5Traits {
 }  // namespace
 
 int MD5_Update(MD5_CTX *c, const void *data, size_t len) {
-  bssl::crypto_md32_update<MD5Traits>(
-      c, bssl::Span(static_cast<const uint8_t *>(data), len));
+  crypto_md32_update<MD5Traits>(c,
+                                Span(static_cast<const uint8_t *>(data), len));
   return 1;
 }
 
 int MD5_Final(uint8_t out[MD5_DIGEST_LENGTH], MD5_CTX *c) {
-  bssl::crypto_md32_final<MD5Traits>(c);
+  crypto_md32_final<MD5Traits>(c);
   CRYPTO_store_u32_le(out, c->h[0]);
   CRYPTO_store_u32_le(out + 4, c->h[1]);
   CRYPTO_store_u32_le(out + 8, c->h[2]);
   CRYPTO_store_u32_le(out + 12, c->h[3]);
+  return 1;
+}
+
+int MD5_marshal_state(const MD5_CTX *md5, uint8_t out[MD5_STATE_MAX_BYTES],
+                      size_t *out_len) {
+  BSSL_CHECK(md5->num < MD5_CBLOCK);
+  CRYPTO_store_u32_le(out, md5->h[0]);
+  CRYPTO_store_u32_le(out + 4, md5->h[1]);
+  CRYPTO_store_u32_le(out + 8, md5->h[2]);
+  CRYPTO_store_u32_le(out + 12, md5->h[3]);
+  CRYPTO_store_u32_le(out + 16, md5->Nl);
+  CRYPTO_store_u32_le(out + 20, md5->Nh);
+  OPENSSL_memcpy(out + 24, md5->data, md5->num);
+  *out_len = 24 + md5->num;
+  return 1;
+}
+
+int MD5_parse_state(MD5_CTX *md5, const uint8_t *in, size_t in_len) {
+  if (in_len < 24 || in_len > MD5_STATE_MAX_BYTES) {
+    return 0;
+  }
+  uint32_t nl = CRYPTO_load_u32_le(in + 16);
+  if ((nl & 7) != 0) {
+    return 0;
+  }
+  // The number of bytes left in `data` is the number of bits divided by 8,
+  // modulo the block size.
+  static_assert((MD5_CBLOCK & (MD5_CBLOCK - 1)) == 0,
+                "MD5_CBLOCK must be a power of 2");
+  unsigned num = (nl >> 3) & (MD5_CBLOCK - 1);
+  if (in_len != 24 + num) {
+    return 0;
+  }
+  OPENSSL_memset(md5, 0, sizeof(MD5_CTX));
+  md5->h[0] = CRYPTO_load_u32_le(in);
+  md5->h[1] = CRYPTO_load_u32_le(in + 4);
+  md5->h[2] = CRYPTO_load_u32_le(in + 8);
+  md5->h[3] = CRYPTO_load_u32_le(in + 12);
+  md5->Nl = nl;
+  md5->Nh = CRYPTO_load_u32_le(in + 20);
+  md5->num = num;
+  OPENSSL_memcpy(md5->data, in + 24, num);
   return 1;
 }
 

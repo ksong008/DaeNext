@@ -577,7 +577,7 @@ impl AeadUdpCodec {
         payload: &[u8],
         out: &mut Vec<u8>,
     ) -> Result<(), OutboundError> {
-        let packet_cipher = self.packet_cipher(salt)?;
+        let mut packet_cipher = self.packet_cipher(salt)?;
         out.clear();
         out.reserve(salt.len() + target.encoded_len() + payload.len() + TAG_LEN);
         out.extend_from_slice(salt);
@@ -917,13 +917,17 @@ impl AeadCipher {
         }
     }
 
-    fn encrypt(&self, nonce: &[u8; NONCE_LEN], plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    fn encrypt(
+        &mut self,
+        nonce: &[u8; NONCE_LEN],
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, OutboundError> {
         match self {
             Self::Aes128(cipher) | Self::Aes256(cipher) => {
                 let mut output = plaintext.to_vec();
                 let mut tag = [0_u8; TAG_LEN];
                 cipher
-                    .seal_in_place(nonce, &mut output, &mut tag, &[])
+                    .seal_in_place_mut(nonce, &mut output, &mut tag, &[])
                     .map_err(|_| OutboundError::BadShadowsocks("aead encrypt failed".to_owned()))?;
                 output.extend_from_slice(&tag);
                 Ok(output)
@@ -935,7 +939,7 @@ impl AeadCipher {
     }
 
     fn decrypt(
-        &self,
+        &mut self,
         nonce: &[u8; NONCE_LEN],
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, OutboundError> {
@@ -948,7 +952,7 @@ impl AeadCipher {
                 })?;
                 let mut output = ciphertext[..payload_len].to_vec();
                 cipher
-                    .open_in_place(nonce, &mut output, &ciphertext[payload_len..], &[])
+                    .open_in_place_mut(nonce, &mut output, &ciphertext[payload_len..], &[])
                     .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned()))?;
                 Ok(output)
             }
@@ -959,7 +963,7 @@ impl AeadCipher {
     }
 
     fn encrypt_in_place(
-        &self,
+        &mut self,
         nonce: &[u8; NONCE_LEN],
         plaintext: &mut [u8],
     ) -> Result<[u8; TAG_LEN], OutboundError> {
@@ -967,7 +971,7 @@ impl AeadCipher {
             Self::Aes128(cipher) | Self::Aes256(cipher) => {
                 let mut tag = [0_u8; TAG_LEN];
                 cipher
-                    .seal_in_place(nonce, plaintext, &mut tag, &[])
+                    .seal_in_place_mut(nonce, plaintext, &mut tag, &[])
                     .map_err(|_| OutboundError::BadShadowsocks("aead encrypt failed".to_owned()))?;
                 return Ok(tag);
             }
@@ -982,7 +986,7 @@ impl AeadCipher {
     }
 
     fn decrypt_in_place(
-        &self,
+        &mut self,
         nonce: &[u8; NONCE_LEN],
         ciphertext: &mut [u8],
     ) -> Result<usize, OutboundError> {
@@ -992,7 +996,7 @@ impl AeadCipher {
         let (plaintext, tag) = ciphertext.split_at_mut(plain_len);
         if let Self::Aes128(cipher) | Self::Aes256(cipher) = self {
             cipher
-                .open_in_place(nonce, plaintext, tag, &[])
+                .open_in_place_mut(nonce, plaintext, tag, &[])
                 .map_err(|_| OutboundError::BadShadowsocks("aead decrypt failed".to_owned()))?;
             return Ok(plain_len);
         }

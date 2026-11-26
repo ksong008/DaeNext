@@ -127,10 +127,10 @@ impl BodyCodec {
         payload: &mut [u8],
         authentication: &mut [u8; MAX_CHUNK_AUTHENTICATION_SIZE],
     ) -> Result<usize, OutboundError> {
-        match &self.cipher {
+        match &mut self.cipher {
             BodyCipher::Aes128Gcm(cipher) => {
                 cipher
-                    .seal_in_place(&self.nonce.next(), payload, authentication, &[])
+                    .seal_in_place_mut(&self.nonce.next(), payload, authentication, &[])
                     .map_err(|_| {
                         OutboundError::BadVmess("VMess AES-GCM body encryption failed".to_owned())
                     })?;

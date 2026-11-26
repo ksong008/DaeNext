@@ -53,7 +53,7 @@ impl BodyCodec {
     }
 
     fn open_payload_in_place(&mut self, payload: &mut [u8]) -> Result<usize, OutboundError> {
-        match &self.cipher {
+        match &mut self.cipher {
             BodyCipher::Aes128Gcm(cipher) => {
                 let plain_len = payload
                     .len()
@@ -65,7 +65,7 @@ impl BodyCodec {
                     })?;
                 let (plain, authentication) = payload.split_at_mut(plain_len);
                 cipher
-                    .open_in_place(&self.nonce.next(), plain, authentication, &[])
+                    .open_in_place_mut(&self.nonce.next(), plain, authentication, &[])
                     .map_err(|_| {
                         OutboundError::BadVmess("VMess AES-GCM body decryption failed".to_owned())
                     })?;

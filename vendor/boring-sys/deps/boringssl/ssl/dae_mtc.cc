@@ -32,7 +32,7 @@ struct DAEMTCTrust {
   bool IsCurrent(uint64_t now) const { return valid_from <= now && now < expires; }
 };
 
-bool ssl_dae_append_mtc_anchor_ids(SSL *ssl) {
+bool ssl_dae_append_mtc_anchor_ids(SSLImpl *ssl) {
   const auto &trust = *ssl->ctx->dae_mtc_trust;
   if (!trust.IsCurrent(ssl_ctx_get_current_time(ssl->ctx.get()).tv_sec)) {
     return true;
@@ -53,7 +53,7 @@ bool ssl_dae_append_mtc_anchor_ids(SSL *ssl) {
   return true;
 }
 
-std::optional<int> ssl_dae_verify_mtc(const SSL_CTX *ctx,
+std::optional<int> ssl_dae_verify_mtc(const SSLContext *ctx,
                                       CRYPTO_BUFFER *certificate,
                                       X509_STORE_CTX *verify_context) {
   const ASN1_OBJECT *signature;
@@ -151,8 +151,8 @@ int DAE_SSL_CTX_set1_mtc_trust(SSL_CTX *ctx, const uint8_t *data, size_t len) {
       checked_subtrees.push_back(subtree);
     }
     DAEMTCTrust::Log log;
-    log.anchor = std::make_shared<MTCAnchor>(id, Span(checked_subtrees));
-    if (!trust->store->trust_store->AddMTCTrustAnchor(log.anchor)) {
+    log.anchor = MTCAnchor::CreateDaeDavidben08(id, std::move(checked_subtrees));
+    if (!log.anchor || !trust->store->trust_store->AddMTCTrustAnchor(log.anchor)) {
       return 0;
     }
     while (CBS_len(&revoked) != 0) {
@@ -168,10 +168,10 @@ int DAE_SSL_CTX_set1_mtc_trust(SSL_CTX *ctx, const uint8_t *data, size_t len) {
   if (trust->logs.empty()) {
     return 0;
   }
-  ctx->dae_mtc_trust = std::move(trust);
+  FromOpaque(ctx)->dae_mtc_trust = std::move(trust);
   return 1;
 }
 
 int DAE_SSL_CTX_has_mtc_trust(const SSL_CTX *ctx) {
-  return ctx->dae_mtc_trust != nullptr;
+  return FromOpaque(ctx)->dae_mtc_trust != nullptr;
 }

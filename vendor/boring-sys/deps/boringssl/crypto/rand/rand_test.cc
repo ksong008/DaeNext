@@ -22,7 +22,7 @@
 
 #include <openssl/span.h>
 
-#include "../bcm_support.h"
+#include "../bcm_support.h"  // IWYU pragma: keep
 #include "../fipsmodule/rand/internal.h"
 #include "../test/abi_test.h"
 #include "../test/test_util.h"
@@ -40,6 +40,9 @@
 #include <unistd.h>
 #endif
 
+
+BSSL_NAMESPACE_BEGIN
+namespace {
 
 // These tests are, strictly speaking, flaky, but we use large enough buffers
 // that the probability of failing when we should pass is negligible.
@@ -59,7 +62,7 @@ TEST(RandTest, NotObviouslyBroken) {
 #if !defined(OPENSSL_WINDOWS) && !defined(OPENSSL_IOS) && \
     !defined(OPENSSL_FUCHSIA) &&                          \
     !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
-static bool ForkAndRand(bssl::Span<uint8_t> out, bool fork_unsafe_buffering) {
+bool ForkAndRand(Span<uint8_t> out, bool fork_unsafe_buffering) {
   int pipefds[2];
   if (pipe(pipefds) < 0) {
     perror("pipe");
@@ -168,7 +171,7 @@ TEST(RandTest, Fork) {
         // !OPENSSL_FUCHSIA && !FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 
 #if defined(OPENSSL_THREADS)
-static void RunConcurrentRands(size_t num_threads) {
+void RunConcurrentRands(size_t num_threads) {
   static const uint8_t kZeros[256] = {0};
 
   std::vector<std::array<uint8_t, 256>> bufs(num_threads);
@@ -220,3 +223,6 @@ TEST(RandTest, RdrandABI) {
   CHECK_ABI_SEH(CRYPTO_rdrand_multiple8_buf, buf, 32);
 }
 #endif  // OPENSSL_X86_64 && SUPPORTS_ABI_TEST
+
+}  // namespace
+BSSL_NAMESPACE_END

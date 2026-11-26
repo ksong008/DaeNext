@@ -18,9 +18,6 @@
 
 BSSL_NAMESPACE_BEGIN
 
-TrustStoreCollection::TrustStoreCollection() = default;
-TrustStoreCollection::~TrustStoreCollection() = default;
-
 void TrustStoreCollection::AddTrustStore(TrustStore *store) {
   BSSL_CHECK(store);
   stores_.push_back(store);
@@ -52,6 +49,19 @@ CertificateTrust TrustStoreCollection::GetTrust(const ParsedCertificate *cert) {
   }
 
   return result;
+}
+
+std::shared_ptr<const MTCAnchor> TrustStoreCollection::GetTrustedMTCIssuerOf(
+    const ParsedCertificate *cert) {
+  for (auto *store : stores_) {
+    std::shared_ptr<const MTCAnchor> mtc_anchor =
+        store->GetTrustedMTCIssuerOf(cert);
+    if (mtc_anchor) {
+      return mtc_anchor;
+    }
+  }
+
+  return nullptr;
 }
 
 BSSL_NAMESPACE_END

@@ -14,9 +14,9 @@
 
 #include <openssl/base.h>
 
-#include <memory>
-
+#include <openssl/digest.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/hpke.h>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
@@ -25,41 +25,52 @@
 #include "transport_common.h"
 
 
+BSSL_NAMESPACE_BEGIN
+
 static const struct argument kArguments[] = {
     {
-        "-accept", kRequiredArgument,
+        "-accept",
+        kRequiredArgument,
         "The port of the server to bind on; eg 45102",
     },
     {
-        "-cipher", kOptionalArgument,
+        "-cipher",
+        kOptionalArgument,
         "An OpenSSL-style cipher suite string that configures the offered "
         "ciphers",
     },
     {
-        "-curves", kOptionalArgument,
+        "-curves",
+        kOptionalArgument,
         "An OpenSSL-style ECDH curves list that configures the offered curves",
     },
     {
-        "-max-version", kOptionalArgument,
+        "-max-version",
+        kOptionalArgument,
         "The maximum acceptable protocol version",
     },
     {
-        "-min-version", kOptionalArgument,
+        "-min-version",
+        kOptionalArgument,
         "The minimum acceptable protocol version",
     },
     {
-        "-key", kOptionalArgument,
+        "-key",
+        kOptionalArgument,
         "PEM-encoded file containing the private key. A self-signed "
         "certificate is generated at runtime if this argument is not provided.",
     },
     {
-        "-cert", kOptionalArgument,
+        "-cert",
+        kOptionalArgument,
         "PEM-encoded file containing the leaf certificate and optional "
         "certificate chain. This is taken from the -key argument if this "
         "argument is not provided.",
     },
     {
-        "-ocsp-response", kOptionalArgument, "OCSP response file to send",
+        "-ocsp-response",
+        kOptionalArgument,
+        "OCSP response file to send",
     },
     {
         "-ech-key",
@@ -72,39 +83,79 @@ static const struct argument kArguments[] = {
         "File containing one ECHConfig.",
     },
     {
-        "-loop", kBooleanArgument,
+        "-loop",
+        kBooleanArgument,
         "The server will continue accepting new sequential connections.",
     },
     {
-        "-early-data", kBooleanArgument, "Allow early data",
+        "-early-data",
+        kBooleanArgument,
+        "Allow early data",
     },
     {
-        "-www", kBooleanArgument,
+        "-www",
+        kBooleanArgument,
         "The server will print connection information in response to a "
         "HTTP GET request.",
     },
     {
-        "-debug", kBooleanArgument,
+        "-debug",
+        kBooleanArgument,
         "Print debug information about the handshake",
     },
     {
-        "-require-any-client-cert", kBooleanArgument,
+        "-require-any-client-cert",
+        kBooleanArgument,
         "The server will require a client certificate.",
     },
     {
-        "-jdk11-workaround", kBooleanArgument,
+        "-jdk11-workaround",
+        kBooleanArgument,
         "Enable the JDK 11 workaround",
     },
     {
-        "", kOptionalArgument, "",
+        "-psk-hex",
+        kOptionalArgument,
+        "A hex-encoded pre-shared key to import (RFC 9258)",
+    },
+    {
+        "-psk-identity",
+        kOptionalArgument,
+        "A PSK identity to configure",
+    },
+    {
+        "-psk-context",
+        kOptionalArgument,
+        "A PSK context string to configure",
+    },
+    {
+        "-psk-sha384",
+        kBooleanArgument,
+        "Use a SHA-384 PSK instead of a SHA-256 PSK.",
+    },
+    {
+        "-rpk-key",
+        kOptionalArgument,
+        "PEM-encoded file containing the private key to use for a Raw Public "
+        "Key (RFC 7250) certificate if the client supports it, in which case "
+        "the server will automatically offer it.",
+    },
+    {
+        "-accept-cert-types",
+        kOptionalArgument,
+        "A comma-separated list of cert types to accept from the client.",
+    },
+    {
+        "",
+        kOptionalArgument,
+        "",
     },
 };
 
 static bool LoadOCSPResponse(SSL_CTX *ctx, const char *filename) {
   ScopedFILE f(fopen(filename, "rb"));
   std::vector<uint8_t> data;
-  if (f == nullptr ||
-      !ReadAll(&data, f.get())) {
+  if (f == nullptr || !ReadAll(&data, f.get())) {
     fprintf(stderr, "Error reading %s.\n", filename);
     return false;
   }
@@ -117,14 +168,10 @@ static bool LoadOCSPResponse(SSL_CTX *ctx, const char *filename) {
 }
 
 static bssl::UniquePtr<EVP_PKEY> MakeKeyPairForSelfSignedCert() {
-  bssl::UniquePtr<EC_KEY> ec_key(EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
-  if (!ec_key || !EC_KEY_generate_key(ec_key.get())) {
+  bssl::UniquePtr<EVP_PKEY> evp_pkey(
+      EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  if (!evp_pkey) {
     fprintf(stderr, "Failed to generate key pair.\n");
-    return nullptr;
-  }
-  bssl::UniquePtr<EVP_PKEY> evp_pkey(EVP_PKEY_new());
-  if (!evp_pkey || !EVP_PKEY_assign_EC_KEY(evp_pkey.get(), ec_key.release())) {
-    fprintf(stderr, "Failed to assign key pair.\n");
     return nullptr;
   }
   return evp_pkey;
@@ -157,8 +204,7 @@ static bssl::UniquePtr<X509> MakeSelfSignedCert(EVP_PKEY *evp_pkey,
 
   // macOS requires an explicit EKU extension.
   bssl::UniquePtr<STACK_OF(ASN1_OBJECT)> ekus(sk_ASN1_OBJECT_new_null());
-  if (!ekus ||
-      !sk_ASN1_OBJECT_push(ekus.get(), OBJ_nid2obj(NID_server_auth)) ||
+  if (!ekus || !sk_ASN1_OBJECT_push(ekus.get(), OBJ_nid2obj(NID_server_auth)) ||
       !X509_add1_ext_i2d(x509.get(), NID_ext_key_usage, ekus.get(), /*crit=*/1,
                          /*flags=*/0)) {
     return nullptr;
@@ -255,6 +301,7 @@ bool Server(const std::vector<std::string> &args) {
   }
 
   // Server authentication is required.
+  bool installed_cred = false;
   if (args_map.count("-key") != 0) {
     std::string key = args_map["-key"];
     if (!SSL_CTX_use_PrivateKey_file(ctx.get(), key.c_str(),
@@ -268,7 +315,50 @@ bool Server(const std::vector<std::string> &args) {
       fprintf(stderr, "Failed to load cert chain: %s\n", cert.c_str());
       return false;
     }
-  } else {
+    installed_cred = true;
+  }
+  if (args_map.count("-rpk-key") != 0) {
+    UniquePtr<EVP_PKEY> pkey = LoadPrivateKeyFile(args_map["-rpk-key"]);
+    if (!pkey) {
+      return false;
+    }
+    UniquePtr<SSL_CREDENTIAL> cred(
+        SSL_CREDENTIAL_new_raw_public_key(pkey.get()));
+    if (!cred || !SSL_CTX_add1_credential(ctx.get(), cred.get())) {
+      fprintf(stderr, "Failed to add RPK\n");
+      return false;
+    }
+    installed_cred = true;
+  }
+  if (auto psk_hex = args_map.find("-psk-hex"); psk_hex != args_map.end()) {
+    auto psk = DecodeHex(psk_hex->second);
+    if (!psk) {
+      fprintf(stderr, "Could not convert PSK from hex\n");
+      return false;
+    }
+    auto psk_id_arg = args_map.find("-psk-identity");
+    if (psk_id_arg == args_map.end()) {
+      fprintf(stderr, "No PSK identity specified\n");
+      return false;
+    }
+    Span<const uint8_t> psk_id = StringAsBytes(psk_id_arg->second);
+    Span<const uint8_t> psk_context;
+    if (auto it = args_map.find("-psk-context"); it != args_map.end()) {
+      psk_context = StringAsBytes(it->second);
+    }
+    const EVP_MD *psk_md =
+        args_map.count("-psk-sha384") ? EVP_sha384() : EVP_sha256();
+    UniquePtr<SSL_CREDENTIAL> cred(SSL_CREDENTIAL_new_pre_shared_key(
+        psk->data(), psk->size(), psk_id.data(), psk_id.size(), psk_md,
+        psk_context.data(), psk_context.size()));
+    if (!cred || !SSL_CTX_add1_credential(ctx.get(), cred.get())) {
+      fprintf(stderr, "Failed to load PSK\n");
+      return false;
+    }
+    installed_cred = true;
+  }
+  // Install a default self-signed credential.
+  if (!installed_cred) {
     bssl::UniquePtr<EVP_PKEY> evp_pkey = MakeKeyPairForSelfSignedCert();
     if (!evp_pkey) {
       return false;
@@ -289,8 +379,7 @@ bool Server(const std::vector<std::string> &args) {
   }
 
   if (args_map.count("-ech-key") + args_map.count("-ech-config") == 1) {
-    fprintf(stderr,
-            "-ech-config and -ech-key must be specified together.\n");
+    fprintf(stderr, "-ech-config and -ech-key must be specified together.\n");
     return false;
   }
 
@@ -299,8 +388,7 @@ bool Server(const std::vector<std::string> &args) {
     std::string ech_key_path = args_map["-ech-key"];
     ScopedFILE ech_key_file(fopen(ech_key_path.c_str(), "rb"));
     std::vector<uint8_t> ech_key;
-    if (ech_key_file == nullptr ||
-        !ReadAll(&ech_key, ech_key_file.get())) {
+    if (ech_key_file == nullptr || !ReadAll(&ech_key, ech_key_file.get())) {
       fprintf(stderr, "Error reading %s\n", ech_key_path.c_str());
       return false;
     }
@@ -367,7 +455,8 @@ bool Server(const std::vector<std::string> &args) {
 
   if (args_map.count("-ocsp-response") != 0 &&
       !LoadOCSPResponse(ctx.get(), args_map["-ocsp-response"].c_str())) {
-    fprintf(stderr, "Failed to load OCSP response: %s\n", args_map["-ocsp-response"].c_str());
+    fprintf(stderr, "Failed to load OCSP response: %s\n",
+            args_map["-ocsp-response"].c_str());
     return false;
   }
 
@@ -380,11 +469,22 @@ bool Server(const std::vector<std::string> &args) {
   }
 
   if (args_map.count("-require-any-client-cert") != 0) {
-    SSL_CTX_set_verify(
-        ctx.get(), SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
-    SSL_CTX_set_cert_verify_callback(
-        ctx.get(), [](X509_STORE_CTX *store, void *arg) -> int { return 1; },
-        nullptr);
+    SSL_CTX_set_custom_verify(
+        ctx.get(), SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+        [](SSL *ssl, uint8_t *out_alert) -> ssl_verify_result_t {
+          return ssl_verify_ok;
+        });
+  }
+
+  if (args_map.count("-accept-cert-types") != 0) {
+    auto accepted_client_cert_types =
+        CertificateTypesFromString(args_map["-accept-cert-types"]);
+    if (!accepted_client_cert_types.has_value() ||
+        !SSL_CTX_set1_accepted_peer_cert_types(
+            ctx.get(), accepted_client_cert_types->data(),
+            accepted_client_cert_types->size())) {
+      return false;
+    }
   }
 
   Listener listener;
@@ -428,3 +528,5 @@ bool Server(const std::vector<std::string> &args) {
 
   return result;
 }
+
+BSSL_NAMESPACE_END

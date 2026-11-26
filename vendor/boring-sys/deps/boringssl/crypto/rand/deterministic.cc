@@ -14,8 +14,10 @@
 
 #include <openssl/rand.h>
 
+// IWYU pragma: begin_keep
 #include "../bcm_support.h"
 #include "internal.h"
+// IWYU pragma: end_keep
 
 #if defined(OPENSSL_RAND_DETERMINISTIC)
 
@@ -26,24 +28,30 @@
 #include "../internal.h"
 
 
-// g_num_calls is the number of calls to |CRYPTO_sysrand| that have occurred.
+using namespace bssl;
+
+namespace {
+
+// g_num_calls is the number of calls to `CRYPTO_sysrand` that have occurred.
 //
 // This is intentionally not thread-safe. If the fuzzer mode is ever used in a
 // multi-threaded program, replace this with a thread-local. (A mutex would not
 // be deterministic.)
-static uint64_t g_num_calls = 0;
-static CRYPTO_MUTEX g_num_calls_lock = CRYPTO_MUTEX_INIT;
+uint64_t g_num_calls = 0;
+StaticMutex g_num_calls_lock;
 
-void RAND_reset_for_fuzzing(void) { g_num_calls = 0; }
+}  // namespace
 
-void CRYPTO_init_sysrand(void) {}
+void RAND_reset_for_fuzzing() { g_num_calls = 0; }
 
-void CRYPTO_sysrand(uint8_t *out, size_t requested) {
+void bssl::CRYPTO_init_sysrand() {}
+
+void bssl::CRYPTO_sysrand(uint8_t *out, size_t requested) {
   static const uint8_t kZeroKey[32] = {0};
 
-  CRYPTO_MUTEX_lock_write(&g_num_calls_lock);
+  g_num_calls_lock.LockWrite();
   uint64_t num_calls = g_num_calls++;
-  CRYPTO_MUTEX_unlock_write(&g_num_calls_lock);
+  g_num_calls_lock.UnlockWrite();
 
   uint8_t nonce[12];
   OPENSSL_memset(nonce, 0, sizeof(nonce));
@@ -51,10 +59,6 @@ void CRYPTO_sysrand(uint8_t *out, size_t requested) {
 
   OPENSSL_memset(out, 0, requested);
   CRYPTO_chacha_20(out, out, requested, kZeroKey, nonce, 0);
-}
-
-void CRYPTO_sysrand_for_seed(uint8_t *out, size_t requested) {
-  CRYPTO_sysrand(out, requested);
 }
 
 #endif  // OPENSSL_RAND_DETERMINISTIC

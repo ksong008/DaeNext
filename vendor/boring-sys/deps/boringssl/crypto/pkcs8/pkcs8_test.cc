@@ -22,6 +22,9 @@
 #include "../internal.h"
 
 
+BSSL_NAMESPACE_BEGIN
+namespace {
+
 // kEncryptedPBES2WithDESAndSHA1 is a PKCS#8 encrypted private key using PBES2
 // with DES-EDE3-CBC and HMAC-SHA-1 and a password of "testing". It was
 // generated with:
@@ -55,7 +58,8 @@ static const uint8_t kEncryptedPBES2WithDESAndSHA1[] = {
 };
 
 // kEncryptedPBES2WithAESAndSHA256 is a PKCS#8 encrypted private key using PBES2
-// with AES-128-CBC and HMAC-SHA-256 and a password of "testing". It was generated with:
+// with AES-128-CBC and HMAC-SHA-256 and a password of "testing". It was
+// generated with:
 //
 // clang-format off
 //
@@ -193,21 +197,19 @@ static const uint8_t kExplicitHMACWithSHA1[] = {
     0x68, 0xf9, 0x5e, 0x01, 0x66, 0x59, 0x5f, 0x3f, 0x05, 0x57, 0xcd,
 };
 
-static void TestDecrypt(const uint8_t *der, size_t der_len,
-                        const char *password) {
+void TestDecrypt(const uint8_t *der, size_t der_len, const char *password) {
   const uint8_t *data = der;
-  bssl::UniquePtr<X509_SIG> sig(d2i_X509_SIG(nullptr, &data, der_len));
+  UniquePtr<X509_SIG> sig(d2i_X509_SIG(nullptr, &data, der_len));
   ASSERT_TRUE(sig.get());
   ASSERT_EQ(der + der_len, data);
 
-  bssl::UniquePtr<PKCS8_PRIV_KEY_INFO> keypair(
+  UniquePtr<PKCS8_PRIV_KEY_INFO> keypair(
       PKCS8_decrypt(sig.get(), password, -1));
   ASSERT_TRUE(keypair);
 }
 
-static void TestRoundTrip(int pbe_nid, const EVP_CIPHER *cipher,
-                          const char *password, const uint8_t *salt,
-                          size_t salt_len, int iterations) {
+void TestRoundTrip(int pbe_nid, const EVP_CIPHER *cipher, const char *password,
+                   const uint8_t *salt, size_t salt_len, int iterations) {
   static const uint8_t kSampleKey[] = {
       0x30, 0x81, 0x87, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86,
       0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d,
@@ -224,22 +226,22 @@ static void TestRoundTrip(int pbe_nid, const EVP_CIPHER *cipher,
   };
 
   const uint8_t *ptr = kSampleKey;
-  bssl::UniquePtr<PKCS8_PRIV_KEY_INFO> key(
+  UniquePtr<PKCS8_PRIV_KEY_INFO> key(
       d2i_PKCS8_PRIV_KEY_INFO(nullptr, &ptr, sizeof(kSampleKey)));
   ASSERT_TRUE(key);
   ASSERT_EQ(kSampleKey + sizeof(kSampleKey), ptr);
 
-  bssl::UniquePtr<X509_SIG> encrypted(PKCS8_encrypt(
+  UniquePtr<X509_SIG> encrypted(PKCS8_encrypt(
       pbe_nid, cipher, password, -1, salt, salt_len, iterations, key.get()));
   ASSERT_TRUE(encrypted);
 
-  bssl::UniquePtr<PKCS8_PRIV_KEY_INFO> key2(
+  UniquePtr<PKCS8_PRIV_KEY_INFO> key2(
       PKCS8_decrypt(encrypted.get(), password, -1));
   ASSERT_TRUE(key2);
 
   uint8_t *encoded = nullptr;
   int len = i2d_PKCS8_PRIV_KEY_INFO(key2.get(), &encoded);
-  bssl::UniquePtr<uint8_t> free_encoded(encoded);
+  UniquePtr<uint8_t> free_encoded(encoded);
   ASSERT_GE(len, 0);
   ASSERT_EQ(static_cast<size_t>(len), sizeof(kSampleKey));
   ASSERT_EQ(0, OPENSSL_memcmp(encoded, kSampleKey, sizeof(kSampleKey)));
@@ -270,41 +272,41 @@ TEST(PKCS8Test, DecryptExplicitHMACWithSHA1) {
 
 TEST(PKCS8Test, RoundTripPBEWithrSHA1And3KeyTripleDES) {
   // Test with different salts.
-  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr,
-                "password", nullptr, 0, 10);
-  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr,
-                "password", nullptr, 4, 10);
-  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr,
-                "password", (const uint8_t *)"salt", 4, 10);
+  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr, "password",
+                nullptr, 0, 10);
+  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr, "password",
+                nullptr, 4, 10);
+  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr, "password",
+                (const uint8_t *)"salt", 4, 10);
   // Test with a different iteration count.
-  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr,
-                "password", nullptr, 0, 1);
+  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr, "password",
+                nullptr, 0, 1);
 }
 
 // Test that both "" (empty password, encoded as "\0\0") and nullptr (no
 // password, encoded as "") work.
 TEST(PKCS8Test, RoundTripPBEWithSHA1And3KeyTripleDESEmptyPassword) {
-  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr, "",
-                nullptr, 0, 1);
+  TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr, "", nullptr, 0,
+                1);
   TestRoundTrip(NID_pbe_WithSHA1And3_Key_TripleDES_CBC, nullptr, nullptr,
                 nullptr, 0, 1);
 }
 
 TEST(PKCS8Test, RoundTripPBEWithSHA1And40BitRC2CBC) {
-  TestRoundTrip(NID_pbe_WithSHA1And40BitRC2_CBC, nullptr, "password",
-                nullptr, 0, 10);
+  TestRoundTrip(NID_pbe_WithSHA1And40BitRC2_CBC, nullptr, "password", nullptr,
+                0, 10);
 }
 
 TEST(PKCS8Test, RoundTripPBEWithSHA1And128BitRC4) {
-  TestRoundTrip(NID_pbe_WithSHA1And128BitRC4, nullptr, "password",
-                nullptr, 0, 10);
+  TestRoundTrip(NID_pbe_WithSHA1And128BitRC4, nullptr, "password", nullptr, 0,
+                10);
 }
 
 TEST(PKCS8Test, RoundTripPBES2) {
   TestRoundTrip(-1, EVP_aes_128_cbc(), "password", nullptr, 0, 10);
   TestRoundTrip(-1, EVP_aes_128_cbc(), "password", nullptr, 4, 10);
-  TestRoundTrip(-1, EVP_aes_128_cbc(), "password", (const uint8_t *)"salt",
-                4, 10);
+  TestRoundTrip(-1, EVP_aes_128_cbc(), "password", (const uint8_t *)"salt", 4,
+                10);
   TestRoundTrip(-1, EVP_aes_128_cbc(), "password", nullptr, 0, 1);
   TestRoundTrip(-1, EVP_rc2_cbc(), "password", nullptr, 0, 10);
 }
@@ -326,13 +328,13 @@ TEST(PKCS8Test, InvalidPBES1NIDs) {
   };
 
   const uint8_t *ptr = kSampleKey;
-  bssl::UniquePtr<PKCS8_PRIV_KEY_INFO> key(
+  UniquePtr<PKCS8_PRIV_KEY_INFO> key(
       d2i_PKCS8_PRIV_KEY_INFO(nullptr, &ptr, sizeof(kSampleKey)));
   ASSERT_TRUE(key);
   ASSERT_EQ(kSampleKey + sizeof(kSampleKey), ptr);
 
-  bssl::UniquePtr<X509_SIG> encrypted(PKCS8_encrypt(
-      NID_pbes2, nullptr, "password", -1, nullptr, 0, 0, key.get()));
+  UniquePtr<X509_SIG> encrypted(PKCS8_encrypt(NID_pbes2, nullptr, "password",
+                                              -1, nullptr, 0, 0, key.get()));
   EXPECT_FALSE(encrypted);
 
   encrypted.reset(PKCS8_encrypt(NID_undef, nullptr, "password", -1, nullptr, 0,
@@ -343,3 +345,6 @@ TEST(PKCS8Test, InvalidPBES1NIDs) {
                                 nullptr, 0, 0, key.get()));
   EXPECT_FALSE(encrypted);
 }
+
+}  // namespace
+BSSL_NAMESPACE_END

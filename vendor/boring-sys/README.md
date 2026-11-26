@@ -15,3 +15,15 @@ Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in the work by you, as defined in the Apache-2.0
 license, shall be dual licensed under the terms of both the Apache License,
 Version 2.0 and the MIT license without any additional terms or conditions.
+
+## DaeNext source revision
+
+The Rust bindings are based on Cloudflare boring-sys 5.6.0. The embedded
+BoringSSL source is Google release 0.20261105.0, commit
+3dc4b63808921e914a3fb1fa61869abc3938781b.
+
+DaeNext retains typed ClientHello templates, REALITY authentication, explicit
+signature GREASE, trust-anchor range selection and checkpoint-only
+Davidben-08 MTC verification. Server padding uses the upstream implementation.
+The PQ compatibility patch is rebased onto this revision and retains the
+legacy Kyber groups used by existing templates.

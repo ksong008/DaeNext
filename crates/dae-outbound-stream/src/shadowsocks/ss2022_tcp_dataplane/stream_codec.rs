@@ -94,13 +94,17 @@ impl Ss2022AeadCipher {
         }
     }
 
-    pub(super) fn encrypt(&self, nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, OutboundError> {
+    pub(super) fn encrypt(
+        &mut self,
+        nonce: &[u8],
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, OutboundError> {
         match self {
             Self::BoringAes128(cipher) | Self::BoringAes256(cipher) => {
                 let mut output = plaintext.to_vec();
                 let mut tag = [0_u8; SS2022_TCP_TAG_LEN];
                 cipher
-                    .seal_in_place(nonce, &mut output, &mut tag, &[])
+                    .seal_in_place_mut(nonce, &mut output, &mut tag, &[])
                     .map_err(|_| {
                         OutboundError::BadShadowsocks("SS2022 encrypt failed".to_owned())
                     })?;
@@ -114,7 +118,7 @@ impl Ss2022AeadCipher {
     }
 
     pub(super) fn decrypt(
-        &self,
+        &mut self,
         nonce: &[u8],
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, OutboundError> {
@@ -130,7 +134,7 @@ impl Ss2022AeadCipher {
                     })?;
                 let mut output = ciphertext[..payload_len].to_vec();
                 cipher
-                    .open_in_place(nonce, &mut output, &ciphertext[payload_len..], &[])
+                    .open_in_place_mut(nonce, &mut output, &ciphertext[payload_len..], &[])
                     .map_err(|_| {
                         OutboundError::BadShadowsocks("SS2022 decrypt failed".to_owned())
                     })?;
@@ -143,7 +147,7 @@ impl Ss2022AeadCipher {
     }
 
     fn encrypt_in_place(
-        &self,
+        &mut self,
         nonce: &[u8],
         plaintext: &mut [u8],
         tag_out: &mut [u8],
@@ -156,7 +160,7 @@ impl Ss2022AeadCipher {
         }
         if let Self::BoringAes128(cipher) | Self::BoringAes256(cipher) = self {
             cipher
-                .seal_in_place(nonce, plaintext, tag_out, &[])
+                .seal_in_place_mut(nonce, plaintext, tag_out, &[])
                 .map(|_| ())
                 .map_err(|_| OutboundError::BadShadowsocks("SS2022 encrypt failed".to_owned()))?;
             return Ok(());
@@ -175,7 +179,7 @@ impl Ss2022AeadCipher {
     }
 
     fn decrypt_in_place(
-        &self,
+        &mut self,
         nonce: &[u8],
         ciphertext: &mut [u8],
         tag: &[u8],
@@ -188,7 +192,7 @@ impl Ss2022AeadCipher {
         }
         if let Self::BoringAes128(cipher) | Self::BoringAes256(cipher) = self {
             return cipher
-                .open_in_place(nonce, ciphertext, tag, &[])
+                .open_in_place_mut(nonce, ciphertext, tag, &[])
                 .map_err(|_| OutboundError::BadShadowsocks("SS2022 decrypt failed".to_owned()));
         }
         let tag = GenericArray::from_slice(tag);

@@ -230,17 +230,27 @@ impl AeadState {
             .ok_or_else(|| io_other("VLESS Encryption record is shorter than its AEAD tag"))
     }
 
-    fn open_in_place(&self, nonce: &[u8; 12], ciphertext: &mut Vec<u8>, aad: &[u8]) -> Result<()> {
+    fn open_in_place(
+        &mut self,
+        nonce: &[u8; 12],
+        ciphertext: &mut Vec<u8>,
+        aad: &[u8],
+    ) -> Result<()> {
         let payload_len = Self::payload_len(ciphertext.len())?;
         let (payload, tag) = ciphertext.split_at_mut(payload_len);
         self.cipher
-            .open_in_place(nonce, payload, tag, aad)
+            .open_in_place_mut(nonce, payload, tag, aad)
             .map_err(|_| io_other("VLESS Encryption open failed"))?;
         ciphertext.truncate(payload_len);
         Ok(())
     }
 
-    fn open_with_nonce(&self, nonce: &[u8; 12], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
+    fn open_with_nonce(
+        &mut self,
+        nonce: &[u8; 12],
+        ciphertext: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>> {
         let mut plaintext = ciphertext.to_vec();
         self.open_in_place(nonce, &mut plaintext, aad)?;
         Ok(plaintext)

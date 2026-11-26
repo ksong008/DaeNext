@@ -15,12 +15,17 @@
 #include <limits.h>
 
 #include <algorithm>
-#include <iterator>
 #include <functional>
+#include <initializer_list>
+#include <iterator>
+#include <memory>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <openssl/asn1.h>
@@ -32,7 +37,9 @@
 #include <openssl/digest.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/mldsa.h>
 #include <openssl/nid.h>
+#include <openssl/obj.h>
 #include <openssl/pem.h>
 #include <openssl/pool.h>
 #include <openssl/span.h>
@@ -40,6 +47,7 @@
 
 #include "../internal.h"
 #include "../test/der_trailing_data.h"
+#include "../test/file_test.h"
 #include "../test/file_util.h"
 #include "../test/test_data.h"
 #include "../test/test_util.h"
@@ -50,9 +58,10 @@
 #endif
 
 
+BSSL_NAMESPACE_BEGIN
 namespace {
 
-static const char kCrossSigningRootPEM[] = R"(
+const char kCrossSigningRootPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICcTCCAdqgAwIBAgIIagJHiPvE0MowDQYJKoZIhvcNAQELBQAwPDEaMBgGA1UE
 ChMRQm9yaW5nU1NMIFRFU1RJTkcxHjAcBgNVBAMTFUNyb3NzLXNpZ25pbmcgUm9v
@@ -71,7 +80,7 @@ YFXvkME=
 -----END CERTIFICATE-----
 )";
 
-static const char kRootCAPEM[] = R"(
+const char kRootCAPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICVTCCAb6gAwIBAgIIAj5CwoHlWuYwDQYJKoZIhvcNAQELBQAwLjEaMBgGA1UE
 ChMRQm9yaW5nU1NMIFRFU1RJTkcxEDAOBgNVBAMTB1Jvb3QgQ0EwIBcNMTUwMTAx
@@ -89,7 +98,7 @@ kfGIBAYhzGZWhY3JbhIfTEfY1PNM1pWChQ==
 -----END CERTIFICATE-----
 )";
 
-static const char kRootCrossSignedPEM[] = R"(
+const char kRootCrossSignedPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICYzCCAcygAwIBAgIIAj5CwoHlWuYwDQYJKoZIhvcNAQELBQAwPDEaMBgGA1UE
 ChMRQm9yaW5nU1NMIFRFU1RJTkcxHjAcBgNVBAMTFUNyb3NzLXNpZ25pbmcgUm9v
@@ -107,7 +116,7 @@ CwUAA4GBAErTxYJ0en9HVRHAAr5OO5wuk5Iq3VMc79TMyQLCXVL8YH8Uk7KEwv+q
 -----END CERTIFICATE-----
 )";
 
-static const char kIntermediatePEM[] = R"(
+const char kIntermediatePEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICXjCCAcegAwIBAgIJAKJMH+7rscPcMA0GCSqGSIb3DQEBCwUAMC4xGjAYBgNV
 BAoTEUJvcmluZ1NTTCBURVNUSU5HMRAwDgYDVQQDEwdSb290IENBMCAXDTE1MDEw
@@ -125,7 +134,7 @@ aGSh09eQRvAVmbVCviDK2ipkWNegdyI19jFfNP5uIkGlYg==
 -----END CERTIFICATE-----
 )";
 
-static const char kIntermediateSelfSignedPEM[] = R"(
+const char kIntermediateSelfSignedPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICZjCCAc+gAwIBAgIJAKJMH+7rscPcMA0GCSqGSIb3DQEBCwUAMDYxGjAYBgNV
 BAoTEUJvcmluZ1NTTCBURVNUSU5HMRgwFgYDVQQDEw9JbnRlcm1lZGlhdGUgQ0Ew
@@ -143,7 +152,7 @@ E4Vs6ZLU+fra1WAuIj6qFiigRja+3YkZArG8tMA9vtlhTX/g7YBZIkqH
 -----END CERTIFICATE-----
 )";
 
-static const char kLeafPEM[] = R"(
+const char kLeafPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICXjCCAcegAwIBAgIIWjO48ufpunYwDQYJKoZIhvcNAQELBQAwNjEaMBgGA1UE
 ChMRQm9yaW5nU1NMIFRFU1RJTkcxGDAWBgNVBAMTD0ludGVybWVkaWF0ZSBDQTAg
@@ -161,7 +170,7 @@ xNCwyMX9mtdXdQicOfNjIGUCD5OLV5PgHFPRKiHHioBAhg==
 -----END CERTIFICATE-----
 )";
 
-static const char kLeafNoKeyUsagePEM[] = R"(
+const char kLeafNoKeyUsagePEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICNTCCAZ6gAwIBAgIJAIFQGaLQ0G2mMA0GCSqGSIb3DQEBCwUAMDYxGjAYBgNV
 BAoTEUJvcmluZ1NTTCBURVNUSU5HMRgwFgYDVQQDEw9JbnRlcm1lZGlhdGUgQ0Ew
@@ -178,7 +187,7 @@ uwBqh4Y3Eto+Zn4pMVsxGEfUpjzjZDel7bN1/oU/9KWPpDfywfUmjgk=
 -----END CERTIFICATE-----
 )";
 
-static const char kForgeryPEM[] = R"(
+const char kForgeryPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICZzCCAdCgAwIBAgIIdTlMzQoKkeMwDQYJKoZIhvcNAQELBQAwNzEaMBgGA1UE
 ChMRQm9yaW5nU1NMIFRFU1RJTkcxGTAXBgNVBAMTEGV2aWwuZXhhbXBsZS5jb20w
@@ -197,7 +206,7 @@ DSLfRgaQwcb2gg2xpDFoG+W0vc6O651uF23WGt5JaFFJJxqjII05IexfCNhuPmp4
 )";
 
 // kBadPSSCertPEM is a self-signed RSA-PSS certificate with bad parameters.
-static const char kBadPSSCertPEM[] = R"(
+const char kBadPSSCertPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIDdjCCAjqgAwIBAgIJANcwZLyfEv7DMD4GCSqGSIb3DQEBCjAxoA0wCwYJYIZI
 AWUDBAIBoRowGAYJKoZIhvcNAQEIMAsGCWCGSAFlAwQCAaIEAgIA3jAnMSUwIwYD
@@ -221,7 +230,7 @@ lC9+9hPHIoc9UMmAQNo1vGIW3NWVoeGbaJ8=
 -----END CERTIFICATE-----
 )";
 
-static const char kRSAKey[] = R"(
+const char kRSAKey[] = R"(
 -----BEGIN RSA PRIVATE KEY-----
 MIICXgIBAAKBgQDYK8imMuRi/03z0K1Zi0WnvfFHvwlYeyK9Na6XJYaUoIDAtB92
 kWdGMdAQhLciHnAjkXLI6W15OoV3gA/ElRZ1xUpxTMhjP6PyY5wqT5r6y8FxbiiF
@@ -239,7 +248,7 @@ moZWgjHvB2W9Ckn7sDqsPB+U2tyX0joDdQEyuiMECDY8oQ==
 -----END RSA PRIVATE KEY-----
 )";
 
-static const char kP256Key[] = R"(
+const char kP256Key[] = R"(
 -----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgBw8IcnrUoEqc3VnJ
 TYlodwi1b8ldMHcO6NHJzgqLtGqhRANCAATmK2niv2Wfl74vHg2UikzVl2u3qR4N
@@ -276,7 +285,7 @@ Rvvdqakendy6WgHn1peoChj5w8SjHlbifINI2xYaHPUdfvGULUvPciLB
 //     Lbf3v2dvxOpTNTONWjp2c+iUQo8QxJCZr5Sfb21oQ9Ktcrmc/CY7LeBVDibXwxdM
 //     vRG8kBzvslFWh7REzC3u06GSVhyKDfW93kN2cKVwGoahRlhj7oHuZQ==
 //     -----END RSA PRIVATE KEY-----
-static const char kCRLTestRoot[] = R"(
+const char kCRLTestRoot[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIDbzCCAlegAwIBAgIJAODri7v0dDUFMA0GCSqGSIb3DQEBCwUAME4xCzAJBgNV
 BAYTAlVTMRMwEQYDVQQIDApDYWxpZm9ybmlhMRYwFAYDVQQHDA1Nb3VudGFpbiBW
@@ -300,7 +309,7 @@ amd8GKMZQvP0ufGnUn7D7uartA==
 -----END CERTIFICATE-----
 )";
 
-static const char kCRLTestLeaf[] = R"(
+const char kCRLTestLeaf[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIDkDCCAnigAwIBAgICEAAwDQYJKoZIhvcNAQELBQAwTjELMAkGA1UEBhMCVVMx
 EzARBgNVBAgMCkNhbGlmb3JuaWExFjAUBgNVBAcMDU1vdW50YWluIFZpZXcxEjAQ
@@ -325,7 +334,7 @@ tjJMFw==
 -----END CERTIFICATE-----
 )";
 
-static const char kBasicCRL[] = R"(
+const char kBasicCRL[] = R"(
 -----BEGIN X509 CRL-----
 MIIBpzCBkAIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -339,7 +348,7 @@ diyu0fZ/bPAM3VAGawatf/SyWfBMyKpoPXEG39oAzmjjOj8en82psn7m474IGaho
 -----END X509 CRL-----
 )";
 
-static const char kRevokedCRL[] = R"(
+const char kRevokedCRL[] = R"(
 -----BEGIN X509 CRL-----
 MIIB6DCB0QIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -355,7 +364,7 @@ WXdfcGJRL1D3xRXk
 -----END X509 CRL-----
 )";
 
-static const char kBadIssuerCRL[] = R"(
+const char kBadIssuerCRL[] = R"(
 -----BEGIN X509 CRL-----
 MIIBwjCBqwIBATANBgkqhkiG9w0BAQsFADBSMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzEWMBQGA1UECgwN
@@ -372,7 +381,7 @@ Od4cjsc3ymNk88S4jpnLRtIVxZB+SQ==
 
 // kKnownCriticalCRL is kBasicCRL but with a critical issuing distribution point
 // extension.
-static const char kKnownCriticalCRL[] = R"(
+const char kKnownCriticalCRL[] = R"(
 -----BEGIN X509 CRL-----
 MIIBuDCBoQIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -388,7 +397,7 @@ xDx+GDWVVXccehcwAu983kAqP+JDaVQPBVksLuBXz2adrEWwvbLCnZeL3zH1IY9h
 )";
 
 // kUnknownCriticalCRL is kBasicCRL but with an unknown critical extension.
-static const char kUnknownCriticalCRL[] = R"(
+const char kUnknownCriticalCRL[] = R"(
 -----BEGIN X509 CRL-----
 MIIBvDCBpQIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -405,7 +414,7 @@ kwzzU2rL3G65CrZ7H0SZsQ==
 
 // kUnknownCriticalCRL2 is kBasicCRL but with a critical issuing distribution
 // point extension followed by an unknown critical extension
-static const char kUnknownCriticalCRL2[] = R"(
+const char kUnknownCriticalCRL2[] = R"(
 -----BEGIN X509 CRL-----
 MIIBzTCBtgIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -422,7 +431,7 @@ YjqkkSVIcr87u+8AznwdstnQzsyD27Jt7SjVORkYRywi
 
 // kBadExtensionCRL is kBasicCRL but with an incorrectly-encoded issuing
 // distribution point extension.
-static const char kBadExtensionCRL[] = R"(
+const char kBadExtensionCRL[] = R"(
 -----BEGIN X509 CRL-----
 MIIBujCBowIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -440,7 +449,7 @@ o/1TpfOMSGhMyMoyPrk=
 // kAlgorithmMismatchCRL is kBasicCRL but with mismatched AlgorithmIdentifiers
 // in the outer structure and signed portion. The signature reflects the signed
 // portion.
-static const char kAlgorithmMismatchCRL[] = R"(
+const char kAlgorithmMismatchCRL[] = R"(
 -----BEGIN X509 CRL-----
 MIIBpzCBkAIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -457,7 +466,7 @@ diyu0fZ/bPAM3VAGawatf/SyWfBMyKpoPXEG39oAzmjjOj8en82psn7m474IGaho
 // kAlgorithmMismatchCRL2 is kBasicCRL but with mismatched AlgorithmIdentifiers
 // in the outer structure and signed portion. The signature reflects the outer
 // structure.
-static const char kAlgorithmMismatchCRL2[] = R"(
+const char kAlgorithmMismatchCRL2[] = R"(
 -----BEGIN X509 CRL-----
 MIIBpzCBkAIBATANBgkqhkiG9w0BAQwFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -472,7 +481,7 @@ SrkFz8Se3F6mCHnbDzYElbmA46iKU2J12LTrso3Ewq/qHq0mebfp2z0y6g==
 )";
 
 // kEd25519Cert is a self-signed Ed25519 certificate.
-static const char kEd25519Cert[] = R"(
+const char kEd25519Cert[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBkTCCAUOgAwIBAgIJAJwooam0UCDmMAUGAytlcDBFMQswCQYDVQQGEwJBVTET
 MBEGA1UECAwKU29tZS1TdGF0ZTEhMB8GA1UECgwYSW50ZXJuZXQgV2lkZ2l0cyBQ
@@ -488,7 +497,7 @@ r+VHVKUhsrvcdCelnXRrrSD7xWAL
 
 // kEd25519CertNull is an invalid self-signed Ed25519 with an explicit NULL in
 // the signature algorithm.
-static const char kEd25519CertNull[] = R"(
+const char kEd25519CertNull[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBlTCCAUWgAwIBAgIJAJwooam0UCDmMAcGAytlcAUAMEUxCzAJBgNVBAYTAkFV
 MRMwEQYDVQQIDApTb21lLVN0YXRlMSEwHwYDVQQKDBhJbnRlcm5ldCBXaWRnaXRz
@@ -504,7 +513,7 @@ recgVPpVS7B+d9g4EwtZXIh4lodTBDHBBw==
 
 // kX25519 is the example X25519 certificate from
 // https://tools.ietf.org/html/rfc8410#section-10.2
-static const char kX25519Cert[] = R"(
+const char kX25519Cert[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBLDCB36ADAgECAghWAUdKKo3DMDAFBgMrZXAwGTEXMBUGA1UEAwwOSUVURiBUZX
 N0IERlbW8wHhcNMTYwODAxMTIxOTI0WhcNNDAxMjMxMjM1OTU5WjAZMRcwFQYDVQQD
@@ -516,11 +525,255 @@ w1AH9efZBw==
 -----END CERTIFICATE-----
 )";
 
-// kSANTypesLeaf is a leaf certificate (signed by |kSANTypesRoot|) which
+// kMLDSA65Cert is the example ML-DSA-65 certificate from
+// https://tools.ietf.org/html/rfc9881#name-example-certificates
+const char kMLDSA65Cert[] = R"(
+-----BEGIN CERTIFICATE-----
+MIIVjTCCCIqgAwIBAgIUFZ/+byL9XMQsUk32/V4o0N44804wCwYJYIZIAWUDBAMS
+MCIxDTALBgNVBAoTBElFVEYxETAPBgNVBAMTCExBTVBTIFdHMB4XDTIwMDIwMzA0
+MzIxMFoXDTQwMDEyOTA0MzIxMFowIjENMAsGA1UEChMESUVURjERMA8GA1UEAxMI
+TEFNUFMgV0cwggeyMAsGCWCGSAFlAwQDEgOCB6EASGg9kZeOMes93biwRzSC0riK
+X2JZSf2PWKVh5pa9TCfQWzjbsu3wHmZO/YG+HqiTaIzmiqLVHFlY+LvG606J7mfS
+wDIJVNVyEsrHIp/x1urwOSi9UVEfjYjYR3NsfeJzDVl45UEHExYJeIZ3Eb9VOaC/
+xMNQwr5XK68O4uL7Fsz+oIAo2ZrEmuu3WTfdzhEc2rYv/zzqi6IjPR5W+8XFoecm
+3mP63SrwFrEZF3+j2XGi2Sdxc/zlW2d0WvC3wh1Zfb65Pmoy80HEmlqL6eglCI0f
+KqRRVdbIrhU2fk6wA7j994UQcZSXOfn/8JAj6vRRBNKoSkWQbu1GcaRNwo0nmHu1
+XfaenoVh9hqApyaZUDhl/tm37nKo4XoZxAgUT0spr+9wMcOm2FcWELQsn0ISRaiP
+GX4WgSsDEVm2W5aH5bPpNMUiWumKebpz0rOZ1zUQ7/rRnlO4RQ8LqPzhAS/ZjSYK
+dKqqE/riSaAGscNPW6C4gvJjeCIvs28ig8JD8P/rXxu0FKCnDVXj1ApWtsvIiuHw
+O3sogtmN7qKOFFyd7f2OrxzvLtlKiwUPiWT0bR6g0MKkPg3aYYKtv09u0XW2dCJX
+hZvyLzpBfs8fnYkxe15TnVh68WueExPgRRT/pkuos/8rgyH4gRyz+wIsj2ROcKS4
+Ci+/7mBKu3N5CR6o5sXHTfwCg2ZrQMB5OHACggShNr9dqVaOt5jTSQOL2wwR4DRF
+54R8tQacdc8orGAcd5nZWCEN28siblGv758d5HsHOHPW0/l0Vr7eCFCC50opiyzU
+j0swkxVfNmyPpgHGr4WN+jLAhJGyopiH+QM1lJpdbtqmeYgqOpXWv22XCiIfS509
+jL84SvgarJXisylOBHiayDcnpdwEVZ+Wr0HYoFNRb+7uvFJ0brarKBngkQhxDYNf
+AR+mMGWHKtM01c3/srIxBQfpL8mTrjF9qX9PMJza8PZ+2Z2QIVV2CDhJ+VOyRtf+
+2z/bZ2eYUKWtQE5kFH+3z09q7d0Fr7S4NJaNH+iAFJYNzl2UIjZSbhKkeNaeX75p
+cDELMIwGhFAYz8eyq0MKE6axrHuwLMy7PZEawvEQaGE/vgKb/c4Cz1zTiVDtcsg5
+RO37x1YVr4f4ZMBR88VUVsVBKGOkDAbR2rVivf8FcbjTw5F7vTAIgLul6Zgjm5X6
+kbfWQW1POYs6280wmD7TWStNnvfUI2/QD1DZiqU6I1rEFycg932WFyZymAz+j/el
+pwJ4PtwroxsiWQFaES/H9GipwvlGQDkALTDvZ4tMt5i8EWIWv3qafBi6A7e1j9B1
+FdMRUEnTYUvnoH50QwB1DfHSxYdTOJBZ6vw9eFzN0xwHZIvtwDpcO4rUbQZNWcE9
+VzdHKfxOKVNi4qUZEgRTBCi8FSKvoo/1/hZV4wTKW8jCetDgxqOd1N8olWwUs4zJ
+NoLO/kArvV6C0pxGTkTrXTe0j8Vo3+DMbo4WuuoF5RNVkPGSlOc+g2ewIW27gVAw
+ud5VkT8IA5xCNRxZ5VFd1a+OCJoV5iXo9t7mOThsRkl9eiYyiHdN5YGn3pYptBtE
+JBQfl4+4MxII797DxuDeObxXBj89zWxHA3PAiJHqKcvHzG1kg7iIkIOs6GqntRsc
+LP5uKtGNl842+8VupC+ul+anrBFIZEeMNm3x67HnsRqQmFBP1Zdb3x9J3HAAK2PB
+c5qdJj+61Ac/ap9sK4r0tMMyoQOgz/pd7rLQYso8IV/TYAJr58UWT0pEJO90lIgE
+1m9GSHcyyCAseVR4ZHtOpx1ifAhgJMyjVKQfCHezjxmzd0rSCVyNpTsGniHHauLS
+AH4WcZ7UAIDTNPfaUun1pZkEOcrwg6lbgz8CrRCgjBptDyYMAHKFvUovR3A6Wu9G
+UofSU7GKwiUUMWIQ/1ZoFLEPh6KT1vGZ08OVmZDQwSaLT1DV+fzvu/I3vQwouAGC
+1mWXQfFPEL+7IbuhKrYgqiOW9WwGhrTqkBeZAiQhay/orXbEqRSO75qGo2Naaqd7
+wdz7b7pZp339qbdTDcDKhkjI2XNzjgG6uPCLSQXoSqRkG9YCQQzZdSAmXy8jHys1
+4V6y+gTSvZTVp3q68eDhYQEKmQCH9bRuqYiyvAUS/aD6kj2t1sRcUwHQlINnMmW1
+qy4Q9LpSD2u61WSlw9Xie9sID30g4TKWoxgZVMOcZJyUPr4X31wfeq4Kj+EmxHdY
+Wl1NZIoNAItq9ejNMb5pqSltTz/SXthvIh5Lk/ZfWSmWdTNiS5I1dQwwcHVQtYU2
+0QmnExxaW75KVxVWfBJTSux2YHYe67n64okcd0WJuA5WatVX3e9zZxlrcifqmHDv
+Cd3+x51rkxmmh5tSBddr96ulrPM6+1nRf8VOaDg9a+Wgjptm2lPc3gCLspS4WCvR
+Ms3MSZWf28IeUnIYgMitA1LHnwOkO72ExM39xsUpAF4efNmjSacWijVWm6XeqBiW
+jVqRRmvW5k4gv2JBcZivxOgcKN137UAoIyOYtS+96GvIT0dbkBZxDOKqvBGga026
+yQHsFs82XKPy1TgTlIppOg+T55xGyl1abco9KMpQrRi9E/ylUFndmxhfefnEcZak
+6BshBLxGCgUeAvLoRE+jQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTAD
+AQH/MB0GA1UdDgQWBBQbBWPjzTNGFJyMnrzyOwpOWpAO6jALBglghkgBZQMEAxID
+ggzuABGBaGipDGaTS9ux0ZxTpqXcMFNf9tzIZpskKErpMQ6aV8eRhwK1+knGM75H
+XVSS2dfuo5FCaBmpJpq1lPQ0lCtN/LulqD3M01O+evbv3WYJch6O5zkUALRH5Xg9
+NKps3fGNrf+wyuCjyJn+D/Y75gWpM25S7jXrsu4vu2TNqlzkyzYehJx6zu3B70QJ
+0vfBCLthjdBepjQ33aA5bAgJoIMDd3UUJwtDdeYP+WOf6qRq3CaYEigq/hfBb5sY
+m6MS6lY8ICDjHve05b2iguECEkeZGXfxSF0w/tIgyhPoRx6PvIuyuVI14a43ttSP
+zATqALqoA6nUifcgr+RpWMeNQBMTJlc6EnMXxB+H0wq/ZfVmx7ixgTgOm8kIzcHv
+rO6yQkbyrD4hOXsYN7eabJvuZIpFTPyxfG8kwBUl/8Vrp5hl8z9F1fJU3J8bOUha
+XmTrHU+gM8oNVrnUHYufcLpJkhiufVWvuXtHsmyvZm9N6nkOCDCkJwUop91d0Pde
+2dBHOKcb2L1lWfKy4N43nt9ntldr4s0LieIb1XDFM+eJmMpv6/mb1no7W9koXf+j
+zIrbeY9nMGvQW+opV2XA8HEYyJ2iaFrAn9bcyO/CFCsyPRchJ7sO6FfSFISEw6ak
+D3hTCMqSaPYk4THepKBi73/PdKcyVXEZLXFTT1wPv+PacRE4rgPlfpWe+6lOtsZW
+8AG+FqzLE1Ag87Hj5W1xmTPC0R/47lnsQ+HVWEfMGtt1kCuWqfA9OkQNyK5ogLkK
+f1KBYF6Ie5Ay2vw6cKZOlHSmAynwskgqzuPOGAqEUdbomnSbulLH/Xut8YfR0gNH
+5q2vzA6lr7Hw6NpCMiH3SJ3+9ST1wDS1KS9HN6gPh8q2Vps67Ezg8BnEsJ2w2Qt1
+WfFSXlNtwGZSLLZVcZbk6IRsvg5E19egM7Uozmc621rdZEOU56n24XyWDP3oVJrC
+y9/m7mMPesIo5+Sa0oZyG9QYf8mjqckUbS8+z1xFX4s+aJB3bk+ACbJBS2EnJUjM
+Pi2vvQ60nU+euOLxRBBizMkShiWUoAsM/1Gk7OM2WU0mdNPsrWVNih4F0LLsxhBl
+DBa/7+Kk9X9XqvMaTP+RJU2Z6r0Xhz/0QODSH1aefm2AYCgmv/fUIj8SQsMFxnrb
+ocarCVc0BbJLMPrQm71SPsVzZCqHwME+aLDMlTE6Mqj4uR8feilTgK8mclcUgLQL
+CsjAM/xT2B3RGVUSx4W21q0FYPy4L9NCyKMfFOg8+3ChmCg5u6XYKncSHltyoEE8
+XVDgEKgxONy5huCYPpDo087Ke1AGg6Br6WTmDGwnXOIzyQNMEJlaOZaCCKUqitfu
+d+DvAD3+bzk6WTwsj7OMUEeqo5NBUxMR/eWTJRBmVT97f+6SnGld+UBliVi6V/Sx
+OeTWQMO9ljKd9lMar8uT/WyyvByUCevHzEAe5YiLMezPS8hw7lu4XRhe+3uD5JsX
+854zVKOrraOh1t0sZHlxdNO+656htKo4dO5ObGbqp1tWmvWw5VEcX233yqSnN0vj
++/0l9lUfS7YOYrCQHtbds+gLlL8ZhpBhdcZd/HLwfuShBdvjwRRmNglG5lKF9G1x
+qAxLr9ZIuooPKDG9IWD3RRDSuXcBCJcPh1FQ4JVZDgxc2vnraC9ikS7iBdnrcFbM
+ASjTvoHNuo5j42aqca8dStxXW4WX9gNd1Ld+ItLA2GaBi1EK+mf+f+37xC46xZ/B
+g/kWxT9HYHF5SwxZ7zszZZLSKykJd0ziUIdeYMgZ4Yo6v08SU51/2ZSzAxQW4TZ6
+j88YJBsuX8ariqiCKOTF+lHavSK7RjsaN+McvJ0KR6RZw9iBeO9najevlYT1HxZP
+KfvVQVWfyhmevOoyo3ZhQP07zORuoXqXOidypQWpY2RS+g7WU+HaFyeFzZAbYFEL
+M5Eibh16apEtPOXglDKWTiLNdU6ws0T5ymHNgrAZLtq308RhQkTCFR7/yYnlbcMh
+9MApe0Z8/aNFEU3jbmTFBRZGYX7tfqJMHgYAaVW6I2u27Ix/bcsLDN+K1hwK1QmH
+IzpxaAAeSh6fOq7DDcm1ahEuxMZX/mV7SA8a8LQvYMk0KTeuexHw6B+hSipLUReK
+bMIYSwYS2qMJLkI+TFP7nY4KvPGaKiIIbFDHMTRKH9jS2B+rUiVaDqCMZW7rZ8De
+EGjGYTb0dnrT0ItmVRypQyi36PyUybAr39Ry7XDdQOJwdXOhq/qrL8IMQOhXgGAV
+WD3VGVcJAaQHHgEM8nVENxtuDl62S71zn03EKo82x3F7MGnYfDaHFShb1UCRxIC2
+SPrAAn8iH31smTl3CD+5HdEBv3xzeY+d/TKL2z1395SOMQNNEwWnJ2tyYwkueRdc
+4O1EomIp9vm2gjZiV6nAnqaac87vdzOjGx2u0hLWfR+77tfL2P9q9BAd28yCTAie
+i+OcgjBG0ooisI9qxAXRFMkgNJtEsoe0Fk37az3MBPOo9jWiPlKfGKn/n8/YcAHk
+f5z30IiwK/BenYLJPFfWCdXW3OxXOECmPzKmt++iOHjpAeNiGJU8OBvjhHn8oGBx
+ONb+XmvgNuzOkS6XtcPjt5bzbQBFFXnxiqbW5F9qPfgg28I397cQDI4ysGw460+e
+hf7lSqfCFUhKENkkpPcUF2eSByni3VLLmdw5WscUk3Ey4kmiouvLk5opVdfJruyR
+lbuZMTqThXRZMqdxicwEonZZaGzWBFm4MFFRm3oXJ9Nap+1QgIM6uqHVSBwR27rP
+7ph5iP93E9L4lr78xUXPlbEq8sB2u/5luvS+jIu01Rjk1U+hIBLML6uOmNTHX8RU
+AjyQas+bOQ3rhvik2bPaybLzWEhYuDpBaiOyn7aWtZHd5hRmZrobo3WcVBnnWv+p
+bjn3bKluMhEtnXI4OtOP5TVAGUKP0k2eab5PRhHRvdzg7Zn4DZctA37w+pxwr/TC
+hXAa2eyUnxhrxv8Hu9FrF8omCRyyW8s4Hmc+WVg16VXQl1bE0WKK1CtRUKQaiNCB
+Ha6UYRczREGIFYwkY1RMAoQwwSuqeJG3yaPT7ezYSDqEZBAVr6j3RzgNsf0MMk/q
+VDPOA6g/D99DIB6D9ghUFSgai/1Rvo5eaVs7B9X7c0+qK8H0zusYGDFd5fr9b+7W
+9j0Zo54bGu4uAW+7vh7pq8jqOG+L3bMkth8b/7ZsLfkkYCtlqP2VfOL8qwWGzOFL
+X6k9anNFgd5Ip52e5KvReNCHSKuHp7zrzk/WyVzU81ZLJYHCv4P3RHxStQHMdaqn
+qxtPEXgX9ORWF2aw8mf9XbXarHrkHOkyhwi+tF7dLxVDPMREJKm1y/jqfSaJP1aP
+0es4QSdF5CEBha7oixy00ejqGx5z3HoG6maIAOGUTb/aTQpPR8OmCzccP6rqERwS
+6Sl+TznKi6nbbrjRcyDO/9TnM8G1Aj3T0fiU9h2hXJQnD3vuRwI5H8TkRDK4804C
+MmzKH/pnAWl9UmOl/066Pz4g0XEX/jg8wPKHvnMyd6QbSud5Y1swOqcnperhhkVN
++mJqTkSujjFr7EMdkUsG1SK0BeTVS9lSb6iu7bLa2rOha9l/zPI1Fp7WiHqANnOW
+xgcl3QJHVkvxqijDIrShYlS2bcn8xYL6e1PNxfJCqxEfDJHmkQwYDiqRZpkuMJ2Z
+5+uYPCtX6+6bpIrmLBQZFxR/YgFLlF5t5rtHadL3DCjOWyvT0tOhvQfaoeOojgSa
+rYrm5GzvClE0SF1PPsn/qsFY0s8fpjpVOwuU+E3qi59V6LVZB4NEYn8x8qTsdyeZ
++Z+d7LbnsPirvSFU+r/ZUCTP8Rzd2ejH8akGoUepeXgqUXHdqi86jvgoTds8vHUg
+7E3OGjBH4my94VaNx6O8HIEhtY6zq2X18IkRvwUhO9dLIUZqYNAgC5n/8NQrxRqi
+iY0RxJ9UObtef5YlNsNNoXmL4tXvJ9esMNTMFR5bHLlFW5dpfHd2TCzAZKxRPeGr
+uKQ14KFmXfvcmw18tV7YXNTitPtBb+5osiJIX8GBG91eipxNytxK/qoVqvvfjytS
+f4Bi0XC/I1E4xQ46UwTvGQKLTtRHyeg3vG+gX5raRK2Ny6IXDJj0scYE79q83TAc
+uWXH6mJ0D04Edb/ut+2n5xL5VDde/rXlzntbCYTwxa4BbJmYjwQCiKVzDeknXdMj
+xsV0Euw3Okm3CIQp7biPo7108y5keJll6HEpx7sWT37mNOoj4AFdm79wzEJQhl6p
+KOo4Bpfj1etTFQAcU6E3weyVD9ROi7WtSBH4EFhFOfgfga1CHD8DHbwDdsa+dhIj
+9mORCp7dEUPjt5Qi5mimlqQwYFfCHI+ap6VYsrhpzWr3gPi8EENRsbTUEWWezM/n
++BH4UnmFmQY7SGZyeHuDvFNzdNIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYNDxMc
+IA==
+-----END CERTIFICATE-----
+)";
+
+// kMLDSA65CertNull is an invalid self-signed ML-DSA-65 certificate with an
+// explicit NULL in the signature algorithm.
+const char kMLDSA65CertNull[] = R"(
+-----BEGIN CERTIFICATE-----
+MIIVSjCCCEWgAwIBAgIBATANBglghkgBZQMEAxIFADAfMR0wGwYDVQQDDBRtYWxm
+b3JtZWQgTUwtRFNBIGtleTAgFw03MDAxMDEwMDAwMDBaGA85OTk5MTIzMTIzNTk1
+OVowHzEdMBsGA1UEAwwUbWFsZm9ybWVkIE1MLURTQSBrZXkwggeyMAsGCWCGSAFl
+AwQDEgOCB6EAAmdAmEbMRB3c5lDTmA+k2dctR+9QviPLGsdce0Mh6HvQIYszW+Ug
+W2I+doeKjJt9LpD6gdqVtiNvs7ddJvmR+MQvw/AaAgK4odV9IeeZoUys7izWcw+B
+jhWuj/5hVPyiDho7bD4RcAtvomaUuH9LMXcFt2kHbLqiFlDjWgUUNAzV+JeQyX8R
+6czmyO/a+ulJQ81iZy9c2/Tg+gJc1j9UycY8HafbJIEdVroIiQdPvpRICbYe4dID
+6vrW1M4hWG/LnOSev2BCorMwlr1ICQ+650RE7TjF9DFJUz86cm8HFco80B6t1isV
+IWQu2sr/+UeGz2Vi8Drdrxev/VoeKddSgL1lXoavuZbAblD5Gp/MoF/j2Lb5oCeR
+pVxs//KayDbcFvKjHoObK7UDu1Uwpldkd1OW0IZm/yCVexPnC9dZtYaArdCZJji+
+hWuNZa6hg5qVVj7DBlTYwBaIWXmxs2f6RzngFTedkA6nGMQRppvD1RJ62sU2K8zg
++bF2ZUT56jhENZa0gjZknnvB7tmoa9+zcQSiaibMkef+yC8abK5WyQaFDjC/qhZ1
+kSjeH4fn3YI+R7w9iuLD0Nly36uHS5IjCuCl3H4Ta2P2Youm3Q2Na8dT5qLSydPT
+qQvSezXonflJJeHoJqUHjHVkib6J3X+TJGDBj0MnawSV4b837GgHdTutzaLwOt9H
+X836NxxPAx7CXBkVdO8IZ8JaR3sag8AGQhbcZBaSO3ad2zfOvX+JjMveihAFCnWt
+MvHIrdZHrQbyyyEDGZRZFp+X0jvEedy2AmIfbZ1SBH4u+lvmVZdfhc0w03n7LlrK
+6WZ0fNe7lZ6eG8NUKBaFRAn0xPNCJhc5viqG0mc41aATfgBFjdueTeZnNS/nSTBh
+R8ypsvXP05K2ixNE4r4K7RBUFoWW8dokUjSQlt9PalOaYijzcgif67AFY3czvn8h
+jQ8UxCUfqgGpInlpi6mX5Xb9jdMnrK9Yx0LRAKYeDIIFegfxgFUpDQxFZd1wqvna
+HsasUryNejI1Tnh7mpGWkkkfZfnINdCzWWL2hk6v+BD4AS/H1NP0dCkGMhmgPPqe
+sHhgKTGYCHnyjE1ngfNwbfmCDFbiWLR2WLIwQiqQ3CMqnbUJXwo/fMvE/kUpZPV0
+kUEq6oLlOGCMxpr7iAvgYs2A4br4rqlRdp7/ay6/T/ikSH/+9uRgFzmdabG6BkF+
+d6+YfQC5DYfKoxokCZ6+ID3ZKAYfzw8BeMttoBB8R7oyIOZjsLDclygB/hkO7LMp
+nAncMFyY0f9YHNr+xX1YbNfIw/gN9AWnish2XF7c2HkJTGdAkM4CFBKcaekdn4i/
+Bpth5aD8bxl9hS+k6dJzjSL/2r770LY/s7okfJTLoVw/FTJPuTvpTszK/oQFXQka
+yiACSl50kyHUHAbR+w/kIVia9BMZxMravXwb1/sVyztbytEGaCNhbU5oPSo9vPk3
+dsI/o3wR3OfI4j365SFuYl9M3e7qZAW3cfW/qlkbHoilNHlpfuMlqovKW/Y/XRvp
+a54ytxdF/t9gCZEFvmdn/xIDYH20wiZhkIhfUL3jwkuu4PDatdG6I5JMXV3Vm9Ie
+tBD8e5J10VZHdLrlWPdrMtibXM2v6e/HbDxzSQ0pGKWPiO7rwYG/bdewOxmvfo+A
+42qziqU4HcPkmLaZzCEvOzyqWetZe+ISV688xxUqKNP+LNegC3XorwtMKUKeTzHc
+oF/dd3usAhGwsqtntBXq05JsQrh2XlEC9b5AFep7vfU3sghwcAHhHV36azfDzaHZ
+L6vHHsUmqd4w9fPdOLABClNGyu1XqamkFGTFTHAdQ9dfTSOLZI5zFMwmHRYcJPwP
+VweeMnocCU/cdBCpVk/bl43jThFAe36m4+Xdj3e0qLUZYYX8/tiAyH+j7/A4s1yq
+LPlILqhU7QzQpvdYtbXX2IIvsRD1Y4YXXGKaSwvWtowOA0exG/qRa/lPra77j+nt
+Z56sjL8qfJKJgFj1hRtmbtoYymF3JkqeCm5hib0YCNc3YeHYcIupoVUjh2uJ8IY4
+zHUi8VnYKimb+ipjiFsPIM3KEjwi0mj6PloXHApaRRc1WlHshdetEOksYmDN1XNI
+TDNs3+WY6GhVVoktpjwhgyv94suhqoAfPKaC0v8dEVKSvDJT7A80adLjXApeyfBI
+acUwz9sLySyJUj6Z5Pgs+iyNydxtSsCYvPe8saAn0B7aSinLZRpBfQ1eOWXdhw5J
+PBdyd1VHhLtt8oo+p9FAVEvJ1Zbv9BVQrlkCF9JU2P6FKNn8QNXz72clN8kjw3em
+rx3xN8rfDp7oT5wir4wz9QPcG2g4akYISiS0CSE8BEwIaFBi/ZLQlz/WgrFX0dWN
+sett3CEWZ2CyRl6dLXRxIJa2GsyY6En5B+KuKOUmR4O893Tz/aX/KRXZSxvgVoCM
+ioorMcb2zi1V4e80czEcTS3dsUSYymmb9ZEeqVg8v/h1aEcON6MGnMYRQbLsmu+V
+eIvOU1/2RPBzSgtzg1oa91afEY08PS0QbDoW5YonZ+RLLfMX+eXj7HYMpoNqBx+U
+AmTrUcqNvjgCMSWv2ri5Bhx2Q9z2Jc+s8NwTvWAIMX3CWpTeDc143umjEjAQMA4G
+A1UdDwEB/wQEAwIHgDANBglghkgBZQMEAxIFAAOCDO4Af/wkjW5oOONDtPekJAVT
+J1RSLQodhrRSq2asHTYXBOQtF+AimTd9TnY4hwPfqRLA7oeJu+LAbq7bkQOkELOv
+q1E0MFb/pwWf3+AgrhKdYGBdY227rFJTjVWu7RWqzdnB/Do9mJZAAo0hyXePMxDw
+8mUgkp3kjeCkAekSWjNlPg+UQ5H+ZW+fSu1vz5NruIdWWfowvQwKXlvEhNnezIpW
+rro7M1eU0ZgmY4lq3mzO9ZjGTndqnZJ/QI3W1nXuxfnhAz5ZGg+XQKeDBzAQGd2q
+c1US1Ez7t1yCSOOkETvyauis6rsDJubtKy43j6Qw2bzaZNlbWq6DQkLdB3WLAS55
+TEhUTmDzWh9Hl8TE7xynaAkJRCaS3AKWSLZX0zAYscSG+NPb+JRvw7F4RlZFPZIa
+jjzuK846x5ZyqihMf2KI4E7T2orAd2QbU9bjx+FQrZBw5MFsKJBZGGi8KBl5sYfY
+kmEetJUts/j3he9+u8pnzwE77ldJ1WBNrRy72/rxikzzA1uQwA35LHfDkxjBUvw/
+3i0NoSVkFpDHdzEkzkx8CRLeds1otWS9O8IusyYh4s2uyqNqUNX5nBPYKh2LkLH4
+lN7RxhTY+D/mIZ91B9KO0LuMr6IV69KBB7NcmTOyDYsAaXhYRH/6oc+IkS+EB0V0
+5m30zUNub0l5vBUTMs7uzGMnMkbTsE18GVq9j1wh3kIKNElu3bzQ8RjW5/gbYqRH
+nte3GQRrB/YPjr4fttMPh0ox9rUz6inBiIfWuOkeu4CgsX+ZBQJmUwddh5uQJ73/
+Ow70iCb05NPTduoxvoK2jnj3duyNc2gcoEtqkb1r1P931MvbNIAImf0KiGnaj3M6
+VbdDLVlbfBbQqYSd/o2kn96zhedaNK5ZxXoWOgfMx6oRfwszI+nKysJlG9XqxNg9
+LK9pNSvCZ2l5GACB24CaS+Z0LHU7QcjiOYw+7WBs32gP6iVsiIXrwszcTpa0BfWZ
+Yp/qJuG/1zX9Jw+IEtUo2EryH0fr6baddWSfhb9JaK2yieKYyGrR8yBos6od8frf
+T8kjfQPIgvAweAscaNEKimpAfU1whQuAlSfdS8/OMnWqZmgCz5XleltYRLQ6gfKk
+8/+oyULc2LFcP3IUQ6hcMccNNEFHJpU21EYs+jCi6yxqbROyLoTZA1+PzLqr9xkw
+B3+JrnUnBgPJRymELahaeYzglCBM4pw0FQuLDc3P9OhJDuGVf9KLvB4xED/z7N/9
++0gljIU6qwzNZekQ28B560kHjlAyaWFqjslBE39wQTs08WvYwXLQ6P3lfw2odKKp
+fWLVRqXxr1QjDdqoaD2J2ZVE0Sc0ULmwB+4WtGfKEjjGhkE4D+pXp2+fkglC0LQI
+lkAQJOxNmdUBZ/hHWxJOQHqTDCOCQD8tziC5yfae5GOlv7J2pILm4LJ83wf5L2yX
+UW87sysg6wkY3rMiiWxbO43eNYztSEsiwIZqRrIla84CnXlTr8J0qEvJ6tA81UlM
+iX5WWvIx6o/8hFQ0RZS0/VJ2OHSNVHWHeLsiU1EBUPxM7Y4oMroL9P2hq4jVbag+
+OXESLJD1DShNcNcc5Ybpnv9giBNqnPPwly7jT0/JRNqaUA/J19c9/V8Vrn8CFoIi
+fe/DZ1Tg5TqsAtsD6gSgzTw6SlGN1L5BEANcRuko7oDjiQ4wftcmYUGuqT1cvthR
+1/D8Yzw5rxY2WaM662mI4+xhhZTRs5tOFKi6lAC8lsAJv3iL1rZjGANmt2isRssE
+E2JnnZyxyDJxHIc9Xzo9UwIcqZQzypqJr2F9tL5B91Kvqg/aAhyn8+Wsuwnxvv/m
+JthCEXndqki7gADtIVDbTXRmvrQszEL5t2+u1fECEJaXbmoaCm3jksps87kt8OGg
+LMLeOaJUBO44Vc5wAjqtm11WPM3pdQg/Nr3wMcd0gA7+kpDDGm7/OKytwgyCSyIt
+07KHbfltN62DHIWBw5EdGxGWI1wPXaf6J/qmxLRLpmTQgFUM+13YLlyu/N7sNlmM
+1EWZx3RUbNhYiyvjveTk3SJ2DtbgJQdh7pypHf9iHTbfWPRNmh5Q2MGZm11hZc3p
+Xv9Kq9qdVEwp8zx6b7SuuF+EIUiU2/+ZxXKQkGZQnMdK8fI32S5ig9J0Z+dEi1wq
+Y0E0L096WjA30APWYrpW0LlpCpUZlqjfNIEtjW8rdWugDw4VqQEn+qeakCrE8lnV
+OtRqWy41P30r7rxfD71Z+pul+mruIxHO/5k/Y2gY/7LxZYixm3cCQXK45TTBMBDn
+hCTAa90SFU1DnQZfpctuHwXWQLZdpnH9/hqocC8lqevXK9UURRHwXZwju2Zy061V
+LCrigWtZF06D3QkQF8z9n6hCEFWGFHRJzJfzN9rqj9GZJ0XleB3ocv3nPbj0G63r
+iFKSWQruliP46Jas3z+kTkejL9aUwziFrAES1BQ6Z5SrXTiRXOqLp8bGePmVa/y6
+Q6ngxuK4EPhdh01m7gTjspTwKRq9qve0afxoMk4POKk95HWT10XIBeKA1TOW6lPQ
+tCFL0MKPGSr/6Uaa9ydtAZYKFKHZ6kaovH15a7ssNl0kME5/xZGYBXAFpsZy8xno
+0Ros/V8pzL91CecYVDp4rp7mtX4DaoEB7Q6aUtJjQ0l7IcuURqffYsG4cNOX6vSt
+vTdqRvvCKli+PIpE1MUJBkddrUXMz0FzO+1Ccdwk2h/zsgfKZ0mrZALiTduDuaO4
+uSIxLwel1QI14x9zJTB+K9ID+AAR3cCqvApbRcHF8LqfySbA8qGLZgzQL221kbjL
+R5KS9Y/S0EIX5YsGY4G6V6/W8Oj5H5aGgRjl0rraSwC0t43CUVqJ5YxR2GPGw3ww
+C7YfLPKMnjHs/STc2C7x5eeA2lG4gOJBPnwAbY6AWV6jcpkc6p2RW4F9eLhir2p1
+cD7X9ue6CZ915bs22iXsSwyc53CMItqAUZQi6N1pXjawnX81W/tcjDkgsEq6Hpbg
+yfnS9Y8unYPjN/cfuEGTyyLTGpIiDGM+YRkE8FBYip4wLnUGUlamuYP/Ttg+XNMM
+5vchGMKppVJ2yv49X5sEzQ7yM4Gmpl++6b4mpUegL/nNh38FmuiiF2JIOTrzqJx5
+PpjiRBjuFHMnTEXR1g5wsUgBQKjyFGT2N1a0InroGDnyIze3xoeHePVrmudNCL/F
+xfC6cmgI8reVYI5Jv4PWKOWMSuFVDCXontv5dy5CkcAuRuBsT8mljrwjo5BWNGm0
+pyOF2aX0lTAFV0oRO2hXru+NKnSBkMk0EZpplwjdhVsfi3jEqdnXk0Svff/lV4W3
+mWzPGAqrj3EVQWOewoEeYzZuGzAVYkJg9xSIFcI3Sd0lIf5KKsrWWUQtbvqy/jvo
+BW3s6devl+Q/UX5vKa6Kz3plntkslxYPs0D94hacn2UnzTDmNgW+7bPhoZHy+d7G
+JejamiJ41Dab9g0XW3/3TQTvvFc62VFENKQ0A/Up+E+/ipjGDPDYXgiJN7UUqQLR
+6zvolzcNnwzRDJR7feHIy38eGWqFOzB9S5Nh+Ep+TdpoQDkuf1J0hXGBn3GyExUl
+tUhBlc1KpGK8pL0JiOTF/ScybMYaS99T6HNgZPFrQZ9/hjchS2uXbRdWyLJeSrCL
+/rWl9LlQvzaRayAZJoAlafR/dNWHIPpzA8fXUPcbAWPvgC0Jeuh2PBD60bRQn7tr
+ovosIl5GAKhMNkrWfCZvzcoptVpKz0OqPbHm6ESIkhmh54WKtvzyVkHajegjuXES
+pxpT3885DrfRZPD1nO7u1ooN+MHw7NkNdtz2mJGI/sgP8fUfMoVJIJfBuIz6Y8CX
+Cq89+XvLoNDf40Dk0f8PUjy03TX1pi4gruE64zh8b9eFyj5efNz6lgeW3NCVUY7d
+DEO60mbRlsGuIogGwz+wkGkZ5Pe615Vd3FoPG49iMRFnw8rk0GMqbpxEXBdIwDd9
+PkH8HqPN3JPOvVNoVM2ACA31yD2Dsz/VgrycLpnPr9+j8kHI7dbQfLSC1D5dbT50
+TqWbtJrJhPHA+g0m4jKAWlnuBTYOQlX6Zj+n9WJtrQLj3EcSaOO3utPv/U5P4sD/
+lvLjQ2R2Tk0ZTzkqk1f2QJI6wz9f1cgaCGTbh45ITTm5UQ1yIeAmzdn9wnQS82G0
+Tgju4sAl/2yBtBO/GtW/aQY7keF4K2K6UBz+sRsUx4VBIq2Q3reSyRMibejatIta
+qkdkhKdib21cldvRFaFUyGFlVZrTLxp8TBRbwNxkKbfhGOGtr20d5IuozEsJKHxt
+jaZMdzsagp2rSxCT9j0V+ltZ6x/2lW6G9SnacDgsCfn3XE6isniQgNMZlFRFJjRX
+RJbwUj3bMJcvc01Zf7L9n6EEQkVshdHuA3G329/4AS5A7yBSWI23zgtMUq+2zNLn
+P0BTpwAAAAAAAAAAAAAAAAAAAAAAAAAABw0RFx8j
+-----END CERTIFICATE-----
+)";
+
+// kSANTypesLeaf is a leaf certificate (signed by `kSANTypesRoot`) which
 // contains SANS for example.com, test@example.com, 127.0.0.1, and
 // https://example.com/. (The latter is useless for now since crypto/x509
 // doesn't deal with URI SANs directly.)
-static const char kSANTypesLeaf[] = R"(
+const char kSANTypesLeaf[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIClzCCAgCgAwIBAgIJAOjwnT/iW+qmMA0GCSqGSIb3DQEBCwUAMCsxFzAVBgNV
 BAoTDkJvcmluZ1NTTCBUZXN0MRAwDgYDVQQDEwdSb290IENBMB4XDTE1MDEwMTAw
@@ -555,7 +808,7 @@ jusJ2PqSmtKNU1Zcaba4d29oFejmOAfeguhR8AHpsc/zHEaS5Q9cJsuJcw==
 // YvJUG1zoHwUVrxxbR3DbpTODlktLcl/0b97D0IkH3w==
 // -----END RSA PRIVATE KEY-----
 
-static const char kSANTypesRoot[] = R"(
+const char kSANTypesRoot[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICTTCCAbagAwIBAgIIAj5CwoHlWuYwDQYJKoZIhvcNAQELBQAwKzEXMBUGA1UE
 ChMOQm9yaW5nU1NMIFRlc3QxEDAOBgNVBAMTB1Jvb3QgQ0EwHhcNMTUwMTAxMDAw
@@ -590,7 +843,7 @@ d5YVX0c90VMnUhF/dlrqS9U=
 // -----END RSA PRIVATE KEY-----
 
 // The following four certificates were generated with this Go program, varying
-// |includeNetscapeExtension| and defining rootKeyPEM and rootCertPEM to be
+// `includeNetscapeExtension` and defining rootKeyPEM and rootCertPEM to be
 // strings containing the kSANTypesRoot, above.
 
 // clang-format off
@@ -672,7 +925,7 @@ d5YVX0c90VMnUhF/dlrqS9U=
 
 // kNoBasicConstraintsCertSignIntermediate doesn't have isCA set, but contains
 // certSign in the keyUsage.
-static const char kNoBasicConstraintsCertSignIntermediate[] = R"(
+const char kNoBasicConstraintsCertSignIntermediate[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBqjCCAROgAwIBAgIBAjANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -686,7 +939,7 @@ xKt/6oif1ci/KCKqKNXJAIFbc4e+IiBpenwpxHk3If4NM+Ek0nKoO8Uj0NkgTQ==
 -----END CERTIFICATE-----
 )";
 
-static const char kNoBasicConstraintsCertSignLeaf[] = R"(
+const char kNoBasicConstraintsCertSignLeaf[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBUDCB96ADAgECAgEDMAoGCCqGSM49BAMCMB8xHTAbBgNVBAMTFE5vIEJhc2lj
 IENvbnN0cmFpbnRzMCAXDTAwMDEwMTAwMDAwMFoYDzIwOTkwMTAxMDAwMDAwWjAx
@@ -701,7 +954,7 @@ Djy3Zw==
 
 // kNoBasicConstraintsNetscapeCAIntermediate doesn't have isCA set, but contains
 // a Netscape certificate-type extension that asserts a type of "SSL CA".
-static const char kNoBasicConstraintsNetscapeCAIntermediate[] = R"(
+const char kNoBasicConstraintsNetscapeCAIntermediate[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBuDCCASGgAwIBAgIBAjANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -716,7 +969,7 @@ P9p6HuyLrmn0c/F0
 -----END CERTIFICATE-----
 )";
 
-static const char kNoBasicConstraintsNetscapeCALeaf[] = R"(
+const char kNoBasicConstraintsNetscapeCALeaf[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBXDCCAQKgAwIBAgIBAzAKBggqhkjOPQQDAjAqMSgwJgYDVQQDEx9ObyBCYXNp
 YyBDb25zdHJhaW50cyAoTmV0c2NhcGUpMCAXDTAwMDEwMTAwMDAwMFoYDzIwOTkw
@@ -729,7 +982,7 @@ XyPwWPbymSTpzKhB4xB7qQ==
 -----END CERTIFICATE-----
 )";
 
-static const char kSelfSignedMismatchAlgorithms[] = R"(
+const char kSelfSignedMismatchAlgorithms[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIFMjCCAxqgAwIBAgIJAL0mG5fOeJ7xMA0GCSqGSIb3DQEBDQUAMC0xCzAJBgNV
 BAYTAkdCMQ8wDQYDVQQHDAZMb25kb24xDTALBgNVBAoMBFRlc3QwIBcNMTgwOTE3
@@ -765,7 +1018,7 @@ KStYq7X9PKseN+PvmfeoffIKc5R/Ha39oi7cGMVHCr8aiEhsf94=
 // kCommonNameWithSANs is a leaf certificate signed by kSANTypesRoot, with
 // *.host1.test as the common name and a SAN list of *.host2.test and
 // foo.host3.test.
-static const char kCommonNameWithSANs[] = R"(
+const char kCommonNameWithSANs[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIB2zCCAUSgAwIBAgIBAzANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -782,7 +1035,7 @@ enm/h1zOfJ7wXLyscD4kU29Wc/zxBd70thIgLYn16CC1S9NtXKsXXDXv5VVH/bg=
 
 // kCommonNameWithSANs is a leaf certificate signed by kSANTypesRoot, with
 // *.host1.test as the common name and no SAN list.
-static const char kCommonNameWithoutSANs[] = R"(
+const char kCommonNameWithoutSANs[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBtTCCAR6gAwIBAgIBAzANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -800,7 +1053,7 @@ pFFXI2B5usgI
 // kCommonNameWithEmailSAN is a leaf certificate signed by kSANTypesRoot, with
 // *.host1.test as the common name and the email address test@host2.test in the
 // SAN list.
-static const char kCommonNameWithEmailSAN[] = R"(
+const char kCommonNameWithEmailSAN[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBvDCCASWgAwIBAgIBAjANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -818,7 +1071,7 @@ aet/mER21Z/9ZsTUoJQPJw==
 // kCommonNameWithIPSAN is a leaf certificate signed by kSANTypesRoot, with
 // *.host1.test as the common name and the IP address 127.0.0.1 in the
 // SAN list.
-static const char kCommonNameWithIPSAN[] = R"(
+const char kCommonNameWithIPSAN[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBsTCCARqgAwIBAgIBAjANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -842,7 +1095,7 @@ D0+O6KI=
 // JhNOfIv/d8heWFBeKOfMR+RfaROhRANCAASbbbWYiN6mn+BCpg4XNpibOH0D/DN4
 // kZ5C/Ml2YVomC9T83OKk2CzB8fPAabPb4P4Vv+fIabpEfjWS5nzKLY1y
 // -----END PRIVATE KEY-----
-static const char kConstrainedIntermediate[] = R"(
+const char kConstrainedIntermediate[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICDjCCAXegAwIBAgIBAjANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -862,7 +1115,7 @@ UyM=
 // kCommonNamePermittedLeaf is a leaf certificate signed by
 // kConstrainedIntermediate. Its common name is permitted by the name
 // constraints.
-static const char kCommonNamePermittedLeaf[] = R"(
+const char kCommonNamePermittedLeaf[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBaDCCAQ2gAwIBAgIBAzAKBggqhkjOPQQDAjAoMSYwJAYDVQQDEx1OYW1lIENv
 bnN0cmFpbnRzIEludGVybWVkaWF0ZTAgFw0wMDAxMDEwMDAwMDBaGA8yMDk5MDEw
@@ -874,12 +1127,12 @@ AgNJADBGAiEAtsnWuRQXtw2xbieC78Y8SVEtTjcZUx8uZyQe1GPLfGICIQDR4fNY
 yg3PC94ydPNQZVsFxAne32CbonWWsokalTFpUQ==
 -----END CERTIFICATE-----
 )";
-static const char kCommonNamePermitted[] = "foo.permitted1.test";
+const char kCommonNamePermitted[] = "foo.permitted1.test";
 
 // kCommonNameNotPermittedLeaf is a leaf certificate signed by
 // kConstrainedIntermediate. Its common name is not permitted by the name
 // constraints.
-static const char kCommonNameNotPermittedLeaf[] = R"(
+const char kCommonNameNotPermittedLeaf[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBazCCARCgAwIBAgIBBDAKBggqhkjOPQQDAjAoMSYwJAYDVQQDEx1OYW1lIENv
 bnN0cmFpbnRzIEludGVybWVkaWF0ZTAgFw0wMDAxMDEwMDAwMDBaGA8yMDk5MDEw
@@ -891,12 +1144,12 @@ PQQDAgNJADBGAiEAxaUslxmoWL1tIvnDz7gDkto/HcmdU0jHVuUQLXcCG8wCIQCN
 5xZjitlCQU8UB5qSu9wH4B+0JcVO3Ss4Az76HEJWMw==
 -----END CERTIFICATE-----
 )";
-static const char kCommonNameNotPermitted[] = "not-permitted.test";
+const char kCommonNameNotPermitted[] = "not-permitted.test";
 
 // kCommonNameNotPermittedWithSANsLeaf is a leaf certificate signed by
 // kConstrainedIntermediate. Its common name is not permitted by the name
 // constraints but it has a SAN list.
-static const char kCommonNameNotPermittedWithSANsLeaf[] = R"(
+const char kCommonNameNotPermittedWithSANsLeaf[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBqTCCAU+gAwIBAgIBBjAKBggqhkjOPQQDAjAoMSYwJAYDVQQDEx1OYW1lIENv
 bnN0cmFpbnRzIEludGVybWVkaWF0ZTAgFw0wMDAxMDEwMDAwMDBaGA8yMDk5MDEw
@@ -909,11 +1162,11 @@ ZDIudGVzdDAKBggqhkjOPQQDAgNIADBFAiACk+1f184KkKAXuntmrz+Ygcq8MiZl
 4delx44FtcNaegIhAIA5nYfzxNcTXxDo3U+x1vSLH6Y7faLvHiFySp7O//q+
 -----END CERTIFICATE-----
 )";
-static const char kCommonNameNotPermittedWithSANs[] = "not-permitted.test";
+const char kCommonNameNotPermittedWithSANs[] = "not-permitted.test";
 
 // kCommonNameNotDNSLeaf is a leaf certificate signed by
 // kConstrainedIntermediate. Its common name is not a DNS name.
-static const char kCommonNameNotDNSLeaf[] = R"(
+const char kCommonNameNotDNSLeaf[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBYTCCAQagAwIBAgIBCDAKBggqhkjOPQQDAjAoMSYwJAYDVQQDEx1OYW1lIENv
 bnN0cmFpbnRzIEludGVybWVkaWF0ZTAgFw0wMDAxMDEwMDAwMDBaGA8yMDk5MDEw
@@ -925,9 +1178,9 @@ IQChUAmVNI39VHe0zemRE09VDcSEgOxr1nTvjLcg/Q8pVQIhAJYZnJI0YZAi05QH
 RHNlAkTK2TnUaVn3fGSylaLiFS1r
 -----END CERTIFICATE-----
 )";
-static const char kCommonNameNotDNS[] = "Not a DNS name";
+const char kCommonNameNotDNS[] = "Not a DNS name";
 
-// The following six certificates are issued by |kSANTypesRoot| and have
+// The following six certificates are issued by `kSANTypesRoot` and have
 // different extended key usage values. They were created with the following
 // Go program:
 //
@@ -955,7 +1208,7 @@ static const char kCommonNameNotDNS[] = "Not a DNS name";
 //     pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
 // }
 
-static const char kMicrosoftSGCCert[] = R"(
+const char kMicrosoftSGCCert[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBtDCCAR2gAwIBAgIBAzANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -970,7 +1223,7 @@ cC4l0r/6jik=
 -----END CERTIFICATE-----
 )";
 
-static const char kNetscapeSGCCert[] = R"(
+const char kNetscapeSGCCert[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBszCCARygAwIBAgIBAzANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -985,7 +1238,7 @@ RQHX6HQJJg==
 -----END CERTIFICATE-----
 )";
 
-static const char kServerEKUCert[] = R"(
+const char kServerEKUCert[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBsjCCARugAwIBAgIBAzANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -1000,7 +1253,7 @@ iatNW3x1wg0645aNYOktW/iQ7mAAiziTY73GFyfiJDWqnY+CwA94ZWyQidjHdN/I
 -----END CERTIFICATE-----
 )";
 
-static const char kServerEKUPlusMicrosoftSGCCert[] = R"(
+const char kServerEKUPlusMicrosoftSGCCert[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBvjCCASegAwIBAgIBAzANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -1015,7 +1268,7 @@ KHpwoNFU3zA99iQzVJgbUyN0PbKwHEanLyKDJZyFk71R39ToxhSNQgaQYjZYCy1H
 -----END CERTIFICATE-----
 )";
 
-static const char kAnyEKU[] = R"(
+const char kAnyEKU[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBrjCCARegAwIBAgIBAzANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -1030,7 +1283,7 @@ L6A=
 -----END CERTIFICATE-----
 )";
 
-static const char kNoEKU[] = R"(
+const char kNoEKU[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBnTCCAQagAwIBAgIBAzANBgkqhkiG9w0BAQsFADArMRcwFQYDVQQKEw5Cb3Jp
 bmdTU0wgVGVzdDEQMA4GA1UEAxMHUm9vdCBDQTAgFw0wMDAxMDEwMDAwMDBaGA8y
@@ -1044,44 +1297,43 @@ TXHOSQQD8Dl4BK0wOet+TP6LBEjHlRFjAqK4bu9xpxV2
 -----END CERTIFICATE-----
 )";
 
-// CertFromPEM parses the given PEM block and returns an |X509|.
-static bssl::UniquePtr<X509> CertFromPEM(std::string_view pem) {
-  bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
-  return bssl::UniquePtr<X509>(
+// CertFromPEM parses the given PEM block and returns an `X509`.
+bssl::UniquePtr<X509> CertFromPEM(std::string_view pem) {
+  UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
+  return UniquePtr<X509>(
       PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
 }
 
-// CRLFromPEM parses the given PEM block and returns an |X509_CRL|.
-static bssl::UniquePtr<X509_CRL> CRLFromPEM(std::string_view pem) {
-  bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
-  return bssl::UniquePtr<X509_CRL>(
+// CRLFromPEM parses the given PEM block and returns an `X509_CRL`.
+bssl::UniquePtr<X509_CRL> CRLFromPEM(std::string_view pem) {
+  UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
+  return UniquePtr<X509_CRL>(
       PEM_read_bio_X509_CRL(bio.get(), nullptr, nullptr, nullptr));
 }
 
-// CSRFromPEM parses the given PEM block and returns an |X509_REQ|.
-static bssl::UniquePtr<X509_REQ> CSRFromPEM(std::string_view pem) {
-  bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
-  return bssl::UniquePtr<X509_REQ>(
+// CSRFromPEM parses the given PEM block and returns an `X509_REQ`.
+bssl::UniquePtr<X509_REQ> CSRFromPEM(std::string_view pem) {
+  UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
+  return UniquePtr<X509_REQ>(
       PEM_read_bio_X509_REQ(bio.get(), nullptr, nullptr, nullptr));
 }
 
-// PrivateKeyFromPEM parses the given PEM block and returns an |EVP_PKEY|.
-static bssl::UniquePtr<EVP_PKEY> PrivateKeyFromPEM(std::string_view pem) {
-  bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
-  return bssl::UniquePtr<EVP_PKEY>(
+// PrivateKeyFromPEM parses the given PEM block and returns an `EVP_PKEY`.
+bssl::UniquePtr<EVP_PKEY> PrivateKeyFromPEM(std::string_view pem) {
+  UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
+  return UniquePtr<EVP_PKEY>(
       PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr));
 }
 
-// CertsToStack converts a vector of |X509*| to an OpenSSL STACK_OF(X509),
+// CertsToStack converts a vector of `X509*` to an OpenSSL STACK_OF(X509),
 // bumping the reference counts for each certificate in question.
-static bssl::UniquePtr<STACK_OF(X509)> CertsToStack(
-    const std::vector<X509 *> &certs) {
-  bssl::UniquePtr<STACK_OF(X509)> stack(sk_X509_new_null());
+bssl::UniquePtr<STACK_OF(X509)> CertsToStack(const std::vector<X509 *> &certs) {
+  UniquePtr<STACK_OF(X509)> stack(sk_X509_new_null());
   if (!stack) {
     return nullptr;
   }
   for (auto cert : certs) {
-    if (!bssl::PushToStack(stack.get(), bssl::UpRef(cert))) {
+    if (!PushToStack(stack.get(), UpRef(cert))) {
       return nullptr;
     }
   }
@@ -1089,24 +1341,32 @@ static bssl::UniquePtr<STACK_OF(X509)> CertsToStack(
   return stack;
 }
 
-static bssl::Span<const uint8_t> ASN1StringAsBytes(const ASN1_STRING *str) {
-  return bssl::Span(ASN1_STRING_get0_data(str), ASN1_STRING_length(str));
+bssl::Span<const uint8_t> ASN1StringAsBytes(const ASN1_STRING *str) {
+  return Span(ASN1_STRING_get0_data(str), ASN1_STRING_length(str));
 }
 
-static std::string_view ASN1StringAsView(const ASN1_STRING *str) {
-  return bssl::BytesAsStringView(ASN1StringAsBytes(str));
+std::string_view ASN1StringAsView(const ASN1_STRING *str) {
+  return BytesAsStringView(ASN1StringAsBytes(str));
 }
 
-// CRLsToStack converts a vector of |X509_CRL*| to an OpenSSL
+static UniquePtr<ASN1_INTEGER> ASN1IntegerFromU64(uint64_t v) {
+  UniquePtr<ASN1_INTEGER> ret(ASN1_INTEGER_new());
+  if (ret == nullptr || !ASN1_INTEGER_set_uint64(ret.get(), v)) {
+    return nullptr;
+  }
+  return ret;
+}
+
+// CRLsToStack converts a vector of `X509_CRL*` to an OpenSSL
 // STACK_OF(X509_CRL), bumping the reference counts for each CRL in question.
-static bssl::UniquePtr<STACK_OF(X509_CRL)> CRLsToStack(
+bssl::UniquePtr<STACK_OF(X509_CRL)> CRLsToStack(
     const std::vector<X509_CRL *> &crls) {
-  bssl::UniquePtr<STACK_OF(X509_CRL)> stack(sk_X509_CRL_new_null());
+  UniquePtr<STACK_OF(X509_CRL)> stack(sk_X509_CRL_new_null());
   if (!stack) {
     return nullptr;
   }
   for (auto crl : crls) {
-    if (!bssl::PushToStack(stack.get(), bssl::UpRef(crl))) {
+    if (!PushToStack(stack.get(), UpRef(crl))) {
       return nullptr;
     }
   }
@@ -1114,57 +1374,137 @@ static bssl::UniquePtr<STACK_OF(X509_CRL)> CRLsToStack(
   return stack;
 }
 
-static const int64_t kReferenceTime = 1474934400 /* Sep 27th, 2016 */;
+// Timestamp to use with X509VerifyMTCTest.
+const int64_t kVerifyMtcReferenceTime = 1735689600 /* Jan 1st, 2025 */;
+// Timestamp that works with the rest of the tests.
+const int64_t kReferenceTime = 1474934400 /* Sep 27th, 2016 */;
 
-static int Verify(
-    X509 *leaf, const std::vector<X509 *> &roots,
-    const std::vector<X509 *> &intermediates,
-    const std::vector<X509_CRL *> &crls, unsigned long flags = 0,
-    std::function<void(X509_STORE_CTX *)> configure_callback = nullptr) {
-  bssl::UniquePtr<STACK_OF(X509)> roots_stack(CertsToStack(roots));
-  bssl::UniquePtr<STACK_OF(X509)> intermediates_stack(
-      CertsToStack(intermediates));
-  bssl::UniquePtr<STACK_OF(X509_CRL)> crls_stack(CRLsToStack(crls));
+class X509VerifyTest : public testing::TestWithParam<bool> {
+ public:
+  bool use_store() const { return GetParam(); }
 
-  if (!roots_stack ||          //
-      !intermediates_stack ||  //
-      !crls_stack) {
-    return X509_V_ERR_UNSPECIFIED;
+  int Verify(X509 *leaf, const std::vector<X509 *> &roots,
+             const std::vector<X509 *> &intermediates,
+             const std::vector<X509_CRL *> &crls, unsigned long flags = 0,
+             std::function<void(X509_STORE_CTX *)> configure_callback = nullptr,
+             int64_t time_posix = kReferenceTime) {
+    VerifyResult result =
+        VerifyAndReturnChain(leaf, roots, intermediates, crls, flags,
+                             configure_callback, time_posix);
+    return result.err;
   }
 
-  bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
-  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
-  if (!ctx ||  //
-      !store) {
-    return X509_V_ERR_UNSPECIFIED;
-  }
+  struct VerifyResult {
+    int err;
+    UniquePtr<STACK_OF(X509)> chain;
+  };
 
-  if (!X509_STORE_CTX_init(ctx.get(), store.get(), leaf,
-                           intermediates_stack.get())) {
-    return X509_V_ERR_UNSPECIFIED;
-  }
+  VerifyResult VerifyAndReturnChain(
+      X509 *leaf, const std::vector<X509 *> &roots,
+      const std::vector<X509 *> &intermediates,
+      const std::vector<X509_CRL *> &crls, unsigned long flags = 0,
+      std::function<void(X509_STORE_CTX *)> configure_callback = nullptr,
+      int64_t time_posix = kReferenceTime) {
+    UniquePtr<STACK_OF(X509)> roots_stack(CertsToStack(roots));
+    UniquePtr<STACK_OF(X509)> intermediates_stack(CertsToStack(intermediates));
+    UniquePtr<STACK_OF(X509_CRL)> crls_stack(CRLsToStack(crls));
 
-  X509_STORE_CTX_set0_trusted_stack(ctx.get(), roots_stack.get());
-  X509_STORE_CTX_set0_crls(ctx.get(), crls_stack.get());
+    if (!roots_stack ||          //
+        !intermediates_stack ||  //
+        !crls_stack) {
+      return VerifyResult{X509_V_ERR_UNSPECIFIED, nullptr};
+    }
 
-  X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx.get());
-  X509_VERIFY_PARAM_set_time_posix(param, kReferenceTime);
-  if (configure_callback) {
-    configure_callback(ctx.get());
-  }
-  if (flags) {
-    X509_VERIFY_PARAM_set_flags(param, flags);
-  }
+    UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+    UniquePtr<X509_STORE> store(X509_STORE_new());
+    if (!ctx ||  //
+        !store) {
+      return VerifyResult{X509_V_ERR_UNSPECIFIED, nullptr};
+    }
 
-  ERR_clear_error();
-  if (X509_verify_cert(ctx.get()) != 1) {
-    return X509_STORE_CTX_get_error(ctx.get());
-  }
+    if (use_store()) {
+      for (X509 *root : roots) {
+        if (!X509_STORE_add_cert(store.get(), root)) {
+          return VerifyResult{X509_V_ERR_UNSPECIFIED, nullptr};
+        }
+      }
+      for (X509_CRL *crl : crls) {
+        if (!X509_STORE_add_crl(store.get(), crl)) {
+          return VerifyResult{X509_V_ERR_UNSPECIFIED, nullptr};
+        }
+      }
+    }
 
-  return X509_V_OK;
+    if (!X509_STORE_CTX_init(ctx.get(), store.get(), leaf,
+                             intermediates_stack.get())) {
+      return VerifyResult{X509_V_ERR_UNSPECIFIED, nullptr};
+    }
+
+    if (!use_store()) {
+      X509_STORE_CTX_set0_trusted_stack(ctx.get(), roots_stack.get());
+      X509_STORE_CTX_set0_crls(ctx.get(), crls_stack.get());
+    }
+
+    X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx.get());
+    X509_VERIFY_PARAM_set_time_posix(param, time_posix);
+    if (configure_callback) {
+      configure_callback(ctx.get());
+    }
+    if (flags) {
+      X509_VERIFY_PARAM_set_flags(param, flags);
+    }
+
+    ERR_clear_error();
+    if (X509_verify_cert(ctx.get()) != 1) {
+      return VerifyResult{X509_STORE_CTX_get_error(ctx.get()), nullptr};
+    }
+
+    VerifyResult ret;
+    ret.err = X509_V_OK;
+    ret.chain.reset(X509_chain_up_ref(X509_STORE_CTX_get0_chain(ctx.get())));
+    return ret;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(/* no prefix */, X509VerifyTest, testing::Bool());
+
+struct SuppressErrors {
+  std::vector<int> errors;
+};
+
+int SuppressErrorsExDataIndex() {
+  static int ret = [] {
+    return X509_STORE_CTX_get_ex_new_index(
+        0, nullptr, nullptr, nullptr,
+        [](void *parent, void *ptr, CRYPTO_EX_DATA *ad, int index, long argl,
+           void *argp) { delete static_cast<SuppressErrors *>(ptr); });
+  }();
+  return ret;
 }
 
-TEST(X509Test, TestVerify) {
+// SuppressErrorsWithVerifyCallback configures a verify callback on `ctx` that
+// suppresses all errors in `errs`. Each value in `errs` should be one of the
+// `X509_V_ERR_*` constants. This feature should never be used in production. It
+// is fragile and unpredictable. We implement it here only to capture test some
+// existing downstream patterns. New code should not follow these patterns, as
+// they may be removed in the future.
+void SuppressErrorsWithVerifyCallback(X509_STORE_CTX *ctx,
+                                      std::vector<int> errs) {
+  X509_STORE_CTX_set_ex_data(ctx, SuppressErrorsExDataIndex(),
+                             new SuppressErrors{std::move(errs)});
+  X509_STORE_CTX_set_verify_cb(ctx, [](int ok, X509_STORE_CTX *ctx2) -> int {
+    auto *suppress = static_cast<const SuppressErrors *>(
+        X509_STORE_CTX_get_ex_data(ctx2, SuppressErrorsExDataIndex()));
+    int err = X509_STORE_CTX_get_error(ctx2);
+    if (std::find(suppress->errors.begin(), suppress->errors.end(), err) !=
+        suppress->errors.end()) {
+      return 1;
+    }
+    return ok;
+  });
+}
+
+TEST_P(X509VerifyTest, Basic) {
   //  cross_signing_root
   //         |
   //   root_cross_signed    root
@@ -1174,15 +1514,15 @@ TEST(X509Test, TestVerify) {
   //              leaf  leaf_no_key_usage
   //                      |
   //                    forgery
-  bssl::UniquePtr<X509> cross_signing_root(CertFromPEM(kCrossSigningRootPEM));
-  bssl::UniquePtr<X509> root(CertFromPEM(kRootCAPEM));
-  bssl::UniquePtr<X509> root_cross_signed(CertFromPEM(kRootCrossSignedPEM));
-  bssl::UniquePtr<X509> intermediate(CertFromPEM(kIntermediatePEM));
-  bssl::UniquePtr<X509> intermediate_self_signed(
+  UniquePtr<X509> cross_signing_root(CertFromPEM(kCrossSigningRootPEM));
+  UniquePtr<X509> root(CertFromPEM(kRootCAPEM));
+  UniquePtr<X509> root_cross_signed(CertFromPEM(kRootCrossSignedPEM));
+  UniquePtr<X509> intermediate(CertFromPEM(kIntermediatePEM));
+  UniquePtr<X509> intermediate_self_signed(
       CertFromPEM(kIntermediateSelfSignedPEM));
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
-  bssl::UniquePtr<X509> leaf_no_key_usage(CertFromPEM(kLeafNoKeyUsagePEM));
-  bssl::UniquePtr<X509> forgery(CertFromPEM(kForgeryPEM));
+  UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
+  UniquePtr<X509> leaf_no_key_usage(CertFromPEM(kLeafNoKeyUsagePEM));
+  UniquePtr<X509> forgery(CertFromPEM(kForgeryPEM));
 
   ASSERT_TRUE(cross_signing_root);
   ASSERT_TRUE(root);
@@ -1193,117 +1533,100 @@ TEST(X509Test, TestVerify) {
   ASSERT_TRUE(forgery);
   ASSERT_TRUE(leaf_no_key_usage);
 
-  // Most of these tests work with or without |X509_V_FLAG_TRUSTED_FIRST|,
-  // though in different ways.
-  for (bool trusted_first : {true, false}) {
-    SCOPED_TRACE(trusted_first);
-    bool override_depth = false;
-    int depth = -1;
-    auto configure_callback = [&](X509_STORE_CTX *ctx) {
-      X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx);
-      // Note we need the callback to clear the flag. Setting |flags| to zero
-      // only skips setting new flags.
-      if (!trusted_first) {
-        X509_VERIFY_PARAM_clear_flags(param, X509_V_FLAG_TRUSTED_FIRST);
-      }
-      if (override_depth) {
-        X509_VERIFY_PARAM_set_depth(param, depth);
-      }
-    };
-
-    // No trust anchors configured.
-    EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
-              Verify(leaf.get(), /*roots=*/{}, /*intermediates=*/{},
-                     /*crls=*/{}, /*flags=*/0, configure_callback));
-    EXPECT_EQ(
-        X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
-        Verify(leaf.get(), /*roots=*/{}, {intermediate.get()}, /*crls=*/{},
-               /*flags=*/0, configure_callback));
-
-    // Each chain works individually.
-    EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {intermediate.get()},
-                                /*crls=*/{}, /*flags=*/0, configure_callback));
-    EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {cross_signing_root.get()},
-                                {intermediate.get(), root_cross_signed.get()},
-                                /*crls=*/{}, /*flags=*/0, configure_callback));
-
-    // When both roots are available, we pick one or the other.
-    EXPECT_EQ(X509_V_OK,
-              Verify(leaf.get(), {cross_signing_root.get(), root.get()},
-                     {intermediate.get(), root_cross_signed.get()}, /*crls=*/{},
-                     /*flags=*/0, configure_callback));
-
-    // This is the “altchains” test – we remove the cross-signing CA but include
-    // the cross-sign in the intermediates. With |trusted_first|, we
-    // preferentially stop path-building at |intermediate|. Without
-    // |trusted_first|, the "altchains" logic repairs it.
-    EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()},
-                                {intermediate.get(), root_cross_signed.get()},
-                                /*crls=*/{}, /*flags=*/0, configure_callback));
-
-    // If |X509_V_FLAG_NO_ALT_CHAINS| is set and |trusted_first| is disabled, we
-    // get stuck on |root_cross_signed|. If either feature is enabled, we can
-    // build the path.
-    //
-    // This test exists to confirm our current behavior, but these modes are
-    // just workarounds for not having an actual path-building verifier. If we
-    // fix it, this test can be removed.
-    EXPECT_EQ(trusted_first ? X509_V_OK
-                            : X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
-              Verify(leaf.get(), {root.get()},
-                     {intermediate.get(), root_cross_signed.get()}, /*crls=*/{},
-                     /*flags=*/X509_V_FLAG_NO_ALT_CHAINS, configure_callback));
-
-    // |forgery| is signed by |leaf_no_key_usage|, but is rejected because the
-    // leaf is not a CA.
-    EXPECT_EQ(X509_V_ERR_INVALID_CA,
-              Verify(forgery.get(), {intermediate_self_signed.get()},
-                     {leaf_no_key_usage.get()}, /*crls=*/{}, /*flags=*/0,
-                     configure_callback));
-
-    // Test that one cannot skip Basic Constraints checking with a contorted set
-    // of roots and intermediates. This is a regression test for CVE-2015-1793.
-    EXPECT_EQ(X509_V_ERR_INVALID_CA,
-              Verify(forgery.get(),
-                     {intermediate_self_signed.get(), root_cross_signed.get()},
-                     {leaf_no_key_usage.get(), intermediate.get()}, /*crls=*/{},
-                     /*flags=*/0, configure_callback));
-
-    // Test depth limits. |configure_callback| looks at |override_depth| and
-    // |depth|. Negative numbers have historically worked, so test those too.
-    for (int d : {-4, -3, -2, -1, 0, 1, 2, 3, 4, INT_MAX - 3, INT_MAX - 2,
-                  INT_MAX - 1, INT_MAX}) {
-      SCOPED_TRACE(d);
-      override_depth = true;
-      depth = d;
-      // A chain with a leaf, two intermediates, and a root is depth two.
-      EXPECT_EQ(
-          depth >= 2 ? X509_V_OK : X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
-          Verify(leaf.get(), {cross_signing_root.get()},
-                 {intermediate.get(), root_cross_signed.get()},
-                 /*crls=*/{}, /*flags=*/0, configure_callback));
-
-      // A chain with a leaf, a root, and no intermediates is depth zero.
-      EXPECT_EQ(
-          depth >= 0 ? X509_V_OK : X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
-          Verify(root_cross_signed.get(), {cross_signing_root.get()}, {},
-                 /*crls=*/{}, /*flags=*/0, configure_callback));
-
-      // An explicitly trusted self-signed certificate is unaffected by depth
-      // checks.
-      EXPECT_EQ(X509_V_OK,
-                Verify(cross_signing_root.get(), {cross_signing_root.get()}, {},
-                       /*crls=*/{}, /*flags=*/0, configure_callback));
+  bool override_depth = false;
+  int depth = -1;
+  auto configure_callback = [&](X509_STORE_CTX *ctx) {
+    X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx);
+    if (override_depth) {
+      X509_VERIFY_PARAM_set_depth(param, depth);
     }
+  };
+
+  // Cannot find a path to a trust anchor.
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
+            Verify(leaf.get(), /*roots=*/{}, /*intermediates=*/{},
+                   /*crls=*/{}, /*flags=*/0, configure_callback));
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
+            Verify(leaf.get(), /*roots=*/{}, {intermediate.get()}, /*crls=*/{},
+                   /*flags=*/0, configure_callback));
+
+  // Sometimes this case gives different error codes.
+  EXPECT_EQ(X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT,
+            Verify(root.get(), /*roots=*/{}, /*intermediates=*/{},
+                   /*crls=*/{}, /*flags=*/0, configure_callback));
+  EXPECT_EQ(X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN,
+            Verify(leaf.get(), /*roots=*/{}, {intermediate.get(), root.get()},
+                   /*crls=*/{},
+                   /*flags=*/0, configure_callback));
+
+  // Each chain works individually.
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {intermediate.get()},
+                              /*crls=*/{}, /*flags=*/0, configure_callback));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {cross_signing_root.get()},
+                              {intermediate.get(), root_cross_signed.get()},
+                              /*crls=*/{}, /*flags=*/0, configure_callback));
+
+  // When both roots are available, we pick one or the other.
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {cross_signing_root.get(), root.get()},
+                   {intermediate.get(), root_cross_signed.get()}, /*crls=*/{},
+                   /*flags=*/0, configure_callback));
+
+  // This is the “altchains” test, which has now been superceded by the
+  // “trusted first” behavior – we remove the cross-signing CA but include the
+  // cross-sign in the intermediates. We preferentially stop path-building at
+  // `intermediate`.
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()},
+                              {intermediate.get(), root_cross_signed.get()},
+                              /*crls=*/{}, /*flags=*/0, configure_callback));
+
+  // `forgery` is signed by `leaf_no_key_usage`, but is rejected because the
+  // leaf is not a CA.
+  EXPECT_EQ(X509_V_ERR_INVALID_CA,
+            Verify(forgery.get(), {intermediate_self_signed.get()},
+                   {leaf_no_key_usage.get()}, /*crls=*/{}, /*flags=*/0,
+                   configure_callback));
+
+  // Test that one cannot skip Basic Constraints checking with a contorted set
+  // of roots and intermediates. This is a regression test for CVE-2015-1793.
+  EXPECT_EQ(X509_V_ERR_INVALID_CA,
+            Verify(forgery.get(),
+                   {intermediate_self_signed.get(), root_cross_signed.get()},
+                   {leaf_no_key_usage.get(), intermediate.get()}, /*crls=*/{},
+                   /*flags=*/0, configure_callback));
+
+  // Test depth limits. `configure_callback` looks at `override_depth` and
+  // `depth`. Negative numbers have historically worked, so test those too.
+  for (int d : {-4, -3, -2, -1, 0, 1, 2, 3, 4, INT_MAX - 3, INT_MAX - 2,
+                INT_MAX - 1, INT_MAX}) {
+    SCOPED_TRACE(d);
+    override_depth = true;
+    depth = d;
+    // A chain with a leaf, two intermediates, and a root is depth two.
+    EXPECT_EQ(depth >= 2 ? X509_V_OK : X509_V_ERR_CERT_CHAIN_TOO_LONG,
+              Verify(leaf.get(), {cross_signing_root.get()},
+                     {intermediate.get(), root_cross_signed.get()},
+                     /*crls=*/{}, /*flags=*/0, configure_callback));
+
+    // A chain with a leaf, a root, and no intermediates is depth zero.
+    EXPECT_EQ(depth >= 0 ? X509_V_OK : X509_V_ERR_CERT_CHAIN_TOO_LONG,
+              Verify(root_cross_signed.get(), {cross_signing_root.get()}, {},
+                     /*crls=*/{}, /*flags=*/0, configure_callback));
+
+    // An explicitly trusted self-signed certificate is unaffected by depth
+    // checks.
+    EXPECT_EQ(X509_V_OK,
+              Verify(cross_signing_root.get(), {cross_signing_root.get()}, {},
+                     /*crls=*/{}, /*flags=*/0, configure_callback));
   }
 }
 
 #if defined(OPENSSL_THREADS)
-// Verifying the same |X509| objects on two threads should be safe.
-TEST(X509Test, VerifyThreads) {
-  bssl::UniquePtr<X509> root(CertFromPEM(kRootCAPEM));
-  bssl::UniquePtr<X509> intermediate(CertFromPEM(kIntermediatePEM));
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
+// Verifying the same `X509` objects on two threads should be safe.
+TEST_P(X509VerifyTest, VerifyThreads) {
+  UniquePtr<X509> root(CertFromPEM(kRootCAPEM));
+  UniquePtr<X509> intermediate(CertFromPEM(kIntermediatePEM));
+  UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
   ASSERT_TRUE(root);
   ASSERT_TRUE(intermediate);
   ASSERT_TRUE(leaf);
@@ -1323,11 +1646,11 @@ TEST(X509Test, VerifyThreads) {
 }
 
 // Using the same CRL on two threads should be safe.
-TEST(X509Test, CRLThreads) {
-  bssl::UniquePtr<X509> root(CertFromPEM(kCRLTestRoot));
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kCRLTestLeaf));
-  bssl::UniquePtr<X509_CRL> basic_crl(CRLFromPEM(kBasicCRL));
-  bssl::UniquePtr<X509_CRL> revoked_crl(CRLFromPEM(kRevokedCRL));
+TEST_P(X509VerifyTest, CRLThreads) {
+  UniquePtr<X509> root(CertFromPEM(kCRLTestRoot));
+  UniquePtr<X509> leaf(CertFromPEM(kCRLTestLeaf));
+  UniquePtr<X509_CRL> basic_crl(CRLFromPEM(kBasicCRL));
+  UniquePtr<X509_CRL> revoked_crl(CRLFromPEM(kRevokedCRL));
   ASSERT_TRUE(root);
   ASSERT_TRUE(leaf);
   ASSERT_TRUE(basic_crl);
@@ -1352,29 +1675,28 @@ TEST(X509Test, CRLThreads) {
   }
 
   // TODO(crbug.com/boringssl/600): Add a thread that iterates
-  // |X509_CRL_get_REVOKED| and a thread that calls |X509_CRL_print|. Those
+  // `X509_CRL_get_REVOKED` and a thread that calls `X509_CRL_print`. Those
   // currently do not work correctly.
 }
 
 TEST(X509Test, StoreThreads) {
-  bssl::UniquePtr<X509> root(CertFromPEM(kRootCAPEM));
-  bssl::UniquePtr<X509> intermediate(CertFromPEM(kIntermediatePEM));
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
+  UniquePtr<X509> root(CertFromPEM(kRootCAPEM));
+  UniquePtr<X509> intermediate(CertFromPEM(kIntermediatePEM));
+  UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
   ASSERT_TRUE(root);
   ASSERT_TRUE(intermediate);
   ASSERT_TRUE(leaf);
 
-  bssl::UniquePtr<STACK_OF(X509)> intermediates =
-      CertsToStack({intermediate.get()});
+  UniquePtr<STACK_OF(X509)> intermediates = CertsToStack({intermediate.get()});
   ASSERT_TRUE(intermediates);
 
   // Some unrelated certificates.
-  bssl::UniquePtr<X509> other1(CertFromPEM(kCRLTestRoot));
-  bssl::UniquePtr<X509> other2(CertFromPEM(kCRLTestLeaf));
+  UniquePtr<X509> other1(CertFromPEM(kCRLTestRoot));
+  UniquePtr<X509> other2(CertFromPEM(kCRLTestLeaf));
   ASSERT_TRUE(other1);
   ASSERT_TRUE(other2);
 
-  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+  UniquePtr<X509_STORE> store(X509_STORE_new());
   ASSERT_TRUE(store);
   ASSERT_TRUE(X509_STORE_add_cert(store.get(), root.get()));
 
@@ -1382,7 +1704,7 @@ TEST(X509Test, StoreThreads) {
   std::vector<std::thread> threads;
   for (size_t i = 0; i < kNumThreads; i++) {
     threads.emplace_back([&] {
-      bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+      UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
       ASSERT_TRUE(ctx);
       ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), leaf.get(),
                                       intermediates.get()));
@@ -1395,7 +1717,7 @@ TEST(X509Test, StoreThreads) {
     threads.emplace_back(
         [&] { ASSERT_TRUE(X509_STORE_add_cert(store.get(), other2.get())); });
     threads.emplace_back([&] {
-      bssl::UniquePtr<STACK_OF(X509_OBJECT)> objs(
+      UniquePtr<STACK_OF(X509_OBJECT)> objs(
           X509_STORE_get1_objects(store.get()));
       ASSERT_TRUE(objs);
     });
@@ -1405,11 +1727,11 @@ TEST(X509Test, StoreThreads) {
   }
 }
 
-// Test that serializing a modified |X509_NAME| object on multiple threads is
-// thread-safe. This historically wasn't because OpenSSL's |X509_NAME| object
+// Test that serializing a modified `X509_NAME` object on multiple threads is
+// thread-safe. This historically wasn't because OpenSSL's `X509_NAME` object
 // maintains a number of caches.
 TEST(X509Test, SerializeModifiedNameThreads) {
-  bssl::UniquePtr<X509_NAME> name(X509_NAME_new());
+  UniquePtr<X509_NAME> name(X509_NAME_new());
   ASSERT_TRUE(name);
   ASSERT_TRUE(
       X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_UTF8,
@@ -1431,13 +1753,13 @@ TEST(X509Test, SerializeModifiedNameThreads) {
   }
 }
 
-// Test that serializing a modified |X509| object on multiple threads is
-// thread-safe. This historically wasn't true because OpenSSL's |X509_NAME|
-// object maintains a number of caches, and because |X509_get_issuer_name| and
-// |X509_get_subject_name| aren't const-correct and allow direct, mutable access
-// to the |X509|'s subject and issuer.
+// Test that serializing a modified `X509` object on multiple threads is
+// thread-safe. This historically wasn't true because OpenSSL's `X509_NAME`
+// object maintains a number of caches, and because `X509_get_issuer_name` and
+// `X509_get_subject_name` aren't const-correct and allow direct, mutable access
+// to the `X509`'s subject and issuer.
 TEST(X509Test, SerializeModifiedCertThreads) {
-  bssl::UniquePtr<X509> cert = CertFromPEM(kLeafPEM);
+  UniquePtr<X509> cert = CertFromPEM(kLeafPEM);
   ASSERT_TRUE(cert);
 
   // Re-encode the TBSCertificate, dropping the cached encoding. As currently
@@ -1456,7 +1778,7 @@ TEST(X509Test, SerializeModifiedCertThreads) {
       /*len=*/-1, /*loc=*/-1, /*set=*/0));
 
   // Now serialize the certificate in parallel. This should be safe to use
-  // across threads. Historically, this would expose the underlying |X509_NAME|
+  // across threads. Historically, this would expose the underlying `X509_NAME`
   // encoder not being thread-safe.
   const size_t kNumThreads = 10;
   std::vector<std::thread> threads;
@@ -1474,18 +1796,18 @@ TEST(X509Test, SerializeModifiedCertThreads) {
 }
 #endif  // OPENSSL_THREADS
 
-static const char kHostname[] = "example.com";
-static const char kWrongHostname[] = "example2.com";
-static const char kEmail[] = "test@example.com";
-static const char kWrongEmail[] = "test2@example.com";
-static const uint8_t kIP[4] = {127, 0, 0, 1};
-static const uint8_t kWrongIP[4] = {127, 0, 0, 2};
-static const char kIPString[] = "127.0.0.1";
-static const char kWrongIPString[] = "127.0.0.2";
+const char kHostname[] = "example.com";
+const char kWrongHostname[] = "example2.com";
+const char kEmail[] = "test@example.com";
+const char kWrongEmail[] = "test2@example.com";
+const uint8_t kIP[4] = {127, 0, 0, 1};
+const uint8_t kWrongIP[4] = {127, 0, 0, 2};
+const char kIPString[] = "127.0.0.1";
+const char kWrongIPString[] = "127.0.0.2";
 
-TEST(X509Test, ZeroLengthsWithX509PARAM) {
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kSANTypesLeaf));
-  bssl::UniquePtr<X509> root(CertFromPEM(kSANTypesRoot));
+TEST_P(X509VerifyTest, ZeroLengthsWithX509PARAM) {
+  UniquePtr<X509> leaf(CertFromPEM(kSANTypesLeaf));
+  UniquePtr<X509> root(CertFromPEM(kSANTypesRoot));
   ASSERT_TRUE(leaf);
   ASSERT_TRUE(root);
 
@@ -1599,11 +1921,11 @@ TEST(X509Test, ZeroLengthsWithX509PARAM) {
                    }));
 
   // Zero bytes in an IP address are, of course, fine. This is tested above
-  // because |kIP| contains zeros.
+  // because `kIP` contains zeros.
 }
 
 TEST(X509Test, ZeroLengthsWithCheckFunctions) {
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kSANTypesLeaf));
+  UniquePtr<X509> leaf(CertFromPEM(kSANTypesLeaf));
   ASSERT_TRUE(leaf);
 
   EXPECT_EQ(
@@ -1632,24 +1954,21 @@ TEST(X509Test, ZeroLengthsWithCheckFunctions) {
   EXPECT_NE(1, X509_check_ip(leaf.get(), kIP, 0, 0));
   EXPECT_NE(1, X509_check_ip(leaf.get(), kWrongIP, 0, 0));
 
-  // Unlike all the other functions, |X509_check_ip_asc| doesn't take a length,
+  // Unlike all the other functions, `X509_check_ip_asc` doesn't take a length,
   // so it cannot be zero.
 }
 
-TEST(X509Test, TestCRL) {
-  bssl::UniquePtr<X509> root(CertFromPEM(kCRLTestRoot));
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kCRLTestLeaf));
-  bssl::UniquePtr<X509_CRL> basic_crl(CRLFromPEM(kBasicCRL));
-  bssl::UniquePtr<X509_CRL> revoked_crl(CRLFromPEM(kRevokedCRL));
-  bssl::UniquePtr<X509_CRL> bad_issuer_crl(CRLFromPEM(kBadIssuerCRL));
-  bssl::UniquePtr<X509_CRL> known_critical_crl(CRLFromPEM(kKnownCriticalCRL));
-  bssl::UniquePtr<X509_CRL> unknown_critical_crl(
-      CRLFromPEM(kUnknownCriticalCRL));
-  bssl::UniquePtr<X509_CRL> unknown_critical_crl2(
-      CRLFromPEM(kUnknownCriticalCRL2));
-  bssl::UniquePtr<X509_CRL> algorithm_mismatch_crl(
-      CRLFromPEM(kAlgorithmMismatchCRL));
-  bssl::UniquePtr<X509_CRL> algorithm_mismatch_crl2(
+TEST_P(X509VerifyTest, TestCRL) {
+  UniquePtr<X509> root(CertFromPEM(kCRLTestRoot));
+  UniquePtr<X509> leaf(CertFromPEM(kCRLTestLeaf));
+  UniquePtr<X509_CRL> basic_crl(CRLFromPEM(kBasicCRL));
+  UniquePtr<X509_CRL> revoked_crl(CRLFromPEM(kRevokedCRL));
+  UniquePtr<X509_CRL> bad_issuer_crl(CRLFromPEM(kBadIssuerCRL));
+  UniquePtr<X509_CRL> known_critical_crl(CRLFromPEM(kKnownCriticalCRL));
+  UniquePtr<X509_CRL> unknown_critical_crl(CRLFromPEM(kUnknownCriticalCRL));
+  UniquePtr<X509_CRL> unknown_critical_crl2(CRLFromPEM(kUnknownCriticalCRL2));
+  UniquePtr<X509_CRL> algorithm_mismatch_crl(CRLFromPEM(kAlgorithmMismatchCRL));
+  UniquePtr<X509_CRL> algorithm_mismatch_crl2(
       CRLFromPEM(kAlgorithmMismatchCRL2));
 
   ASSERT_TRUE(root);
@@ -1714,34 +2033,43 @@ TEST(X509Test, TestCRL) {
   EXPECT_EQ(X509_V_ERR_INVALID_CALL,
             Verify(leaf.get(), {root.get()}, {root.get()}, {basic_crl.get()},
                    X509_V_FLAG_CRL_CHECK | X509_V_FLAG_EXTENDED_CRL_SUPPORT));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{std::nullopt, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
   EXPECT_EQ(X509_V_ERR_INVALID_CALL,
             Verify(leaf.get(), {root.get()}, {root.get()}, {basic_crl.get()},
                    X509_V_FLAG_CRL_CHECK | X509_V_FLAG_USE_DELTAS));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{std::nullopt, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
 
   // Parsing kBadExtensionCRL should fail.
   EXPECT_FALSE(CRLFromPEM(kBadExtensionCRL));
+  EXPECT_TRUE(ErrorsAreAndClear({
+      {ERR_LIB_ASN1, ASN1_R_SEQUENCE_LENGTH_MISMATCH},
+      {ERR_LIB_ASN1, ASN1_R_AUX_ERROR},
+      {ERR_LIB_PEM, std::nullopt},
+  }));
 }
 
-TEST(X509Test, ManyNamesAndConstraints) {
-  bssl::UniquePtr<X509> many_constraints(
+TEST_P(X509VerifyTest, ManyNamesAndConstraints) {
+  UniquePtr<X509> many_constraints(
       CertFromPEM(GetTestData("crypto/x509/test/many_constraints.pem")));
   ASSERT_TRUE(many_constraints);
-  bssl::UniquePtr<X509> many_names1(
+  UniquePtr<X509> many_names1(
       CertFromPEM(GetTestData("crypto/x509/test/many_names1.pem")));
   ASSERT_TRUE(many_names1);
-  bssl::UniquePtr<X509> many_names2(
+  UniquePtr<X509> many_names2(
       CertFromPEM(GetTestData("crypto/x509/test/many_names2.pem")));
   ASSERT_TRUE(many_names2);
-  bssl::UniquePtr<X509> many_names3(
+  UniquePtr<X509> many_names3(
       CertFromPEM(GetTestData("crypto/x509/test/many_names3.pem")));
   ASSERT_TRUE(many_names3);
-  bssl::UniquePtr<X509> some_names1(
+  UniquePtr<X509> some_names1(
       CertFromPEM(GetTestData("crypto/x509/test/some_names1.pem")));
   ASSERT_TRUE(some_names1);
-  bssl::UniquePtr<X509> some_names2(
+  UniquePtr<X509> some_names2(
       CertFromPEM(GetTestData("crypto/x509/test/some_names2.pem")));
   ASSERT_TRUE(some_names2);
-  bssl::UniquePtr<X509> some_names3(
+  UniquePtr<X509> some_names3(
       CertFromPEM(GetTestData("crypto/x509/test/some_names3.pem")));
   ASSERT_TRUE(some_names3);
 
@@ -1763,14 +2091,14 @@ TEST(X509Test, ManyNamesAndConstraints) {
                               {many_constraints.get()}, {}));
 }
 
-static bssl::UniquePtr<GENERAL_NAME> MakeGeneralName(int type,
-                                                     std::string_view value) {
+bssl::UniquePtr<GENERAL_NAME> MakeGeneralName(int type,
+                                              std::string_view value) {
   if (type != GEN_EMAIL && type != GEN_DNS && type != GEN_URI) {
     // This function only supports the IA5String types.
     return nullptr;
   }
-  bssl::UniquePtr<ASN1_IA5STRING> str(ASN1_IA5STRING_new());
-  bssl::UniquePtr<GENERAL_NAME> name(GENERAL_NAME_new());
+  UniquePtr<ASN1_IA5STRING> str(ASN1_IA5STRING_new());
+  UniquePtr<GENERAL_NAME> name(GENERAL_NAME_new());
   if (!str || !name ||
       !ASN1_STRING_set(str.get(), value.data(), value.size())) {
     return nullptr;
@@ -1781,9 +2109,9 @@ static bssl::UniquePtr<GENERAL_NAME> MakeGeneralName(int type,
   return name;
 }
 
-static bssl::UniquePtr<X509_NAME> MakeTestName(std::string_view common_name) {
-  auto bytes = bssl::StringAsBytes(common_name);
-  bssl::UniquePtr<X509_NAME> name(X509_NAME_new());
+bssl::UniquePtr<X509_NAME> MakeTestName(std::string_view common_name) {
+  auto bytes = StringAsBytes(common_name);
+  UniquePtr<X509_NAME> name(X509_NAME_new());
   if (name == nullptr ||
       !X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_UTF8, bytes.data(),
                                   bytes.size(), -1, 0)) {
@@ -1792,17 +2120,19 @@ static bssl::UniquePtr<X509_NAME> MakeTestName(std::string_view common_name) {
   return name;
 }
 
-static bssl::UniquePtr<X509> MakeTestCert(std::string_view issuer,
-                                          std::string_view subject, EVP_PKEY *key,
-                                          bool is_ca) {
-  bssl::UniquePtr<X509_NAME> issuer_name = MakeTestName(issuer);
-  bssl::UniquePtr<X509_NAME> subject_name = MakeTestName(subject);
-  bssl::UniquePtr<X509> cert(X509_new());
-  bssl::UniquePtr<ASN1_INTEGER> serial(ASN1_INTEGER_new());
+// kTestCertSerial is the serial number of certificates made by `MakeTestCert`.
+const uint64_t kTestCertSerial = 42;
+
+bssl::UniquePtr<X509> MakeTestCert(
+    std::string_view issuer, std::string_view subject, const EVP_PKEY *key,
+    bool is_ca, std::optional<int64_t> pathlen = std::nullopt) {
+  UniquePtr<X509_NAME> issuer_name = MakeTestName(issuer);
+  UniquePtr<X509_NAME> subject_name = MakeTestName(subject);
+  UniquePtr<X509> cert(X509_new());
+  UniquePtr<ASN1_INTEGER> serial = ASN1IntegerFromU64(kTestCertSerial);
   if (issuer_name == nullptr || subject_name == nullptr || cert == nullptr ||
       serial == nullptr ||  //
       !X509_set_version(cert.get(), X509_VERSION_3) ||
-      !ASN1_INTEGER_set_uint64(serial.get(), 42) ||
       !X509_set_serialNumber(cert.get(), serial.get()) ||
       !X509_set_issuer_name(cert.get(), issuer_name.get()) ||
       !X509_set_subject_name(cert.get(), subject_name.get()) ||
@@ -1811,11 +2141,18 @@ static bssl::UniquePtr<X509> MakeTestCert(std::string_view issuer,
       !ASN1_TIME_adj(X509_getm_notAfter(cert.get()), kReferenceTime, 1, 0)) {
     return nullptr;
   }
-  bssl::UniquePtr<BASIC_CONSTRAINTS> bc(BASIC_CONSTRAINTS_new());
+  UniquePtr<BASIC_CONSTRAINTS> bc(BASIC_CONSTRAINTS_new());
   if (!bc) {
     return nullptr;
   }
   bc->ca = is_ca ? ASN1_BOOLEAN_TRUE : ASN1_BOOLEAN_FALSE;
+  if (pathlen.has_value()) {
+    bc->pathlen = ASN1_INTEGER_new();
+    if (bc->pathlen == nullptr ||
+        !ASN1_INTEGER_set_int64(bc->pathlen, *pathlen)) {
+      return nullptr;
+    }
+  }
   if (!X509_add1_ext_i2d(cert.get(), NID_basic_constraints, bc.get(),
                          /*crit=*/1, /*flags=*/0)) {
     return nullptr;
@@ -1823,8 +2160,8 @@ static bssl::UniquePtr<X509> MakeTestCert(std::string_view issuer,
   return cert;
 }
 
-static bool AddExtendedKeyUsage(X509 *x509, const std::vector<int> &eku_nids) {
-  bssl::UniquePtr<STACK_OF(ASN1_OBJECT)> objs(sk_ASN1_OBJECT_new_null());
+bool AddExtendedKeyUsage(X509 *x509, const std::vector<int> &eku_nids) {
+  UniquePtr<STACK_OF(ASN1_OBJECT)> objs(sk_ASN1_OBJECT_new_null());
   if (objs == nullptr) {
     return false;
   }
@@ -1849,8 +2186,8 @@ enum class KeyUsage : int {
   kDecipherOnly = 8,
 };
 
-static bool AddKeyUsage(X509 *x509, const std::vector<KeyUsage> usages) {
-  bssl::UniquePtr<ASN1_BIT_STRING> str(ASN1_BIT_STRING_new());
+bool AddKeyUsage(X509 *x509, const std::vector<KeyUsage> usages) {
+  UniquePtr<ASN1_BIT_STRING> str(ASN1_BIT_STRING_new());
   if (str == nullptr) {
     return false;
   }
@@ -1863,18 +2200,16 @@ static bool AddKeyUsage(X509 *x509, const std::vector<KeyUsage> usages) {
                            /*flags=*/0);
 }
 
-static bool AddSubjectKeyIdentifier(X509 *x509,
-                                    bssl::Span<const uint8_t> key_id) {
-  bssl::UniquePtr<ASN1_OCTET_STRING> oct(ASN1_OCTET_STRING_new());
+bool AddSubjectKeyIdentifier(X509 *x509, Span<const uint8_t> key_id) {
+  UniquePtr<ASN1_OCTET_STRING> oct(ASN1_OCTET_STRING_new());
   return oct != nullptr &&
          ASN1_STRING_set(oct.get(), key_id.data(), key_id.size()) &&
          X509_add1_ext_i2d(x509, NID_subject_key_identifier, oct.get(),
                            /*crit=*/0, /*flags=*/0);
 }
 
-static bool AddAuthorityKeyIdentifier(X509 *x509,
-                                      bssl::Span<const uint8_t> key_id) {
-  bssl::UniquePtr<AUTHORITY_KEYID> akid(AUTHORITY_KEYID_new());
+bool AddAuthorityKeyIdentifier(X509 *x509, Span<const uint8_t> key_id) {
+  UniquePtr<AUTHORITY_KEYID> akid(AUTHORITY_KEYID_new());
   if (akid == nullptr) {
     return false;
   }
@@ -1888,14 +2223,132 @@ static bool AddAuthorityKeyIdentifier(X509 *x509,
   return true;
 }
 
-static bssl::UniquePtr<X509_CRL> MakeTestCRL(std::string_view issuer,
-                                             int this_update_offset_day,
-                                             int next_update_offset_day) {
-  bssl::UniquePtr<X509_NAME> issuer_name = MakeTestName(issuer);
-  bssl::UniquePtr<X509_CRL> crl(X509_CRL_new());
-  bssl::UniquePtr<ASN1_TIME> this_update(ASN1_TIME_adj(
+// MakeFullDistPointName returns a `DIST_POINT_NAME` with a fullName of `uris`,
+// or nullptr on error.
+UniquePtr<DIST_POINT_NAME> MakeFullDistPointName(
+    const std::vector<std::string_view> &uris) {
+  UniquePtr<DIST_POINT_NAME> dpn(DIST_POINT_NAME_new());
+  UniquePtr<GENERAL_NAMES> names(GENERAL_NAMES_new());
+  if (dpn == nullptr || names == nullptr) {
+    return nullptr;
+  }
+  for (std::string_view uri : uris) {
+    UniquePtr<GENERAL_NAME> name = MakeGeneralName(GEN_URI, uri);
+    if (name == nullptr || !PushToStack(names.get(), std::move(name))) {
+      return nullptr;
+    }
+  }
+  dpn->type = 0;
+  dpn->name.fullname = names.release();
+  return dpn;
+}
+
+// MakeFullDistPointNameDirectory returns a `DIST_POINT_NAME` with a fullName of
+// a single directoryName, `name`, or nullptr on error.
+UniquePtr<DIST_POINT_NAME> MakeFullDistPointNameDirectory(
+    const X509_NAME *name) {
+  UniquePtr<DIST_POINT_NAME> dpn(DIST_POINT_NAME_new());
+  UniquePtr<GENERAL_NAMES> names(GENERAL_NAMES_new());
+  UniquePtr<GENERAL_NAME> gen(GENERAL_NAME_new());
+  if (dpn == nullptr || names == nullptr || gen == nullptr) {
+    return nullptr;
+  }
+  gen->type = GEN_DIRNAME;
+  gen->d.directoryName = X509_NAME_dup(name);
+  if (gen->d.directoryName == nullptr ||
+      !PushToStack(names.get(), std::move(gen))) {
+    return nullptr;
+  }
+  dpn->type = 0;
+  dpn->name.fullname = names.release();
+  return dpn;
+}
+
+// MakeRelativeDistPointName returns a `DIST_POINT_NAME` with a
+// nameRelativeToCRLIssuer of a single commonName attribute with value
+// `common_name`, or nullptr on error.
+UniquePtr<DIST_POINT_NAME> MakeRelativeDistPointName(
+    std::string_view common_name) {
+  auto bytes = StringAsBytes(common_name);
+  UniquePtr<DIST_POINT_NAME> dpn(DIST_POINT_NAME_new());
+  UniquePtr<STACK_OF(X509_NAME_ENTRY)> entries(sk_X509_NAME_ENTRY_new_null());
+  UniquePtr<X509_NAME_ENTRY> entry(X509_NAME_ENTRY_create_by_NID(
+      /*out=*/nullptr, NID_commonName, MBSTRING_UTF8, bytes.data(),
+      bytes.size()));
+  if (dpn == nullptr || entries == nullptr || entry == nullptr ||
+      !PushToStack(entries.get(), std::move(entry))) {
+    return nullptr;
+  }
+  dpn->type = 1;
+  dpn->name.relativename = entries.release();
+  return dpn;
+}
+
+// Bit positions for the ReasonFlags BIT STRING type. These are not same as
+// `CRL_REASON_*` constants, which are values for CRLReason ENUMERATED type.
+enum class ReasonFlag {
+  kKeyCompromise = 1,
+  kCACompromise = 2,
+  kAffiliationChanged = 3,
+  kSuperseded = 4,
+  kCessationOfOperation = 5,
+  kCertificateHold = 6,
+  kPrivilegeWithdrawn = 7,
+  kAACompromise = 8,
+};
+
+struct DistributionPoint {
+  UniquePtr<DIST_POINT_NAME> name;
+  std::vector<ReasonFlag> reasons;
+};
+
+// MakeDistributionPoint returns a `DIST_POINT` with distributionPoint
+// `distpoint`, or nullptr on error. If `reasons` is non-empty, the
+// DistributionPoint is additionally scoped to those reason codes.
+UniquePtr<DIST_POINT> MakeDistributionPoint(
+    UniquePtr<DIST_POINT_NAME> distpoint,
+    const std::vector<ReasonFlag> &reasons = {}) {
+  UniquePtr<DIST_POINT> dp(DIST_POINT_new());
+  if (dp == nullptr || distpoint == nullptr) {
+    return nullptr;
+  }
+  dp->distpoint = distpoint.release();
+  if (!reasons.empty()) {
+    dp->reasons = ASN1_BIT_STRING_new();
+    if (dp->reasons == nullptr) {
+      return nullptr;
+    }
+    for (ReasonFlag reason : reasons) {
+      if (!ASN1_BIT_STRING_set_bit(dp->reasons, static_cast<int>(reason), 1)) {
+        return nullptr;
+      }
+    }
+  }
+  return dp;
+}
+
+bool AddCRLDistributionPoints(X509 *x509, Span<UniquePtr<DIST_POINT>> dps) {
+  UniquePtr<CRL_DIST_POINTS> crldp(CRL_DIST_POINTS_new());
+  if (crldp == nullptr) {
+    return false;
+  }
+  for (auto &dp : dps) {
+    if (dp == nullptr || !PushToStack(crldp.get(), std::move(dp))) {
+      return false;
+    }
+  }
+  return X509_add1_ext_i2d(x509, NID_crl_distribution_points, crldp.get(),
+                           /*crit=*/0, /*flags=*/0);
+}
+
+bssl::UniquePtr<X509_CRL> MakeTestCRL(std::string_view issuer,
+                                      int this_update_offset_day,
+                                      int next_update_offset_day) {
+  UniquePtr<X509_NAME> issuer_name = MakeTestName(issuer);
+  UniquePtr<X509_CRL> crl(X509_CRL_new());
+  UniquePtr<ASN1_TIME> this_update(ASN1_TIME_adj(
       nullptr, kReferenceTime, this_update_offset_day, /*offset_sec=*/0));
-  bssl::UniquePtr<ASN1_TIME> next_update(ASN1_TIME_adj(
+  UniquePtr<ASN1_TIME> next_update(ASN1_TIME_adj(
       nullptr, kReferenceTime, next_update_offset_day, /*offset_sec=*/0));
   if (crl == nullptr || issuer_name == nullptr || this_update == nullptr ||
       next_update == nullptr ||
@@ -1910,14 +2363,12 @@ static bssl::UniquePtr<X509_CRL> MakeTestCRL(std::string_view issuer,
   return crl;
 }
 
-static bool AddRevokedSerialU64(X509_CRL *crl, uint64_t serial,
-                                int offset_day) {
-  bssl::UniquePtr<X509_REVOKED> rev(X509_REVOKED_new());
-  bssl::UniquePtr<ASN1_INTEGER> serial_asn1(ASN1_INTEGER_new());
-  bssl::UniquePtr<ASN1_TIME> rev_date(
+bool AddRevokedSerialU64(X509_CRL *crl, uint64_t serial, int offset_day) {
+  UniquePtr<X509_REVOKED> rev(X509_REVOKED_new());
+  UniquePtr<ASN1_INTEGER> serial_asn1 = ASN1IntegerFromU64(serial);
+  UniquePtr<ASN1_TIME> rev_date(
       ASN1_TIME_adj(nullptr, kReferenceTime, offset_day, /*offset_sec=*/0));
   if (rev == nullptr || serial_asn1 == nullptr || rev_date == nullptr ||
-      !ASN1_INTEGER_set_uint64(serial_asn1.get(), serial) ||
       !X509_REVOKED_set_serialNumber(rev.get(), serial_asn1.get()) ||
       !X509_REVOKED_set_revocationDate(rev.get(), rev_date.get()) ||
       !X509_CRL_add0_revoked(crl, rev.get())) {
@@ -1927,9 +2378,8 @@ static bool AddRevokedSerialU64(X509_CRL *crl, uint64_t serial,
   return true;
 }
 
-static bool AddAuthorityKeyIdentifier(X509_CRL *crl,
-                                      bssl::Span<const uint8_t> key_id) {
-  bssl::UniquePtr<AUTHORITY_KEYID> akid(AUTHORITY_KEYID_new());
+bool AddAuthorityKeyIdentifier(X509_CRL *crl, Span<const uint8_t> key_id) {
+  UniquePtr<AUTHORITY_KEYID> akid(AUTHORITY_KEYID_new());
   if (akid == nullptr) {
     return false;
   }
@@ -1943,15 +2393,41 @@ static bool AddAuthorityKeyIdentifier(X509_CRL *crl,
   return true;
 }
 
-TEST(X509Test, NameConstraints) {
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+bool AddIssuingDistributionPoint(X509_CRL *crl,
+                                 UniquePtr<DIST_POINT_NAME> distpoint,
+                                 bool only_user = false, bool only_ca = false) {
+  UniquePtr<ISSUING_DIST_POINT> idp(ISSUING_DIST_POINT_new());
+  if (idp == nullptr) {
+    return false;
+  }
+  idp->distpoint = distpoint.release();
+  idp->onlyuser = only_user ? ASN1_BOOLEAN_TRUE : ASN1_BOOLEAN_FALSE;
+  idp->onlyCA = only_ca ? ASN1_BOOLEAN_TRUE : ASN1_BOOLEAN_FALSE;
+  return X509_CRL_add1_ext_i2d(crl, NID_issuing_distribution_point, idp.get(),
+                               /*crit=*/1, /*flags=*/0);
+}
+
+TEST_P(X509VerifyTest, NameConstraints) {
+  enum class SpecialCase {
+    // The constraint as excludedSubtrees is the opposite of permittedSubtrees.
+    kNormal,
+
+    // The constraint always fails as excludedSubtrees.
+    kExcludedViolation,
+
+    // The constraint fails as excludedSubtrees when the name is a DN attribute.
+    kExcludedViolationIfDNAttribute,
+  };
+
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
   const struct {
     int type;
     std::string name;
     std::string constraint;
-    int result;
+    int permit_result;
+    SpecialCase special_case = SpecialCase::kNormal;
   } kTests[] = {
       // Empty string matches everything.
       {GEN_DNS, "foo.example.com", "", X509_V_OK},
@@ -1971,17 +2447,58 @@ TEST(X509Test, NameConstraints) {
        X509_V_ERR_PERMITTED_VIOLATION},
       {GEN_DNS, "foo.example.com", ".unrelated.much.longer.name.example",
        X509_V_ERR_PERMITTED_VIOLATION},
+      // Trailing dot is ignored.
+      {GEN_DNS, "foo.example.com.", "example.com", X509_V_OK},
+      {GEN_DNS, "foo.example.com", "example.com.", X509_V_OK},
       // NUL bytes, if not rejected, should not confuse the matching logic.
       {GEN_DNS, std::string({'a', '\0', 'a'}), std::string({'a', '\0', 'b'}),
        X509_V_ERR_PERMITTED_VIOLATION},
 
+      // Wildcard CN matching.
+      {GEN_DNS, "*.com", "foo.example.com", X509_V_ERR_PERMITTED_VIOLATION},
+      // A foo.example.com permitted subtree does not permit *.example.com.
+      // However, a foo.example.com excluded subtree does exclude *.example.com
+      // because there is a partial overlap between the two.
+      {GEN_DNS, "*.example.com", "foo.example.com",
+       X509_V_ERR_PERMITTED_VIOLATION, SpecialCase::kExcludedViolation},
+      {GEN_DNS, "*.foo.example.com", "foo.example.com", X509_V_OK},
+      {GEN_DNS, "*.sub.foo.example.com", "foo.example.com", X509_V_OK},
+      {GEN_DNS, "*.bar.example.com", "foo.example.com",
+       X509_V_ERR_PERMITTED_VIOLATION},
+      {GEN_DNS, "*.example.com", "net", X509_V_ERR_PERMITTED_VIOLATION},
+      {GEN_DNS, "*.example.com", "com", X509_V_OK},
+
       // Names must be emails.
       {GEN_EMAIL, "not-an-email.example", "not-an-email.example",
        X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
-      // A leading dot matches all local names and all subdomains
+      {GEN_EMAIL, "not@an@email.example", "an@email.example",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_EMAIL, "not@an@email.example", "email.example",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_EMAIL, "not-an-email.example@", "not-an-email.example@",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_EMAIL, "not-an-email.example@", "@",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_EMAIL, "not-an-email.example@", "",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      // Only ASCII emails are supported.
+      {GEN_EMAIL, "bäd-chäräcter@not-an-email.example", "not-an-email.example",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      // Quoting is not supported.
+      {GEN_EMAIL, "\"foo\"@not-an-email.example", "foo@not-an-email.example",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_EMAIL, "foo@not-an-email.example", "\"foo\"@not-an-email.example",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+
+      // A leading dot matches all local names and all subdomains, but not the
+      // domain itself.
       {GEN_EMAIL, "foo@bar.example.com", ".example.com", X509_V_OK},
       {GEN_EMAIL, "foo@bar.example.com", ".EXAMPLE.COM", X509_V_OK},
       {GEN_EMAIL, "foo@bar.example.com", ".bar.example.com",
+       X509_V_ERR_PERMITTED_VIOLATION},
+      {GEN_EMAIL, "foo@bar.example.com", "foo@.example.com",
+       X509_V_ERR_PERMITTED_VIOLATION},
+      {GEN_EMAIL, "foo@bar.example.com", "foo@.bar.example.com",
        X509_V_ERR_PERMITTED_VIOLATION},
       // Without a leading dot, the host must match exactly.
       {GEN_EMAIL, "foo@example.com", "example.com", X509_V_OK},
@@ -1989,18 +2506,24 @@ TEST(X509Test, NameConstraints) {
       {GEN_EMAIL, "foo@bar.example.com", "example.com",
        X509_V_ERR_PERMITTED_VIOLATION},
       // If the constraint specifies a mailbox, it specifies the whole thing.
-      // The halves are compared insensitively.
+      // The localpart is usually handled case-sensitively, the domainpart
+      // case-insensitively.
       {GEN_EMAIL, "foo@example.com", "foo@example.com", X509_V_OK},
       {GEN_EMAIL, "foo@example.com", "foo@EXAMPLE.COM", X509_V_OK},
+      // In the special case of the email being supplied as a DN attribute,
+      // compare the localpart case-insensitively too, but for exclusions only.
       {GEN_EMAIL, "foo@example.com", "FOO@example.com",
-       X509_V_ERR_PERMITTED_VIOLATION},
+       X509_V_ERR_PERMITTED_VIOLATION,
+       SpecialCase::kExcludedViolationIfDNAttribute},
       {GEN_EMAIL, "foo@example.com", "bar@example.com",
        X509_V_ERR_PERMITTED_VIOLATION},
-      // OpenSSL ignores a stray leading @.
-      {GEN_EMAIL, "foo@example.com", "@example.com", X509_V_OK},
-      {GEN_EMAIL, "foo@example.com", "@EXAMPLE.COM", X509_V_OK},
+      // OpenSSL ignores a stray leading @. BoringSSL does not.
+      {GEN_EMAIL, "foo@example.com", "@example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_EMAIL, "foo@example.com", "@EXAMPLE.COM",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
       {GEN_EMAIL, "foo@bar.example.com", "@example.com",
-       X509_V_ERR_PERMITTED_VIOLATION},
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
 
       // Basic syntax check.
       {GEN_URI, "not-a-url", "not-a-url", X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
@@ -2013,10 +2536,47 @@ TEST(X509Test, NameConstraints) {
       {GEN_URI, "foo://:not-a-url", "not-a-url",
        X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
       {GEN_URI, "foo://", "not-a-url", X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      // Reject URIs with userinfo.
+      {GEN_URI, "foo://username:password@example.com/whatever", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://username@example.com/whatever", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://@example.com/whatever", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://misleading.com:443@example.com/whatever",
+       "misleading.com", X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://misleading.com:443@", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      // Reject IP addresses.
+      {GEN_URI, "foo://123.45.67.89", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://0xde.0xad.0xbe.0xef", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://example.com.0x", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://example.com.0xca", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://[1234:5678:90ab::1]", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      // Don't reject domain names whose final component consists of hex digits.
+      {GEN_URI, "foo://0xde.0xad.0xbe.ef", ".0xbe.ef", X509_V_OK},
+      // Port number, if present, must contain only digits.
+      {GEN_URI, "foo://example.com:a443", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      // Empty host is a syntax error.
+      {GEN_URI, "foo://", "example.com", X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo:///whatever", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://:443", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://.:443", "example.com",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
       // Hosts are an exact match.
       {GEN_URI, "foo://example.com", "example.com", X509_V_OK},
       {GEN_URI, "foo://example.com:443", "example.com", X509_V_OK},
       {GEN_URI, "foo://example.com/whatever", "example.com", X509_V_OK},
+      {GEN_URI, "foo://example.com?query", "example.com", X509_V_OK},
+      {GEN_URI, "foo://example.com#fragment", "example.com", X509_V_OK},
       {GEN_URI, "foo://bar.example.com", "example.com",
        X509_V_ERR_PERMITTED_VIOLATION},
       {GEN_URI, "foo://bar.example.com:443", "example.com",
@@ -2057,54 +2617,131 @@ TEST(X509Test, NameConstraints) {
        X509_V_ERR_PERMITTED_VIOLATION},
       {GEN_URI, "foo://example.com/whatever", ".xample.com",
        X509_V_ERR_PERMITTED_VIOLATION},
+      // Allow a single trailing dot representing the DNS common root.
+      {GEN_URI, "foo://bar.example.com.", ".example.com", X509_V_OK},
+      {GEN_URI, "foo://bar.example.com.", ".example.com.", X509_V_OK},
+      {GEN_URI, "foo://bar.example.com", ".example.com.", X509_V_OK},
+      {GEN_URI, "foo://bar.example.com.:443", ".example.com.", X509_V_OK},
+      {GEN_URI, "foo://bar.example.com", "bar.example.com.", X509_V_OK},
+      // Multiple trailing dots, or empty labels, are not allowed.
+      {GEN_URI, "foo://bar.example.com..", ".example.com.",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://bar..example.com.", ".example.com.",
+       X509_V_ERR_UNSUPPORTED_NAME_SYNTAX},
+      {GEN_URI, "foo://bar.example.com.", ".example.com..",
+       X509_V_ERR_UNSUPPORTED_CONSTRAINT_SYNTAX},
+      {GEN_URI, "foo://bar.example.com.", ".example..com.",
+       X509_V_ERR_UNSUPPORTED_CONSTRAINT_SYNTAX},
+      // Test name constraint parsing. The URI name constraint should be a valid
+      // FQDN.
+      {GEN_URI, "foo://example.com", "..example.com",
+       X509_V_ERR_UNSUPPORTED_CONSTRAINT_SYNTAX},
+      {GEN_URI, "foo://example.com:443", "example.com:443",
+       X509_V_ERR_UNSUPPORTED_CONSTRAINT_SYNTAX},
   };
   for (const auto &t : kTests) {
     SCOPED_TRACE(t.type);
     SCOPED_TRACE(t.name);
     SCOPED_TRACE(t.constraint);
 
-    bssl::UniquePtr<GENERAL_NAME> name = MakeGeneralName(t.type, t.name);
-    ASSERT_TRUE(name);
-    bssl::UniquePtr<GENERAL_NAMES> names(GENERAL_NAMES_new());
-    ASSERT_TRUE(names);
-    ASSERT_TRUE(bssl::PushToStack(names.get(), std::move(name)));
+    for (bool use_attr : {false, true}) {
+      SCOPED_TRACE(use_attr);
+      if (use_attr) {
+        if (t.type != GEN_EMAIL) {
+          // DN attribute is only supported for emails.
+          continue;
+        }
+      }
+      for (bool exclude : {false, true}) {
+        SCOPED_TRACE(exclude);
 
-    bssl::UniquePtr<NAME_CONSTRAINTS> nc(NAME_CONSTRAINTS_new());
-    ASSERT_TRUE(nc);
-    nc->permittedSubtrees = sk_GENERAL_SUBTREE_new_null();
-    ASSERT_TRUE(nc->permittedSubtrees);
-    bssl::UniquePtr<GENERAL_SUBTREE> subtree(GENERAL_SUBTREE_new());
-    ASSERT_TRUE(subtree);
-    GENERAL_NAME_free(subtree->base);
-    subtree->base = MakeGeneralName(t.type, t.constraint).release();
-    ASSERT_TRUE(subtree->base);
-    ASSERT_TRUE(bssl::PushToStack(nc->permittedSubtrees, std::move(subtree)));
+        UniquePtr<GENERAL_NAME> name = MakeGeneralName(t.type, t.name);
+        ASSERT_TRUE(name);
+        UniquePtr<GENERAL_NAMES> names(GENERAL_NAMES_new());
+        ASSERT_TRUE(names);
+        ASSERT_TRUE(PushToStack(names.get(), std::move(name)));
 
-    bssl::UniquePtr<X509> root =
-        MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
-    ASSERT_TRUE(root);
-    ASSERT_TRUE(X509_add1_ext_i2d(root.get(), NID_name_constraints, nc.get(),
-                                  /*crit=*/1, /*flags=*/0));
-    ASSERT_TRUE(X509_sign(root.get(), key.get(), EVP_sha256()));
+        UniquePtr<NAME_CONSTRAINTS> nc(NAME_CONSTRAINTS_new());
+        ASSERT_TRUE(nc);
+        STACK_OF(GENERAL_SUBTREE) **rule =
+            exclude ? &nc->excludedSubtrees : &nc->permittedSubtrees;
+        *rule = sk_GENERAL_SUBTREE_new_null();
+        ASSERT_TRUE(*rule);
+        UniquePtr<GENERAL_SUBTREE> subtree(GENERAL_SUBTREE_new());
+        ASSERT_TRUE(subtree);
+        GENERAL_NAME_free(subtree->base);
+        subtree->base = MakeGeneralName(t.type, t.constraint).release();
+        ASSERT_TRUE(subtree->base);
+        ASSERT_TRUE(PushToStack(*rule, std::move(subtree)));
 
-    bssl::UniquePtr<X509> leaf =
-        MakeTestCert("Root", "Leaf", key.get(), /*is_ca=*/false);
-    ASSERT_TRUE(leaf);
-    ASSERT_TRUE(X509_add1_ext_i2d(leaf.get(), NID_subject_alt_name, names.get(),
-                                  /*crit=*/0, /*flags=*/0));
-    ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+        UniquePtr<X509> root =
+            MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
+        ASSERT_TRUE(root);
+        ASSERT_TRUE(X509_add1_ext_i2d(root.get(), NID_name_constraints,
+                                      nc.get(),
+                                      /*crit=*/1, /*flags=*/0));
+        ASSERT_TRUE(X509_sign(root.get(), key.get(), EVP_sha256()));
 
-    int ret = Verify(leaf.get(), {root.get()}, {}, {}, 0);
-    EXPECT_EQ(t.result, ret) << X509_verify_cert_error_string(ret);
+        UniquePtr<X509> leaf =
+            MakeTestCert("Root", "Leaf", key.get(), /*is_ca=*/false);
+        ASSERT_TRUE(leaf);
+        if (use_attr) {
+          UniquePtr<X509_NAME> subject(X509_NAME_new());
+          ASSERT_TRUE(subject);
+          ASSERT_TRUE(X509_NAME_add_entry_by_NID(
+              subject.get(), NID_pkcs9_emailAddress, V_ASN1_IA5STRING,
+              reinterpret_cast<const unsigned char *>(t.name.data()),
+              t.name.size(), /*loc=*/-1, /*set=*/0));
+          ASSERT_TRUE(X509_set_subject_name(leaf.get(), subject.get()));
+        } else {
+          ASSERT_TRUE(X509_add1_ext_i2d(leaf.get(), NID_subject_alt_name,
+                                        names.get(),
+                                        /*crit=*/0, /*flags=*/0));
+        }
+        ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+        int got_result = Verify(leaf.get(), {root.get()}, {}, {}, 0);
+
+        int want_result = t.permit_result;
+        if (exclude) {
+          // By default, invert the sense when excluding.
+          switch (t.permit_result) {
+            case X509_V_OK:
+              want_result = X509_V_ERR_EXCLUDED_VIOLATION;
+              break;
+            case X509_V_ERR_PERMITTED_VIOLATION:
+              want_result = X509_V_OK;
+              break;
+          }
+
+          // Handle special cases.
+          switch (t.special_case) {
+            case SpecialCase::kExcludedViolation:
+              want_result = X509_V_ERR_EXCLUDED_VIOLATION;
+              break;
+            case SpecialCase::kExcludedViolationIfDNAttribute:
+              if (use_attr) {
+                want_result = X509_V_ERR_EXCLUDED_VIOLATION;
+              }
+              break;
+            default:;
+          }
+        }
+        EXPECT_EQ(want_result, got_result)
+            << "got \"" << X509_verify_cert_error_string(got_result)
+            << "\", want \"" << X509_verify_cert_error_string(want_result)
+            << "\"";
+      }
+    }
   }
 }
 
 TEST(X509Test, PrintGeneralName) {
   // TODO(https://crbug.com/boringssl/430): Add more tests. Also fix the
   // external projects that use this to extract the SAN list and unexport.
-  bssl::UniquePtr<GENERAL_NAME> gen = MakeGeneralName(GEN_DNS, "example.com");
+  UniquePtr<GENERAL_NAME> gen = MakeGeneralName(GEN_DNS, "example.com");
   ASSERT_TRUE(gen);
-  bssl::UniquePtr<STACK_OF(CONF_VALUE)> values(
+  UniquePtr<STACK_OF(CONF_VALUE)> values(
       i2v_GENERAL_NAME(nullptr, gen.get(), nullptr));
   ASSERT_TRUE(values);
   ASSERT_EQ(1u, sk_CONF_VALUE_num(values.get()));
@@ -2127,9 +2764,9 @@ TEST(X509Test, TestPSS) {
   };
   for (const char *path : kGoodCerts) {
     SCOPED_TRACE(path);
-    bssl::UniquePtr<X509> cert = CertFromPEM(GetTestData(path));
+    UniquePtr<X509> cert = CertFromPEM(GetTestData(path));
     ASSERT_TRUE(cert);
-    bssl::UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+    UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
     ASSERT_TRUE(pkey);
     EXPECT_TRUE(X509_verify(cert.get(), pkey.get()));
   }
@@ -2148,19 +2785,20 @@ TEST(X509Test, TestPSS) {
   };
   for (const char *path : kBadCerts) {
     SCOPED_TRACE(path);
-    bssl::UniquePtr<X509> cert = CertFromPEM(GetTestData(path));
+    UniquePtr<X509> cert = CertFromPEM(GetTestData(path));
     ASSERT_TRUE(cert);
-    bssl::UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+    UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
     ASSERT_TRUE(pkey);
     EXPECT_FALSE(X509_verify(cert.get(), pkey.get()));
+    EXPECT_TRUE(ErrorsAreAndClear({{std::nullopt, std::nullopt}}));
   }
 }
 
 TEST(X509Test, TestPSSBadParameters) {
-  bssl::UniquePtr<X509> cert(CertFromPEM(kBadPSSCertPEM));
+  UniquePtr<X509> cert(CertFromPEM(kBadPSSCertPEM));
   ASSERT_TRUE(cert);
 
-  bssl::UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+  UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
   ASSERT_TRUE(pkey);
 
   ASSERT_FALSE(X509_verify(cert.get(), pkey.get()));
@@ -2168,20 +2806,20 @@ TEST(X509Test, TestPSSBadParameters) {
 }
 
 TEST(X509Test, TestEd25519) {
-  bssl::UniquePtr<X509> cert(CertFromPEM(kEd25519Cert));
+  UniquePtr<X509> cert(CertFromPEM(kEd25519Cert));
   ASSERT_TRUE(cert);
 
-  bssl::UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+  UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
   ASSERT_TRUE(pkey);
 
   ASSERT_TRUE(X509_verify(cert.get(), pkey.get()));
 }
 
 TEST(X509Test, TestEd25519BadParameters) {
-  bssl::UniquePtr<X509> cert(CertFromPEM(kEd25519CertNull));
+  UniquePtr<X509> cert(CertFromPEM(kEd25519CertNull));
   ASSERT_TRUE(cert);
 
-  bssl::UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+  UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
   ASSERT_TRUE(pkey);
 
   ASSERT_FALSE(X509_verify(cert.get(), pkey.get()));
@@ -2192,10 +2830,10 @@ TEST(X509Test, TestEd25519BadParameters) {
 }
 
 TEST(X509Test, TestX25519) {
-  bssl::UniquePtr<X509> cert(CertFromPEM(kX25519Cert));
+  UniquePtr<X509> cert(CertFromPEM(kX25519Cert));
   ASSERT_TRUE(cert);
 
-  bssl::UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+  UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
   ASSERT_TRUE(pkey);
 
   EXPECT_EQ(EVP_PKEY_id(pkey.get()), EVP_PKEY_X25519);
@@ -2213,89 +2851,127 @@ TEST(X509Test, TestX25519) {
             Bytes(public_value, public_value_size));
 }
 
-static bssl::UniquePtr<X509> ReencodeCertificate(X509 *cert) {
+TEST(X509Test, TestMLDSA65) {
+  UniquePtr<X509> cert(CertFromPEM(kMLDSA65Cert));
+  ASSERT_TRUE(cert);
+
+  UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+  ASSERT_TRUE(pkey);
+
+  ASSERT_TRUE(X509_verify(cert.get(), pkey.get()));
+}
+
+TEST(X509Test, TestMLDSA65BadParameters) {
+  UniquePtr<X509> cert(CertFromPEM(kMLDSA65CertNull));
+  ASSERT_TRUE(cert);
+
+  UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+  ASSERT_TRUE(pkey);
+
+  ASSERT_FALSE(X509_verify(cert.get(), pkey.get()));
+
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_PARAMETER));
+  ERR_clear_error();
+}
+
+bssl::UniquePtr<X509> ReencodeCertificate(X509 *cert) {
   uint8_t *der = nullptr;
   int len = i2d_X509(cert, &der);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
   if (len <= 0) {
     return nullptr;
   }
 
   const uint8_t *inp = der;
-  return bssl::UniquePtr<X509>(d2i_X509(nullptr, &inp, len));
+  return UniquePtr<X509>(d2i_X509(nullptr, &inp, len));
 }
 
-static bssl::UniquePtr<X509> ReencodeCertificateWithAlgorithms(
-    X509 *cert, bssl::Span<const EVP_PKEY_ALG *const> algs) {
+bssl::UniquePtr<X509> ReencodeCertificateWithAlgorithms(
+    X509 *cert, Span<const EVP_PKEY_ALG *const> algs) {
   uint8_t *der = nullptr;
   int len = i2d_X509(cert, &der);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
   if (len <= 0) {
     return nullptr;
   }
 
-  bssl::UniquePtr<CRYPTO_BUFFER> buf(CRYPTO_BUFFER_new(der, len, nullptr));
+  UniquePtr<CRYPTO_BUFFER> buf(CRYPTO_BUFFER_new(der, len, nullptr));
   if (buf == nullptr) {
     return nullptr;
   }
-  return bssl::UniquePtr<X509>(
+  return UniquePtr<X509>(
       X509_parse_with_algorithms(buf.get(), algs.data(), algs.size()));
 }
 
-static bssl::UniquePtr<X509_CRL> ReencodeCRL(X509_CRL *crl) {
+bssl::UniquePtr<X509_CRL> ReencodeCRL(X509_CRL *crl) {
   uint8_t *der = nullptr;
   int len = i2d_X509_CRL(crl, &der);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
   if (len <= 0) {
     return nullptr;
   }
 
   const uint8_t *inp = der;
-  return bssl::UniquePtr<X509_CRL>(d2i_X509_CRL(nullptr, &inp, len));
+  return UniquePtr<X509_CRL>(d2i_X509_CRL(nullptr, &inp, len));
 }
 
-static bssl::UniquePtr<X509_REQ> ReencodeCSR(X509_REQ *req) {
+// SignAndReencodeCRL signs `crl` with `key` and `md`, then returns a re-encoded
+// copy of it, or nullptr on error.
+//
+// TODO(crbug.com/443261873): Some state in CRLs does not get correctly set up
+// unless it is parsed from data. `X509_CRL_sign` should reset it internally,
+// after which callers can sign the CRL in place.
+bssl::UniquePtr<X509_CRL> SignAndReencodeCRL(X509_CRL *crl, EVP_PKEY *key,
+                                             const EVP_MD *md) {
+  if (!X509_CRL_sign(crl, key, md)) {
+    return nullptr;
+  }
+  return ReencodeCRL(crl);
+}
+
+bssl::UniquePtr<X509_REQ> ReencodeCSR(X509_REQ *req) {
   uint8_t *der = nullptr;
   int len = i2d_X509_REQ(req, &der);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
   if (len <= 0) {
     return nullptr;
   }
 
   const uint8_t *inp = der;
-  return bssl::UniquePtr<X509_REQ>(d2i_X509_REQ(nullptr, &inp, len));
+  return UniquePtr<X509_REQ>(d2i_X509_REQ(nullptr, &inp, len));
 }
 
-static bool SignatureRoundTrips(EVP_MD_CTX *md_ctx, EVP_PKEY *pkey) {
-  // Make a certificate like signed with |md_ctx|'s settings.'
-  bssl::UniquePtr<X509> cert(CertFromPEM(kLeafPEM));
+bool SignatureRoundTrips(EVP_MD_CTX *md_ctx, EVP_PKEY *pkey) {
+  // Make a certificate like signed with `md_ctx`'s settings.'
+  UniquePtr<X509> cert(CertFromPEM(kLeafPEM));
   if (!cert || !X509_sign_ctx(cert.get(), md_ctx)) {
     return false;
   }
 
-  // Ensure that |pkey| may still be used to verify the resulting signature. All
-  // settings in |md_ctx| must have been serialized appropriately.
+  // Ensure that `pkey` may still be used to verify the resulting signature. All
+  // settings in `md_ctx` must have been serialized appropriately.
   if (!X509_verify(cert.get(), pkey)) {
     return false;
   }
 
   // Re-encode the certificate. X509 objects contain a cached TBSCertificate
-  // encoding and |X509_sign_ctx| should have dropped that cache.
-  bssl::UniquePtr<X509> copy = ReencodeCertificate(cert.get());
+  // encoding and `X509_sign_ctx` should have dropped that cache.
+  UniquePtr<X509> copy = ReencodeCertificate(cert.get());
   return copy && X509_verify(copy.get(), pkey);
 }
 
 TEST(X509Test, RSASign) {
-  bssl::UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
+  UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
   ASSERT_TRUE(pkey);
   // Test PKCS#1 v1.5.
-  bssl::ScopedEVP_MD_CTX md_ctx;
+  ScopedEVP_MD_CTX md_ctx;
   ASSERT_TRUE(EVP_DigestSignInit(md_ctx.get(), nullptr, EVP_sha256(), nullptr,
                                  pkey.get()));
   ASSERT_TRUE(SignatureRoundTrips(md_ctx.get(), pkey.get()));
 
   // RSA-PSS with salt length matching hash length should work when passing in
-  // |RSA_PSS_SALTLEN_DIGEST| or the value explicitly.
+  // `RSA_PSS_SALTLEN_DIGEST` or the value explicitly.
   md_ctx.Reset();
   EVP_PKEY_CTX *pkey_ctx;
   ASSERT_TRUE(EVP_DigestSignInit(md_ctx.get(), &pkey_ctx, EVP_sha256(), nullptr,
@@ -2319,9 +2995,11 @@ TEST(X509Test, RSASign) {
   ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING));
   ASSERT_TRUE(
       EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, RSA_PSS_SALTLEN_DIGEST));
-  bssl::UniquePtr<X509> cert = CertFromPEM(kLeafPEM);
+  UniquePtr<X509> cert = CertFromPEM(kLeafPEM);
   ASSERT_TRUE(cert);
   EXPECT_FALSE(X509_sign_ctx(cert.get(), md_ctx.get()));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_PSS_PARAMETERS}}));
 
   // RSA-PSS with mismatched hashes is not supported.
   md_ctx.Reset();
@@ -2334,6 +3012,8 @@ TEST(X509Test, RSASign) {
   cert = CertFromPEM(kLeafPEM);
   ASSERT_TRUE(cert);
   EXPECT_FALSE(X509_sign_ctx(cert.get(), md_ctx.get()));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_PSS_PARAMETERS}}));
 
   // RSA-PSS with the wrong salt length is not supported.
   md_ctx.Reset();
@@ -2344,6 +3024,8 @@ TEST(X509Test, RSASign) {
   cert = CertFromPEM(kLeafPEM);
   ASSERT_TRUE(cert);
   EXPECT_FALSE(X509_sign_ctx(cert.get(), md_ctx.get()));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_PSS_PARAMETERS}}));
 }
 
 // Test the APIs for signing a certificate, particularly whether they correctly
@@ -2352,25 +3034,25 @@ TEST(X509Test, SignCertificate) {
   const int kSignatureNID = NID_sha384WithRSAEncryption;
   const EVP_MD *kSignatureHash = EVP_sha384();
 
-  bssl::UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
+  UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
   ASSERT_TRUE(pkey);
-  bssl::UniquePtr<X509_ALGOR> algor(X509_ALGOR_new());
+  UniquePtr<X509_ALGOR> algor(X509_ALGOR_new());
   ASSERT_TRUE(algor);
   ASSERT_TRUE(X509_ALGOR_set0(algor.get(), OBJ_nid2obj(kSignatureNID),
                               V_ASN1_NULL, nullptr));
 
-  // Test both signing with |X509_sign| and constructing a signature manually.
+  // Test both signing with `X509_sign` and constructing a signature manually.
   for (bool sign_manual : {true, false}) {
     SCOPED_TRACE(sign_manual);
 
-    // Test certificates made both from other certificates and |X509_new|, in
+    // Test certificates made both from other certificates and `X509_new`, in
     // case there are bugs in filling in fields from different states. (Parsed
-    // certificates contain a TBSCertificate cache, and |X509_new| initializes
+    // certificates contain a TBSCertificate cache, and `X509_new` initializes
     // fields based on complex ASN.1 template logic.)
     for (bool new_cert : {true, false}) {
       SCOPED_TRACE(new_cert);
 
-      bssl::UniquePtr<X509> cert;
+      UniquePtr<X509> cert;
       if (new_cert) {
         cert.reset(X509_new());
         ASSERT_TRUE(cert);
@@ -2401,14 +3083,14 @@ TEST(X509Test, SignCertificate) {
         // Fill in the signature algorithm.
         ASSERT_TRUE(X509_set1_signature_algo(cert.get(), algor.get()));
 
-        // Extract the TBSCertificiate.
+        // Extract the TBSCertificate.
         uint8_t *tbs_cert = nullptr;
         int tbs_cert_len = i2d_re_X509_tbs(cert.get(), &tbs_cert);
-        bssl::UniquePtr<uint8_t> free_tbs_cert(tbs_cert);
+        UniquePtr<uint8_t> free_tbs_cert(tbs_cert);
         ASSERT_GT(tbs_cert_len, 0);
 
         // Generate a signature externally and fill it in.
-        bssl::ScopedEVP_MD_CTX md_ctx;
+        ScopedEVP_MD_CTX md_ctx;
         ASSERT_TRUE(EVP_DigestSignInit(md_ctx.get(), nullptr, kSignatureHash,
                                        nullptr, pkey.get()));
         size_t sig_len;
@@ -2423,7 +3105,7 @@ TEST(X509Test, SignCertificate) {
       } else {
         int ret = X509_sign(cert.get(), pkey.get(), EVP_sha384());
         ASSERT_GT(ret, 0);
-        // |X509_sign| returns the length of the signature on success.
+        // `X509_sign` returns the length of the signature on success.
         const ASN1_BIT_STRING *sig;
         X509_get0_signature(&sig, /*out_alg=*/nullptr, cert.get());
         EXPECT_EQ(ret, ASN1_STRING_length(sig));
@@ -2434,7 +3116,7 @@ TEST(X509Test, SignCertificate) {
 
       // Re-encode the certificate. X509 objects contain a cached TBSCertificate
       // encoding and re-signing should have dropped that cache.
-      bssl::UniquePtr<X509> copy = ReencodeCertificate(cert.get());
+      UniquePtr<X509> copy = ReencodeCertificate(cert.get());
       ASSERT_TRUE(copy);
       EXPECT_TRUE(X509_verify(copy.get(), pkey.get()));
     }
@@ -2447,36 +3129,36 @@ TEST(X509Test, SignCRL) {
   const int kSignatureNID = NID_sha384WithRSAEncryption;
   const EVP_MD *kSignatureHash = EVP_sha384();
 
-  bssl::UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
+  UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
   ASSERT_TRUE(pkey);
-  bssl::UniquePtr<X509_ALGOR> algor(X509_ALGOR_new());
+  UniquePtr<X509_ALGOR> algor(X509_ALGOR_new());
   ASSERT_TRUE(algor);
   ASSERT_TRUE(X509_ALGOR_set0(algor.get(), OBJ_nid2obj(kSignatureNID),
                               V_ASN1_NULL, nullptr));
 
-  // Test both signing with |X509_CRL_sign| and constructing a signature
+  // Test both signing with `X509_CRL_sign` and constructing a signature
   // manually.
   for (bool sign_manual : {true, false}) {
     SCOPED_TRACE(sign_manual);
 
-    // Test CRLs made both from other CRLs and |X509_CRL_new|, in case there are
+    // Test CRLs made both from other CRLs and `X509_CRL_new`, in case there are
     // bugs in filling in fields from different states. (Parsed CRLs contain a
-    // TBSCertList cache, and |X509_CRL_new| initializes fields based on complex
+    // TBSCertList cache, and `X509_CRL_new` initializes fields based on complex
     // ASN.1 template logic.)
     for (bool new_crl : {true, false}) {
       SCOPED_TRACE(new_crl);
 
-      bssl::UniquePtr<X509_CRL> crl;
+      UniquePtr<X509_CRL> crl;
       if (new_crl) {
         crl.reset(X509_CRL_new());
         ASSERT_TRUE(crl);
         // Fill in some fields for the certificate arbitrarily.
         ASSERT_TRUE(X509_CRL_set_version(crl.get(), X509_CRL_VERSION_2));
-        bssl::UniquePtr<ASN1_TIME> last_update(ASN1_TIME_new());
+        UniquePtr<ASN1_TIME> last_update(ASN1_TIME_new());
         ASSERT_TRUE(last_update);
         ASSERT_TRUE(ASN1_TIME_set_posix(last_update.get(), kReferenceTime));
         ASSERT_TRUE(X509_CRL_set1_lastUpdate(crl.get(), last_update.get()));
-        bssl::UniquePtr<X509_NAME> issuer(X509_NAME_new());
+        UniquePtr<X509_NAME> issuer(X509_NAME_new());
         ASSERT_TRUE(issuer);
         ASSERT_TRUE(X509_NAME_add_entry_by_txt(
             issuer.get(), "CN", MBSTRING_ASC,
@@ -2499,11 +3181,11 @@ TEST(X509Test, SignCRL) {
         // Extract the TBSCertList.
         uint8_t *tbs = nullptr;
         int tbs_len = i2d_re_X509_CRL_tbs(crl.get(), &tbs);
-        bssl::UniquePtr<uint8_t> free_tbs(tbs);
+        UniquePtr<uint8_t> free_tbs(tbs);
         ASSERT_GT(tbs_len, 0);
 
         // Generate a signature externally and fill it in.
-        bssl::ScopedEVP_MD_CTX md_ctx;
+        ScopedEVP_MD_CTX md_ctx;
         ASSERT_TRUE(EVP_DigestSignInit(md_ctx.get(), nullptr, kSignatureHash,
                                        nullptr, pkey.get()));
         size_t sig_len;
@@ -2524,14 +3206,14 @@ TEST(X509Test, SignCRL) {
 
       // Re-encode the CRL. X509_CRL objects contain a cached TBSCertList
       // encoding and re-signing should have dropped that cache.
-      bssl::UniquePtr<X509_CRL> copy = ReencodeCRL(crl.get());
+      UniquePtr<X509_CRL> copy = ReencodeCRL(crl.get());
       ASSERT_TRUE(copy);
       EXPECT_TRUE(X509_CRL_verify(copy.get(), pkey.get()));
     }
   }
 }
 
-static const char kTestCSR[] = R"(
+const char kTestCSR[] = R"(
 -----BEGIN CERTIFICATE REQUEST-----
 MIICVDCCATwCAQAwDzENMAsGA1UEAwwEVGVzdDCCASIwDQYJKoZIhvcNAQEBBQAD
 ggEPADCCAQoCggEBAK+UkwcNJfRhg5MzIQzxDdrqF9a76jNoK/BwCflKYFX7QEqf
@@ -2555,30 +3237,30 @@ TEST(X509Test, SignCSR) {
   const int kSignatureNID = NID_sha384WithRSAEncryption;
   const EVP_MD *kSignatureHash = EVP_sha384();
 
-  bssl::UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
+  UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
   ASSERT_TRUE(pkey);
-  bssl::UniquePtr<X509_ALGOR> algor(X509_ALGOR_new());
+  UniquePtr<X509_ALGOR> algor(X509_ALGOR_new());
   ASSERT_TRUE(algor);
   ASSERT_TRUE(X509_ALGOR_set0(algor.get(), OBJ_nid2obj(kSignatureNID),
                               V_ASN1_NULL, nullptr));
 
-  // Test both signing with |X509_REQ_sign| and constructing a signature
+  // Test both signing with `X509_REQ_sign` and constructing a signature
   // manually.
   for (bool sign_manual : {true, false}) {
     SCOPED_TRACE(sign_manual);
 
-    // Test CSRs made both from other CSRs and |X509_REQ_new|, in case there are
+    // Test CSRs made both from other CSRs and `X509_REQ_new`, in case there are
     // bugs in filling in fields from different states. (Parsed CSRs contain a
-    // CertificationRequestInfo cache, and |X509_REQ_new| initializes fields
+    // CertificationRequestInfo cache, and `X509_REQ_new` initializes fields
     // based on complex ASN.1 template logic.)
     for (bool new_csr : {true, false}) {
       SCOPED_TRACE(new_csr);
 
-      bssl::UniquePtr<X509_REQ> csr;
+      UniquePtr<X509_REQ> csr;
       if (new_csr) {
         csr.reset(X509_REQ_new());
         ASSERT_TRUE(csr);
-        bssl::UniquePtr<X509_NAME> subject(X509_NAME_new());
+        UniquePtr<X509_NAME> subject(X509_NAME_new());
         ASSERT_TRUE(subject);
         ASSERT_TRUE(X509_NAME_add_entry_by_txt(
             subject.get(), "CN", MBSTRING_ASC,
@@ -2593,7 +3275,7 @@ TEST(X509Test, SignCSR) {
       // Override the public key from the CSR unconditionally. Unlike
       // certificates and CRLs, CSRs do not contain a signed copy of the
       // signature algorithm, so we use a different field to confirm
-      // |i2d_re_X509_REQ_tbs| clears the cache as expected.
+      // `i2d_re_X509_REQ_tbs` clears the cache as expected.
       EXPECT_TRUE(X509_REQ_set_pubkey(csr.get(), pkey.get()));
 
       if (sign_manual) {
@@ -2603,11 +3285,11 @@ TEST(X509Test, SignCSR) {
         // Extract the CertificationRequestInfo.
         uint8_t *tbs = nullptr;
         int tbs_len = i2d_re_X509_REQ_tbs(csr.get(), &tbs);
-        bssl::UniquePtr<uint8_t> free_tbs(tbs);
+        UniquePtr<uint8_t> free_tbs(tbs);
         ASSERT_GT(tbs_len, 0);
 
         // Generate a signature externally and fill it in.
-        bssl::ScopedEVP_MD_CTX md_ctx;
+        ScopedEVP_MD_CTX md_ctx;
         ASSERT_TRUE(EVP_DigestSignInit(md_ctx.get(), nullptr, kSignatureHash,
                                        nullptr, pkey.get()));
         size_t sig_len;
@@ -2629,27 +3311,27 @@ TEST(X509Test, SignCSR) {
       // Re-encode the CSR. X509_REQ objects contain a cached
       // CertificationRequestInfo encoding and re-signing should have dropped
       // that cache.
-      bssl::UniquePtr<X509_REQ> copy = ReencodeCSR(csr.get());
+      UniquePtr<X509_REQ> copy = ReencodeCSR(csr.get());
       ASSERT_TRUE(copy);
       EXPECT_TRUE(X509_REQ_verify(copy.get(), pkey.get()));
 
       // Check the signature was over the new public key.
-      bssl::UniquePtr<EVP_PKEY> copy_pubkey(X509_REQ_get_pubkey(copy.get()));
+      UniquePtr<EVP_PKEY> copy_pubkey(X509_REQ_get_pubkey(copy.get()));
       ASSERT_TRUE(copy_pubkey);
-      EXPECT_EQ(1, EVP_PKEY_cmp(pkey.get(), copy_pubkey.get()));
+      EXPECT_EQ(1, EVP_PKEY_eq(pkey.get(), copy_pubkey.get()));
     }
   }
 }
 
-// The |*_sign_ctx| APIs implicitly call |EVP_MD_CTX_cleanup| on return, on both
+// The `*_sign_ctx` APIs implicitly call `EVP_MD_CTX_cleanup` on return, on both
 // success and failure. Some callers rely on this to avoid a memory leak. These
 // tests rely on ASan to detect leaks. Test failure by using unsupported RSA-PSS
 // parameters.
 TEST(X509Test, SignImplicitCleanup) {
-  bssl::UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
+  UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
   ASSERT_TRUE(pkey);
 
-  bssl::UniquePtr<X509> cert = CertFromPEM(kLeafPEM);
+  UniquePtr<X509> cert = CertFromPEM(kLeafPEM);
   ASSERT_TRUE(cert);
   {
     EVP_MD_CTX ctx;
@@ -2667,9 +3349,11 @@ TEST(X509Test, SignImplicitCleanup) {
     ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING));
     ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, 33));
     EXPECT_FALSE(X509_sign_ctx(cert.get(), &ctx));
+    EXPECT_TRUE(
+        ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_PSS_PARAMETERS}}));
   }
 
-  bssl::UniquePtr<X509_CRL> crl = CRLFromPEM(kBasicCRL);
+  UniquePtr<X509_CRL> crl = CRLFromPEM(kBasicCRL);
   ASSERT_TRUE(crl);
   {
     EVP_MD_CTX ctx;
@@ -2687,9 +3371,11 @@ TEST(X509Test, SignImplicitCleanup) {
     ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING));
     ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, 33));
     EXPECT_FALSE(X509_CRL_sign_ctx(crl.get(), &ctx));
+    EXPECT_TRUE(
+        ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_PSS_PARAMETERS}}));
   }
 
-  bssl::UniquePtr<X509_REQ> csr = CSRFromPEM(kTestCSR);
+  UniquePtr<X509_REQ> csr = CSRFromPEM(kTestCSR);
   ASSERT_TRUE(csr);
   {
     EVP_MD_CTX ctx;
@@ -2707,6 +3393,8 @@ TEST(X509Test, SignImplicitCleanup) {
     ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING));
     ASSERT_TRUE(EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, 33));
     EXPECT_FALSE(X509_REQ_sign_ctx(csr.get(), &ctx));
+    EXPECT_TRUE(
+        ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_PSS_PARAMETERS}}));
   }
 }
 
@@ -2714,22 +3402,81 @@ TEST(X509Test, Ed25519Sign) {
   uint8_t pub_bytes[32], priv_bytes[64];
   ED25519_keypair(pub_bytes, priv_bytes);
 
-  bssl::UniquePtr<EVP_PKEY> pub(
+  UniquePtr<EVP_PKEY> pub(
       EVP_PKEY_from_raw_public_key(EVP_pkey_ed25519(), pub_bytes, 32));
   ASSERT_TRUE(pub);
-  bssl::UniquePtr<EVP_PKEY> priv(
+  UniquePtr<EVP_PKEY> priv(
       EVP_PKEY_from_raw_private_key(EVP_pkey_ed25519(), priv_bytes, 32));
   ASSERT_TRUE(priv);
 
-  bssl::ScopedEVP_MD_CTX md_ctx;
+  ScopedEVP_MD_CTX md_ctx;
   ASSERT_TRUE(
       EVP_DigestSignInit(md_ctx.get(), nullptr, nullptr, nullptr, priv.get()));
   ASSERT_TRUE(SignatureRoundTrips(md_ctx.get(), pub.get()));
 }
 
-static bool PEMToDER(bssl::UniquePtr<uint8_t> *out, size_t *out_len,
-                     const char *pem) {
-  bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(pem, strlen(pem)));
+TEST(X509Test, MLDSA44Sign) {
+  std::vector<uint8_t> pub_bytes(MLDSA44_PUBLIC_KEY_BYTES);
+  std::vector<uint8_t> seed_bytes(MLDSA_SEED_BYTES);
+  auto priv_key = std::make_unique<MLDSA44_private_key>();
+  ASSERT_EQ(1, MLDSA44_generate_key(pub_bytes.data(), seed_bytes.data(),
+                                    priv_key.get()));
+
+  UniquePtr<EVP_PKEY> pub(EVP_PKEY_from_raw_public_key(
+      EVP_pkey_ml_dsa_44(), pub_bytes.data(), MLDSA44_PUBLIC_KEY_BYTES));
+  ASSERT_TRUE(pub);
+  UniquePtr<EVP_PKEY> priv(EVP_PKEY_from_private_seed(
+      EVP_pkey_ml_dsa_44(), seed_bytes.data(), MLDSA_SEED_BYTES));
+  ASSERT_TRUE(priv);
+
+  ScopedEVP_MD_CTX md_ctx;
+  ASSERT_TRUE(
+      EVP_DigestSignInit(md_ctx.get(), nullptr, nullptr, nullptr, priv.get()));
+  ASSERT_TRUE(SignatureRoundTrips(md_ctx.get(), pub.get()));
+}
+
+TEST(X509Test, MLDSA65Sign) {
+  std::vector<uint8_t> pub_bytes(MLDSA65_PUBLIC_KEY_BYTES);
+  std::vector<uint8_t> seed_bytes(MLDSA_SEED_BYTES);
+  auto priv_key = std::make_unique<MLDSA65_private_key>();
+  ASSERT_EQ(1, MLDSA65_generate_key(pub_bytes.data(), seed_bytes.data(),
+                                    priv_key.get()));
+
+  UniquePtr<EVP_PKEY> pub(EVP_PKEY_from_raw_public_key(
+      EVP_pkey_ml_dsa_65(), pub_bytes.data(), MLDSA65_PUBLIC_KEY_BYTES));
+  ASSERT_TRUE(pub);
+  UniquePtr<EVP_PKEY> priv(EVP_PKEY_from_private_seed(
+      EVP_pkey_ml_dsa_65(), seed_bytes.data(), MLDSA_SEED_BYTES));
+  ASSERT_TRUE(priv);
+
+  ScopedEVP_MD_CTX md_ctx;
+  ASSERT_TRUE(
+      EVP_DigestSignInit(md_ctx.get(), nullptr, nullptr, nullptr, priv.get()));
+  ASSERT_TRUE(SignatureRoundTrips(md_ctx.get(), pub.get()));
+}
+
+TEST(X509Test, MLDSA87Sign) {
+  std::vector<uint8_t> pub_bytes(MLDSA87_PUBLIC_KEY_BYTES);
+  std::vector<uint8_t> seed_bytes(MLDSA_SEED_BYTES);
+  auto priv_key = std::make_unique<MLDSA87_private_key>();
+  ASSERT_EQ(1, MLDSA87_generate_key(pub_bytes.data(), seed_bytes.data(),
+                                    priv_key.get()));
+
+  UniquePtr<EVP_PKEY> pub(EVP_PKEY_from_raw_public_key(
+      EVP_pkey_ml_dsa_87(), pub_bytes.data(), MLDSA87_PUBLIC_KEY_BYTES));
+  ASSERT_TRUE(pub);
+  UniquePtr<EVP_PKEY> priv(EVP_PKEY_from_private_seed(
+      EVP_pkey_ml_dsa_87(), seed_bytes.data(), MLDSA_SEED_BYTES));
+  ASSERT_TRUE(priv);
+
+  ScopedEVP_MD_CTX md_ctx;
+  ASSERT_TRUE(
+      EVP_DigestSignInit(md_ctx.get(), nullptr, nullptr, nullptr, priv.get()));
+  ASSERT_TRUE(SignatureRoundTrips(md_ctx.get(), pub.get()));
+}
+
+bool PEMToDER(UniquePtr<uint8_t> *out, size_t *out_len, const char *pem) {
+  UniquePtr<BIO> bio(BIO_new_mem_buf(pem, strlen(pem)));
   if (!bio) {
     return false;
   }
@@ -2752,55 +3499,55 @@ static bool PEMToDER(bssl::UniquePtr<uint8_t> *out, size_t *out_len,
 
 TEST(X509Test, TestFromBuffer) {
   size_t data_len;
-  bssl::UniquePtr<uint8_t> data;
+  UniquePtr<uint8_t> data;
   ASSERT_TRUE(PEMToDER(&data, &data_len, kRootCAPEM));
 
-  bssl::UniquePtr<CRYPTO_BUFFER> buf(
+  UniquePtr<CRYPTO_BUFFER> buf(
       CRYPTO_BUFFER_new(data.get(), data_len, nullptr));
   ASSERT_TRUE(buf);
-  bssl::UniquePtr<X509> root(X509_parse_from_buffer(buf.get()));
+  UniquePtr<X509> root(X509_parse_from_buffer(buf.get()));
   ASSERT_TRUE(root);
 
-  EXPECT_EQ(buf.get(), root->buf);
+  EXPECT_EQ(buf.get(), FromOpaque(root.get())->buf.get());
   buf.reset();
 
-  // This ensures the X509 took a reference to |buf|, otherwise this will be a
+  // This ensures the X509 took a reference to `buf`, otherwise this will be a
   // reference to free memory and ASAN should notice.
-  CRYPTO_BUFFER_len(root->buf);
+  CRYPTO_BUFFER_len(FromOpaque(root.get())->buf.get());
 }
 
 TEST(X509Test, TestFromBufferWithTrailingData) {
   size_t data_len;
-  bssl::UniquePtr<uint8_t> data;
+  UniquePtr<uint8_t> data;
   ASSERT_TRUE(PEMToDER(&data, &data_len, kRootCAPEM));
 
   auto trailing_data = std::make_unique<uint8_t[]>(data_len + 1);
   OPENSSL_memcpy(trailing_data.get(), data.get(), data_len);
 
-  bssl::UniquePtr<CRYPTO_BUFFER> buf_trailing_data(
+  UniquePtr<CRYPTO_BUFFER> buf_trailing_data(
       CRYPTO_BUFFER_new(trailing_data.get(), data_len + 1, nullptr));
   ASSERT_TRUE(buf_trailing_data);
 
-  bssl::UniquePtr<X509> root_trailing_data(
+  UniquePtr<X509> root_trailing_data(
       X509_parse_from_buffer(buf_trailing_data.get()));
   ASSERT_FALSE(root_trailing_data);
 }
 
 TEST(X509Test, TestFromBufferModified) {
   size_t data_len;
-  bssl::UniquePtr<uint8_t> data;
+  UniquePtr<uint8_t> data;
   ASSERT_TRUE(PEMToDER(&data, &data_len, kRootCAPEM));
 
-  bssl::UniquePtr<CRYPTO_BUFFER> buf(
+  UniquePtr<CRYPTO_BUFFER> buf(
       CRYPTO_BUFFER_new(data.get(), data_len, nullptr));
   ASSERT_TRUE(buf);
 
-  bssl::UniquePtr<X509> root(X509_parse_from_buffer(buf.get()));
+  UniquePtr<X509> root(X509_parse_from_buffer(buf.get()));
   ASSERT_TRUE(root);
 
-  bssl::UniquePtr<ASN1_INTEGER> fourty_two(ASN1_INTEGER_new());
-  ASN1_INTEGER_set_int64(fourty_two.get(), 42);
-  X509_set_serialNumber(root.get(), fourty_two.get());
+  UniquePtr<ASN1_INTEGER> forty_two(ASN1_INTEGER_new());
+  ASN1_INTEGER_set_int64(forty_two.get(), 42);
+  X509_set_serialNumber(root.get(), forty_two.get());
 
   ASSERT_EQ(static_cast<long>(data_len), i2d_X509(root.get(), nullptr));
 
@@ -2812,25 +3559,25 @@ TEST(X509Test, TestFromBufferModified) {
 
 TEST(X509Test, TestFromBufferReused) {
   size_t data_len;
-  bssl::UniquePtr<uint8_t> data;
+  UniquePtr<uint8_t> data;
   ASSERT_TRUE(PEMToDER(&data, &data_len, kRootCAPEM));
 
-  bssl::UniquePtr<CRYPTO_BUFFER> buf(
+  UniquePtr<CRYPTO_BUFFER> buf(
       CRYPTO_BUFFER_new(data.get(), data_len, nullptr));
   ASSERT_TRUE(buf);
 
-  bssl::UniquePtr<X509> root(X509_parse_from_buffer(buf.get()));
+  UniquePtr<X509> root(X509_parse_from_buffer(buf.get()));
   ASSERT_TRUE(root);
 
   size_t data2_len;
-  bssl::UniquePtr<uint8_t> data2;
+  UniquePtr<uint8_t> data2;
   ASSERT_TRUE(PEMToDER(&data2, &data2_len, kLeafPEM));
-  EXPECT_EQ(root->buf, buf.get());
+  EXPECT_EQ(FromOpaque(root.get())->buf.get(), buf.get());
 
   // Historically, this function tested the interaction between
-  // |X509_parse_from_buffer| and object reuse. We no longer support object
-  // reuse, so |d2i_X509| will replace |raw| with a new object. However, we
-  // retain this test to verify that releasing objects from |d2i_X509| works
+  // `X509_parse_from_buffer` and object reuse. We no longer support object
+  // reuse, so `d2i_X509` will replace `raw` with a new object. However, we
+  // retain this test to verify that releasing objects from `d2i_X509` works
   // correctly and doesn't keep the old buffer.
   X509 *raw = root.release();
   const uint8_t *inp = data2.get();
@@ -2838,16 +3585,16 @@ TEST(X509Test, TestFromBufferReused) {
   root.reset(raw);
 
   ASSERT_EQ(root.get(), ret);
-  ASSERT_NE(buf.get(), root->buf);
+  ASSERT_NE(buf.get(), FromOpaque(root.get())->buf.get());
 
-  // Free |data2| and ensure that |root| took its own copy. Otherwise
-  // serializing |root|, below, will trigger a use-after-free.
+  // Free `data2` and ensure that `root` took its own copy. Otherwise
+  // serializing `root`, below, will trigger a use-after-free.
   data2.reset();
 
   uint8_t *i2d = nullptr;
   int i2d_len = i2d_X509(root.get(), &i2d);
   ASSERT_GE(i2d_len, 0);
-  bssl::UniquePtr<uint8_t> i2d_storage(i2d);
+  UniquePtr<uint8_t> i2d_storage(i2d);
 
   ASSERT_TRUE(PEMToDER(&data2, &data2_len, kLeafPEM));
   EXPECT_EQ(Bytes(i2d, i2d_len), Bytes(data2.get(), data2_len));
@@ -2856,29 +3603,28 @@ TEST(X509Test, TestFromBufferReused) {
 TEST(X509Test, TestFailedParseFromBuffer) {
   static const uint8_t kNonsense[] = {1, 2, 3, 4, 5};
 
-  bssl::UniquePtr<CRYPTO_BUFFER> buf(
+  UniquePtr<CRYPTO_BUFFER> buf(
       CRYPTO_BUFFER_new(kNonsense, sizeof(kNonsense), nullptr));
   ASSERT_TRUE(buf);
 
-  bssl::UniquePtr<X509> cert(X509_parse_from_buffer(buf.get()));
+  UniquePtr<X509> cert(X509_parse_from_buffer(buf.get()));
   ASSERT_FALSE(cert);
   ERR_clear_error();
 
   // Test a buffer with trailing data.
   size_t data_len;
-  bssl::UniquePtr<uint8_t> data;
+  UniquePtr<uint8_t> data;
   ASSERT_TRUE(PEMToDER(&data, &data_len, kRootCAPEM));
 
   auto data_with_trailing_byte = std::make_unique<uint8_t[]>(data_len + 1);
   OPENSSL_memcpy(data_with_trailing_byte.get(), data.get(), data_len);
   data_with_trailing_byte[data_len] = 0;
 
-  bssl::UniquePtr<CRYPTO_BUFFER> buf_with_trailing_byte(
+  UniquePtr<CRYPTO_BUFFER> buf_with_trailing_byte(
       CRYPTO_BUFFER_new(data_with_trailing_byte.get(), data_len + 1, nullptr));
   ASSERT_TRUE(buf_with_trailing_byte);
 
-  bssl::UniquePtr<X509> root(
-      X509_parse_from_buffer(buf_with_trailing_byte.get()));
+  UniquePtr<X509> root(X509_parse_from_buffer(buf_with_trailing_byte.get()));
   ASSERT_FALSE(root);
   ERR_clear_error();
 }
@@ -2916,9 +3662,9 @@ TEST(X509Test, TestPrintUTCTIME) {
 
   for (auto t : asn1_utctime_tests) {
     SCOPED_TRACE(t.val);
-    bssl::UniquePtr<ASN1_UTCTIME> tm(ASN1_UTCTIME_new());
+    UniquePtr<ASN1_UTCTIME> tm(ASN1_UTCTIME_new());
     ASSERT_TRUE(tm);
-    bssl::UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
+    UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
     ASSERT_TRUE(bio);
 
     // Use this instead of ASN1_UTCTIME_set() because some callers get
@@ -2932,7 +3678,7 @@ TEST(X509Test, TestPrintUTCTIME) {
     size_t len;
     ASSERT_TRUE(BIO_mem_contents(bio.get(), &contents, &len));
     EXPECT_EQ(ok, (strcmp(t.want, "Bad time value") != 0) ? 1 : 0);
-    EXPECT_EQ(t.want, bssl::BytesAsStringView(bssl::Span(contents, len)));
+    EXPECT_EQ(t.want, BytesAsStringView(Span(contents, len)));
   }
 }
 
@@ -2954,20 +3700,20 @@ TEST(X509Test, PrettyPrintIntegers) {
     SCOPED_TRACE(in);
     BIGNUM *bn = nullptr;
     ASSERT_TRUE(BN_asc2bn(&bn, in));
-    bssl::UniquePtr<BIGNUM> free_bn(bn);
+    UniquePtr<BIGNUM> free_bn(bn);
 
     {
-      bssl::UniquePtr<ASN1_INTEGER> asn1(BN_to_ASN1_INTEGER(bn, nullptr));
+      UniquePtr<ASN1_INTEGER> asn1(BN_to_ASN1_INTEGER(bn, nullptr));
       ASSERT_TRUE(asn1);
-      bssl::UniquePtr<char> out(i2s_ASN1_INTEGER(nullptr, asn1.get()));
+      UniquePtr<char> out(i2s_ASN1_INTEGER(nullptr, asn1.get()));
       ASSERT_TRUE(out.get());
       EXPECT_STREQ(in, out.get());
     }
 
     {
-      bssl::UniquePtr<ASN1_ENUMERATED> asn1(BN_to_ASN1_ENUMERATED(bn, nullptr));
+      UniquePtr<ASN1_ENUMERATED> asn1(BN_to_ASN1_ENUMERATED(bn, nullptr));
       ASSERT_TRUE(asn1);
-      bssl::UniquePtr<char> out(i2s_ASN1_ENUMERATED(nullptr, asn1.get()));
+      UniquePtr<char> out(i2s_ASN1_ENUMERATED(nullptr, asn1.get()));
       ASSERT_TRUE(out.get());
       EXPECT_STREQ(in, out.get());
     }
@@ -2975,7 +3721,7 @@ TEST(X509Test, PrettyPrintIntegers) {
 }
 
 TEST(X509Test, X509AlgorSetMd) {
-  bssl::UniquePtr<X509_ALGOR> alg(X509_ALGOR_new());
+  UniquePtr<X509_ALGOR> alg(X509_ALGOR_new());
   ASSERT_TRUE(alg);
   EXPECT_TRUE(X509_ALGOR_set_md(alg.get(), EVP_sha256()));
   const ASN1_OBJECT *obj;
@@ -2994,7 +3740,7 @@ TEST(X509Test, X509AlgorSetMd) {
 }
 
 TEST(X509Test, X509NameSet) {
-  bssl::UniquePtr<X509_NAME> name(X509_NAME_new());
+  UniquePtr<X509_NAME> name(X509_NAME_new());
   ASSERT_TRUE(name);
   EXPECT_TRUE(X509_NAME_add_entry_by_txt(
       name.get(), "C", MBSTRING_ASC, reinterpret_cast<const uint8_t *>("US"),
@@ -3018,10 +3764,10 @@ TEST(X509Test, X509NameSet) {
   EXPECT_EQ(X509_NAME_ENTRY_set(X509_NAME_get_entry(name.get(), 2)), 2);
 }
 
-// Tests that |X509_NAME_hash| and |X509_NAME_hash_old|'s values never change.
-// These functions figure into |X509_LOOKUP_hash_dir|'s on-disk format, so they
+// Tests that `X509_NAME_hash` and `X509_NAME_hash_old`'s values never change.
+// These functions figure into `X509_LOOKUP_hash_dir`'s on-disk format, so they
 // must remain stable. In particular, if we ever remove name canonicalization,
-// we'll need to preserve it for |X509_NAME_hash|.
+// we'll need to preserve it for `X509_NAME_hash`.
 TEST(X509Test, NameHash) {
   struct {
     std::vector<uint8_t> name_der;
@@ -3043,7 +3789,7 @@ TEST(X509Test, NameHash) {
        0x8c0d4fea},
 
       // This name canonicalizes to the same value, with OpenSSL's algorithm, as
-      // the above input, so |hash| matches. |hash_old| doesn't use
+      // the above input, so `hash` matches. `hash_old` doesn't use
       // canonicalization and does not match.
       //
       // SEQUENCE {
@@ -3067,23 +3813,57 @@ TEST(X509Test, NameHash) {
         0x09, 0x00, 0x0a, 0x00, 0x0b, 0x00, 0x0c, 0x00, 0x0d, 0x00, 0x20},
        0xc90fba01,
        0xbe2dd8c8},
+
+      // OCTET STRING should never be canonicalized. It does not have a defined
+      // encoding.
+      //
+      // SEQUENCE {
+      //   SET {
+      //     SEQUENCE {
+      //       # commonName
+      //       OBJECT_IDENTIFIER { 2.5.4.3 }
+      //       OCTET_STRING { "Test Name" }
+      //     }
+      //   }
+      // }
+      {{0x30, 0x14, 0x31, 0x12, 0x30, 0x10, 0x06, 0x03, 0x55, 0x04, 0x03,
+        0x04, 0x09, 0x54, 0x65, 0x73, 0x74, 0x20, 0x4e, 0x61, 0x6d, 0x65},
+       0x4985589c,
+       0x457dbefa},
+
+      // The set of string types that we are canonicalized in `hash` cannot
+      // increase. (We also would not want to increase it anyway. Name
+      // canonicalization was a mistake.)
+      //
+      // SEQUENCE {
+      //   SET {
+      //     SEQUENCE {
+      //       # commonName
+      //       OBJECT_IDENTIFIER { 2.5.4.3 }
+      //       GeneralString { "Test Name" }
+      //     }
+      //   }
+      // }
+      {{0x30, 0x14, 0x31, 0x12, 0x30, 0x10, 0x06, 0x03, 0x55, 0x04, 0x03,
+        0x1b, 0x09, 0x54, 0x65, 0x73, 0x74, 0x20, 0x4e, 0x61, 0x6d, 0x65},
+       0xe6b4efbf,
+       0x186fd8dc},
   };
   for (const auto &t : kTests) {
     SCOPED_TRACE(Bytes(t.name_der));
     const uint8_t *der = t.name_der.data();
-    bssl::UniquePtr<X509_NAME> name(
-        d2i_X509_NAME(nullptr, &der, t.name_der.size()));
+    UniquePtr<X509_NAME> name(d2i_X509_NAME(nullptr, &der, t.name_der.size()));
     ASSERT_TRUE(name);
     EXPECT_EQ(t.hash, X509_NAME_hash(name.get()));
     EXPECT_EQ(t.hash_old, X509_NAME_hash_old(name.get()));
   }
 }
 
-TEST(X509Test, NoBasicConstraintsCertSign) {
-  bssl::UniquePtr<X509> root(CertFromPEM(kSANTypesRoot));
-  bssl::UniquePtr<X509> intermediate(
+TEST_P(X509VerifyTest, NoBasicConstraintsCertSign) {
+  UniquePtr<X509> root(CertFromPEM(kSANTypesRoot));
+  UniquePtr<X509> intermediate(
       CertFromPEM(kNoBasicConstraintsCertSignIntermediate));
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kNoBasicConstraintsCertSignLeaf));
+  UniquePtr<X509> leaf(CertFromPEM(kNoBasicConstraintsCertSignLeaf));
 
   ASSERT_TRUE(root);
   ASSERT_TRUE(intermediate);
@@ -3094,9 +3874,9 @@ TEST(X509Test, NoBasicConstraintsCertSign) {
   EXPECT_EQ(X509_V_ERR_INVALID_CA,
             Verify(leaf.get(), {root.get()}, {intermediate.get()}, {}, 0));
 
-  // |X509_check_purpose| with |X509_PURPOSE_ANY| and purpose -1 do not check
+  // `X509_check_purpose` with `X509_PURPOSE_ANY` and purpose -1 do not check
   // basicConstraints, but other purpose types do. (This is redundant with the
-  // actual basicConstraints check, but |X509_check_purpose| is public API.)
+  // actual basicConstraints check, but `X509_check_purpose` is public API.)
   EXPECT_TRUE(X509_check_purpose(intermediate.get(), -1, /*ca=*/1));
   EXPECT_TRUE(
       X509_check_purpose(intermediate.get(), X509_PURPOSE_ANY, /*ca=*/1));
@@ -3104,11 +3884,11 @@ TEST(X509Test, NoBasicConstraintsCertSign) {
                                   /*ca=*/1));
 }
 
-TEST(X509Test, NoBasicConstraintsNetscapeCA) {
-  bssl::UniquePtr<X509> root(CertFromPEM(kSANTypesRoot));
-  bssl::UniquePtr<X509> intermediate(
+TEST_P(X509VerifyTest, NoBasicConstraintsNetscapeCA) {
+  UniquePtr<X509> root(CertFromPEM(kSANTypesRoot));
+  UniquePtr<X509> intermediate(
       CertFromPEM(kNoBasicConstraintsNetscapeCAIntermediate));
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kNoBasicConstraintsNetscapeCALeaf));
+  UniquePtr<X509> leaf(CertFromPEM(kNoBasicConstraintsNetscapeCALeaf));
 
   ASSERT_TRUE(root);
   ASSERT_TRUE(intermediate);
@@ -3121,15 +3901,41 @@ TEST(X509Test, NoBasicConstraintsNetscapeCA) {
 }
 
 TEST(X509Test, MismatchAlgorithms) {
-  bssl::UniquePtr<X509> cert(CertFromPEM(kSelfSignedMismatchAlgorithms));
+  UniquePtr<X509> cert(CertFromPEM(kSelfSignedMismatchAlgorithms));
   ASSERT_TRUE(cert);
 
-  bssl::UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
+  UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(cert.get()));
   ASSERT_TRUE(pkey);
 
   EXPECT_FALSE(X509_verify(cert.get(), pkey.get()));
   EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_X509,
                           X509_R_SIGNATURE_ALGORITHM_MISMATCH));
+}
+
+TEST(X509Test, VerifyUnusedBits) {
+  UniquePtr<X509> cert(CertFromPEM(kLeafPEM));
+  ASSERT_TRUE(cert);
+  UniquePtr<X509> issuer(CertFromPEM(kIntermediatePEM));
+  ASSERT_TRUE(issuer);
+  UniquePtr<EVP_PKEY> pkey(X509_get_pubkey(issuer.get()));
+  ASSERT_TRUE(pkey);
+  ASSERT_TRUE(X509_verify(cert.get(), pkey.get()));
+
+  X509Impl *impl = FromOpaque(cert.get());
+  const uint8_t *data = ASN1_STRING_get0_data(impl->signature.get());
+  int len = ASN1_STRING_length(impl->signature.get());
+  ASSERT_TRUE(data);
+  ASSERT_GT(len, 0);
+
+  std::vector<uint8_t> sig_bytes(data, data + len);
+  sig_bytes[len - 1] &= 0xf0;  // Ensure lower bits are 0 for set1.
+  ASSERT_TRUE(ASN1_BIT_STRING_set1(impl->signature.get(), sig_bytes.data(),
+                                   sig_bytes.size(), 4));  // Set 4 unused bits.
+
+  ERR_clear_error();
+  EXPECT_FALSE(X509_verify(cert.get(), pkey.get()));
+  EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_X509,
+                          X509_R_INVALID_BIT_STRING_BITS_LEFT));
 }
 
 // TODO(crbug.com/387737061): Test that this function can decrypt certificates
@@ -3147,7 +3953,7 @@ TEST(X509Test, PEMX509Info) {
   auto crl_obj = CRLFromPEM(kBasicCRL);
   ASSERT_TRUE(crl_obj);
 
-  bssl::UniquePtr<EVP_PKEY> placeholder_key(EVP_PKEY_new());
+  UniquePtr<EVP_PKEY> placeholder_key(EVP_PKEY_new());
   ASSERT_TRUE(placeholder_key);
 
   std::string unknown =
@@ -3231,18 +4037,17 @@ wr6JtaX2G+pOmwcSPymZC4u2TncAP7KHgS8UGcMw8CE=
         // Expect a placeholder key.
         EXPECT_FALSE(info->x_pkey->dec_pkey);
       } else {
-        // EVP_PKEY_cmp returns one if the keys are equal.
         ASSERT_TRUE(info->x_pkey->dec_pkey);
-        EXPECT_EQ(1, EVP_PKEY_cmp(expected->key, info->x_pkey->dec_pkey));
+        EXPECT_EQ(1, EVP_PKEY_eq(expected->key, info->x_pkey->dec_pkey));
       }
     } else {
       EXPECT_EQ(nullptr, info->x_pkey);
     }
   };
 
-  bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
+  UniquePtr<BIO> bio(BIO_new_mem_buf(pem.data(), pem.size()));
   ASSERT_TRUE(bio);
-  bssl::UniquePtr<STACK_OF(X509_INFO)> infos(
+  UniquePtr<STACK_OF(X509_INFO)> infos(
       PEM_X509_INFO_read_bio(bio.get(), nullptr, nullptr, nullptr));
   ASSERT_TRUE(infos);
   ASSERT_EQ(std::size(kExpected), sk_X509_INFO_num(infos.get()));
@@ -3269,37 +4074,39 @@ wr6JtaX2G+pOmwcSPymZC4u2TncAP7KHgS8UGcMw8CE=
 
   bio.reset(BIO_new_mem_buf(bad_pem.data(), bad_pem.size()));
   ASSERT_TRUE(bio);
-  bssl::UniquePtr<STACK_OF(X509_INFO)> infos2(
+  UniquePtr<STACK_OF(X509_INFO)> infos2(
       PEM_X509_INFO_read_bio(bio.get(), nullptr, nullptr, nullptr));
   EXPECT_FALSE(infos2);
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
 
   bio.reset(BIO_new_mem_buf(bad_pem.data(), bad_pem.size()));
   ASSERT_TRUE(bio);
   EXPECT_FALSE(
       PEM_X509_INFO_read_bio(bio.get(), infos.get(), nullptr, nullptr));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_EQ(2 * std::size(kExpected), sk_X509_INFO_num(infos.get()));
 }
 
 TEST(X509Test, ReadBIOEmpty) {
-  bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(nullptr, 0));
+  UniquePtr<BIO> bio(BIO_new_mem_buf(nullptr, 0));
   ASSERT_TRUE(bio);
 
-  // CPython expects |ASN1_R_HEADER_TOO_LONG| on EOF, to terminate a series of
+  // CPython expects `ASN1_R_HEADER_TOO_LONG` on EOF, to terminate a series of
   // certificates.
-  bssl::UniquePtr<X509> x509(d2i_X509_bio(bio.get(), nullptr));
+  UniquePtr<X509> x509(d2i_X509_bio(bio.get(), nullptr));
   EXPECT_FALSE(x509);
   EXPECT_TRUE(
       ErrorEquals(ERR_get_error(), ERR_LIB_ASN1, ASN1_R_HEADER_TOO_LONG));
 }
 
 TEST(X509Test, ReadBIOOneByte) {
-  bssl::UniquePtr<BIO> bio(BIO_new_mem_buf("\x30", 1));
+  UniquePtr<BIO> bio(BIO_new_mem_buf("\x30", 1));
   ASSERT_TRUE(bio);
 
-  // CPython expects |ASN1_R_HEADER_TOO_LONG| on EOF, to terminate a series of
+  // CPython expects `ASN1_R_HEADER_TOO_LONG` on EOF, to terminate a series of
   // certificates. This EOF appeared after some data, however, so we do not wish
   // to signal EOF.
-  bssl::UniquePtr<X509> x509(d2i_X509_bio(bio.get(), nullptr));
+  UniquePtr<X509> x509(d2i_X509_bio(bio.get(), nullptr));
   EXPECT_FALSE(x509);
   EXPECT_TRUE(
       ErrorEquals(ERR_get_error(), ERR_LIB_ASN1, ASN1_R_NOT_ENOUGH_DATA));
@@ -3307,7 +4114,7 @@ TEST(X509Test, ReadBIOOneByte) {
 
 TEST(X509Test, PartialBIOReturn) {
   // Create a filter BIO that only reads and writes one byte at a time.
-  bssl::UniquePtr<BIO_METHOD> method(BIO_meth_new(0, nullptr));
+  UniquePtr<BIO_METHOD> method(BIO_meth_new(0, nullptr));
   ASSERT_TRUE(method);
   ASSERT_TRUE(BIO_meth_set_create(method.get(), [](BIO *b) -> int {
     BIO_set_init(b, 1);
@@ -3322,18 +4129,18 @@ TEST(X509Test, PartialBIOReturn) {
         return BIO_write(BIO_next(b), in, std::min(len, 1));
       }));
 
-  bssl::UniquePtr<BIO> bio(BIO_new(method.get()));
+  UniquePtr<BIO> bio(BIO_new(method.get()));
   ASSERT_TRUE(bio);
   BIO *mem_bio = BIO_new(BIO_s_mem());
   ASSERT_TRUE(mem_bio);
   BIO_push(bio.get(), mem_bio);  // BIO_push takes ownership.
 
-  bssl::UniquePtr<X509> cert(CertFromPEM(kLeafPEM));
+  UniquePtr<X509> cert(CertFromPEM(kLeafPEM));
   ASSERT_TRUE(cert);
   uint8_t *der = nullptr;
   int der_len = i2d_X509(cert.get(), &der);
   ASSERT_GT(der_len, 0);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
 
   // Write the certificate into the BIO. Though we only write one byte at a
   // time, the write should succeed.
@@ -3345,21 +4152,21 @@ TEST(X509Test, PartialBIOReturn) {
 
   // Read the certificate back out of the BIO. Though we only read one byte at a
   // time, the read should succeed.
-  bssl::UniquePtr<X509> cert2(d2i_X509_bio(bio.get(), nullptr));
+  UniquePtr<X509> cert2(d2i_X509_bio(bio.get(), nullptr));
   ASSERT_TRUE(cert2);
   EXPECT_EQ(0, X509_cmp(cert.get(), cert2.get()));
 }
 
-TEST(X509Test, CommonNameFallback) {
-  bssl::UniquePtr<X509> root = CertFromPEM(kSANTypesRoot);
+TEST_P(X509VerifyTest, CommonNameFallback) {
+  UniquePtr<X509> root = CertFromPEM(kSANTypesRoot);
   ASSERT_TRUE(root);
-  bssl::UniquePtr<X509> with_sans = CertFromPEM(kCommonNameWithSANs);
+  UniquePtr<X509> with_sans = CertFromPEM(kCommonNameWithSANs);
   ASSERT_TRUE(with_sans);
-  bssl::UniquePtr<X509> without_sans = CertFromPEM(kCommonNameWithoutSANs);
+  UniquePtr<X509> without_sans = CertFromPEM(kCommonNameWithoutSANs);
   ASSERT_TRUE(without_sans);
-  bssl::UniquePtr<X509> with_email = CertFromPEM(kCommonNameWithEmailSAN);
+  UniquePtr<X509> with_email = CertFromPEM(kCommonNameWithEmailSAN);
   ASSERT_TRUE(with_email);
-  bssl::UniquePtr<X509> with_ip = CertFromPEM(kCommonNameWithIPSAN);
+  UniquePtr<X509> with_ip = CertFromPEM(kCommonNameWithIPSAN);
   ASSERT_TRUE(with_ip);
 
   auto verify_cert = [&](X509 *leaf, unsigned flags, const char *host) {
@@ -3427,6 +4234,51 @@ TEST(X509Test, CommonNameFallback) {
                         "foo.host1.test"));
 }
 
+// Test that it is possible to set host flags on the store and hosts on the
+// individual verify operation.
+TEST(X509Test, SeparateHostFlagsAndHosts) {
+  UniquePtr<X509> root = CertFromPEM(kSANTypesRoot);
+  ASSERT_TRUE(root);
+  UniquePtr<X509> without_sans = CertFromPEM(kCommonNameWithoutSANs);
+  ASSERT_TRUE(without_sans);
+  std::string_view host = "foo.host1.test";
+
+  UniquePtr<X509_STORE> store(X509_STORE_new());
+  ASSERT_TRUE(store);
+  ASSERT_TRUE(X509_STORE_add_cert(store.get(), root.get()));
+
+  // By default, we allow the common name fallback. This is just to establish a
+  // baseline. If this fails (e.g. if we turn off the common name fallback by
+  // default), this test will need to be updated with a different flag.
+  {
+    UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+    ASSERT_TRUE(ctx);
+    ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), without_sans.get(),
+                                    nullptr));
+    ASSERT_TRUE(X509_VERIFY_PARAM_set1_host(
+        X509_STORE_CTX_get0_param(ctx.get()), host.data(), host.size()));
+    X509_STORE_CTX_set_time_posix(ctx.get(), /*flags=*/0, kReferenceTime);
+    EXPECT_EQ(1, X509_verify_cert(ctx.get()));
+    EXPECT_EQ(X509_V_OK, X509_STORE_CTX_get_error(ctx.get()));
+  }
+
+  // Disabling the common name fallback on the store should work.
+  X509_VERIFY_PARAM_set_hostflags(X509_STORE_get0_param(store.get()),
+                                  X509_CHECK_FLAG_NEVER_CHECK_SUBJECT);
+  {
+    UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+    ASSERT_TRUE(ctx);
+    ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), without_sans.get(),
+                                    nullptr));
+    ASSERT_TRUE(X509_VERIFY_PARAM_set1_host(
+        X509_STORE_CTX_get0_param(ctx.get()), host.data(), host.size()));
+    X509_STORE_CTX_set_time_posix(ctx.get(), /*flags=*/0, kReferenceTime);
+    EXPECT_EQ(0, X509_verify_cert(ctx.get()));
+    EXPECT_EQ(X509_V_ERR_HOSTNAME_MISMATCH,
+              X509_STORE_CTX_get_error(ctx.get()));
+  }
+}
+
 TEST(X509Test, LooksLikeDNSName) {
   static const char *kValid[] = {
       "example.com",  "eXample123-.com", "*.example.com",
@@ -3458,20 +4310,19 @@ TEST(X509Test, LooksLikeDNSName) {
   }
 }
 
-TEST(X509Test, CommonNameAndNameConstraints) {
-  bssl::UniquePtr<X509> root = CertFromPEM(kSANTypesRoot);
+TEST_P(X509VerifyTest, CommonNameAndNameConstraints) {
+  UniquePtr<X509> root = CertFromPEM(kSANTypesRoot);
   ASSERT_TRUE(root);
-  bssl::UniquePtr<X509> intermediate = CertFromPEM(kConstrainedIntermediate);
+  UniquePtr<X509> intermediate = CertFromPEM(kConstrainedIntermediate);
   ASSERT_TRUE(intermediate);
-  bssl::UniquePtr<X509> permitted = CertFromPEM(kCommonNamePermittedLeaf);
+  UniquePtr<X509> permitted = CertFromPEM(kCommonNamePermittedLeaf);
   ASSERT_TRUE(permitted);
-  bssl::UniquePtr<X509> not_permitted =
-      CertFromPEM(kCommonNameNotPermittedLeaf);
+  UniquePtr<X509> not_permitted = CertFromPEM(kCommonNameNotPermittedLeaf);
   ASSERT_TRUE(not_permitted);
-  bssl::UniquePtr<X509> not_permitted_with_sans =
+  UniquePtr<X509> not_permitted_with_sans =
       CertFromPEM(kCommonNameNotPermittedWithSANsLeaf);
   ASSERT_TRUE(not_permitted_with_sans);
-  bssl::UniquePtr<X509> not_dns = CertFromPEM(kCommonNameNotDNSLeaf);
+  UniquePtr<X509> not_dns = CertFromPEM(kCommonNameNotDNSLeaf);
   ASSERT_TRUE(not_dns);
 
   auto verify_cert = [&](X509 *leaf, unsigned flags, const char *host) {
@@ -3495,7 +4346,7 @@ TEST(X509Test, CommonNameAndNameConstraints) {
                         kCommonNameNotPermitted));
 
   // This occurs even if the built-in name checks aren't used. The caller may
-  // separately call |X509_check_host|.
+  // separately call `X509_check_host`.
   EXPECT_EQ(X509_V_ERR_NAME_CONSTRAINTS_WITHOUT_SANS,
             Verify(not_permitted.get(), {root.get()}, {intermediate.get()}, {},
                    0 /* no flags */, nullptr));
@@ -3516,24 +4367,24 @@ TEST(X509Test, CommonNameAndNameConstraints) {
             verify_cert(not_dns.get(), 0 /* no flags */, kCommonNameNotDNS));
 }
 
-TEST(X509Test, ServerGatedCryptoEKUs) {
-  bssl::UniquePtr<X509> root = CertFromPEM(kSANTypesRoot);
+TEST_P(X509VerifyTest, ServerGatedCryptoEKUs) {
+  UniquePtr<X509> root = CertFromPEM(kSANTypesRoot);
   ASSERT_TRUE(root);
-  bssl::UniquePtr<X509> ms_sgc = CertFromPEM(kMicrosoftSGCCert);
+  UniquePtr<X509> ms_sgc = CertFromPEM(kMicrosoftSGCCert);
   ASSERT_TRUE(ms_sgc);
-  bssl::UniquePtr<X509> ns_sgc = CertFromPEM(kNetscapeSGCCert);
+  UniquePtr<X509> ns_sgc = CertFromPEM(kNetscapeSGCCert);
   ASSERT_TRUE(ns_sgc);
-  bssl::UniquePtr<X509> server_eku = CertFromPEM(kServerEKUCert);
+  UniquePtr<X509> server_eku = CertFromPEM(kServerEKUCert);
   ASSERT_TRUE(server_eku);
-  bssl::UniquePtr<X509> server_eku_plus_ms_sgc =
+  UniquePtr<X509> server_eku_plus_ms_sgc =
       CertFromPEM(kServerEKUPlusMicrosoftSGCCert);
   ASSERT_TRUE(server_eku_plus_ms_sgc);
-  bssl::UniquePtr<X509> any_eku = CertFromPEM(kAnyEKU);
+  UniquePtr<X509> any_eku = CertFromPEM(kAnyEKU);
   ASSERT_TRUE(any_eku);
-  bssl::UniquePtr<X509> no_eku = CertFromPEM(kNoEKU);
+  UniquePtr<X509> no_eku = CertFromPEM(kNoEKU);
   ASSERT_TRUE(no_eku);
 
-  auto verify_cert = [&root](X509 *leaf) {
+  auto verify_cert = [&](X509 *leaf) {
     return Verify(leaf, {root.get()}, /*intermediates=*/{}, /*crls=*/{},
                   /*flags=*/0, [&](X509_STORE_CTX *ctx) {
                     X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx);
@@ -3543,7 +4394,7 @@ TEST(X509Test, ServerGatedCryptoEKUs) {
   };
 
   // Neither the Microsoft nor Netscape SGC EKU should be sufficient for
-  // |X509_PURPOSE_SSL_SERVER|. The "any" EKU probably, technically, should be.
+  // `X509_PURPOSE_SSL_SERVER`. The "any" EKU probably, technically, should be.
   // However, we've never accepted it and it's not acceptable in leaf
   // certificates by the Baseline, so perhaps we don't need this complexity.
   for (X509 *leaf : {ms_sgc.get(), ns_sgc.get(), any_eku.get()}) {
@@ -3560,14 +4411,14 @@ TEST(X509Test, ServerGatedCryptoEKUs) {
 
 // Test that invalid extensions are rejected by, if not the parser, at least the
 // verifier.
-TEST(X509Test, InvalidExtensions) {
-  bssl::UniquePtr<X509> root =
+TEST_P(X509VerifyTest, InvalidExtensions) {
+  UniquePtr<X509> root =
       CertFromPEM(GetTestData("crypto/x509/test/invalid_extension_root.pem"));
   ASSERT_TRUE(root);
-  bssl::UniquePtr<X509> intermediate = CertFromPEM(
+  UniquePtr<X509> intermediate = CertFromPEM(
       GetTestData("crypto/x509/test/invalid_extension_intermediate.pem"));
   ASSERT_TRUE(intermediate);
-  bssl::UniquePtr<X509> leaf =
+  UniquePtr<X509> leaf =
       CertFromPEM(GetTestData("crypto/x509/test/invalid_extension_leaf.pem"));
   ASSERT_TRUE(leaf);
 
@@ -3586,23 +4437,23 @@ TEST(X509Test, InvalidExtensions) {
   };
   for (const char *ext : kExtensions) {
     SCOPED_TRACE(ext);
-    bssl::UniquePtr<X509> invalid_root = CertFromPEM(GetTestData(
+    UniquePtr<X509> invalid_root = CertFromPEM(GetTestData(
         (std::string("crypto/x509/test/invalid_extension_root_") + ext + ".pem")
             .c_str()));
     ASSERT_TRUE(invalid_root);
 
-    bssl::UniquePtr<X509> invalid_intermediate = CertFromPEM(GetTestData(
+    UniquePtr<X509> invalid_intermediate = CertFromPEM(GetTestData(
         (std::string("crypto/x509/test/invalid_extension_intermediate_") + ext +
          ".pem")
             .c_str()));
     ASSERT_TRUE(invalid_intermediate);
 
-    bssl::UniquePtr<X509> invalid_leaf = CertFromPEM(GetTestData(
+    UniquePtr<X509> invalid_leaf = CertFromPEM(GetTestData(
         (std::string("crypto/x509/test/invalid_extension_leaf_") + ext + ".pem")
             .c_str()));
     ASSERT_TRUE(invalid_leaf);
 
-    bssl::UniquePtr<X509> trailing_leaf = CertFromPEM(GetTestData(
+    UniquePtr<X509> trailing_leaf = CertFromPEM(GetTestData(
         (std::string("crypto/x509/test/trailing_data_leaf_") + ext + ".pem")
             .c_str()));
     ASSERT_TRUE(trailing_leaf);
@@ -3616,7 +4467,7 @@ TEST(X509Test, InvalidExtensions) {
         Verify(trailing_leaf.get(), {root.get()}, {intermediate.get()}, {}));
 
     // If the invalid extension is on an intermediate or root,
-    // |X509_verify_cert| notices by way of being unable to build a path to
+    // `X509_verify_cert` notices by way of being unable to build a path to
     // a valid issuer.
     EXPECT_EQ(
         X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
@@ -3627,9 +4478,204 @@ TEST(X509Test, InvalidExtensions) {
   }
 }
 
+// CA certificates are required to have the keyCertSign bit.
+TEST_P(X509VerifyTest, KeyUsageCertSign) {
+  UniquePtr<EVP_PKEY> root_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(root_key);
+  UniquePtr<EVP_PKEY> ca_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(ca_key);
+  UniquePtr<EVP_PKEY> cert_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(cert_key);
+
+  UniquePtr<X509> root =
+      MakeTestCert("Root", "Root", root_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(root);
+  ASSERT_TRUE(X509_sign(root.get(), root_key.get(), EVP_sha256()));
+
+  UniquePtr<X509> ca = MakeTestCert("Root", "CA", ca_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(AddKeyUsage(ca.get(), {KeyUsage::kKeyCertSign}));
+  ASSERT_TRUE(X509_sign(ca.get(), root_key.get(), EVP_sha256()));
+
+  UniquePtr<X509> ca_wrong =
+      MakeTestCert("Root", "CA", ca_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca_wrong);
+  ASSERT_TRUE(AddKeyUsage(ca_wrong.get(), {KeyUsage::kDigitalSignature}));
+  ASSERT_TRUE(X509_sign(ca_wrong.get(), root_key.get(), EVP_sha256()));
+
+  UniquePtr<X509> cert =
+      MakeTestCert("CA", "Subject", cert_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(cert);
+  ASSERT_TRUE(X509_sign(cert.get(), ca_key.get(), EVP_sha256()));
+
+  EXPECT_EQ(X509_V_OK, Verify(cert.get(), {root.get()}, {ca.get()}, {}));
+
+  // This is currently implemented as part of finding issuers, so this currently
+  // manifests as `X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY` instead of
+  // `X509_V_ERR_KEYUSAGE_NO_CERTSIGN`.
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
+            Verify(cert.get(), {root.get()}, {ca_wrong.get()}, {}));
+
+  // It is possible, but difficult, for the callback to suppress this check. It
+  // is actually impossible in OpenSSL, but some of our callers currently rely
+  // on `X509_V_FLAG_CB_ISSUER_CHECK`. Until we rewrite those callers, add tests
+  // for this behavior.
+  EXPECT_EQ(X509_V_OK,
+            Verify(cert.get(), {root.get()}, {ca_wrong.get()}, {},
+                   X509_V_FLAG_CB_ISSUER_CHECK, [](X509_STORE_CTX *ctx) {
+                     SuppressErrorsWithVerifyCallback(
+                         ctx, {X509_V_ERR_KEYUSAGE_NO_CERTSIGN,
+                               X509_V_ERR_INVALID_CA});
+                   }));
+}
+
+// Our path builder currently requires AKID and SKID to match. This is more
+// strict than needed. A more general path-building would treat AKID/SKID match
+// as a hint (exercised by X509Test.DuplicateName), but not a hard requirement.
+// But `X509_verify_cert` currently matches strictly.
+TEST_P(X509VerifyTest, AKIDAndSKIDMatch) {
+  UniquePtr<EVP_PKEY> root_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(root_key);
+  UniquePtr<EVP_PKEY> ca_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(ca_key);
+  UniquePtr<EVP_PKEY> cert_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(cert_key);
+
+  static const uint8_t kRightKeyID[] = {1, 2, 3};
+  static const uint8_t kWrongKeyID[] = {4, 5, 6};
+
+  UniquePtr<X509> root =
+      MakeTestCert("Root", "Root", root_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(root);
+  ASSERT_TRUE(X509_sign(root.get(), root_key.get(), EVP_sha256()));
+
+  UniquePtr<X509> ca = MakeTestCert("Root", "CA", ca_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(AddSubjectKeyIdentifier(ca.get(), kRightKeyID));
+  ASSERT_TRUE(X509_sign(ca.get(), root_key.get(), EVP_sha256()));
+
+  UniquePtr<X509> ca_wrong =
+      MakeTestCert("Root", "CA", ca_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca_wrong);
+  ASSERT_TRUE(AddSubjectKeyIdentifier(ca_wrong.get(), kWrongKeyID));
+  ASSERT_TRUE(X509_sign(ca_wrong.get(), root_key.get(), EVP_sha256()));
+
+  UniquePtr<X509> cert =
+      MakeTestCert("CA", "Subject", cert_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(cert);
+  ASSERT_TRUE(AddAuthorityKeyIdentifier(cert.get(), kRightKeyID));
+  ASSERT_TRUE(X509_sign(cert.get(), ca_key.get(), EVP_sha256()));
+
+  EXPECT_EQ(X509_V_OK, Verify(cert.get(), {root.get()}, {ca.get()}, {}));
+
+  // This is currently implemented as part of finding issuers, so this currently
+  // manifests as `X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY` instead of
+  // `X509_V_ERR_AKID_SKID_MISMATCH`.
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
+            Verify(cert.get(), {root.get()}, {ca_wrong.get()}, {}));
+
+  // It is possible, but difficult, for the callback to suppress this check. It
+  // is actually impossible in OpenSSL, but some of our callers currently rely
+  // on `X509_V_FLAG_CB_ISSUER_CHECK`. Until we rewrite those callers, add tests
+  // for this behavior.
+  EXPECT_EQ(X509_V_OK,
+            Verify(cert.get(), {root.get()}, {ca_wrong.get()}, {},
+                   X509_V_FLAG_CB_ISSUER_CHECK, [](X509_STORE_CTX *ctx) {
+                     SuppressErrorsWithVerifyCallback(
+                         ctx, {X509_V_ERR_AKID_SKID_MISMATCH});
+                   }));
+}
+
+TEST_P(X509VerifyTest, SHA1Signatures) {
+  // This is currently enabled by default, so we disable it to test the
+  // rejection cases.
+  auto disallow_sha1 = [](X509_STORE_CTX *ctx) {
+    X509_VERIFY_PARAM_clear_flags(X509_STORE_CTX_get0_param(ctx),
+                                  X509_V_FLAG_ALLOW_SHA1);
+  };
+
+  for (const char *key_pem : {kP256Key, kRSAKey}) {
+    SCOPED_TRACE(key_pem == kP256Key ? "P-256" : "RSA");
+    UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(key_pem);
+    ASSERT_TRUE(key);
+
+    auto make_cert = [&](const char *issuer, const char *subject, bool is_ca,
+                         const EVP_MD *md) -> UniquePtr<X509> {
+      UniquePtr<X509> cert = MakeTestCert(issuer, subject, key.get(), is_ca);
+      if (cert == nullptr || !X509_sign(cert.get(), key.get(), md)) {
+        return nullptr;
+      }
+      return cert;
+    };
+
+    UniquePtr<X509> root = make_cert("Root", "Root", true, EVP_sha256());
+    UniquePtr<X509> root_sha1 = make_cert("Root", "Root", true, EVP_sha1());
+    UniquePtr<X509> intermediate =
+        make_cert("Root", "Intermediate", true, EVP_sha256());
+    UniquePtr<X509> intermediate_sha1 =
+        make_cert("Root", "Intermediate", true, EVP_sha1());
+    UniquePtr<X509> leaf =
+        make_cert("Intermediate", "Leaf", false, EVP_sha256());
+    UniquePtr<X509> leaf_sha1 =
+        make_cert("Intermediate", "Leaf", false, EVP_sha1());
+
+    ASSERT_THAT(root, testing::NotNull());
+    ASSERT_THAT(root_sha1, testing::NotNull());
+    ASSERT_THAT(intermediate, testing::NotNull());
+    ASSERT_THAT(intermediate_sha1, testing::NotNull());
+    ASSERT_THAT(leaf, testing::NotNull());
+    ASSERT_THAT(leaf_sha1, testing::NotNull());
+
+    // Control: an all-SHA-256 chain is unaffected by the flag.
+    EXPECT_EQ(X509_V_OK,
+              Verify(leaf.get(), {root.get()}, {intermediate.get()}, {}));
+    EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {intermediate.get()},
+                                {}, /*flags=*/0, disallow_sha1));
+
+    // By default, SHA-1 signatures are currently still accepted.
+    // TODO(crbug.com/461736992): Flip these when the default changes.
+    EXPECT_EQ(X509_V_OK,
+              Verify(leaf_sha1.get(), {root.get()}, {intermediate.get()}, {}));
+    EXPECT_EQ(X509_V_OK,
+              Verify(leaf.get(), {root.get()}, {intermediate_sha1.get()}, {}));
+
+    // Setting the flag explicitly accepts SHA-1.
+    EXPECT_EQ(X509_V_OK,
+              Verify(leaf_sha1.get(), {root.get()}, {intermediate.get()}, {},
+                     X509_V_FLAG_ALLOW_SHA1));
+
+    // Without the flag, SHA-1 in the leaf or intermediate is rejected.
+    EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+              Verify(leaf_sha1.get(), {root.get()}, {intermediate.get()}, {},
+                     /*flags=*/0, disallow_sha1));
+    EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+              Verify(leaf.get(), {root.get()}, {intermediate_sha1.get()}, {},
+                     /*flags=*/0, disallow_sha1));
+
+    // The self-signature on a trust anchor is never checked, so a SHA-1
+    // self-signed root is still accepted.
+    EXPECT_EQ(X509_V_OK,
+              Verify(leaf.get(), {root_sha1.get()}, {intermediate.get()}, {},
+                     /*flags=*/0, disallow_sha1));
+
+    // CRLs signed with SHA-1 follow the same rule.
+    UniquePtr<X509_CRL> crl_sha1 = MakeTestCRL("Intermediate", -1, 1);
+    ASSERT_THAT(crl_sha1, testing::NotNull());
+    crl_sha1 = SignAndReencodeCRL(crl_sha1.get(), key.get(), EVP_sha1());
+    ASSERT_THAT(crl_sha1, testing::NotNull());
+    EXPECT_EQ(
+        X509_V_OK,
+        Verify(leaf.get(), {root.get()}, {intermediate.get()}, {crl_sha1.get()},
+               X509_V_FLAG_CRL_CHECK | X509_V_FLAG_ALLOW_SHA1));
+    EXPECT_EQ(X509_V_ERR_CRL_SIGNATURE_FAILURE,
+              Verify(leaf.get(), {root.get()}, {intermediate.get()},
+                     {crl_sha1.get()}, X509_V_FLAG_CRL_CHECK, disallow_sha1));
+  }
+}
+
 // kExplicitDefaultVersionPEM is an X.509v1 certificate with the version number
 // encoded explicitly, rather than omitted as required by DER.
-static const char kExplicitDefaultVersionPEM[] = R"(
+const char kExplicitDefaultVersionPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBfTCCASSgAwIBAAIJANlMBNpJfb/rMAkGByqGSM49BAEwRTELMAkGA1UEBhMC
 QVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdp
@@ -3644,7 +4690,7 @@ FA==
 )";
 
 // kNegativeVersionPEM is an X.509 certificate with a negative version number.
-static const char kNegativeVersionPEM[] = R"(
+const char kNegativeVersionPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBfTCCASSgAwIB/wIJANlMBNpJfb/rMAkGByqGSM49BAEwRTELMAkGA1UEBhMC
 QVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdp
@@ -3660,7 +4706,7 @@ FA==
 
 // kFutureVersionPEM is an X.509 certificate with a version number value of
 // three, which is not defined. (v3 has value two).
-static const char kFutureVersionPEM[] = R"(
+const char kFutureVersionPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBfTCCASSgAwIBAwIJANlMBNpJfb/rMAkGByqGSM49BAEwRTELMAkGA1UEBhMC
 QVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdp
@@ -3675,8 +4721,8 @@ FA==
 )";
 
 // kOverflowVersionPEM is an X.509 certificate with a version field which
-// overflows |uint64_t|.
-static const char kOverflowVersionPEM[] = R"(
+// overflows `uint64_t`.
+const char kOverflowVersionPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBoDCCAUegJgIkAP//////////////////////////////////////////////
 AgkA2UwE2kl9v+swCQYHKoZIzj0EATBFMQswCQYDVQQGEwJBVTETMBEGA1UECAwK
@@ -3691,7 +4737,7 @@ xAcCIHweeRRqIYPwenRoeV8UmZpotPHLnhVe5h8yUmFedckU
 )";
 
 // kV1WithExtensionsPEM is an X.509v1 certificate with extensions.
-static const char kV1WithExtensionsPEM[] = R"(
+const char kV1WithExtensionsPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIByjCCAXECCQDZTATaSX2/6zAJBgcqhkjOPQQBMEUxCzAJBgNVBAYTAkFVMRMw
 EQYDVQQIDApTb21lLVN0YXRlMSEwHwYDVQQKDBhJbnRlcm5ldCBXaWRnaXRzIFB0
@@ -3707,7 +4753,7 @@ eRRqIYPwenRoeV8UmZpotPHLnhVe5h8yUmFedckU
 )";
 
 // kV2WithExtensionsPEM is an X.509v2 certificate with extensions.
-static const char kV2WithExtensionsPEM[] = R"(
+const char kV2WithExtensionsPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBzzCCAXagAwIBAQIJANlMBNpJfb/rMAkGByqGSM49BAEwRTELMAkGA1UEBhMC
 QVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdp
@@ -3723,7 +4769,7 @@ BwIgfB55FGohg/B6dGh5XxSZmmi08cueFV7mHzJSYV51yRQ=
 )";
 
 // kV1WithIssuerUniqueIDPEM is an X.509v1 certificate with an issuerUniqueID.
-static const char kV1WithIssuerUniqueIDPEM[] = R"(
+const char kV1WithIssuerUniqueIDPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBgzCCASoCCQDZTATaSX2/6zAJBgcqhkjOPQQBMEUxCzAJBgNVBAYTAkFVMRMw
 EQYDVQQIDApTb21lLVN0YXRlMSEwHwYDVQQKDBhJbnRlcm5ldCBXaWRnaXRzIFB0
@@ -3738,7 +4784,7 @@ MlJhXnXJFA==
 )";
 
 // kV1WithSubjectUniqueIDPEM is an X.509v1 certificate with an issuerUniqueID.
-static const char kV1WithSubjectUniqueIDPEM[] = R"(
+const char kV1WithSubjectUniqueIDPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBgzCCASoCCQDZTATaSX2/6zAJBgcqhkjOPQQBMEUxCzAJBgNVBAYTAkFVMRMw
 EQYDVQQIDApTb21lLVN0YXRlMSEwHwYDVQQKDBhJbnRlcm5ldCBXaWRnaXRzIFB0
@@ -3753,7 +4799,7 @@ MlJhXnXJFA==
 )";
 
 // kV1CRLWithExtensionsPEM is a v1 CRL with extensions.
-static const char kV1CRLWithExtensionsPEM[] = R"(
+const char kV1CRLWithExtensionsPEM[] = R"(
 -----BEGIN X509 CRL-----
 MIIBpDCBjTANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UECAwK
 Q2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJQm9y
@@ -3768,7 +4814,7 @@ hl1ms5qQiLYPjm4YELtnXQoFyC72tBjbdFd/ZE9k4CNKDbxFUXFbkw==
 )";
 
 // kV1CRLWithEntryExtensionsPEM is a v1 CRL with entry extensions.
-static const char kV1CRLWithEntryExtensionsPEM[] = R"(
+const char kV1CRLWithEntryExtensionsPEM[] = R"(
 -----BEGIN X509 CRL-----
 MIIB7DCB1TANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UECAwK
 Q2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJQm9y
@@ -3786,7 +4832,7 @@ Jf1k00LEKjpUSQRtnIu6btX8zspWN+WBRAAKZDQ/zJEI0H8pTTYAsw1lgD0MdKQ7
 
 // kExplicitDefaultVersionCRLPEM is a v1 CRL with an explicitly-encoded version
 // field.
-static const char kExplicitDefaultVersionCRLPEM[] = R"(
+const char kExplicitDefaultVersionCRLPEM[] = R"(
 -----BEGIN X509 CRL-----
 MIIBlzCBgAIBADANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -3801,7 +4847,7 @@ u2ddCgXILva0GNt0V39kT2TgI0oNvEVRcVuT
 )";
 
 // kV3CRLPEM is a v3 CRL. CRL versions only go up to v2.
-static const char kV3CRLPEM[] = R"(
+const char kV3CRLPEM[] = R"(
 -----BEGIN X509 CRL-----
 MIIBpzCBkAIBAjANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -3816,7 +4862,7 @@ diyu0fZ/bPAM3VAGawatf/SyWfBMyKpoPXEG39oAzmjjOj8en82psn7m474IGaho
 )";
 
 // kV2CSRPEM is a v2 CSR. CSR versions only go up to v1.
-static const char kV2CSRPEM[] = R"(
+const char kV2CSRPEM[] = R"(
 -----BEGIN CERTIFICATE REQUEST-----
 MIHJMHECAQEwDzENMAsGA1UEAwwEVGVzdDBZMBMGByqGSM49AgEGCCqGSM49AwEH
 A0IABJjsayyAQod1J7UJYNT8AH4WWxLdKV0ozhrIz6hCzBAze7AqXWOSH8G+1EWC
@@ -3827,7 +4873,7 @@ rsn4lSYsqI4OI4ei
 )";
 
 // kV3CSRPEM is a v3 CSR. CSR versions only go up to v1.
-static const char kV3CSRPEM[] = R"(
+const char kV3CSRPEM[] = R"(
 -----BEGIN CERTIFICATE REQUEST-----
 MIHJMHECAQIwDzENMAsGA1UEAwwEVGVzdDBZMBMGByqGSM49AgEGCCqGSM49AwEH
 A0IABJjsayyAQod1J7UJYNT8AH4WWxLdKV0ozhrIz6hCzBAze7AqXWOSH8G+1EWC
@@ -3844,43 +4890,65 @@ TEST(X509Test, InvalidVersion) {
   // https://crbug.com/42290225.
   EXPECT_TRUE(CertFromPEM(kExplicitDefaultVersionPEM));
   EXPECT_FALSE(CRLFromPEM(kExplicitDefaultVersionCRLPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(CertFromPEM(kNegativeVersionPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_FALSE(CertFromPEM(kFutureVersionPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(CertFromPEM(kOverflowVersionPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_FALSE(CertFromPEM(kV1WithExtensionsPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_FALSE(CertFromPEM(kV2WithExtensionsPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_FALSE(CertFromPEM(kV1WithIssuerUniqueIDPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_FALSE(CertFromPEM(kV1WithSubjectUniqueIDPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_FALSE(CRLFromPEM(kV1CRLWithExtensionsPEM));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_FIELD_FOR_VERSION}}));
   EXPECT_FALSE(CRLFromPEM(kV1CRLWithEntryExtensionsPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(CRLFromPEM(kV3CRLPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(CSRFromPEM(kV2CSRPEM));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
 
   // kV3CSRPEM is invalid but, for now, we accept it. See
   // https://github.com/certbot/certbot/pull/9334
   EXPECT_TRUE(CSRFromPEM(kV3CSRPEM));
 
-  bssl::UniquePtr<X509> x509(X509_new());
+  UniquePtr<X509> x509(X509_new());
   ASSERT_TRUE(x509);
   EXPECT_FALSE(X509_set_version(x509.get(), -1));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(X509_set_version(x509.get(), X509_VERSION_3 + 1));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(X509_set_version(x509.get(), 9999));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
 
-  bssl::UniquePtr<X509_CRL> crl(X509_CRL_new());
+  UniquePtr<X509_CRL> crl(X509_CRL_new());
   ASSERT_TRUE(crl);
   EXPECT_FALSE(X509_CRL_set_version(crl.get(), -1));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(X509_CRL_set_version(crl.get(), X509_CRL_VERSION_2 + 1));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(X509_CRL_set_version(crl.get(), 9999));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
 
-  bssl::UniquePtr<X509_REQ> req(X509_REQ_new());
+  UniquePtr<X509_REQ> req(X509_REQ_new());
   ASSERT_TRUE(req);
   EXPECT_FALSE(X509_REQ_set_version(req.get(), -1));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(X509_REQ_set_version(req.get(), X509_REQ_VERSION_1 + 1));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
   EXPECT_FALSE(X509_REQ_set_version(req.get(), 9999));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_INVALID_VERSION}}));
 }
 
 // kCRLEmptyExtension is a CRL with an empty extension list.
-static const char kCRLEmptyExtensionPEM[] = R"(
+const char kCRLEmptyExtensionPEM[] = R"(
 -----BEGIN X509 CRL-----
 MIIB3DCBxQIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -3896,7 +4964,7 @@ hGj8t1MUZdVY4UPtQ8oltSHkFEvH4PxOW/xKpHT4QQMl/WTTQsQqOlRJBG2ci7pu
 )";
 
 // kCRLEmptyEntryExtension is a CRL with an entry with an empty extension list.
-static const char kCRLEmptyEntryExtensionPEM[] = R"(
+const char kCRLEmptyEntryExtensionPEM[] = R"(
 -----BEGIN X509 CRL-----
 MIIB2jCBwwIBATANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJVUzETMBEGA1UE
 CAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwNTW91bnRhaW4gVmlldzESMBAGA1UECgwJ
@@ -3919,24 +4987,24 @@ TEST(X509Test, EmptyCRLExtensions) {
 }
 
 // Unlike upstream OpenSSL, we require a non-null store in
-// |X509_STORE_CTX_init|.
+// `X509_STORE_CTX_init`.
 TEST(X509Test, NullStore) {
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
+  UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
   ASSERT_TRUE(leaf);
-  bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+  UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
   ASSERT_TRUE(ctx);
   EXPECT_FALSE(X509_STORE_CTX_init(ctx.get(), nullptr, leaf.get(), nullptr));
 }
 
 TEST(X509Test, StoreCtxReuse) {
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
+  UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
   ASSERT_TRUE(leaf);
-  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+  UniquePtr<X509_STORE> store(X509_STORE_new());
   ASSERT_TRUE(store);
-  bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+  UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
   ASSERT_TRUE(ctx);
   ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), leaf.get(), nullptr));
-  // Re-initializing |ctx| should not leak memory.
+  // Re-initializing `ctx` should not leak memory.
   ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), leaf.get(), nullptr));
 }
 
@@ -3963,7 +5031,7 @@ TEST(X509Test, BasicConstraints) {
     std::string path = "crypto/x509/test/";
     path += test.file;
 
-    bssl::UniquePtr<X509> cert = CertFromPEM(GetTestData(path.c_str()));
+    UniquePtr<X509> cert = CertFromPEM(GetTestData(path.c_str()));
     ASSERT_TRUE(cert);
     EXPECT_EQ(test.flags, X509_get_extension_flags(cert.get()) & kFlagMask);
     EXPECT_EQ(test.path_len, X509_get_pathlen(cert.get()));
@@ -3972,7 +5040,7 @@ TEST(X509Test, BasicConstraints) {
 
 // The following strings are test certificates signed by kP256Key and kRSAKey,
 // with missing, NULL, or invalid algorithm parameters.
-static const char kP256NoParam[] = R"(
+const char kP256NoParam[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBIDCBxqADAgECAgIE0jAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDEwRUZXN0MCAX
 DTAwMDEwMTAwMDAwMFoYDzIxMDAwMTAxMDAwMDAwWjAPMQ0wCwYDVQQDEwRUZXN0
@@ -3983,7 +5051,7 @@ aXd7HqhpVUaglYKw9ChmNUACIQCpMdL0fNkFNDbRww9dSl/y7kBdk/tp16HiqeSy
 gGzFYg==
 -----END CERTIFICATE-----
 )";
-static const char kP256NullParam[] = R"(
+const char kP256NullParam[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBJDCByKADAgECAgIE0jAMBggqhkjOPQQDAgUAMA8xDTALBgNVBAMTBFRlc3Qw
 IBcNMDAwMTAxMDAwMDAwWhgPMjEwMDAxMDEwMDAwMDBaMA8xDTALBgNVBAMTBFRl
@@ -3994,7 +5062,7 @@ UUeSXOQQKX5aLzsQitwwmNF3ZgH3AiEAsYHcrVj/ftmoQIORARkQ/+PrqntXev8r
 t6uPxHrmpUY=
 -----END CERTIFICATE-----
 )";
-static const char kP256InvalidParam[] = R"(
+const char kP256InvalidParam[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBMTCBz6ADAgECAgIE0jATBggqhkjOPQQDAgQHZ2FyYmFnZTAPMQ0wCwYDVQQD
 EwRUZXN0MCAXDTAwMDEwMTAwMDAwMFoYDzIxMDAwMTAxMDAwMDAwWjAPMQ0wCwYD
@@ -4005,7 +5073,7 @@ AiAglpDf/YhN89LeJ2WAs/F0SJIrsuhS4uoInIz6WXUiuQIhAIu5Pwhp5E3Pbo8y
 fLULTZnynuQUULQkRcF7S7T2WpIL
 -----END CERTIFICATE-----
 )";
-static const char kRSANoParam[] = R"(
+const char kRSANoParam[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBWzCBx6ADAgECAgIE0jALBgkqhkiG9w0BAQswDzENMAsGA1UEAxMEVGVzdDAg
 Fw0wMDAxMDEwMDAwMDBaGA8yMTAwMDEwMTAwMDAwMFowDzENMAsGA1UEAxMEVGVz
@@ -4017,7 +5085,7 @@ l9kIeZ6FVPmC30d3sXx70Jjs+ZX9yt7kD1gLyNAQQfeYfa4rORAZT1n2YitD74NY
 TWUH2ieFP3l+ecj1SeQR
 -----END CERTIFICATE-----
 )";
-static const char kRSANullParam[] = R"(
+const char kRSANullParam[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBXzCByaADAgECAgIE0jANBgkqhkiG9w0BAQsFADAPMQ0wCwYDVQQDEwRUZXN0
 MCAXDTAwMDEwMTAwMDAwMFoYDzIxMDAwMTAxMDAwMDAwWjAPMQ0wCwYDVQQDEwRU
@@ -4029,7 +5097,7 @@ seZfvtBDR0TwJm0S/pQl8prKB4wgALcwe3bmi56Rq85nzY5ZLNcP16LQxL+jAAua
 SwmQUz4bRpckRBj+sIyp1We+pg==
 -----END CERTIFICATE-----
 )";
-static const char kRSAInvalidParam[] = R"(
+const char kRSAInvalidParam[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBbTCB0KADAgECAgIE0jAUBgkqhkiG9w0BAQsEB2dhcmJhZ2UwDzENMAsGA1UE
 AxMEVGVzdDAgFw0wMDAxMDEwMDAwMDBaGA8yMTAwMDEwMTAwMDAwMFowDzENMAsG
@@ -4044,10 +5112,10 @@ AHTJ6cWWjCNrZhqiWWVI3jdK+h5xpRG8jGMXxR4JnjtoYRRusJLOXhmapwCB6fA0
 
 TEST(X509Test, AlgorithmParameters) {
   // P-256 parameters should be omitted, but we accept NULL ones.
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
-  bssl::UniquePtr<X509> cert = CertFromPEM(kP256NoParam);
+  UniquePtr<X509> cert = CertFromPEM(kP256NoParam);
   ASSERT_TRUE(cert);
   EXPECT_TRUE(X509_verify(cert.get(), key.get()));
 
@@ -4080,6 +5148,43 @@ TEST(X509Test, AlgorithmParameters) {
       ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_PARAMETER));
 }
 
+namespace {
+
+// ExpectTotalOrder checks that `cmp` is a three-way comparison consistent with
+// a total order. `a` and `b` must hold the same pairwise-distinct values,
+// parsed separately, so equality is not checked by pointer.
+template <typename T, typename Cmp>
+void ExpectTotalOrder(const std::vector<T> &a, const std::vector<T> &b,
+                      Cmp cmp) {
+  ASSERT_EQ(a.size(), b.size());
+  auto sign = [](int v) { return (v > 0) - (v < 0); };
+  for (size_t i = 0; i < a.size(); i++) {
+    SCOPED_TRACE(i);
+    for (size_t j = 0; j < a.size(); j++) {
+      SCOPED_TRACE(j);
+      int ij = cmp(a[i], b[j]);
+      if (i == j) {
+        EXPECT_EQ(ij, 0);
+      } else {
+        EXPECT_NE(ij, 0);
+      }
+      EXPECT_EQ(sign(ij), -sign(cmp(b[j], a[i])));
+      if (ij >= 0) {
+        continue;
+      }
+      for (size_t k = 0; k < a.size(); k++) {
+        if (cmp(b[j], a[k]) < 0) {
+          SCOPED_TRACE(k);
+          EXPECT_LT(cmp(a[i], b[k]), 0);
+        }
+      }
+    }
+  }
+}
+
+}  // namespace
+
+#if !defined(BORINGSSL_SHARED_LIBRARY)
 TEST(X509Test, GeneralName) {
   const std::vector<uint8_t> kNames[] = {
       // [0] {
@@ -4240,7 +5345,7 @@ TEST(X509Test, GeneralName) {
     SCOPED_TRACE(Bytes(kNames[i]));
 
     const uint8_t *ptr = kNames[i].data();
-    bssl::UniquePtr<GENERAL_NAME> a(
+    UniquePtr<GENERAL_NAME> a(
         d2i_GENERAL_NAME(nullptr, &ptr, kNames[i].size()));
     ASSERT_TRUE(a);
     ASSERT_EQ(ptr, kNames[i].data() + kNames[i].size());
@@ -4248,14 +5353,14 @@ TEST(X509Test, GeneralName) {
     uint8_t *enc = nullptr;
     int enc_len = i2d_GENERAL_NAME(a.get(), &enc);
     ASSERT_GE(enc_len, 0);
-    bssl::UniquePtr<uint8_t> free_enc(enc);
+    UniquePtr<uint8_t> free_enc(enc);
     EXPECT_EQ(Bytes(enc, enc_len), Bytes(kNames[i]));
 
     for (size_t j = 0; j < std::size(kNames); j++) {
       SCOPED_TRACE(Bytes(kNames[j]));
 
       ptr = kNames[j].data();
-      bssl::UniquePtr<GENERAL_NAME> b(
+      UniquePtr<GENERAL_NAME> b(
           d2i_GENERAL_NAME(nullptr, &ptr, kNames[j].size()));
       ASSERT_TRUE(b);
       ASSERT_EQ(ptr, kNames[j].data() + kNames[j].size());
@@ -4267,9 +5372,63 @@ TEST(X509Test, GeneralName) {
       }
     }
   }
+
+  auto fill_names = [&](std::vector<UniquePtr<GENERAL_NAME>> &names) {
+    for (const auto &der : kNames) {
+      const uint8_t *ptr = der.data();
+      names.emplace_back(d2i_GENERAL_NAME(nullptr, &ptr, der.size()));
+      ASSERT_TRUE(names.back());
+    }
+  };
+  std::vector<UniquePtr<GENERAL_NAME>> a, b;
+  ASSERT_NO_FATAL_FAILURE(fill_names(a));
+  ASSERT_NO_FATAL_FAILURE(fill_names(b));
+  ExpectTotalOrder(a, b, [](const auto &x, const auto &y) {
+    return GENERAL_NAME_cmp(x.get(), y.get());
+  });
 }
 
-// Test that extracting fields of an |X509_ALGOR| works correctly.
+#endif  // !BORINGSSL_SHARED_LIBRARY
+
+TEST(X509Test, AlgorCmpTotalOrder) {
+  const std::vector<uint8_t> kAlgors[] = {
+      // SEQUENCE { sha256WithRSAEncryption }
+      {0x30, 0x0b, 0x06, 0x09, OBJ_ENC_sha256WithRSAEncryption},
+      // SEQUENCE { sha256WithRSAEncryption, NULL }
+      {0x30, 0x0d, 0x06, 0x09, OBJ_ENC_sha256WithRSAEncryption, 0x05, 0x00},
+      // SEQUENCE { sha256WithRSAEncryption, OCTET STRING {} }
+      {0x30, 0x0d, 0x06, 0x09, OBJ_ENC_sha256WithRSAEncryption, 0x04, 0x00},
+      // SEQUENCE { sha384WithRSAEncryption, NULL }
+      {0x30, 0x0d, 0x06, 0x09, OBJ_ENC_sha384WithRSAEncryption, 0x05, 0x00},
+      // SEQUENCE { id-ecPublicKey, prime256v1 }
+      {0x30, 0x13, 0x06, 0x07, OBJ_ENC_X9_62_id_ecPublicKey, 0x06, 0x08,
+       OBJ_ENC_X9_62_prime256v1},
+      // SEQUENCE { id-ecPublicKey, secp384r1 }
+      {0x30, 0x10, 0x06, 0x07, OBJ_ENC_X9_62_id_ecPublicKey, 0x06, 0x05,
+       OBJ_ENC_secp384r1},
+      // SEQUENCE { ecdsa-with-SHA256 }
+      {0x30, 0x0a, 0x06, 0x08, OBJ_ENC_ecdsa_with_SHA256},
+  };
+
+  auto parse_all = [&](std::vector<UniquePtr<X509_ALGOR>> &out) {
+    for (const auto &der : kAlgors) {
+      SCOPED_TRACE(Bytes(der));
+      const uint8_t *ptr = der.data();
+      UniquePtr<X509_ALGOR> algor(d2i_X509_ALGOR(nullptr, &ptr, der.size()));
+      ASSERT_TRUE(algor);
+      ASSERT_EQ(ptr, der.data() + der.size());
+      out.push_back(std::move(algor));
+    }
+  };
+  std::vector<UniquePtr<X509_ALGOR>> a, b;
+  ASSERT_NO_FATAL_FAILURE(parse_all(a));
+  ASSERT_NO_FATAL_FAILURE(parse_all(b));
+  ExpectTotalOrder(a, b, [](const auto &x, const auto &y) {
+    return X509_ALGOR_cmp(x.get(), y.get());
+  });
+}
+
+// Test that extracting fields of an `X509_ALGOR` works correctly.
 TEST(X509Test, X509AlgorExtract) {
   static const char kTestOID[] = "1.2.840.113554.4.1.72585.2";
   const struct {
@@ -4305,7 +5464,7 @@ TEST(X509Test, X509AlgorExtract) {
     SCOPED_TRACE(Bytes(t.param_der));
 
     // Assemble an AlgorithmIdentifier with the parameter.
-    bssl::ScopedCBB cbb;
+    ScopedCBB cbb;
     CBB seq, oid;
     ASSERT_TRUE(CBB_init(cbb.get(), 64));
     ASSERT_TRUE(CBB_add_asn1(cbb.get(), &seq, CBS_ASN1_SEQUENCE));
@@ -4315,7 +5474,7 @@ TEST(X509Test, X509AlgorExtract) {
     ASSERT_TRUE(CBB_flush(cbb.get()));
 
     const uint8_t *ptr = CBB_data(cbb.get());
-    bssl::UniquePtr<X509_ALGOR> alg(
+    UniquePtr<X509_ALGOR> alg(
         d2i_X509_ALGOR(nullptr, &ptr, CBB_len(cbb.get())));
     ASSERT_TRUE(alg);
 
@@ -4331,25 +5490,25 @@ TEST(X509Test, X509AlgorExtract) {
                           /*always_return_oid=*/1));
     EXPECT_STREQ(oid_buf, kTestOID);
 
-    // |param_type| and |param_value| must be consistent with |ASN1_TYPE|.
+    // `param_type` and `param_value` must be consistent with `ASN1_TYPE`.
     if (param_type == V_ASN1_UNDEF) {
       EXPECT_EQ(nullptr, param_value);
     } else {
-      bssl::UniquePtr<ASN1_TYPE> param(ASN1_TYPE_new());
+      UniquePtr<ASN1_TYPE> param(ASN1_TYPE_new());
       ASSERT_TRUE(param);
       ASSERT_TRUE(ASN1_TYPE_set1(param.get(), param_type, param_value));
 
       uint8_t *param_der = nullptr;
       int param_len = i2d_ASN1_TYPE(param.get(), &param_der);
       ASSERT_GE(param_len, 0);
-      bssl::UniquePtr<uint8_t> free_param_der(param_der);
+      UniquePtr<uint8_t> free_param_der(param_der);
 
       EXPECT_EQ(Bytes(param_der, param_len), Bytes(t.param_der));
     }
   }
 }
 
-// Test the various |X509_ATTRIBUTE| creation functions.
+// Test the various `X509_ATTRIBUTE` creation functions.
 TEST(X509Test, Attribute) {
   // The expected attribute values are:
   // 1. BMPString U+2603
@@ -4367,16 +5526,17 @@ TEST(X509Test, Attribute) {
 
     int idx = 0;
     if (mask & kTest1Mask) {
-      // The first attribute should contain |kTest1|.
+      // The first attribute should contain `kTest1`.
       const ASN1_TYPE *value = X509_ATTRIBUTE_get0_type(attr, idx);
       ASSERT_TRUE(value);
       EXPECT_EQ(V_ASN1_BMPSTRING, value->type);
       EXPECT_EQ(Bytes(kTest1),
                 Bytes(ASN1StringAsBytes(value->value.bmpstring)));
 
-      // |X509_ATTRIBUTE_get0_data| requires the type match.
+      // `X509_ATTRIBUTE_get0_data` requires the type match.
       EXPECT_FALSE(
           X509_ATTRIBUTE_get0_data(attr, idx, V_ASN1_OCTET_STRING, nullptr));
+      EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509, X509_R_WRONG_TYPE}}));
       const ASN1_BMPSTRING *bmpstring = static_cast<const ASN1_BMPSTRING *>(
           X509_ATTRIBUTE_get0_data(attr, idx, V_ASN1_BMPSTRING, nullptr));
       ASSERT_TRUE(bmpstring);
@@ -4406,18 +5566,18 @@ TEST(X509Test, Attribute) {
     EXPECT_FALSE(X509_ATTRIBUTE_get0_type(attr, idx));
   };
 
-  bssl::UniquePtr<ASN1_STRING> str(ASN1_STRING_type_new(V_ASN1_BMPSTRING));
+  UniquePtr<ASN1_STRING> str(ASN1_STRING_type_new(V_ASN1_BMPSTRING));
   ASSERT_TRUE(str);
   ASSERT_TRUE(ASN1_STRING_set(str.get(), kTest1, sizeof(kTest1)));
 
-  // Test |X509_ATTRIBUTE_create|.
-  bssl::UniquePtr<X509_ATTRIBUTE> attr(
+  // Test `X509_ATTRIBUTE_create`.
+  UniquePtr<X509_ATTRIBUTE> attr(
       X509_ATTRIBUTE_create(NID_friendlyName, V_ASN1_BMPSTRING, str.get()));
   ASSERT_TRUE(attr);
-  str.release();  // |X509_ATTRIBUTE_create| takes ownership on success.
+  str.release();  // `X509_ATTRIBUTE_create` takes ownership on success.
   check_attribute(attr.get(), kTest1Mask);
 
-  // Test the |MBSTRING_*| form of |X509_ATTRIBUTE_set1_data|.
+  // Test the `MBSTRING_*` form of `X509_ATTRIBUTE_set1_data`.
   attr.reset(X509_ATTRIBUTE_new());
   ASSERT_TRUE(attr);
   ASSERT_TRUE(
@@ -4426,19 +5586,19 @@ TEST(X509Test, Attribute) {
                                        sizeof(kTest1UTF8)));
   check_attribute(attr.get(), kTest1Mask);
 
-  // Test the |ASN1_STRING| form of |X509_ATTRIBUTE_set1_data|.
+  // Test the `ASN1_STRING` form of `X509_ATTRIBUTE_set1_data`.
   ASSERT_TRUE(X509_ATTRIBUTE_set1_data(attr.get(), V_ASN1_BMPSTRING, kTest2,
                                        sizeof(kTest2)));
   check_attribute(attr.get(), kTest1Mask | kTest2Mask);
 
-  // The |ASN1_STRING| form of |X509_ATTRIBUTE_set1_data| should correctly
+  // The `ASN1_STRING` form of `X509_ATTRIBUTE_set1_data` should correctly
   // handle negative integers.
   const uint8_t kOne = 1;
   ASSERT_TRUE(
       X509_ATTRIBUTE_set1_data(attr.get(), V_ASN1_NEG_INTEGER, &kOne, 1));
   check_attribute(attr.get(), kTest1Mask | kTest2Mask | kTest3Mask);
 
-  // Test the |ASN1_TYPE| form of |X509_ATTRIBUTE_set1_data|.
+  // Test the `ASN1_TYPE` form of `X509_ATTRIBUTE_set1_data`.
   attr.reset(X509_ATTRIBUTE_new());
   ASSERT_TRUE(attr);
   ASSERT_TRUE(
@@ -4450,17 +5610,17 @@ TEST(X509Test, Attribute) {
       X509_ATTRIBUTE_set1_data(attr.get(), V_ASN1_BMPSTRING, str.get(), -1));
   check_attribute(attr.get(), kTest1Mask);
 
-  // An |attrtype| of zero leaves the attribute empty.
+  // An `attrtype` of zero leaves the attribute empty.
   attr.reset(X509_ATTRIBUTE_create_by_NID(
       nullptr, NID_friendlyName, /*attrtype=*/0, /*data=*/nullptr, /*len=*/0));
   ASSERT_TRUE(attr);
   check_attribute(attr.get(), 0);
 }
 
-// Test that, by default, |X509_V_FLAG_TRUSTED_FIRST| is set, which means we'll
-// skip over server-sent expired intermediates when there is a local trust
-// anchor that works better.
-TEST(X509Test, TrustedFirst) {
+// Test that we'll skip over server-sent expired intermediates when there is a
+// local trust anchor that works better. This was once controlled by an
+// on-by-default flag, `X509_V_FLAG_TRUSTED_FIRST`, but is now always enabled.
+TEST_P(X509VerifyTest, TrustedFirst) {
   // Generate the following certificates:
   //
   //                     Root 2 (in store, expired)
@@ -4470,10 +5630,10 @@ TEST(X509Test, TrustedFirst) {
   //          Intermediate
   //                |
   //               Leaf
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
-  bssl::UniquePtr<X509> root2 =
+  UniquePtr<X509> root2 =
       MakeTestCert("Root 2", "Root 2", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(root2);
   ASSERT_TRUE(ASN1_TIME_adj(X509_getm_notAfter(root2.get()), kReferenceTime,
@@ -4481,76 +5641,51 @@ TEST(X509Test, TrustedFirst) {
                             /*offset_sec=*/-1));
   ASSERT_TRUE(X509_sign(root2.get(), key.get(), EVP_sha256()));
 
-  bssl::UniquePtr<X509> root1 =
+  UniquePtr<X509> root1 =
       MakeTestCert("Root 1", "Root 1", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(root1);
   ASSERT_TRUE(X509_sign(root1.get(), key.get(), EVP_sha256()));
 
-  bssl::UniquePtr<X509> root1_cross =
+  UniquePtr<X509> root1_cross =
       MakeTestCert("Root 2", "Root 1", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(root1_cross);
   ASSERT_TRUE(X509_sign(root1_cross.get(), key.get(), EVP_sha256()));
 
-  bssl::UniquePtr<X509> intermediate =
+  UniquePtr<X509> intermediate =
       MakeTestCert("Root 1", "Intermediate", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(intermediate);
   ASSERT_TRUE(X509_sign(intermediate.get(), key.get(), EVP_sha256()));
 
-  bssl::UniquePtr<X509> leaf =
+  UniquePtr<X509> leaf =
       MakeTestCert("Intermediate", "Leaf", key.get(), /*is_ca=*/false);
   ASSERT_TRUE(leaf);
   ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
 
-  // As a control, confirm that |leaf| -> |intermediate| -> |root1| is valid,
-  // but the path through |root1_cross| is expired.
+  // As a control, confirm that `leaf` -> `intermediate` -> `root1` is valid,
+  // but the path through `root1_cross` is expired.
   EXPECT_EQ(X509_V_OK,
             Verify(leaf.get(), {root1.get()}, {intermediate.get()}, {}));
   EXPECT_EQ(X509_V_ERR_CERT_HAS_EXPIRED,
             Verify(leaf.get(), {root2.get()},
                    {intermediate.get(), root1_cross.get()}, {}));
 
-  // By default, we should find the |leaf| -> |intermediate| -> |root2| chain,
-  // skipping |root1_cross|.
+  // We should find the `leaf` -> `intermediate` -> `root1` chain, skipping
+  // `root1_cross`, whether or not `root2` is trusted.
   EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root1.get(), root2.get()},
                               {intermediate.get(), root1_cross.get()}, {}));
-
-  // When |X509_V_FLAG_TRUSTED_FIRST| is disabled, we get stuck on the expired
-  // intermediate. Note we need the callback to clear the flag. Setting |flags|
-  // to zero only skips setting new flags.
-  //
-  // This test exists to confirm our current behavior, but these modes are just
-  // workarounds for not having an actual path-building verifier. If we fix it,
-  // this test can be removed.
-  EXPECT_EQ(X509_V_ERR_CERT_HAS_EXPIRED,
-            Verify(leaf.get(), {root1.get(), root2.get()},
-                   {intermediate.get(), root1_cross.get()}, {}, /*flags=*/0,
-                   [&](X509_STORE_CTX *ctx) {
-                     X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx);
-                     X509_VERIFY_PARAM_clear_flags(param,
-                                                   X509_V_FLAG_TRUSTED_FIRST);
-                   }));
-
-  // Even when |X509_V_FLAG_TRUSTED_FIRST| is disabled, if |root2| is not
-  // trusted, the alt chains logic recovers the path.
-  EXPECT_EQ(
-      X509_V_OK,
-      Verify(leaf.get(), {root1.get()}, {intermediate.get(), root1_cross.get()},
-             {}, /*flags=*/0, [&](X509_STORE_CTX *ctx) {
-               X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx);
-               X509_VERIFY_PARAM_clear_flags(param, X509_V_FLAG_TRUSTED_FIRST);
-             }));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root1.get()},
+                              {intermediate.get(), root1_cross.get()}, {}));
 }
 
 // Test that notBefore and notAfter checks work correctly.
-TEST(X509Test, Expiry) {
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+TEST_P(X509VerifyTest, Expiry) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
   auto make_cert = [&](const char *issuer, const char *subject, bool is_ca,
                        int not_before_offset,
-                       int not_after_offset) -> bssl::UniquePtr<X509> {
-    bssl::UniquePtr<X509> cert =
-        MakeTestCert(issuer, subject, key.get(), is_ca);
+                       int not_after_offset) -> UniquePtr<X509> {
+    UniquePtr<X509> cert = MakeTestCert(issuer, subject, key.get(), is_ca);
     if (cert == nullptr ||
         !ASN1_TIME_adj(X509_getm_notBefore(cert.get()), kReferenceTime,
                        /*offset_day=*/not_before_offset,
@@ -4565,7 +5700,7 @@ TEST(X509Test, Expiry) {
   };
 
   struct Certs {
-    bssl::UniquePtr<X509> not_yet_valid, valid, expired;
+    UniquePtr<X509> not_yet_valid, valid, expired;
   };
   auto make_certs = [&](const char *issuer, const char *subject,
                         bool is_ca) -> Certs {
@@ -4635,7 +5770,7 @@ TEST(X509Test, Expiry) {
                   Verify(leaf.valid.get(), {root_cross.valid.get()},
                          {intermediate.valid.get()}, {}, flags));
       } else {
-        // |X509_V_FLAG_PARTIAL_CHAIN| allows non-self-signed trust anchors.
+        // `X509_V_FLAG_PARTIAL_CHAIN` allows non-self-signed trust anchors.
         EXPECT_EQ(X509_V_OK, Verify(leaf.valid.get(), {root_cross.valid.get()},
                                     {intermediate.valid.get()}, {}, flags));
         // Expiry of the trust anchor must still be checked.
@@ -4669,16 +5804,46 @@ TEST(X509Test, Expiry) {
                      X509_VERIFY_PARAM_clear_flags(param,
                                                    X509_V_FLAG_USE_CHECK_TIME);
                    }));
+
+  // Time zone offsets in notBefore and notAfter fields are rejected by default,
+  // but allowed with X509_V_FLAG_ALLOW_TIMEZONE_OFFSET.
+  UniquePtr<X509> leaf_not_before_tz =
+      MakeTestCert("Intermediate", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf_not_before_tz);
+  ASSERT_TRUE(ASN1_STRING_set(X509_getm_notBefore(leaf_not_before_tz.get()),
+                              "160926010000+0100", 17));
+  ASSERT_TRUE(X509_sign(leaf_not_before_tz.get(), key.get(), EVP_sha256()));
+
+  EXPECT_EQ(X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD,
+            Verify(leaf_not_before_tz.get(), {root.valid.get()},
+                   {intermediate.valid.get()}, {}));
+  EXPECT_EQ(X509_V_OK, Verify(leaf_not_before_tz.get(), {root.valid.get()},
+                              {intermediate.valid.get()}, {},
+                              X509_V_FLAG_ALLOW_TIMEZONE_OFFSET));
+
+  UniquePtr<X509> leaf_not_after_tz =
+      MakeTestCert("Intermediate", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf_not_after_tz);
+  ASSERT_TRUE(ASN1_STRING_set(X509_getm_notAfter(leaf_not_after_tz.get()),
+                              "160928010000+0100", 17));
+  ASSERT_TRUE(X509_sign(leaf_not_after_tz.get(), key.get(), EVP_sha256()));
+
+  EXPECT_EQ(X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD,
+            Verify(leaf_not_after_tz.get(), {root.valid.get()},
+                   {intermediate.valid.get()}, {}));
+  EXPECT_EQ(X509_V_OK, Verify(leaf_not_after_tz.get(), {root.valid.get()},
+                              {intermediate.valid.get()}, {},
+                              X509_V_FLAG_ALLOW_TIMEZONE_OFFSET));
 }
 
-TEST(X509Test, SignatureVerification) {
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+TEST_P(X509VerifyTest, SignatureVerification) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
   struct Certs {
-    bssl::UniquePtr<X509> valid;
-    bssl::UniquePtr<X509> bad_key_type, bad_key;
-    bssl::UniquePtr<X509> bad_sig_type, bad_sig;
+    UniquePtr<X509> valid;
+    UniquePtr<X509> bad_key_type, bad_key;
+    UniquePtr<X509> bad_sig_type, bad_sig;
   };
   auto make_certs = [&](const char *issuer, const char *subject,
                         bool is_ca) -> Certs {
@@ -4691,14 +5856,14 @@ TEST(X509Test, SignatureVerification) {
 
     static const uint8_t kInvalid[] = {'i', 'n', 'v', 'a', 'l', 'i', 'd'};
 
-    // Extracting the algorithm identifier from |certs.valid|'s SPKI, with
+    // Extracting the algorithm identifier from `certs.valid`'s SPKI, with
     // OpenSSL's API, is very tedious. Instead, we'll just rely on knowing it is
     // ecPublicKey with P-256 as parameters.
     const ASN1_BIT_STRING *pubkey = X509_get0_pubkey_bitstr(certs.valid.get());
     int pubkey_len = ASN1_STRING_length(pubkey);
 
     // Sign a copy of the certificate where the key type is an unsupported OID.
-    bssl::UniquePtr<uint8_t> pubkey_data(static_cast<uint8_t *>(
+    UniquePtr<uint8_t> pubkey_data(static_cast<uint8_t *>(
         OPENSSL_memdup(ASN1_STRING_get0_data(pubkey), pubkey_len)));
     certs.bad_key_type = MakeTestCert(issuer, subject, key.get(), is_ca);
     if (pubkey_data == nullptr || certs.bad_key_type == nullptr ||
@@ -4724,7 +5889,7 @@ TEST(X509Test, SignatureVerification) {
       return Certs{};
     }
 
-    bssl::UniquePtr<X509_ALGOR> wrong_algo(X509_ALGOR_new());
+    UniquePtr<X509_ALGOR> wrong_algo(X509_ALGOR_new());
     if (wrong_algo == nullptr ||
         !X509_ALGOR_set0(wrong_algo.get(), OBJ_nid2obj(NID_subject_alt_name),
                          V_ASN1_NULL, nullptr)) {
@@ -4772,44 +5937,21 @@ TEST(X509Test, SignatureVerification) {
             Verify(leaf.valid.get(), {root.valid.get()},
                    {intermediate.bad_sig_type.get()}, {}));
 
-  // By default, the redundant root signature is not checked.
+  // The redundant root signature is not checked. It carries no securiy value.
   EXPECT_EQ(X509_V_OK, Verify(leaf.valid.get(), {root.bad_sig.get()},
                               {intermediate.valid.get()}, {}));
   EXPECT_EQ(X509_V_OK, Verify(leaf.valid.get(), {root.bad_sig_type.get()},
                               {intermediate.valid.get()}, {}));
 
-  // The caller can request checking it, although it's pointless.
-  EXPECT_EQ(
-      X509_V_ERR_CERT_SIGNATURE_FAILURE,
-      Verify(leaf.valid.get(), {root.bad_sig.get()}, {intermediate.valid.get()},
-             {}, X509_V_FLAG_CHECK_SS_SIGNATURE));
-  EXPECT_EQ(
-      X509_V_ERR_CERT_SIGNATURE_FAILURE,
-      Verify(leaf.valid.get(), {root.bad_sig_type.get()},
-             {intermediate.valid.get()}, {}, X509_V_FLAG_CHECK_SS_SIGNATURE));
-
-  // The above also applies when accepting a trusted, self-signed root as the
-  // target certificate.
+  // Likewise when accepting a trusted, self-signed root as the target
+  // certificate.
   EXPECT_EQ(X509_V_OK,
             Verify(root.bad_sig.get(), {root.bad_sig.get()}, {}, {}));
   EXPECT_EQ(X509_V_OK,
             Verify(root.bad_sig_type.get(), {root.bad_sig_type.get()}, {}, {}));
-  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
-            Verify(root.bad_sig.get(), {root.bad_sig.get()}, {}, {},
-                   X509_V_FLAG_CHECK_SS_SIGNATURE));
-  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
-            Verify(root.bad_sig_type.get(), {root.bad_sig_type.get()}, {}, {},
-                   X509_V_FLAG_CHECK_SS_SIGNATURE));
 
-  // If an intermediate is a trust anchor, the redundant signature is always
-  // ignored, even with |X509_V_FLAG_CHECK_SS_SIGNATURE|. (We cannot check the
-  // signature without the key.)
-  EXPECT_EQ(X509_V_OK,
-            Verify(leaf.valid.get(), {intermediate.bad_sig.get()}, {}, {},
-                   X509_V_FLAG_CHECK_SS_SIGNATURE | X509_V_FLAG_PARTIAL_CHAIN));
-  EXPECT_EQ(X509_V_OK,
-            Verify(leaf.valid.get(), {intermediate.bad_sig_type.get()}, {}, {},
-                   X509_V_FLAG_CHECK_SS_SIGNATURE | X509_V_FLAG_PARTIAL_CHAIN));
+  // If an intermediate is a trust anchor, the redundant signature is likewise
+  // ignored. (We cannot check the signature without the key anyway.)
   EXPECT_EQ(X509_V_OK, Verify(leaf.valid.get(), {intermediate.bad_sig.get()},
                               {}, {}, X509_V_FLAG_PARTIAL_CHAIN));
   EXPECT_EQ(X509_V_OK,
@@ -4835,29 +5977,12 @@ TEST(X509Test, SignatureVerification) {
                               {intermediate.valid.get()}, {}));
   EXPECT_EQ(X509_V_OK, Verify(leaf.bad_key_type.get(), {root.valid.get()},
                               {intermediate.valid.get()}, {}));
-
-  // At the time we go to verify signatures, it is possible that we have a
-  // single-element certificate chain with a certificate that isn't self-signed.
-  // This does not seem to be reachable except if missing trust anchors are
-  // suppressed with the verify callback, but exercise this codepath anyway.
-  EXPECT_EQ(X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE,
-            Verify(leaf.valid.get(), {}, {}, {}, 0, [](X509_STORE_CTX *ctx) {
-              X509_STORE_CTX_set_verify_cb(
-                  ctx, [](int ok, X509_STORE_CTX *ctx_inner) -> int {
-                    if (ok) {
-                      return ok;
-                    }
-                    // Suppress the missing issuer certificate.
-                    int err = X509_STORE_CTX_get_error(ctx_inner);
-                    return err == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY;
-                  });
-            }));
 }
 
 // kConstructedBitString is an X.509 certificate where the signature is encoded
 // as a BER constructed BIT STRING. Note that, while OpenSSL's parser accepts
 // this input, it interprets the value incorrectly.
-static const char kConstructedBitString[] = R"(
+const char kConstructedBitString[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBJTCBxqADAgECAgIE0jAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDEwRUZXN0MCAX
 DTAwMDEwMTAwMDAwMFoYDzIxMDAwMTAxMDAwMDAwWjAPMQ0wCwYDVQQDEwRUZXN0
@@ -4871,7 +5996,7 @@ oeKp5LKAbMVi
 
 // kConstructedOctetString is an X.509 certificate where an extension is encoded
 // as a BER constructed OCTET STRING.
-static const char kConstructedOctetString[] = R"(
+const char kConstructedOctetString[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBJDCByqADAgECAgIE0jAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDEwRUZXN0MCAX
 DTAwMDEwMTAwMDAwMFoYDzIxMDAwMTAxMDAwMDAwWjAPMQ0wCwYDVQQDEwRUZXN0
@@ -4885,7 +6010,7 @@ HiAqcml3ex6oaVVGoJWCsPQoZjVAAiEAqTHS9HzZBTQ20cMPXUpf8u5AXZP7adeh
 
 // kIndefiniteLength is an X.509 certificate where the outermost SEQUENCE uses
 // BER indefinite-length encoding.
-static const char kIndefiniteLength[] = R"(
+const char kIndefiniteLength[] = R"(
 -----BEGIN CERTIFICATE-----
 MIAwgcagAwIBAgICBNIwCgYIKoZIzj0EAwIwDzENMAsGA1UEAxMEVGVzdDAgFw0w
 MDAxMDEwMDAwMDBaGA8yMTAwMDEwMTAwMDAwMFowDzENMAsGA1UEAxMEVGVzdDBZ
@@ -4899,7 +6024,7 @@ xWIAAA==
 
 // kNonZeroPadding is an X.09 certificate where the BIT STRING signature field
 // has non-zero padding values.
-static const char kNonZeroPadding[] = R"(
+const char kNonZeroPadding[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIB0DCCAXagAwIBAgIJANlMBNpJfb/rMAkGByqGSM49BAEwRTELMAkGA1UEBhMC
 QVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdp
@@ -4916,7 +6041,7 @@ BwIgfB55FGohg/B6dGh5XxSZmmi08cueFV7mHzJSYV51yRQB
 
 // kHighTagNumber is an X.509 certificate where the outermost SEQUENCE tag uses
 // high tag number form.
-static const char kHighTagNumber[] = R"(
+const char kHighTagNumber[] = R"(
 -----BEGIN CERTIFICATE-----
 PxCCASAwgcagAwIBAgICBNIwCgYIKoZIzj0EAwIwDzENMAsGA1UEAxMEVGVzdDAg
 Fw0wMDAxMDEwMDAwMDBaGA8yMTAwMDEwMTAwMDAwMFowDzENMAsGA1UEAxMEVGVz
@@ -4930,7 +6055,7 @@ soBsxWI=
 
 // kNonMinimalLengthOuter is an X.509 certificate where the outermost SEQUENCE
 // has a non-minimal length.
-static const char kNonMinimalLengthOuter[] = R"(
+const char kNonMinimalLengthOuter[] = R"(
 -----BEGIN CERTIFICATE-----
 MIMAASAwgcagAwIBAgICBNIwCgYIKoZIzj0EAwIwDzENMAsGA1UEAxMEVGVzdDAg
 Fw0wMDAxMDEwMDAwMDBaGA8yMTAwMDEwMTAwMDAwMFowDzENMAsGA1UEAxMEVGVz
@@ -4944,7 +6069,7 @@ soBsxWI=
 
 // kNonMinimalLengthSignature is an X.509 certificate where the signature has a
 // non-minimal length.
-static const char kNonMinimalLengthSignature[] = R"(
+const char kNonMinimalLengthSignature[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBITCBxqADAgECAgIE0jAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDEwRUZXN0MCAX
 DTAwMDEwMTAwMDAwMFoYDzIxMDAwMTAxMDAwMDAwWjAPMQ0wCwYDVQQDEwRUZXN0
@@ -4958,7 +6083,7 @@ soBsxWI=
 
 // kNonMinimalLengthSerial is an X.509 certificate where the serial number has a
 // non-minimal length.
-static const char kNonMinimalLengthSerial[] = R"(
+const char kNonMinimalLengthSerial[] = R"(
 -----BEGIN CERTIFICATE-----
 MIIBITCBx6ADAgECAoECBNIwCgYIKoZIzj0EAwIwDzENMAsGA1UEAxMEVGVzdDAg
 Fw0wMDAxMDEwMDAwMDBaGA8yMTAwMDEwMTAwMDAwMFowDzENMAsGA1UEAxMEVGVz
@@ -4973,26 +6098,34 @@ soBsxWI=
 TEST(X509Test, BER) {
   // Constructed strings are forbidden in DER.
   EXPECT_FALSE(CertFromPEM(kConstructedBitString));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_FALSE(CertFromPEM(kConstructedOctetString));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   // Indefinite lengths are forbidden in DER.
   EXPECT_FALSE(CertFromPEM(kIndefiniteLength));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   // Padding bits in BIT STRINGs must be zero in BER.
   EXPECT_FALSE(CertFromPEM(kNonZeroPadding));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_INVALID_BIT_STRING_PADDING}}));
   // Tags must be minimal in both BER and DER, though many BER decoders
   // incorrectly support non-minimal tags.
   EXPECT_FALSE(CertFromPEM(kHighTagNumber));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   // Lengths must be minimal in DER.
   EXPECT_FALSE(CertFromPEM(kNonMinimalLengthOuter));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   EXPECT_FALSE(CertFromPEM(kNonMinimalLengthSerial));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
   // We, for now, accept a non-minimal length in the signature field. See
   // b/18228011.
   EXPECT_TRUE(CertFromPEM(kNonMinimalLengthSignature));
 }
 
-TEST(X509Test, Names) {
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+TEST_P(X509VerifyTest, Names) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
-  bssl::UniquePtr<X509> root =
+  UniquePtr<X509> root =
       MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(root);
   ASSERT_TRUE(X509_sign(root.get(), key.get(), EVP_sha256()));
@@ -5001,6 +6134,7 @@ TEST(X509Test, Names) {
     std::vector<std::pair<int, std::string>> cert_subject;
     std::vector<std::string> cert_dns_names;
     std::vector<std::string> cert_emails;
+    bool cert_invalid_subject_alt_name;
     std::vector<std::string> valid_dns_names;
     std::vector<std::string> invalid_dns_names;
     std::vector<std::string> valid_emails;
@@ -5012,6 +6146,7 @@ TEST(X509Test, Names) {
           /*cert_subject=*/{},
           /*cert_dns_names=*/{"example.com", "WWW.EXAMPLE.COM"},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/
           {"example.com", "EXAMPLE.COM", "www.example.com", "WWW.EXAMPLE.COM"},
           /*invalid_dns_names=*/{"test.example.com", "example.org"},
@@ -5025,6 +6160,7 @@ TEST(X509Test, Names) {
           /*cert_subject=*/{},
           /*cert_dns_names=*/{"*.example.com", "*.EXAMPLE.ORG"},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/
           {"www.example.com", "WWW.EXAMPLE.COM", "www.example.org",
            "WWW.EXAMPLE.ORG"},
@@ -5040,6 +6176,7 @@ TEST(X509Test, Names) {
           /*cert_subject=*/{},
           /*cert_dns_names=*/{"example.com", "*.example.com"},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{"example.com"},
           /*invalid_dns_names=*/{"www.example.com"},
           /*valid_emails=*/{},
@@ -5054,6 +6191,7 @@ TEST(X509Test, Names) {
           {"a.*", "**.b.example", "*c.example", "d*.example", "e*e.example",
            "*", ".", "..", "*."},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{},
           /*invalid_dns_names=*/
           {"a.example", "test.b.example", "cc.example", "dd.example",
@@ -5070,6 +6208,7 @@ TEST(X509Test, Names) {
           {"xn--rger-koa.a.example", "*.xn--rger-koa.b.example",
            "www.xn--rger-koa.c.example"},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/
           {"xn--rger-koa.a.example", "www.xn--rger-koa.b.example",
            "www.xn--rger-koa.c.example"},
@@ -5089,6 +6228,7 @@ TEST(X509Test, Names) {
                             {NID_commonName, "*.b.example"}},
           /*cert_dns_names=*/{},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/
           {"a.example", "A.EXAMPLE", "test.b.example", "TEST.B.EXAMPLE"},
           /*invalid_dns_names=*/{},
@@ -5101,6 +6241,22 @@ TEST(X509Test, Names) {
                             {NID_commonName, "*.b.example"}},
           /*cert_dns_names=*/{"example.com"},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
+          /*valid_dns_names=*/{},
+          /*invalid_dns_names=*/
+          {"a.example", "A.EXAMPLE", "test.b.example", "TEST.B.EXAMPLE"},
+          /*valid_emails=*/{},
+          /*invalid_emails=*/{},
+          /*flags=*/0,
+      },
+
+      // An invalid SAN extension should not trigger the common name fallback.
+      {
+          /*cert_subject=*/{{NID_commonName, "a.example"},
+                            {NID_commonName, "*.b.example"}},
+          /*cert_dns_names=*/{},
+          /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/true,
           /*valid_dns_names=*/{},
           /*invalid_dns_names=*/
           {"a.example", "A.EXAMPLE", "test.b.example", "TEST.B.EXAMPLE"},
@@ -5114,6 +6270,7 @@ TEST(X509Test, Names) {
           /*cert_subject=*/{{NID_organizationName, "example.com"}},
           /*cert_dns_names=*/{},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{},
           /*invalid_dns_names=*/{"example.com"},
           /*valid_emails=*/{},
@@ -5126,6 +6283,7 @@ TEST(X509Test, Names) {
           /*cert_subject=*/{},
           /*cert_dns_names=*/{"www.example.com"},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{},
           /*invalid_dns_names=*/{"*.example.com"},
           /*valid_emails=*/{},
@@ -5139,6 +6297,7 @@ TEST(X509Test, Names) {
           /*cert_subject=*/{},
           /*cert_dns_names=*/{"www.a.example", "*.b.test"},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{},
           /*invalid_dns_names=*/
           {".www.a.example", ".www.b.test", ".a.example", ".b.test", ".example",
@@ -5154,6 +6313,7 @@ TEST(X509Test, Names) {
           /*cert_subject=*/{},
           /*cert_dns_names=*/{},
           /*cert_emails=*/{"test@a.example", "TEST@B.EXAMPLE"},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{},
           /*invalid_dns_names=*/{"a.example", "b.example"},
           /*valid_emails=*/
@@ -5171,6 +6331,7 @@ TEST(X509Test, Names) {
                             {NID_pkcs9_emailAddress, "TEST@B.EXAMPLE"}},
           /*cert_dns_names=*/{},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{},
           /*invalid_dns_names=*/{"a.example", "b.example"},
           /*valid_emails=*/
@@ -5187,6 +6348,7 @@ TEST(X509Test, Names) {
           /*cert_subject=*/{},
           /*cert_dns_names=*/{},
           /*cert_emails=*/{"test@*.a.example", "@b.example", "*@c.example"},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{},
           /*invalid_dns_names=*/{},
           /*valid_emails=*/{},
@@ -5203,6 +6365,7 @@ TEST(X509Test, Names) {
                             {NID_countryName, "US"}},
           /*cert_dns_names=*/{},
           /*cert_emails=*/{},
+          /*cert_invalid_subject_alt_name=*/false,
           /*valid_dns_names=*/{"a.example"},
           /*invalid_dns_names=*/{},
           /*valid_emails=*/{"test@b.example"},
@@ -5216,11 +6379,11 @@ TEST(X509Test, Names) {
     SCOPED_TRACE(i++);
 
     // Issue a test certificate.
-    bssl::UniquePtr<X509> cert =
+    UniquePtr<X509> cert =
         MakeTestCert("Root", "Leaf", key.get(), /*is_ca=*/false);
     ASSERT_TRUE(cert);
     if (!t.cert_subject.empty()) {
-      bssl::UniquePtr<X509_NAME> subject(X509_NAME_new());
+      UniquePtr<X509_NAME> subject(X509_NAME_new());
       ASSERT_TRUE(subject);
       for (const auto &entry : t.cert_subject) {
         ASSERT_TRUE(X509_NAME_add_entry_by_NID(
@@ -5230,28 +6393,35 @@ TEST(X509Test, Names) {
       }
       ASSERT_TRUE(X509_set_subject_name(cert.get(), subject.get()));
     }
-    bssl::UniquePtr<GENERAL_NAMES> sans(sk_GENERAL_NAME_new_null());
+    UniquePtr<GENERAL_NAMES> sans(sk_GENERAL_NAME_new_null());
     ASSERT_TRUE(sans);
     for (const auto &dns : t.cert_dns_names) {
-      bssl::UniquePtr<GENERAL_NAME> name(GENERAL_NAME_new());
+      UniquePtr<GENERAL_NAME> name(GENERAL_NAME_new());
       ASSERT_TRUE(name);
       name->type = GEN_DNS;
       name->d.dNSName = ASN1_IA5STRING_new();
       ASSERT_TRUE(name->d.dNSName);
       ASSERT_TRUE(ASN1_STRING_set(name->d.dNSName, dns.data(), dns.size()));
-      ASSERT_TRUE(bssl::PushToStack(sans.get(), std::move(name)));
+      ASSERT_TRUE(PushToStack(sans.get(), std::move(name)));
     }
     for (const auto &email : t.cert_emails) {
-      bssl::UniquePtr<GENERAL_NAME> name(GENERAL_NAME_new());
+      UniquePtr<GENERAL_NAME> name(GENERAL_NAME_new());
       ASSERT_TRUE(name);
       name->type = GEN_EMAIL;
       name->d.rfc822Name = ASN1_IA5STRING_new();
       ASSERT_TRUE(name->d.rfc822Name);
       ASSERT_TRUE(
           ASN1_STRING_set(name->d.rfc822Name, email.data(), email.size()));
-      ASSERT_TRUE(bssl::PushToStack(sans.get(), std::move(name)));
+      ASSERT_TRUE(PushToStack(sans.get(), std::move(name)));
     }
-    if (sk_GENERAL_NAME_num(sans.get()) != 0) {
+    if (t.cert_invalid_subject_alt_name) {
+      UniquePtr<X509_EXTENSION> ext(X509_EXTENSION_new());
+      ASSERT_TRUE(ext);
+      ASSERT_TRUE(X509_EXTENSION_set_object(ext.get(),
+                                            OBJ_nid2obj(NID_subject_alt_name)));
+      // Leave the contents as an empty string, which is invalid.
+      ASSERT_TRUE(X509_add_ext(cert.get(), ext.get(), -1));
+    } else if (sk_GENERAL_NAME_num(sans.get()) != 0) {
       ASSERT_TRUE(X509_add1_ext_i2d(cert.get(), NID_subject_alt_name,
                                     sans.get(), /*crit=*/0, /*flags=*/0));
     }
@@ -5261,7 +6431,8 @@ TEST(X509Test, Names) {
       SCOPED_TRACE(dns);
       EXPECT_EQ(1, X509_check_host(cert.get(), dns.data(), dns.size(), t.flags,
                                    /*peername=*/nullptr));
-      EXPECT_EQ(X509_V_OK,
+      EXPECT_EQ(t.cert_invalid_subject_alt_name ? X509_V_ERR_INVALID_EXTENSION
+                                                : X509_V_OK,
                 Verify(cert.get(), {root.get()}, /*intermediates=*/{},
                        /*crls=*/{}, /*flags=*/0, [&](X509_STORE_CTX *ctx) {
                          X509_VERIFY_PARAM *param =
@@ -5276,7 +6447,11 @@ TEST(X509Test, Names) {
       SCOPED_TRACE(dns);
       EXPECT_EQ(0, X509_check_host(cert.get(), dns.data(), dns.size(), t.flags,
                                    /*peername=*/nullptr));
-      EXPECT_EQ(X509_V_ERR_HOSTNAME_MISMATCH,
+      if (t.cert_invalid_subject_alt_name) {
+        EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
+      }
+      EXPECT_EQ(t.cert_invalid_subject_alt_name ? X509_V_ERR_INVALID_EXTENSION
+                                                : X509_V_ERR_HOSTNAME_MISMATCH,
                 Verify(cert.get(), {root.get()}, /*intermediates=*/{},
                        /*crls=*/{}, /*flags=*/0, [&](X509_STORE_CTX *ctx) {
                          X509_VERIFY_PARAM *param =
@@ -5291,7 +6466,11 @@ TEST(X509Test, Names) {
       SCOPED_TRACE(email);
       EXPECT_EQ(
           1, X509_check_email(cert.get(), email.data(), email.size(), t.flags));
-      EXPECT_EQ(X509_V_OK,
+      if (t.cert_invalid_subject_alt_name) {
+        EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
+      }
+      EXPECT_EQ(t.cert_invalid_subject_alt_name ? X509_V_ERR_INVALID_EXTENSION
+                                                : X509_V_OK,
                 Verify(cert.get(), {root.get()}, /*intermediates=*/{},
                        /*crls=*/{}, /*flags=*/0, [&](X509_STORE_CTX *ctx) {
                          X509_VERIFY_PARAM *param =
@@ -5306,7 +6485,11 @@ TEST(X509Test, Names) {
       SCOPED_TRACE(email);
       EXPECT_EQ(
           0, X509_check_email(cert.get(), email.data(), email.size(), t.flags));
-      EXPECT_EQ(X509_V_ERR_EMAIL_MISMATCH,
+      if (t.cert_invalid_subject_alt_name) {
+        EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
+      }
+      EXPECT_EQ(t.cert_invalid_subject_alt_name ? X509_V_ERR_INVALID_EXTENSION
+                                                : X509_V_ERR_EMAIL_MISMATCH,
                 Verify(cert.get(), {root.get()}, /*intermediates=*/{},
                        /*crls=*/{}, /*flags=*/0, [&](X509_STORE_CTX *ctx) {
                          X509_VERIFY_PARAM *param =
@@ -5319,20 +6502,20 @@ TEST(X509Test, Names) {
   }
 }
 
-// Adding an invalid entry to an |X509_NAME| should not be possible.
+// Adding an invalid entry to an `X509_NAME` should not be possible.
 TEST(X509Test, AddInvalidEntryToName) {
-  bssl::UniquePtr<X509_NAME> name(X509_NAME_new());
+  UniquePtr<X509_NAME> name(X509_NAME_new());
   ASSERT_TRUE(name);
-  bssl::UniquePtr<X509_NAME_ENTRY> entry(X509_NAME_ENTRY_new());
+  UniquePtr<X509_NAME_ENTRY> entry(X509_NAME_ENTRY_new());
   ASSERT_TRUE(entry);
   EXPECT_FALSE(
       X509_NAME_add_entry(name.get(), entry.get(), /*loc=*/-1, /*set=*/0));
 }
 
 TEST(X509Test, AddDuplicates) {
-  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
-  bssl::UniquePtr<X509> a(CertFromPEM(kCrossSigningRootPEM));
-  bssl::UniquePtr<X509> b(CertFromPEM(kRootCAPEM));
+  UniquePtr<X509_STORE> store(X509_STORE_new());
+  UniquePtr<X509> a(CertFromPEM(kCrossSigningRootPEM));
+  UniquePtr<X509> b(CertFromPEM(kRootCAPEM));
 
   ASSERT_TRUE(store);
   ASSERT_TRUE(a);
@@ -5361,14 +6544,18 @@ TEST(X509Test, BytesToHex) {
   };
   for (const auto &t : kTests) {
     SCOPED_TRACE(Bytes(t.bytes));
-    bssl::UniquePtr<char> hex(
-        x509v3_bytes_to_hex(t.bytes.data(), t.bytes.size()));
+    UniquePtr<char> hex(x509v3_bytes_to_hex(t.bytes.data(), t.bytes.size()));
     ASSERT_TRUE(hex);
     EXPECT_STREQ(hex.get(), t.hex);
   }
 }
 
 TEST(X509Test, NamePrint) {
+  // Registering one of the test OIDs as a nameless OID should not impact
+  // printing. Note this impacts global state.
+  ASSERT_NE(OBJ_create("1.2.840.113554.4.1.72585.3", nullptr, nullptr),
+            NID_undef);
+
   // kTestName is a DER-encoded X.509 that covers many cases.
   //
   // SEQUENCE {
@@ -5459,8 +6646,7 @@ TEST(X509Test, NamePrint) {
       0x20, 0x73, 0x70, 0x61, 0x63, 0x65, 0x73, 0x20};
 
   const uint8_t *ptr = kTestName;
-  bssl::UniquePtr<X509_NAME> name(
-      d2i_X509_NAME(nullptr, &ptr, sizeof(kTestName)));
+  UniquePtr<X509_NAME> name(d2i_X509_NAME(nullptr, &ptr, sizeof(kTestName)));
   ASSERT_TRUE(name);
   EXPECT_EQ(ptr, kTestName + sizeof(kTestName));
 
@@ -5497,11 +6683,11 @@ TEST(X509Test, NamePrint) {
        "ST=Some Other State \\E2\\98\\83+"
        "ST=Some State,"
        "C=US"},
-      // |XN_FLAG_ONELINE| is an OpenSSL-specific single-line format. It also
-      // omits |XN_FLAG_DUMP_UNKNOWN_FIELDS|, so unknown OIDs that use known
+      // `XN_FLAG_ONELINE` is an OpenSSL-specific single-line format. It also
+      // omits `XN_FLAG_DUMP_UNKNOWN_FIELDS`, so unknown OIDs that use known
       // string types will still be decoded. (This may drop important
       // information if the unknown OID distinguishes between string types.) It
-      // also passes |ASN1_STRFLGS_ESC_QUOTE|.
+      // also passes `ASN1_STRFLGS_ESC_QUOTE`.
       {/*indent=*/0,
        /*flags=*/XN_FLAG_ONELINE,
        "C = US, "
@@ -5514,8 +6700,8 @@ TEST(X509Test, NamePrint) {
        "CN = \"Common "
        "Name/CN=A/CN=B,CN=A,CN=B+CN=A+CN=B;CN=A;CN=B\\0ACN=A\\0A\", "
        "CN = \" spaces \""},
-      // Callers can also customize the output, with both |XN_FLAG_*| and
-      // |ASN1_STRFLGS_*|. |XN_FLAG_SEP_SPLUS_SPC| uses semicolon separators.
+      // Callers can also customize the output, with both `XN_FLAG_*` and
+      // `ASN1_STRFLGS_*`. `XN_FLAG_SEP_SPLUS_SPC` uses semicolon separators.
       {/*indent=*/0,
        /*flags=*/XN_FLAG_SEP_SPLUS_SPC | ASN1_STRFLGS_RFC2253 |
            ASN1_STRFLGS_ESC_QUOTE,
@@ -5543,11 +6729,11 @@ TEST(X509Test, NamePrint) {
        "CN=Common "
        "Name/CN=A/CN=B\\,CN=A\\,CN=B\\+CN=A\\+CN=B\\;CN=A\\;CN=B\\0ACN=A\\0A\n"
        "CN=\\ spaces\\ "},
-      // |XN_FLAG_COMPAT| matches |X509_NAME_print|, rather than
-      // |X509_NAME_print_ex|.
+      // `XN_FLAG_COMPAT` matches `X509_NAME_print`, rather than
+      // `X509_NAME_print_ex`.
       //
       // TODO(davidben): This works by post-processing the output of
-      // |X509_NAME_oneline|, which uses "/"" separators, and replacing with
+      // `X509_NAME_oneline`, which uses "/"" separators, and replacing with
       // ", ". The escaping is ambiguous and the post-processing is buggy, so
       // some of the trailing slashes are still present and some internal
       // slashes are mis-converted.
@@ -5567,7 +6753,7 @@ TEST(X509Test, NamePrint) {
   };
   for (const auto &t : kTests) {
     SCOPED_TRACE(t.printed);
-    bssl::UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
+    UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
     ASSERT_TRUE(bio);
     int len = X509_NAME_print_ex(bio.get(), name.get(), t.indent, t.flags);
     ASSERT_GT(len, 0);
@@ -5577,10 +6763,10 @@ TEST(X509Test, NamePrint) {
     ASSERT_TRUE(BIO_mem_contents(bio.get(), &printed, &printed_len));
     EXPECT_EQ(std::string(printed, printed + printed_len), t.printed);
     if (t.flags != XN_FLAG_COMPAT) {
-      // TODO(davidben): |XN_FLAG_COMPAT| does not return the length.
+      // TODO(davidben): `XN_FLAG_COMPAT` does not return the length.
       EXPECT_EQ(static_cast<size_t>(len), printed_len);
 
-      // Passing a null |BIO| measures the output instead.
+      // Passing a null `BIO` measures the output instead.
       len = X509_NAME_print_ex(nullptr, name.get(), t.indent, t.flags);
       EXPECT_GT(len, 0);
       EXPECT_EQ(static_cast<size_t>(len), printed_len);
@@ -5589,7 +6775,7 @@ TEST(X509Test, NamePrint) {
 
   // TODO(davidben): This escapes the underlying bytes in the string, but that
   // is ambiguous without capturing the type. Should this escape like
-  // |ASN1_STRFLGS_UTF8_CONVERT| instead?
+  // `ASN1_STRFLGS_UTF8_CONVERT` instead?
   static const char *kOnelineComponents[] = {
       "/C=US",
       "/ST=Some State",
@@ -5607,8 +6793,8 @@ TEST(X509Test, NamePrint) {
     oneline_expected += component;
   }
 
-  // Given null buffer, |X509_NAME_oneline| allocates a new output.
-  bssl::UniquePtr<char> oneline(X509_NAME_oneline(name.get(), nullptr, 0));
+  // Given null buffer, `X509_NAME_oneline` allocates a new output.
+  UniquePtr<char> oneline(X509_NAME_oneline(name.get(), nullptr, 0));
   ASSERT_TRUE(oneline);
   EXPECT_EQ(oneline.get(), oneline_expected);
 
@@ -5625,7 +6811,7 @@ TEST(X509Test, NamePrint) {
             X509_NAME_oneline(name.get(), buf, oneline_expected.size() + 2));
   EXPECT_EQ(buf, oneline_expected);
 
-  // If the length is too small, |X509_NAME_oneline| truncates at name
+  // If the length is too small, `X509_NAME_oneline` truncates at name
   // entry boundaries.
   EXPECT_EQ(nullptr, X509_NAME_oneline(name.get(), buf, 0));
   for (size_t len = 1; len < oneline_expected.size(); len++) {
@@ -5645,7 +6831,7 @@ TEST(X509Test, NamePrint) {
 }
 
 // kLargeSerialPEM is a certificate with a large serial number.
-static const char kLargeSerialPEM[] = R"(
+const char kLargeSerialPEM[] = R"(
 -----BEGIN CERTIFICATE-----
 MIICZjCCAc+gAwIBAgIQASNFZ4mrze8BI0VniavN7zANBgkqhkiG9w0BAQsFADA2
 MRowGAYDVQQKExFCb3JpbmdTU0wgVEVTVElORzEYMBYGA1UEAxMPSW50ZXJtZWRp
@@ -5664,10 +6850,10 @@ PyeGVPUK21TE0LDIxf2a11d1CJw582MgZQIPk4tXk+AcU9EqIceKgECG
 )";
 
 TEST(X509Test, Print) {
-  bssl::UniquePtr<X509> cert(CertFromPEM(kLargeSerialPEM));
+  UniquePtr<X509> cert(CertFromPEM(kLargeSerialPEM));
   ASSERT_TRUE(cert);
 
-  bssl::UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
+  UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
   ASSERT_TRUE(bio);
   EXPECT_TRUE(X509_print_ex(bio.get(), cert.get(), 0, 0));
   // Nothing should be left in the error queue.
@@ -5678,7 +6864,7 @@ TEST(X509Test, Print) {
   const uint8_t *data;
   size_t data_len;
   ASSERT_TRUE(BIO_mem_contents(bio.get(), &data, &data_len));
-  auto print = bssl::BytesAsStringView(bssl::Span(data, data_len));
+  auto print = BytesAsStringView(Span(data, data_len));
   EXPECT_EQ(print, R"(Certificate:
     Data:
         Version: 3 (0x2)
@@ -5707,13 +6893,13 @@ TEST(X509Test, Print) {
         X509v3 extensions:
             X509v3 Key Usage: critical
                 Digital Signature, Key Encipherment
-            X509v3 Extended Key Usage: 
+            X509v3 Extended Key Usage:
                 TLS Web Server Authentication, TLS Web Client Authentication
             X509v3 Basic Constraints: critical
                 CA:FALSE
-            X509v3 Subject Key Identifier: 
+            X509v3 Subject Key Identifier:
                 A3:79:A6:F6:EE:AF:B9:A5:5E:37:8C:11:80:34:E2:75
-            X509v3 Authority Key Identifier: 
+            X509v3 Authority Key Identifier:
                 keyid:8C:1A:68:A8:B5:76:DB:5D:57:7B:1F:8D:14:B2:06:A3
 
     Signature Algorithm: sha256WithRSAEncryption
@@ -5729,7 +6915,7 @@ TEST(X509Test, Print) {
 }
 
 TEST(X509Test, AddExt) {
-  bssl::UniquePtr<X509> x509(X509_new());
+  UniquePtr<X509> x509(X509_new());
   ASSERT_TRUE(x509);
 
   struct Extension {
@@ -5754,28 +6940,28 @@ TEST(X509Test, AddExt) {
   // SEQUENCE {}
   std::vector<uint8_t> basic1_der = {0x30, 0x00};
   const uint8_t *inp = basic1_der.data();
-  bssl::UniquePtr<BASIC_CONSTRAINTS> basic1_obj(
+  UniquePtr<BASIC_CONSTRAINTS> basic1_obj(
       d2i_BASIC_CONSTRAINTS(nullptr, &inp, basic1_der.size()));
   EXPECT_EQ(inp, basic1_der.data() + basic1_der.size());
 
   // SEQUENCE { BOOLEAN { TRUE } }
   std::vector<uint8_t> basic2_der = {0x30, 0x03, 0x01, 0x01, 0xff};
   inp = basic2_der.data();
-  bssl::UniquePtr<BASIC_CONSTRAINTS> basic2_obj(
+  UniquePtr<BASIC_CONSTRAINTS> basic2_obj(
       d2i_BASIC_CONSTRAINTS(nullptr, &inp, basic2_der.size()));
   EXPECT_EQ(inp, basic2_der.data() + basic2_der.size());
 
   // OCTET_STRING {}
   std::vector<uint8_t> skid1_der = {0x04, 0x00};
   inp = skid1_der.data();
-  bssl::UniquePtr<ASN1_OCTET_STRING> skid1_obj(
+  UniquePtr<ASN1_OCTET_STRING> skid1_obj(
       d2i_ASN1_OCTET_STRING(nullptr, &inp, skid1_der.size()));
   EXPECT_EQ(inp, skid1_der.data() + skid1_der.size());
 
   // OCTET_STRING { "a" }
   std::vector<uint8_t> skid2_der = {0x04, 0x01, 0x61};
   inp = skid2_der.data();
-  bssl::UniquePtr<ASN1_OCTET_STRING> skid2_obj(
+  UniquePtr<ASN1_OCTET_STRING> skid2_obj(
       d2i_ASN1_OCTET_STRING(nullptr, &inp, skid2_der.size()));
   EXPECT_EQ(inp, skid2_der.data() + skid2_der.size());
 
@@ -5797,10 +6983,11 @@ TEST(X509Test, AddExt) {
   EXPECT_EQ(
       0, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, basic2_obj.get(),
                            /*crit=*/0, X509V3_ADD_DEFAULT));
+  EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_X509V3, X509V3_R_EXTENSION_EXISTS}}));
   expect_extensions({{NID_basic_constraints, true, basic1_der},
                      {NID_subject_key_identifier, false, skid1_der}});
 
-  // |X509V3_ADD_KEEP_EXISTING| silently keeps the existing extension if already
+  // `X509V3_ADD_KEEP_EXISTING` silently keeps the existing extension if already
   // present.
   EXPECT_EQ(
       1, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, basic2_obj.get(),
@@ -5808,21 +6995,21 @@ TEST(X509Test, AddExt) {
   expect_extensions({{NID_basic_constraints, true, basic1_der},
                      {NID_subject_key_identifier, false, skid1_der}});
 
-  // |X509V3_ADD_REPLACE| replaces it.
+  // `X509V3_ADD_REPLACE` replaces it.
   EXPECT_EQ(
       1, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, basic2_obj.get(),
                            /*crit=*/0, X509V3_ADD_REPLACE));
   expect_extensions({{NID_basic_constraints, false, basic2_der},
                      {NID_subject_key_identifier, false, skid1_der}});
 
-  // |X509V3_ADD_REPLACE_EXISTING| also replaces matches.
+  // `X509V3_ADD_REPLACE_EXISTING` also replaces matches.
   EXPECT_EQ(1, X509_add1_ext_i2d(x509.get(), NID_subject_key_identifier,
                                  skid2_obj.get(),
                                  /*crit=*/1, X509V3_ADD_REPLACE_EXISTING));
   expect_extensions({{NID_basic_constraints, false, basic2_der},
                      {NID_subject_key_identifier, true, skid2_der}});
 
-  // |X509V3_ADD_DELETE| ignores the value and deletes the extension.
+  // `X509V3_ADD_DELETE` ignores the value and deletes the extension.
   EXPECT_EQ(1, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, nullptr, 0,
                                  X509V3_ADD_DELETE));
   expect_extensions({{NID_subject_key_identifier, true, skid2_der}});
@@ -5830,15 +7017,19 @@ TEST(X509Test, AddExt) {
   // Not finding an extension to delete is an error.
   EXPECT_EQ(0, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, nullptr, 0,
                                  X509V3_ADD_DELETE));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509V3, X509V3_R_EXTENSION_NOT_FOUND}}));
   expect_extensions({{NID_subject_key_identifier, true, skid2_der}});
 
-  // |X509V3_ADD_REPLACE_EXISTING| fails if it cannot find a match.
+  // `X509V3_ADD_REPLACE_EXISTING` fails if it cannot find a match.
   EXPECT_EQ(
       0, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, basic1_obj.get(),
                            /*crit=*/1, X509V3_ADD_REPLACE_EXISTING));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509V3, X509V3_R_EXTENSION_NOT_FOUND}}));
   expect_extensions({{NID_subject_key_identifier, true, skid2_der}});
 
-  // |X509V3_ADD_REPLACE| adds a new extension if not preseent.
+  // `X509V3_ADD_REPLACE` adds a new extension if not present.
   EXPECT_EQ(
       1, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, basic1_obj.get(),
                            /*crit=*/1, X509V3_ADD_REPLACE));
@@ -5850,7 +7041,7 @@ TEST(X509Test, AddExt) {
                                  X509V3_ADD_DELETE));
   expect_extensions({{NID_subject_key_identifier, true, skid2_der}});
 
-  // |X509V3_ADD_KEEP_EXISTING| adds a new extension if not preseent.
+  // `X509V3_ADD_KEEP_EXISTING` adds a new extension if not present.
   EXPECT_EQ(
       1, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, basic1_obj.get(),
                            /*crit=*/1, X509V3_ADD_KEEP_EXISTING));
@@ -5862,14 +7053,14 @@ TEST(X509Test, AddExt) {
                                  X509V3_ADD_DELETE));
   expect_extensions({{NID_subject_key_identifier, true, skid2_der}});
 
-  // |X509V3_ADD_APPEND| adds a new extension if not present.
+  // `X509V3_ADD_APPEND` adds a new extension if not present.
   EXPECT_EQ(
       1, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, basic1_obj.get(),
                            /*crit=*/1, X509V3_ADD_APPEND));
   expect_extensions({{NID_subject_key_identifier, true, skid2_der},
                      {NID_basic_constraints, true, basic1_der}});
 
-  // |X509V3_ADD_APPEND| keeps adding duplicates (invalid) even if present.
+  // `X509V3_ADD_APPEND` keeps adding duplicates (invalid) even if present.
   EXPECT_EQ(
       1, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, basic2_obj.get(),
                            /*crit=*/0, X509V3_ADD_APPEND));
@@ -5877,7 +7068,7 @@ TEST(X509Test, AddExt) {
                      {NID_basic_constraints, true, basic1_der},
                      {NID_basic_constraints, false, basic2_der}});
 
-  // |X509V3_ADD_DELETE| only deletes one extension at a time.
+  // `X509V3_ADD_DELETE` only deletes one extension at a time.
   EXPECT_EQ(1, X509_add1_ext_i2d(x509.get(), NID_basic_constraints, nullptr, 0,
                                  X509V3_ADD_DELETE));
   expect_extensions({{NID_subject_key_identifier, true, skid2_der},
@@ -5888,7 +7079,7 @@ TEST(X509Test, AddExt) {
 }
 
 TEST(X509Test, NameEntry) {
-  bssl::UniquePtr<X509_NAME> name(X509_NAME_new());
+  UniquePtr<X509_NAME> name(X509_NAME_new());
   ASSERT_TRUE(name);
 
   auto check_name = [&](const char *expected_rfc2253) {
@@ -5909,7 +7100,7 @@ TEST(X509Test, NameEntry) {
 
     // Check the name based on the RFC 2253 serialization. Note the RFC 2253
     // serialization is in reverse.
-    bssl::UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
+    UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
     ASSERT_TRUE(bio);
     EXPECT_GE(X509_NAME_print_ex(bio.get(), name.get(), 0, XN_FLAG_RFC2253), 0);
     const uint8_t *data;
@@ -5920,21 +7111,21 @@ TEST(X509Test, NameEntry) {
 
   check_name("");
 
-  // |loc| = -1, |set| = 0 appends as new RDNs.
+  // `loc` = -1, `set` = 0 appends as new RDNs.
   ASSERT_TRUE(X509_NAME_add_entry_by_NID(
       name.get(), NID_organizationName, MBSTRING_UTF8,
       reinterpret_cast<const unsigned char *>("Org"), /*len=*/-1, /*loc=*/-1,
       /*set=*/0));
   check_name("O=Org");
 
-  // |loc| = -1, |set| = 0 appends as new RDNs.
+  // `loc` = -1, `set` = 0 appends as new RDNs.
   ASSERT_TRUE(X509_NAME_add_entry_by_NID(
       name.get(), NID_commonName, MBSTRING_UTF8,
       reinterpret_cast<const unsigned char *>("Name"), /*len=*/-1, /*loc=*/-1,
       /*set=*/0));
   check_name("CN=Name,O=Org");
 
-  // Inserting in the middle of the set, but with |set| = 0 inserts a new RDN
+  // Inserting in the middle of the set, but with `set` = 0 inserts a new RDN
   // and fixes the "set" values as needed.
   ASSERT_TRUE(X509_NAME_add_entry_by_NID(
       name.get(), NID_organizationalUnitName, MBSTRING_UTF8,
@@ -5942,7 +7133,7 @@ TEST(X509Test, NameEntry) {
       /*set=*/0));
   check_name("CN=Name,OU=Unit,O=Org");
 
-  // |set = -1| adds to the previous entry's RDN. (Although putting O and OU at
+  // `set = -1` adds to the previous entry's RDN. (Although putting O and OU at
   // the same level makes little sense, the test is written this way to check
   // the function isn't using attribute types to order things.)
   ASSERT_TRUE(X509_NAME_add_entry_by_NID(
@@ -5951,14 +7142,14 @@ TEST(X509Test, NameEntry) {
       /*set=*/-1));
   check_name("CN=Name,O=Org2+OU=Unit,O=Org");
 
-  // |set| = 1 adds to the next entry's RDN.
+  // `set` = 1 adds to the next entry's RDN.
   ASSERT_TRUE(X509_NAME_add_entry_by_NID(
       name.get(), NID_commonName, MBSTRING_UTF8,
       reinterpret_cast<const unsigned char *>("Name2"), /*len=*/-1, /*loc=*/2,
       /*set=*/-1));
   check_name("CN=Name,O=Org2+CN=Name2+OU=Unit,O=Org");
 
-  // If there is no previous RDN, |set| = -1 makes a new RDN.
+  // If there is no previous RDN, `set` = -1 makes a new RDN.
   ASSERT_TRUE(X509_NAME_add_entry_by_NID(
       name.get(), NID_countryName, MBSTRING_UTF8,
       reinterpret_cast<const unsigned char *>("US"), /*len=*/-1, /*loc=*/0,
@@ -5972,7 +7163,7 @@ TEST(X509Test, NameEntry) {
       /*set=*/1));
   check_name("CN=Name3,CN=Name,O=Org2+CN=Name2+OU=Unit,O=Org,C=US");
 
-  // If |set| = 0 and we insert in the middle of an existing RDN, it adds an
+  // If `set` = 0 and we insert in the middle of an existing RDN, it adds an
   // RDN boundary after the entry but not before. This is a quirk of how the
   // function is implemented and hopefully not something any caller depends on.
   ASSERT_TRUE(X509_NAME_add_entry_by_NID(
@@ -6006,17 +7197,17 @@ TEST(X509Test, NameEntry) {
 // Tests that non-integer types are rejected when passed as an argument to
 // X509_set_serialNumber().
 TEST(X509Test, SetSerialNumberChecksASN1StringType) {
-  bssl::UniquePtr<X509> root = CertFromPEM(kRootCAPEM);
+  UniquePtr<X509> root = CertFromPEM(kRootCAPEM);
   ASSERT_TRUE(root);
 
   // Passing an IA5String to X509_set_serialNumber() should fail.
-  bssl::UniquePtr<ASN1_IA5STRING> str(ASN1_IA5STRING_new());
+  UniquePtr<ASN1_IA5STRING> str(ASN1_IA5STRING_new());
   ASSERT_TRUE(str);
   EXPECT_FALSE(X509_set_serialNumber(root.get(), str.get()));
 
   // Passing a negative serial number is allowed. While invalid, we do accept
   // them and some callers rely in this for tests.
-  bssl::UniquePtr<ASN1_INTEGER> serial(ASN1_INTEGER_new());
+  UniquePtr<ASN1_INTEGER> serial(ASN1_INTEGER_new());
   ASSERT_TRUE(serial);
   ASSERT_TRUE(ASN1_INTEGER_set_int64(serial.get(), -1));
   ASSERT_TRUE(X509_set_serialNumber(root.get(), serial.get()));
@@ -6025,103 +7216,102 @@ TEST(X509Test, SetSerialNumberChecksASN1StringType) {
   EXPECT_EQ(-1, val);
 }
 
-TEST(X509Test, Policy) {
-  bssl::UniquePtr<ASN1_OBJECT> oid1(
+TEST_P(X509VerifyTest, Policy) {
+  UniquePtr<ASN1_OBJECT> oid1(
       OBJ_txt2obj("1.2.840.113554.4.1.72585.2.1", /*dont_search_names=*/1));
   ASSERT_TRUE(oid1);
-  bssl::UniquePtr<ASN1_OBJECT> oid2(
+  UniquePtr<ASN1_OBJECT> oid2(
       OBJ_txt2obj("1.2.840.113554.4.1.72585.2.2", /*dont_search_names=*/1));
   ASSERT_TRUE(oid2);
-  bssl::UniquePtr<ASN1_OBJECT> oid3(
+  UniquePtr<ASN1_OBJECT> oid3(
       OBJ_txt2obj("1.2.840.113554.4.1.72585.2.3", /*dont_search_names=*/1));
   ASSERT_TRUE(oid3);
-  bssl::UniquePtr<ASN1_OBJECT> oid4(
+  UniquePtr<ASN1_OBJECT> oid4(
       OBJ_txt2obj("1.2.840.113554.4.1.72585.2.4", /*dont_search_names=*/1));
   ASSERT_TRUE(oid4);
-  bssl::UniquePtr<ASN1_OBJECT> oid5(
+  UniquePtr<ASN1_OBJECT> oid5(
       OBJ_txt2obj("1.2.840.113554.4.1.72585.2.5", /*dont_search_names=*/1));
   ASSERT_TRUE(oid5);
 
-  bssl::UniquePtr<X509> root(
+  UniquePtr<X509> root(
       CertFromPEM(GetTestData("crypto/x509/test/policy_root.pem")));
   ASSERT_TRUE(root);
-  bssl::UniquePtr<X509> root_cross_inhibit_mapping(CertFromPEM(
+  UniquePtr<X509> root_cross_inhibit_mapping(CertFromPEM(
       GetTestData("crypto/x509/test/policy_root_cross_inhibit_mapping.pem")));
   ASSERT_TRUE(root_cross_inhibit_mapping);
-  bssl::UniquePtr<X509> root2(
+  UniquePtr<X509> root2(
       CertFromPEM(GetTestData("crypto/x509/test/policy_root2.pem")));
   ASSERT_TRUE(root2);
-  bssl::UniquePtr<X509> intermediate(
+  UniquePtr<X509> intermediate(
       CertFromPEM(GetTestData("crypto/x509/test/policy_intermediate.pem")));
   ASSERT_TRUE(intermediate);
-  bssl::UniquePtr<X509> intermediate_any(
+  UniquePtr<X509> intermediate_any(
       CertFromPEM(GetTestData("crypto/x509/test/policy_intermediate_any.pem")));
   ASSERT_TRUE(intermediate_any);
-  bssl::UniquePtr<X509> intermediate_duplicate(CertFromPEM(
+  UniquePtr<X509> intermediate_duplicate(CertFromPEM(
       GetTestData("crypto/x509/test/policy_intermediate_duplicate.pem")));
   ASSERT_TRUE(intermediate_duplicate);
-  bssl::UniquePtr<X509> intermediate_invalid(CertFromPEM(
+  UniquePtr<X509> intermediate_invalid(CertFromPEM(
       GetTestData("crypto/x509/test/policy_intermediate_invalid.pem")));
   ASSERT_TRUE(intermediate_invalid);
-  bssl::UniquePtr<X509> intermediate_mapped(CertFromPEM(
+  UniquePtr<X509> intermediate_mapped(CertFromPEM(
       GetTestData("crypto/x509/test/policy_intermediate_mapped.pem")));
   ASSERT_TRUE(intermediate_mapped);
-  bssl::UniquePtr<X509> intermediate_mapped_any(CertFromPEM(
+  UniquePtr<X509> intermediate_mapped_any(CertFromPEM(
       GetTestData("crypto/x509/test/policy_intermediate_mapped_any.pem")));
   ASSERT_TRUE(intermediate_mapped_any);
-  bssl::UniquePtr<X509> intermediate_mapped_oid3(CertFromPEM(
+  UniquePtr<X509> intermediate_mapped_oid3(CertFromPEM(
       GetTestData("crypto/x509/test/policy_intermediate_mapped_oid3.pem")));
   ASSERT_TRUE(intermediate_mapped_oid3);
-  bssl::UniquePtr<X509> intermediate_require(CertFromPEM(
+  UniquePtr<X509> intermediate_require(CertFromPEM(
       GetTestData("crypto/x509/test/policy_intermediate_require.pem")));
   ASSERT_TRUE(intermediate_require);
-  bssl::UniquePtr<X509> intermediate_require1(CertFromPEM(
+  UniquePtr<X509> intermediate_require1(CertFromPEM(
       GetTestData("crypto/x509/test/policy_intermediate_require1.pem")));
   ASSERT_TRUE(intermediate_require1);
-  bssl::UniquePtr<X509> intermediate_require2(CertFromPEM(
+  UniquePtr<X509> intermediate_require2(CertFromPEM(
       GetTestData("crypto/x509/test/policy_intermediate_require2.pem")));
   ASSERT_TRUE(intermediate_require2);
-  bssl::UniquePtr<X509> intermediate_require_duplicate(CertFromPEM(GetTestData(
+  UniquePtr<X509> intermediate_require_duplicate(CertFromPEM(GetTestData(
       "crypto/x509/test/policy_intermediate_require_duplicate.pem")));
   ASSERT_TRUE(intermediate_require_duplicate);
-  bssl::UniquePtr<X509> intermediate_require_no_policies(
-      CertFromPEM(GetTestData(
-          "crypto/x509/test/policy_intermediate_require_no_policies.pem")));
+  UniquePtr<X509> intermediate_require_no_policies(CertFromPEM(GetTestData(
+      "crypto/x509/test/policy_intermediate_require_no_policies.pem")));
   ASSERT_TRUE(intermediate_require_no_policies);
-  bssl::UniquePtr<X509> leaf(
+  UniquePtr<X509> leaf(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf.pem")));
   ASSERT_TRUE(leaf);
-  bssl::UniquePtr<X509> leaf_any(
+  UniquePtr<X509> leaf_any(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_any.pem")));
   ASSERT_TRUE(leaf_any);
-  bssl::UniquePtr<X509> leaf_duplicate(
+  UniquePtr<X509> leaf_duplicate(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_duplicate.pem")));
   ASSERT_TRUE(leaf_duplicate);
-  bssl::UniquePtr<X509> leaf_invalid(
+  UniquePtr<X509> leaf_invalid(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_invalid.pem")));
   ASSERT_TRUE(leaf_invalid);
-  bssl::UniquePtr<X509> leaf_none(
+  UniquePtr<X509> leaf_none(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_none.pem")));
   ASSERT_TRUE(leaf_none);
-  bssl::UniquePtr<X509> leaf_oid1(
+  UniquePtr<X509> leaf_oid1(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_oid1.pem")));
   ASSERT_TRUE(leaf_oid1);
-  bssl::UniquePtr<X509> leaf_oid2(
+  UniquePtr<X509> leaf_oid2(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_oid2.pem")));
   ASSERT_TRUE(leaf_oid2);
-  bssl::UniquePtr<X509> leaf_oid3(
+  UniquePtr<X509> leaf_oid3(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_oid3.pem")));
   ASSERT_TRUE(leaf_oid3);
-  bssl::UniquePtr<X509> leaf_oid4(
+  UniquePtr<X509> leaf_oid4(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_oid4.pem")));
   ASSERT_TRUE(leaf_oid4);
-  bssl::UniquePtr<X509> leaf_oid5(
+  UniquePtr<X509> leaf_oid5(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_oid5.pem")));
   ASSERT_TRUE(leaf_oid5);
-  bssl::UniquePtr<X509> leaf_require(
+  UniquePtr<X509> leaf_require(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_require.pem")));
   ASSERT_TRUE(leaf_require);
-  bssl::UniquePtr<X509> leaf_require1(
+  UniquePtr<X509> leaf_require1(
       CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_require1.pem")));
   ASSERT_TRUE(leaf_require1);
 
@@ -6129,15 +7319,15 @@ TEST(X509Test, Policy) {
                          std::vector<const ASN1_OBJECT *> oids) {
     X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx);
     for (const ASN1_OBJECT *oid : oids) {
-      bssl::UniquePtr<ASN1_OBJECT> copy(OBJ_dup(oid));
+      UniquePtr<ASN1_OBJECT> copy(OBJ_dup(oid));
       ASSERT_TRUE(copy);
       ASSERT_TRUE(X509_VERIFY_PARAM_add0_policy(param, copy.get()));
-      copy.release();  // |X509_VERIFY_PARAM_add0_policy| takes ownership on
+      copy.release();  // `X509_VERIFY_PARAM_add0_policy` takes ownership on
                        // success.
     }
   };
 
-  // The chain is good for |oid1| and |oid2|, but not |oid3|.
+  // The chain is good for `oid1` and `oid2`, but not `oid3`.
   EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {intermediate.get()},
                               /*crls=*/{}, X509_V_FLAG_EXPLICIT_POLICY));
   EXPECT_EQ(X509_V_OK,
@@ -6195,7 +7385,7 @@ TEST(X509Test, Policy) {
              /*crls=*/{}, X509_V_FLAG_EXPLICIT_POLICY,
              [&](X509_STORE_CTX *ctx) { set_policies(ctx, {oid1.get()}); }));
 
-  // Without |X509_V_FLAG_EXPLICIT_POLICY|, the policy tree is built and
+  // Without `X509_V_FLAG_EXPLICIT_POLICY`, the policy tree is built and
   // intersected with user-specified policies, but it is not required to result
   // in any valid policies.
   EXPECT_EQ(X509_V_OK,
@@ -6423,7 +7613,7 @@ TEST(X509Test, Policy) {
                                 }));
   }
 
-  // Although |intermediate_mapped_oid3| contains many mappings, it only accepts
+  // Although `intermediate_mapped_oid3` contains many mappings, it only accepts
   // OID3. Nodes should not be created for the other mappings.
   EXPECT_EQ(
       X509_V_OK,
@@ -6455,16 +7645,16 @@ TEST(X509Test, Policy) {
 #if defined(OPENSSL_THREADS)
 // A similar test to the above, but ensures the various bits of intermediate
 // state are computed safely.
-TEST(X509Test, PolicyThreads) {
+TEST_P(X509VerifyTest, PolicyThreads) {
   const size_t kNumThreads = 10;
 
-  bssl::UniquePtr<ASN1_OBJECT> oid1(
+  UniquePtr<ASN1_OBJECT> oid1(
       OBJ_txt2obj("1.2.840.113554.4.1.72585.2.1", /*dont_search_names=*/1));
   ASSERT_TRUE(oid1);
-  bssl::UniquePtr<ASN1_OBJECT> oid2(
+  UniquePtr<ASN1_OBJECT> oid2(
       OBJ_txt2obj("1.2.840.113554.4.1.72585.2.2", /*dont_search_names=*/1));
   ASSERT_TRUE(oid2);
-  bssl::UniquePtr<ASN1_OBJECT> oid3(
+  UniquePtr<ASN1_OBJECT> oid3(
       OBJ_txt2obj("1.2.840.113554.4.1.72585.2.3", /*dont_search_names=*/1));
   ASSERT_TRUE(oid3);
 
@@ -6472,22 +7662,22 @@ TEST(X509Test, PolicyThreads) {
                          std::vector<const ASN1_OBJECT *> oids) {
     X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx);
     for (const ASN1_OBJECT *oid : oids) {
-      bssl::UniquePtr<ASN1_OBJECT> copy(OBJ_dup(oid));
+      UniquePtr<ASN1_OBJECT> copy(OBJ_dup(oid));
       ASSERT_TRUE(copy);
       ASSERT_TRUE(X509_VERIFY_PARAM_add0_policy(param, copy.get()));
-      copy.release();  // |X509_VERIFY_PARAM_add0_policy| takes ownership on
+      copy.release();  // `X509_VERIFY_PARAM_add0_policy` takes ownership on
                        // success.
     }
   };
 
   {
-    bssl::UniquePtr<X509> root(
+    UniquePtr<X509> root(
         CertFromPEM(GetTestData("crypto/x509/test/policy_root.pem")));
     ASSERT_TRUE(root);
-    bssl::UniquePtr<X509> intermediate(
+    UniquePtr<X509> intermediate(
         CertFromPEM(GetTestData("crypto/x509/test/policy_intermediate.pem")));
     ASSERT_TRUE(intermediate);
-    bssl::UniquePtr<X509> leaf(
+    UniquePtr<X509> leaf(
         CertFromPEM(GetTestData("crypto/x509/test/policy_leaf.pem")));
     ASSERT_TRUE(leaf);
 
@@ -6508,13 +7698,13 @@ TEST(X509Test, PolicyThreads) {
   }
 
   {
-    bssl::UniquePtr<X509> root(
+    UniquePtr<X509> root(
         CertFromPEM(GetTestData("crypto/x509/test/policy_root.pem")));
     ASSERT_TRUE(root);
-    bssl::UniquePtr<X509> intermediate(
+    UniquePtr<X509> intermediate(
         CertFromPEM(GetTestData("crypto/x509/test/policy_intermediate.pem")));
     ASSERT_TRUE(intermediate);
-    bssl::UniquePtr<X509> leaf_invalid(
+    UniquePtr<X509> leaf_invalid(
         CertFromPEM(GetTestData("crypto/x509/test/policy_leaf_invalid.pem")));
     ASSERT_TRUE(leaf_invalid);
 
@@ -6581,7 +7771,10 @@ TEST(X509Test, ExtensionFromConf) {
       // issuingDistributionPoint takes a list of name:value pairs. Omitting the
       // value is not allowed.
       {"issuingDistributionPoint", "fullname", nullptr, {}},
+      {"issuingDistributionPoint", "relativename", nullptr, {}},
 
+      // issuingDistributionPoint can specify a nameRelativeToCRLIssuer by
+      // section.
       {"issuingDistributionPoint",
        "relativename:name",
        "[name]\nCN=Hello\n",
@@ -6611,6 +7804,56 @@ TEST(X509Test, ExtensionFromConf) {
         0x04, 0x06, 0x13, 0x02, 0x55, 0x53, 0x30, 0x0c, 0x06, 0x03,
         0x55, 0x04, 0x03, 0x0c, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f}},
 
+      // issuingDistributionPoint can specify a fullName by section or inline.
+      {"issuingDistributionPoint",
+       "fullname:URI:http://example.com/",
+       nullptr,
+       {0x30, 0x22, 0x06, 0x03, 0x55, 0x1d, 0x1c, 0x04, 0x1b,
+        0x30, 0x19, 0xa0, 0x17, 0xa0, 0x15, 0x86, 0x13, 0x68,
+        0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x65, 0x78, 0x61,
+        0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0x2f}},
+      {"issuingDistributionPoint",
+       "fullname:@name",
+       "[name]\nURI.1=https://example.com/1\nURI.2=https://example.com/2",
+       {0x30, 0x3b, 0x06, 0x03, 0x55, 0x1d, 0x1c, 0x04, 0x34, 0x30, 0x32,
+        0xa0, 0x30, 0xa0, 0x2e, 0x86, 0x15, 0x68, 0x74, 0x74, 0x70, 0x73,
+        0x3a, 0x2f, 0x2f, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e,
+        0x63, 0x6f, 0x6d, 0x2f, 0x31, 0x86, 0x15, 0x68, 0x74, 0x74, 0x70,
+        0x73, 0x3a, 0x2f, 0x2f, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65,
+        0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x32}},
+
+      // The inline form of fullName can take multiple values, but only when the
+      // whole value is indirected through a section. Otherwise
+      // `X509V3_parse_list` splits it by commas too early.
+      {"issuingDistributionPoint",
+       "@idp",
+       "[idp]\nfullname = URI:https://example.com/1, URI:https://example.com/2",
+       {0x30, 0x3b, 0x06, 0x03, 0x55, 0x1d, 0x1c, 0x04, 0x34, 0x30, 0x32,
+        0xa0, 0x30, 0xa0, 0x2e, 0x86, 0x15, 0x68, 0x74, 0x74, 0x70, 0x73,
+        0x3a, 0x2f, 0x2f, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e,
+        0x63, 0x6f, 0x6d, 0x2f, 0x31, 0x86, 0x15, 0x68, 0x74, 0x74, 0x70,
+        0x73, 0x3a, 0x2f, 0x2f, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65,
+        0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x32}},
+
+      // Multiple distribution point names are an error, either two full, two
+      // relative, or one of each.
+      {"issuingDistributionPoint",
+       "fullname:URI:http://a.example/, fullname:URI:http://b.example",
+       nullptr,
+       {}},
+      {"issuingDistributionPoint",
+       "fullname:URI:http://a.example/, relativename:name",
+       "[name]\nCN=Hello\n",
+       {}},
+      {"issuingDistributionPoint",
+       "relativename:name, fullname:URI:http://a.example/",
+       "[name]\nCN=Hello\n",
+       {}},
+      {"issuingDistributionPoint",
+       "relativename:name1, relativename:name2",
+       "[name1]\nCN=Hello\n[name2]\nCN=World\n",
+       {}},
+
       // Duplicate reason keys are an error. Reaching this case is interesting.
       // The value can a string like "key:value,key:value", or it can be
       // "@section" and reference a config section. If using a string, duplicate
@@ -6626,6 +7869,75 @@ TEST(X509Test, ExtensionFromConf) {
       {"issuingDistributionPoint",
        "onlysomereasons:keyCompromise,onlysomereasons:CACompromise\n",
        nullptr,
+       {}},
+
+      // crlDistributionPoints takes a series of key/value pairs, each of which
+      // becomes a distribution point. If a pair has a value, this is a
+      // shorthand to specify a GeneralName, which goes into a single
+      // distribution point as its sole fullName value. Otherwise, the key is a
+      // second reference which specifies the distribution point.
+      {"crlDistributionPoints",
+       "dp1, dp2, dp3, dp4, URI:http://a.example, DNS:example.com",
+       R"(
+# Empty distribution point. This is not actually allowed, but OpenSSL's config
+# syntax will construct it.
+[dp1]
+
+# A fullName with multiple names.
+[dp2]
+fullname = URI:http://a.example, URI:http://b.example
+
+# A nameRelativeToCRLIssuer, with all the other options.
+[dp3]
+relativename = relname
+reasons = keyCompromise, CACompromise
+CRLissuer = dirName:crlissuer
+# Unknown keys are silently ignored. This is probably a bug.
+foo = bar
+[relname]
+CN = Test
+[crlissuer]
+CN = CRL Issuer
+
+# cRLIssuer is, for some reason, a GeneralNames, yet RFC 5280 says "If present,
+# the cRLIssuer MUST only contain the distinguished name (DN) from the issuer
+# field of the CRL to which the DistributionPoint is pointing." While invalid by
+# this text, it is syntactically possible in both X.509 and OpenSSL's ad-hoc
+# config language to specify a multi-valued GeneralNames with non-DN SAN types.
+[dp4]
+CRLissuer = URI:http://example.com, DNS:example.com, IP:127.0.0.1
+)",
+       {0x30, 0x81, 0xbf, 0x06, 0x03, 0x55, 0x1d, 0x1f, 0x04, 0x81, 0xb7, 0x30,
+        0x81, 0xb4, 0x30, 0x00, 0x30, 0x28, 0xa0, 0x26, 0xa0, 0x24, 0x86, 0x10,
+        0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x61, 0x2e, 0x65, 0x78, 0x61,
+        0x6d, 0x70, 0x6c, 0x65, 0x86, 0x10, 0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f,
+        0x2f, 0x62, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x30, 0x30,
+        0xa0, 0x0f, 0xa1, 0x0d, 0x30, 0x0b, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c,
+        0x04, 0x54, 0x65, 0x73, 0x74, 0x81, 0x02, 0x05, 0x60, 0xa2, 0x19, 0xa4,
+        0x17, 0x30, 0x15, 0x31, 0x13, 0x30, 0x11, 0x06, 0x03, 0x55, 0x04, 0x03,
+        0x0c, 0x0a, 0x43, 0x52, 0x4c, 0x20, 0x49, 0x73, 0x73, 0x75, 0x65, 0x72,
+        0x30, 0x29, 0xa2, 0x27, 0x86, 0x12, 0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f,
+        0x2f, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d,
+        0x82, 0x0b, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f,
+        0x6d, 0x87, 0x04, 0x7f, 0x00, 0x00, 0x01, 0x30, 0x16, 0xa0, 0x14, 0xa0,
+        0x12, 0x86, 0x10, 0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x61, 0x2e,
+        0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x30, 0x11, 0xa0, 0x0f, 0xa0,
+        0x0d, 0x82, 0x0b, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63,
+        0x6f, 0x6d}},
+
+      // Multiple distribution point names within a single CRL distribution
+      // point are an error. Unlike issuingDistributionPoint, this seems to be
+      // only reachable by mixing full and relative in one distribution point.
+      // There is no inline form for this extension and, within a section, it is
+      // impossible to have a duplicate key because the parser silently
+      // overrides the old key.
+      {"crlDistributionPoints",
+       "dp",
+       R"([dp]
+fullname = URI:http://a.example
+relativename = relname
+[relname]
+CN = Test)",
        {}},
 
       // subjectAltName has a series of string-based inputs for each name type.
@@ -6689,6 +8001,48 @@ TEST(X509Test, ExtensionFromConf) {
         0x2d, 0x73, 0x65, 0x6e, 0x73, 0x65, 0x2d, 0x62, 0x75, 0x74, 0x2d, 0x69,
         0x73, 0x2d, 0x61, 0x6c, 0x6c, 0x6f, 0x77, 0x65, 0x64, 0x2e, 0x74, 0x65,
         0x73, 0x74}},
+
+      // nameConstraints puts a "permitted" or "excluded" prefix on the key
+      // name.
+      {"nameConstraints",
+       "permitted.DNS:example.com",
+       nullptr,
+       {0x30, 0x1a, 0x06, 0x03, 0x55, 0x1d, 0x1e, 0x04, 0x13, 0x30,
+        0x11, 0xa0, 0x0f, 0x30, 0x0d, 0x82, 0x0b, 0x65, 0x78, 0x61,
+        0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}},
+      {"nameConstraints",
+       "permitted_DNS:example.com",
+       nullptr,
+       {0x30, 0x1a, 0x06, 0x03, 0x55, 0x1d, 0x1e, 0x04, 0x13, 0x30,
+        0x11, 0xa0, 0x0f, 0x30, 0x0d, 0x82, 0x0b, 0x65, 0x78, 0x61,
+        0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}},
+      {"nameConstraints",
+       "excluded.DNS:example.com, excluded.email:example.com",
+       nullptr,
+       {0x30, 0x29, 0x06, 0x03, 0x55, 0x1d, 0x1e, 0x04, 0x22, 0x30, 0x20,
+        0xa1, 0x1e, 0x30, 0x0d, 0x82, 0x0b, 0x65, 0x78, 0x61, 0x6d, 0x70,
+        0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0x30, 0x0d, 0x81, 0x0b, 0x65,
+        0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}},
+      {"nameConstraints",
+       "permitted.DNS.1:example.com, permitted.DNS.2:example.net, "
+       "excluded.DNS.1:nope.example.com, excluded.DNS.2:also-nope.example.com",
+       nullptr,
+       {0x30, 0x58, 0x06, 0x03, 0x55, 0x1d, 0x1e, 0x04, 0x51, 0x30, 0x4f, 0xa0,
+        0x1e, 0x30, 0x0d, 0x82, 0x0b, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65,
+        0x2e, 0x63, 0x6f, 0x6d, 0x30, 0x0d, 0x82, 0x0b, 0x65, 0x78, 0x61, 0x6d,
+        0x70, 0x6c, 0x65, 0x2e, 0x6e, 0x65, 0x74, 0xa1, 0x2d, 0x30, 0x12, 0x82,
+        0x10, 0x6e, 0x6f, 0x70, 0x65, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c,
+        0x65, 0x2e, 0x63, 0x6f, 0x6d, 0x30, 0x17, 0x82, 0x15, 0x61, 0x6c, 0x73,
+        0x6f, 0x2d, 0x6e, 0x6f, 0x70, 0x65, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70,
+        0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}},
+
+      // Invalid prefixes.
+      {"nameConstraints", "permit:example.com", nullptr, {}},
+      {"nameConstraints", "permitted:example.com", nullptr, {}},
+      {"nameConstraints", "permitted.nope:example.com", nullptr, {}},
+      {"nameConstraints", "exclude:example.com", nullptr, {}},
+      {"nameConstraints", "excluded:example.com", nullptr, {}},
+      {"nameConstraints", "excluded.nope:example.com", nullptr, {}},
 
       // The "DER:" prefix just specifies an arbitrary byte string. Colons
       // separators are ignored.
@@ -7002,7 +8356,7 @@ TEST(X509Test, ExtensionFromConf) {
         0x01, 0x84, 0xb7, 0x09, 0x02, 0x04, 0x04, 0x03, 0x02, 0x02, 0x44}},
 
       {kTestOID, "ASN1:FORMAT:BITLIST,BITSTR:1,invalid,5", nullptr, {}},
-      // Negative bit inidices are not allowed.
+      // Negative bit indices are not allowed.
       {kTestOID, "ASN1:FORMAT:BITLIST,BITSTR:-1", nullptr, {}},
       // We cap bit indices at 256.
       {kTestOID, "ASN1:FORMAT:BITLIST,BITSTR:257", nullptr, {}},
@@ -7089,7 +8443,7 @@ val = SEQ:seq1
       // Invalid tag numbers.
       {kTestOID, "ASN1:EXP:-1,NULL", nullptr, {}},
       {kTestOID, "ASN1:EXP:1?,NULL", nullptr, {}},
-      // Fits in |uint32_t| but exceeds |CBS_ASN1_TAG_NUMBER_MASK|, the largest
+      // Fits in `uint32_t` but exceeds `CBS_ASN1_TAG_NUMBER_MASK`, the largest
       // tag number we support.
       {kTestOID, "ASN1:EXP:536870912,NULL", nullptr, {}},
 
@@ -7204,68 +8558,254 @@ val2 = IA5:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
 
       // Integer sizes are capped to mitigate quadratic behavior.
       {kTestOID, "ASN1:INT:" + std::string(16384, '9'), nullptr, {}},
+
+      // Certificate policies can be specified as OIDs.
+      {"certificatePolicies",
+       "1.2.3.4, anyPolicy",
+       "",
+       {0x30, 0x18, 0x06, 0x03, 0x55, 0x1d, 0x20, 0x04, 0x11,
+        0x30, 0x0f, 0x30, 0x05, 0x06, 0x03, 0x2a, 0x03, 0x04,
+        0x30, 0x06, 0x06, 0x04, 0x55, 0x1d, 0x20, 0x00}},
+
+      // Or they may be specified by section.
+      {"certificatePolicies",
+       "@policy",
+       R"(
+[policy]
+policyIdentifier = 1.2.3.4
+)",
+       {0x30, 0x10, 0x06, 0x03, 0x55, 0x1d, 0x20, 0x04, 0x09, 0x30, 0x07, 0x30,
+        0x05, 0x06, 0x03, 0x2a, 0x03, 0x04}},
+
+      // Specifying a section allows qualifiers to be included.
+      {"certificatePolicies",
+       "@policy",
+       R"(
+[policy]
+policyIdentifier = 1.2.3.4
+CPS = http://example.com/cps
+userNotice = @notice
+[notice]
+explicitText = Hello World
+organization = MyOrg
+noticeNumbers = 1,2,3
+)",
+       {0x30, 0x65, 0x06, 0x03, 0x55, 0x1d, 0x20, 0x04, 0x5e, 0x30, 0x5c, 0x30,
+        0x5a, 0x06, 0x03, 0x2a, 0x03, 0x04, 0x30, 0x53, 0x30, 0x22, 0x06, 0x08,
+        0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x02, 0x01, 0x16, 0x16, 0x68, 0x74,
+        0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65,
+        0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x63, 0x70, 0x73, 0x30, 0x2d, 0x06, 0x08,
+        0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x02, 0x02, 0x30, 0x21, 0x30, 0x12,
+        0x1a, 0x05, 0x4d, 0x79, 0x4f, 0x72, 0x67, 0x30, 0x09, 0x02, 0x01, 0x01,
+        0x02, 0x01, 0x02, 0x02, 0x01, 0x03, 0x1a, 0x0b, 0x48, 0x65, 0x6c, 0x6c,
+        0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64}},
+
+      // The ia5org token flips the string type used in the organization name.
+      {"certificatePolicies",
+       "ia5org, @policy",
+       R"(
+[policy]
+policyIdentifier = 1.2.3.4
+CPS = http://example.com/cps
+userNotice = @notice
+[notice]
+explicitText = Hello World
+organization = MyOrg
+noticeNumbers = 1,2,3
+)",
+       {0x30, 0x65, 0x06, 0x03, 0x55, 0x1d, 0x20, 0x04, 0x5e, 0x30, 0x5c, 0x30,
+        0x5a, 0x06, 0x03, 0x2a, 0x03, 0x04, 0x30, 0x53, 0x30, 0x22, 0x06, 0x08,
+        0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x02, 0x01, 0x16, 0x16, 0x68, 0x74,
+        0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65,
+        0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x63, 0x70, 0x73, 0x30, 0x2d, 0x06, 0x08,
+        0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x02, 0x02, 0x30, 0x21, 0x30, 0x12,
+        0x16, 0x05, 0x4d, 0x79, 0x4f, 0x72, 0x67, 0x30, 0x09, 0x02, 0x01, 0x01,
+        0x02, 0x01, 0x02, 0x02, 0x01, 0x03, 0x1a, 0x0b, 0x48, 0x65, 0x6c, 0x6c,
+        0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64}},
   };
   for (const auto &t : kTests) {
     SCOPED_TRACE(t.name);
     SCOPED_TRACE(t.value);
     SCOPED_TRACE(t.conf);
 
-    bssl::UniquePtr<CONF> conf;
+    UniquePtr<CONF> conf;
     if (t.conf != nullptr) {
       conf.reset(NCONF_new(nullptr));
       ASSERT_TRUE(conf);
-      bssl::UniquePtr<BIO> bio(BIO_new_mem_buf(t.conf, strlen(t.conf)));
+      UniquePtr<BIO> bio(BIO_new_mem_buf(t.conf, strlen(t.conf)));
       ASSERT_TRUE(bio);
       long error_line;
       ASSERT_TRUE(NCONF_load_bio(conf.get(), bio.get(), &error_line))
           << "Failed to load config at line " << error_line;
     }
 
-    bssl::UniquePtr<X509_EXTENSION> ext(
+    UniquePtr<X509_EXTENSION> ext(
         X509V3_EXT_nconf(conf.get(), nullptr, t.name, t.value.c_str()));
     if (t.expected.empty()) {
       EXPECT_FALSE(ext);
+      ERR_clear_error();
     } else {
       ASSERT_TRUE(ext);
       uint8_t *der = nullptr;
       int len = i2d_X509_EXTENSION(ext.get(), &der);
       ASSERT_GE(len, 0);
-      bssl::UniquePtr<uint8_t> free_der(der);
+      UniquePtr<uint8_t> free_der(der);
       EXPECT_EQ(Bytes(t.expected), Bytes(der, len));
     }
 
-    // Repeat the test with an explicit |X509V3_CTX|.
+    // Repeat the test with an explicit `X509V3_CTX`.
     X509V3_CTX ctx;
     X509V3_set_ctx(&ctx, nullptr, nullptr, nullptr, nullptr, 0);
     X509V3_set_nconf(&ctx, conf.get());
     ext.reset(X509V3_EXT_nconf(conf.get(), &ctx, t.name, t.value.c_str()));
     if (t.expected.empty()) {
       EXPECT_FALSE(ext);
+      ERR_clear_error();
     } else {
       ASSERT_TRUE(ext);
       uint8_t *der = nullptr;
       int len = i2d_X509_EXTENSION(ext.get(), &der);
       ASSERT_GE(len, 0);
-      bssl::UniquePtr<uint8_t> free_der(der);
+      UniquePtr<uint8_t> free_der(der);
+      EXPECT_EQ(Bytes(t.expected), Bytes(der, len));
+    }
+  }
+
+  UniquePtr<EVP_PKEY> issuer_key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(issuer_key);
+
+  // Issuer cert without SKID.
+  UniquePtr<X509> issuer_no_skid =
+      MakeTestCert("Issuer", "Issuer", issuer_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(issuer_no_skid);
+  ASSERT_TRUE(X509_sign(issuer_no_skid.get(), issuer_key.get(), EVP_sha256()));
+
+  // Issuer cert with SKID.
+  UniquePtr<X509> issuer_with_skid =
+      MakeTestCert("Issuer", "Issuer", issuer_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(issuer_with_skid);
+  static const uint8_t kSKID[] = {1, 2, 3, 4, 5, 6, 7, 8};
+  ASSERT_TRUE(AddSubjectKeyIdentifier(issuer_with_skid.get(), kSKID));
+  ASSERT_TRUE(
+      X509_sign(issuer_with_skid.get(), issuer_key.get(), EVP_sha256()));
+
+  // Issuer cert with an unparseable SKID extension.
+  UniquePtr<X509> issuer_invalid_skid =
+      MakeTestCert("Issuer", "Issuer", issuer_key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(issuer_invalid_skid);
+  UniquePtr<X509_EXTENSION> invalid_skid(X509_EXTENSION_new());
+  ASSERT_TRUE(X509_EXTENSION_set_object(
+      invalid_skid.get(), OBJ_nid2obj(NID_subject_key_identifier)));
+  ASSERT_TRUE(
+      X509_add_ext(issuer_invalid_skid.get(), invalid_skid.get(), /*loc=*/-1));
+  ASSERT_TRUE(
+      X509_sign(issuer_invalid_skid.get(), issuer_key.get(), EVP_sha256()));
+
+  const struct {
+    const char *name;
+    const char *value;
+    // issuer_cert is the issuer certificate that must be used with the
+    // extension.
+    const X509 *issuer_cert;
+    // expected is the resulting extension, encoded in DER, or the empty string
+    // if an error is expected.
+    std::vector<uint8_t> expected;
+  } kTestsWithIssuer[] = {
+      // The AKID extension is a series of options. The "keyid" option picks up
+      // the issuer's SKID, but only if it is present.
+      {"authorityKeyIdentifier",
+       "keyid",
+       issuer_no_skid.get(),
+       {0x30, 0x09, 0x06, 0x03, 0x55, 0x1d, 0x23, 0x04, 0x02, 0x30, 0x00}},
+      {"authorityKeyIdentifier",
+       "keyid",
+       issuer_with_skid.get(),
+       {0x30, 0x13, 0x06, 0x03, 0x55, 0x1d, 0x23, 0x04, 0x0c, 0x30, 0x0a,
+        0x80, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}},
+
+      // The SKID extension could not be parsed.
+      {"authorityKeyIdentifier", "keyid", issuer_invalid_skid.get(), {}},
+
+      // keyid:always makes it an error when there is no issuer SKID.
+      {"authorityKeyIdentifier", "keyid:always", issuer_no_skid.get(), {}},
+      {"authorityKeyIdentifier",
+       "keyid:always",
+       issuer_with_skid.get(),
+       {0x30, 0x13, 0x06, 0x03, 0x55, 0x1d, 0x23, 0x04, 0x0c, 0x30, 0x0a,
+        0x80, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}},
+
+      // The issuer option picks up the issuer's issuer and serial.
+      {"authorityKeyIdentifier",
+       "issuer",
+       issuer_no_skid.get(),
+       {0x30, 0x23, 0x06, 0x03, 0x55, 0x1d, 0x23, 0x04, 0x1c, 0x30,
+        0x1a, 0xa1, 0x15, 0xa4, 0x13, 0x30, 0x11, 0x31, 0x0f, 0x30,
+        0x0d, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c, 0x06, 0x49, 0x73,
+        0x73, 0x75, 0x65, 0x72, 0x82, 0x01, 0x2a}},
+
+      // If both options are enabled, the issuer option only applies if the
+      // keyid option missed.
+      {"authorityKeyIdentifier",
+       "keyid,issuer",
+       issuer_no_skid.get(),
+       {0x30, 0x23, 0x06, 0x03, 0x55, 0x1d, 0x23, 0x04, 0x1c, 0x30,
+        0x1a, 0xa1, 0x15, 0xa4, 0x13, 0x30, 0x11, 0x31, 0x0f, 0x30,
+        0x0d, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0c, 0x06, 0x49, 0x73,
+        0x73, 0x75, 0x65, 0x72, 0x82, 0x01, 0x2a}},
+      {"authorityKeyIdentifier",
+       "keyid,issuer",
+       issuer_with_skid.get(),
+       {0x30, 0x13, 0x06, 0x03, 0x55, 0x1d, 0x23, 0x04, 0x0c, 0x30, 0x0a,
+        0x80, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}},
+
+      // Unless issuer:always is set, in which case both are included.
+      {"authorityKeyIdentifier",
+       "keyid,issuer:always",
+       issuer_with_skid.get(),
+       {0x30, 0x2d, 0x06, 0x03, 0x55, 0x1d, 0x23, 0x04, 0x26, 0x30, 0x24, 0x80,
+        0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0xa1, 0x15, 0xa4,
+        0x13, 0x30, 0x11, 0x31, 0x0f, 0x30, 0x0d, 0x06, 0x03, 0x55, 0x04, 0x03,
+        0x0c, 0x06, 0x49, 0x73, 0x73, 0x75, 0x65, 0x72, 0x82, 0x01, 0x2a}},
+
+      // Invalid options are rejected.
+      {"authorityKeyIdentifier", "keyid,badopt", issuer_with_skid.get(), {}},
+  };
+  for (const auto &t : kTestsWithIssuer) {
+    SCOPED_TRACE(t.name);
+    SCOPED_TRACE(t.value);
+
+    X509V3_CTX ctx;
+    X509V3_set_ctx(&ctx, t.issuer_cert, nullptr, nullptr, nullptr, 0);
+    UniquePtr<X509_EXTENSION> ext(
+        X509V3_EXT_nconf(nullptr, &ctx, t.name, t.value));
+    if (t.expected.empty()) {
+      EXPECT_FALSE(ext);
+      ERR_clear_error();
+    } else {
+      ASSERT_TRUE(ext);
+      uint8_t *der = nullptr;
+      int len = i2d_X509_EXTENSION(ext.get(), &der);
+      ASSERT_GE(len, 0);
+      UniquePtr<uint8_t> free_der(der);
       EXPECT_EQ(Bytes(t.expected), Bytes(der, len));
     }
   }
 }
 
 TEST(X509Test, AddUnserializableExtension) {
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
-  bssl::UniquePtr<X509> x509 =
+  UniquePtr<X509> x509 =
       MakeTestCert("Issuer", "Subject", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(x509);
-  bssl::UniquePtr<X509_EXTENSION> ext(X509_EXTENSION_new());
+  UniquePtr<X509_EXTENSION> ext(X509_EXTENSION_new());
   ASSERT_TRUE(X509_EXTENSION_set_object(ext.get(), OBJ_get_undef()));
   EXPECT_FALSE(X509_add_ext(x509.get(), ext.get(), /*loc=*/-1));
 }
 
-// Test that, when constructing an |X509_NAME|, names are sorted by DER order.
+// Test that, when constructing an `X509_NAME`, names are sorted by DER order.
 TEST(X509Test, SortRDN) {
-  bssl::UniquePtr<X509_NAME> name(X509_NAME_new());
+  UniquePtr<X509_NAME> name(X509_NAME_new());
   ASSERT_TRUE(name);
 
   auto append_entry_new_rdn = [&](const char *str) {
@@ -7300,7 +8840,7 @@ TEST(X509Test, SortRDN) {
   uint8_t *der = nullptr;
   int der_len = i2d_X509_NAME(name.get(), &der);
   ASSERT_GT(der_len, 0);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
 
   // SEQUENCE {
   //   SET {
@@ -7354,8 +8894,8 @@ TEST(X509Test, NameAttributeValues) {
 
   auto encode_single_attribute_name =
       [](CBS_ASN1_TAG tag, std::string_view contents) -> std::vector<uint8_t> {
-    auto bytes = bssl::StringAsBytes(contents);
-    bssl::ScopedCBB cbb;
+    auto bytes = StringAsBytes(contents);
+    ScopedCBB cbb;
     CBB seq, rdn, attr;
     if (!CBB_init(cbb.get(), 128) ||
         !CBB_add_asn1(cbb.get(), &seq, CBS_ASN1_SEQUENCE) ||
@@ -7399,17 +8939,17 @@ TEST(X509Test, NameAttributeValues) {
 
       // Test negative values. These are interesting because, when encoding, the
       // ASN.1 type must be determined from the string type, but the string type
-      // has an extra |V_ASN1_NEG| bit.
+      // has an extra `V_ASN1_NEG` bit.
       {CBS_ASN1_INTEGER, "\xff", V_ASN1_NEG_INTEGER, "\x01"},
       {CBS_ASN1_ENUMERATED, "\xff", V_ASN1_NEG_ENUMERATED, "\x01"},
 
-      // SEQUENCE and SET use their |ASN1_STRING| representation, which includes
+      // SEQUENCE and SET use their `ASN1_STRING` representation, which includes
       // the tag and length.
       {CBS_ASN1_SEQUENCE, "", V_ASN1_SEQUENCE, std::string("\x30\x00", 2)},
       {CBS_ASN1_SET, "", V_ASN1_SET, std::string("\x31\x00", 2)},
 
-      // NULL, BOOLEAN, and OBJECT IDENTIFIER use non-|ASN1_STRING|
-      // representations, so they are represented with |V_ASN1_OTHER|.
+      // NULL, BOOLEAN, and OBJECT IDENTIFIER use non-`ASN1_STRING`
+      // representations, so they are represented with `V_ASN1_OTHER`.
       {CBS_ASN1_NULL, "", V_ASN1_OTHER, std::string("\x05\x00", 2)},
       {CBS_ASN1_BOOLEAN, std::string("\x00", 1), V_ASN1_OTHER,
        std::string("\x01\x01\x00", 3)},
@@ -7418,7 +8958,7 @@ TEST(X509Test, NameAttributeValues) {
        "\x06\x04\x01\x02\x03\x04"},
 
       // These types are not actually supported by the library, but we accept
-      // them as |V_ASN1_OTHER|.
+      // them as `V_ASN1_OTHER`.
       {7 /* ObjectDescriptor */, "", V_ASN1_OTHER, std::string("\x07\x00", 2)},
       {CBS_ASN1_CONSTRUCTED | 8 /* EXTERNAL */, "", V_ASN1_OTHER,
        std::string("\x28\x00", 2)},
@@ -7432,7 +8972,7 @@ TEST(X509Test, NameAttributeValues) {
       {CBS_ASN1_CONSTRUCTED | 29 /* CHARACTER STRING */, "", V_ASN1_OTHER,
        std::string("\x3d\x00", 2)},
 
-      // Non-universal tags are allowed as |V_ASN1_OTHER| too.
+      // Non-universal tags are allowed as `V_ASN1_OTHER` too.
       {CBS_ASN1_APPLICATION | CBS_ASN1_CONSTRUCTED | 42, "", V_ASN1_OTHER,
        std::string("\x7f\x2a\x00", 3)},
       {CBS_ASN1_APPLICATION | 42, "", V_ASN1_OTHER,
@@ -7450,8 +8990,7 @@ TEST(X509Test, NameAttributeValues) {
 
     // The input should parse.
     const uint8_t *inp = encoded.data();
-    bssl::UniquePtr<X509_NAME> name(
-        d2i_X509_NAME(nullptr, &inp, encoded.size()));
+    UniquePtr<X509_NAME> name(d2i_X509_NAME(nullptr, &inp, encoded.size()));
     ASSERT_TRUE(name);
     EXPECT_EQ(inp, encoded.data() + encoded.size())
         << "input was not fully consumed";
@@ -7470,12 +9009,12 @@ TEST(X509Test, NameAttributeValues) {
     uint8_t *der = nullptr;
     int der_len = i2d_X509_NAME(name.get(), &der);
     ASSERT_GE(der_len, 0);
-    bssl::UniquePtr<uint8_t> free_der(der);
+    UniquePtr<uint8_t> free_der(der);
     EXPECT_EQ(Bytes(der, der_len), Bytes(encoded));
 
     // X509_NAME internally caches its encoding, which means the check above
     // does not fully test re-encoding. Repeat the test by constructing an
-    // |X509_NAME| from the string representation.
+    // `X509_NAME` from the string representation.
     name.reset(X509_NAME_new());
     ASSERT_TRUE(name);
     ASSERT_TRUE(X509_NAME_add_entry_by_txt(
@@ -7527,9 +9066,9 @@ TEST(X509Test, NameAttributeValues) {
 
     // The input should not parse.
     const uint8_t *inp = encoded.data();
-    bssl::UniquePtr<X509_NAME> name(
-        d2i_X509_NAME(nullptr, &inp, encoded.size()));
+    UniquePtr<X509_NAME> name(d2i_X509_NAME(nullptr, &inp, encoded.size()));
     EXPECT_FALSE(name);
+    EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, std::nullopt}}));
   }
 }
 
@@ -7575,7 +9114,7 @@ TEST(X509Test, GetTextByOBJ) {
       },
   };
   for (const auto &test : kTests) {
-    bssl::UniquePtr<X509_NAME> name(X509_NAME_new());
+    UniquePtr<X509_NAME> name(X509_NAME_new());
     ASSERT_TRUE(name);
     ASSERT_TRUE(X509_NAME_add_entry_by_NID(
         name.get(), NID_commonName, test.content_type,
@@ -7599,43 +9138,43 @@ TEST(X509Test, GetTextByOBJ) {
 }
 
 TEST(X509Test, ParamInheritance) {
-  // |X509_VERIFY_PARAM_inherit| with both unset.
+  // `X509_VERIFY_PARAM_inherit` with both unset.
   {
-    bssl::UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(dest);
-    bssl::UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(src);
     ASSERT_TRUE(X509_VERIFY_PARAM_inherit(dest.get(), src.get()));
     EXPECT_EQ(X509_VERIFY_PARAM_get_depth(dest.get()), -1);
   }
 
-  // |X509_VERIFY_PARAM_inherit| with source set.
+  // `X509_VERIFY_PARAM_inherit` with source set.
   {
-    bssl::UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(dest);
-    bssl::UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(src);
     X509_VERIFY_PARAM_set_depth(src.get(), 5);
     ASSERT_TRUE(X509_VERIFY_PARAM_inherit(dest.get(), src.get()));
     EXPECT_EQ(X509_VERIFY_PARAM_get_depth(dest.get()), 5);
   }
 
-  // |X509_VERIFY_PARAM_inherit| with destination set.
+  // `X509_VERIFY_PARAM_inherit` with destination set.
   {
-    bssl::UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(dest);
-    bssl::UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(src);
     X509_VERIFY_PARAM_set_depth(dest.get(), 5);
     ASSERT_TRUE(X509_VERIFY_PARAM_inherit(dest.get(), src.get()));
     EXPECT_EQ(X509_VERIFY_PARAM_get_depth(dest.get()), 5);
   }
 
-  // |X509_VERIFY_PARAM_inherit| with both set.
+  // `X509_VERIFY_PARAM_inherit` with both set.
   {
-    bssl::UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(dest);
-    bssl::UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(src);
     X509_VERIFY_PARAM_set_depth(dest.get(), 5);
     X509_VERIFY_PARAM_set_depth(src.get(), 10);
@@ -7644,43 +9183,43 @@ TEST(X509Test, ParamInheritance) {
     EXPECT_EQ(X509_VERIFY_PARAM_get_depth(dest.get()), 5);
   }
 
-  // |X509_VERIFY_PARAM_set1| with both unset.
+  // `X509_VERIFY_PARAM_set1` with both unset.
   {
-    bssl::UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(dest);
-    bssl::UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(src);
     ASSERT_TRUE(X509_VERIFY_PARAM_set1(dest.get(), src.get()));
     EXPECT_EQ(X509_VERIFY_PARAM_get_depth(dest.get()), -1);
   }
 
-  // |X509_VERIFY_PARAM_set1| with source set.
+  // `X509_VERIFY_PARAM_set1` with source set.
   {
-    bssl::UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(dest);
-    bssl::UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(src);
     X509_VERIFY_PARAM_set_depth(src.get(), 5);
     ASSERT_TRUE(X509_VERIFY_PARAM_set1(dest.get(), src.get()));
     EXPECT_EQ(X509_VERIFY_PARAM_get_depth(dest.get()), 5);
   }
 
-  // |X509_VERIFY_PARAM_set1| with destination set.
+  // `X509_VERIFY_PARAM_set1` with destination set.
   {
-    bssl::UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(dest);
-    bssl::UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(src);
     X509_VERIFY_PARAM_set_depth(dest.get(), 5);
     ASSERT_TRUE(X509_VERIFY_PARAM_set1(dest.get(), src.get()));
     EXPECT_EQ(X509_VERIFY_PARAM_get_depth(dest.get()), 5);
   }
 
-  // |X509_VERIFY_PARAM_set1| with both set.
+  // `X509_VERIFY_PARAM_set1` with both set.
   {
-    bssl::UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(dest);
-    bssl::UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
     ASSERT_TRUE(src);
     X509_VERIFY_PARAM_set_depth(dest.get(), 5);
     X509_VERIFY_PARAM_set_depth(src.get(), 10);
@@ -7688,21 +9227,59 @@ TEST(X509Test, ParamInheritance) {
     // The new value is used.
     EXPECT_EQ(X509_VERIFY_PARAM_get_depth(dest.get()), 10);
   }
+
+  // `X509_VERIFY_PARAM_inherit` and `X509_VERIFY_PARAM_set1` must fail if the
+  // source parameter is poisoned.
+  {
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    ASSERT_TRUE(dest);
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    ASSERT_TRUE(src);
+
+    // Poison the source parameter (using an embedded NUL in hostname).
+    ASSERT_FALSE(X509_VERIFY_PARAM_set1_host(src.get(), "a", 2));
+
+    EXPECT_FALSE(X509_VERIFY_PARAM_inherit(dest.get(), src.get()));
+    EXPECT_TRUE(
+        ErrorsAreAndClear({{ERR_LIB_X509, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
+    EXPECT_FALSE(X509_VERIFY_PARAM_set1(dest.get(), src.get()));
+    EXPECT_TRUE(
+        ErrorsAreAndClear({{ERR_LIB_X509, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
+  }
+
+  // `X509_VERIFY_PARAM_inherit` and `X509_VERIFY_PARAM_set1` must fail if the
+  // destination parameter is poisoned.
+  {
+    UniquePtr<X509_VERIFY_PARAM> dest(X509_VERIFY_PARAM_new());
+    ASSERT_TRUE(dest);
+    UniquePtr<X509_VERIFY_PARAM> src(X509_VERIFY_PARAM_new());
+    ASSERT_TRUE(src);
+
+    // Poison the destination parameter (using an embedded NUL in hostname).
+    ASSERT_FALSE(X509_VERIFY_PARAM_set1_host(dest.get(), "a", 2));
+
+    EXPECT_FALSE(X509_VERIFY_PARAM_inherit(dest.get(), src.get()));
+    EXPECT_TRUE(
+        ErrorsAreAndClear({{ERR_LIB_X509, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
+    EXPECT_FALSE(X509_VERIFY_PARAM_set1(dest.get(), src.get()));
+    EXPECT_TRUE(
+        ErrorsAreAndClear({{ERR_LIB_X509, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED}}));
+  }
 }
 
 TEST(X509Test, PublicKeyCache) {
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
   X509_PUBKEY *pub = nullptr;
   ASSERT_TRUE(X509_PUBKEY_set(&pub, key.get()));
-  bssl::UniquePtr<X509_PUBKEY> free_pub(pub);
+  UniquePtr<X509_PUBKEY> free_pub(pub);
 
-  bssl::UniquePtr<EVP_PKEY> key2(X509_PUBKEY_get(pub));
+  UniquePtr<EVP_PKEY> key2(X509_PUBKEY_get(pub));
   ASSERT_TRUE(key2);
-  EXPECT_EQ(1, EVP_PKEY_cmp(key.get(), key2.get()));
+  EXPECT_EQ(1, EVP_PKEY_eq(key.get(), key2.get()));
 
-  // Replace |pub| with different (garbage) values.
+  // Replace `pub` with different (garbage) values.
   ASSERT_TRUE(X509_PUBKEY_set0_param(pub, OBJ_nid2obj(NID_subject_alt_name),
                                      V_ASN1_NULL, nullptr, nullptr, 0));
 
@@ -7711,15 +9288,15 @@ TEST(X509Test, PublicKeyCache) {
   EXPECT_FALSE(key2);
 }
 
-// Tests some unusual behavior in |X509_STORE_CTX_set_purpose| and
-// |X509_STORE_CTX_set_trust|.
+// Tests some unusual behavior in `X509_STORE_CTX_set_purpose` and
+// `X509_STORE_CTX_set_trust`.
 TEST(X509Test, ContextTrustAndPurpose) {
-  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+  UniquePtr<X509_STORE> store(X509_STORE_new());
   ASSERT_TRUE(store);
-  bssl::UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
+  UniquePtr<X509> leaf(CertFromPEM(kLeafPEM));
   ASSERT_TRUE(leaf);
 
-  bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+  UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
   ASSERT_TRUE(ctx);
   ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), leaf.get(), nullptr));
 
@@ -7731,7 +9308,7 @@ TEST(X509Test, ContextTrustAndPurpose) {
   EXPECT_FALSE(X509_STORE_CTX_set_purpose(ctx.get(), 999));
   EXPECT_FALSE(X509_STORE_CTX_set_trust(ctx.get(), 999));
 
-  // It is not possible to set |X509_PURPOSE_ANY| with this API, because there
+  // It is not possible to set `X509_PURPOSE_ANY` with this API, because there
   // is no corresponding trust.
   EXPECT_FALSE(X509_STORE_CTX_set_purpose(ctx.get(), X509_PURPOSE_ANY));
 
@@ -7758,7 +9335,7 @@ TEST(X509Test, ContextTrustAndPurpose) {
   EXPECT_EQ(ctx->param->purpose, 0);
   EXPECT_EQ(ctx->param->trust, X509_TRUST_SSL_SERVER);
 
-  // If trust is set, but not purpose, |X509_STORE_CTX_set_purpose| only sets
+  // If trust is set, but not purpose, `X509_STORE_CTX_set_purpose` only sets
   // purpose.
   ASSERT_TRUE(X509_STORE_CTX_set_purpose(ctx.get(), X509_PURPOSE_SSL_CLIENT));
   EXPECT_EQ(ctx->param->purpose, X509_PURPOSE_SSL_CLIENT);
@@ -7771,7 +9348,7 @@ TEST(X509Test, ContextTrustAndPurpose) {
   EXPECT_EQ(ctx->param->purpose, 0);
   EXPECT_EQ(ctx->param->trust, 0);
 
-  // If purpose is set, but not trust, |X509_STORE_CTX_set_purpose| only sets
+  // If purpose is set, but not trust, `X509_STORE_CTX_set_purpose` only sets
   // trust.
   ASSERT_TRUE(X509_VERIFY_PARAM_set_purpose(
       X509_STORE_CTX_get0_param(ctx.get()), X509_PURPOSE_SSL_CLIENT));
@@ -7783,8 +9360,8 @@ TEST(X509Test, ContextTrustAndPurpose) {
   EXPECT_EQ(ctx->param->trust, X509_TRUST_SSL_SERVER);
 }
 
-TEST(X509Test, Purpose) {
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+TEST_P(X509VerifyTest, Purpose) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
   struct {
@@ -7818,17 +9395,17 @@ TEST(X509Test, Purpose) {
     };
 
     // An unconstrained cert chain is valid.
-    bssl::UniquePtr<X509> root =
+    UniquePtr<X509> root =
         MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
     ASSERT_TRUE(root);
     ASSERT_TRUE(X509_sign(root.get(), key.get(), EVP_sha256()));
 
-    bssl::UniquePtr<X509> intermediate =
+    UniquePtr<X509> intermediate =
         MakeTestCert("Root", "Intermediate", key.get(), /*is_ca=*/true);
     ASSERT_TRUE(intermediate);
     ASSERT_TRUE(X509_sign(intermediate.get(), key.get(), EVP_sha256()));
 
-    bssl::UniquePtr<X509> leaf =
+    UniquePtr<X509> leaf =
         MakeTestCert("Intermediate", "Leaf", key.get(), /*is_ca=*/false);
     ASSERT_TRUE(leaf);
     ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
@@ -7836,7 +9413,15 @@ TEST(X509Test, Purpose) {
     EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {intermediate.get()},
                                 {}, 0, configure_callback));
 
-    // A leaf and intermediate with compatible constraints is valid.
+    // Compatible constraints on each certificate are valid.
+    root = MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
+    ASSERT_TRUE(root);
+    ASSERT_TRUE(AddKeyUsage(root.get(), {KeyUsage::kKeyCertSign}));
+    if (t.eku_nid != NID_undef) {
+      ASSERT_TRUE(AddExtendedKeyUsage(root.get(), {t.eku_nid}));
+    }
+    ASSERT_TRUE(X509_sign(root.get(), key.get(), EVP_sha256()));
+
     intermediate =
         MakeTestCert("Root", "Intermediate", key.get(), /*is_ca=*/true);
     ASSERT_TRUE(intermediate);
@@ -7932,7 +9517,7 @@ TEST(X509Test, Purpose) {
                        configure_callback));
     }
 
-    // Restore |leaf| to a valid option.
+    // Restore `leaf` to a valid option.
     leaf = MakeTestCert("Intermediate", "Leaf", key.get(), /*is_ca=*/false);
     ASSERT_TRUE(leaf);
     ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
@@ -7940,38 +9525,61 @@ TEST(X509Test, Purpose) {
     // The intermediate must have the keyCertSign bit. This bit is checked in
     // multiple places. The first place that fails is in looking for candidate
     // issuers.
-    intermediate =
+    UniquePtr<X509> intermediate_bad_ku =
         MakeTestCert("Root", "Intermediate", key.get(), /*is_ca=*/true);
-    ASSERT_TRUE(intermediate);
-    ASSERT_TRUE(AddKeyUsage(intermediate.get(), {KeyUsage::kDigitalSignature}));
+    ASSERT_TRUE(intermediate_bad_ku);
+    ASSERT_TRUE(
+        AddKeyUsage(intermediate_bad_ku.get(), {KeyUsage::kDigitalSignature}));
     if (t.eku_nid != NID_undef) {
-      ASSERT_TRUE(AddExtendedKeyUsage(intermediate.get(), {t.eku_nid}));
+      ASSERT_TRUE(AddExtendedKeyUsage(intermediate_bad_ku.get(), {t.eku_nid}));
     }
-    ASSERT_TRUE(X509_sign(intermediate.get(), key.get(), EVP_sha256()));
+    ASSERT_TRUE(X509_sign(intermediate_bad_ku.get(), key.get(), EVP_sha256()));
     EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
-              Verify(leaf.get(), {root.get()}, {intermediate.get()}, {}, 0,
-                     configure_callback));
+              Verify(leaf.get(), {root.get()}, {intermediate_bad_ku.get()}, {},
+                     0, configure_callback));
 
-    // The intermediate must have the EKU asserted.
+    // Every certificate in the chain, must be compatible with the EKU.
     if (t.eku_nid != NID_undef) {
-      intermediate =
+      UniquePtr<X509> intermediate_bad_eku =
           MakeTestCert("Root", "Intermediate", key.get(), /*is_ca=*/true);
-      ASSERT_TRUE(intermediate);
-      ASSERT_TRUE(AddKeyUsage(intermediate.get(), {KeyUsage::kKeyCertSign}));
-      ASSERT_TRUE(AddExtendedKeyUsage(intermediate.get(), {NID_rsaEncryption}));
-      ASSERT_TRUE(X509_sign(intermediate.get(), key.get(), EVP_sha256()));
+      ASSERT_TRUE(intermediate_bad_eku);
+      ASSERT_TRUE(
+          AddKeyUsage(intermediate_bad_eku.get(), {KeyUsage::kKeyCertSign}));
+      ASSERT_TRUE(
+          AddExtendedKeyUsage(intermediate_bad_eku.get(), {NID_rsaEncryption}));
+      ASSERT_TRUE(
+          X509_sign(intermediate_bad_eku.get(), key.get(), EVP_sha256()));
       EXPECT_EQ(X509_V_ERR_INVALID_PURPOSE,
-                Verify(leaf.get(), {root.get()}, {intermediate.get()}, {}, 0,
-                       configure_callback));
+                Verify(leaf.get(), {root.get()}, {intermediate_bad_eku.get()},
+                       {}, 0, configure_callback));
+
+      // If the intermediate is in the `X509_STORE` but is not a trust anchor,
+      // the check also applies. (By default, `X509_check_trust` expects a
+      // self-signed certificate as a trust anchor, so path-building will
+      // continue past `intermediate_bad_eku`.)
+      EXPECT_EQ(X509_V_ERR_INVALID_PURPOSE,
+                Verify(leaf.get(), {root.get(), intermediate_bad_eku.get()}, {},
+                       {}, 0, configure_callback));
+
+      // Likewise with the root.
+      UniquePtr<X509> root_bad_eku =
+          MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
+      ASSERT_TRUE(root_bad_eku);
+      ASSERT_TRUE(AddKeyUsage(root_bad_eku.get(), {KeyUsage::kKeyCertSign}));
+      ASSERT_TRUE(AddExtendedKeyUsage(root_bad_eku.get(), {NID_rsaEncryption}));
+      ASSERT_TRUE(X509_sign(root_bad_eku.get(), key.get(), EVP_sha256()));
+      EXPECT_EQ(X509_V_ERR_INVALID_PURPOSE,
+                Verify(leaf.get(), {root_bad_eku.get()}, {intermediate.get()},
+                       {}, 0, configure_callback));
     }
   }
 }
 
-TEST(X509Test, Trust) {
+TEST_P(X509VerifyTest, Trust) {
   struct Certs {
-    bssl::UniquePtr<X509> normal;
-    bssl::UniquePtr<X509> trusted_server, distrusted_server;
-    bssl::UniquePtr<X509> trusted_any, distrusted_any;
+    UniquePtr<X509> normal;
+    UniquePtr<X509> trusted_server, distrusted_server;
+    UniquePtr<X509> trusted_any, distrusted_any;
   };
   auto certs_from_pem = [](const char *pem) -> Certs {
     Certs certs;
@@ -8023,6 +9631,50 @@ TEST(X509Test, Trust) {
       X509_V_ERR_CERT_REJECTED,
       Verify(leaf.normal.get(), {intermediate.distrusted_any.get()}, {}, {}));
 
+  // If `X509_V_FLAG_PARTIAL_CHAIN` is set, everything in the store is a trust
+  // anchor, self-signed or not, but explicit distrust still applies.
+  EXPECT_EQ(X509_V_OK, Verify(leaf.normal.get(), {intermediate.normal.get()},
+                              {}, {}, X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.normal.get(), {intermediate.trusted_any.get()}, {}, {},
+                   X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_ERR_CERT_REJECTED,
+            Verify(leaf.normal.get(), {intermediate.distrusted_any.get()}, {},
+                   {}, X509_V_FLAG_PARTIAL_CHAIN));
+
+  // If a target certificate is in the trust store, we evaluate trust similarly.
+  // In this case, the trust store version is compared by byte equality.
+  // Auxiliary info on the target certificate object is ignored because that is
+  // assumed to come from somewhere untrusted.
+  EXPECT_EQ(X509_V_OK, Verify(root.normal.get(), {root.normal.get()}, {}, {}));
+  EXPECT_EQ(X509_V_OK,
+            Verify(root.normal.get(), {root.trusted_any.get()}, {}, {}));
+  EXPECT_EQ(X509_V_ERR_CERT_REJECTED,
+            Verify(root.normal.get(), {root.distrusted_any.get()}, {}, {}));
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
+            Verify(leaf.normal.get(), {leaf.normal.get()}, {}, {}));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.normal.get(), {leaf.trusted_any.get()}, {}, {}));
+  EXPECT_EQ(X509_V_ERR_CERT_REJECTED,
+            Verify(leaf.normal.get(), {leaf.distrusted_any.get()}, {}, {}));
+
+  // If `X509_V_FLAG_PARTIAL_CHAIN`, its looser interpretation of trust anchors
+  // also applies when the target certificate is in the store.
+  EXPECT_EQ(X509_V_OK, Verify(root.normal.get(), {root.normal.get()}, {}, {},
+                              X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK, Verify(root.normal.get(), {root.trusted_any.get()}, {},
+                              {}, X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_ERR_CERT_REJECTED,
+            Verify(root.normal.get(), {root.distrusted_any.get()}, {}, {},
+                   X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.normal.get(), {leaf.normal.get()}, {}, {},
+                              X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.normal.get(), {leaf.trusted_any.get()}, {},
+                              {}, X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_ERR_CERT_REJECTED,
+            Verify(leaf.normal.get(), {leaf.distrusted_any.get()}, {}, {},
+                   X509_V_FLAG_PARTIAL_CHAIN));
+
   // If a certificate has trust settings, but only for a different OID, the
   // self-signed rule still takes effect.
   EXPECT_EQ(X509_V_OK, Verify(leaf.normal.get(), {root.trusted_server.get()},
@@ -8033,8 +9685,8 @@ TEST(X509Test, Trust) {
       X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT,
       Verify(leaf.normal.get(), {intermediate.trusted_server.get()}, {}, {}));
 
-  // |X509_TRUST_SSL_SERVER| should instead look at self-signedness and
-  // |NID_server_auth|.
+  // `X509_TRUST_SSL_SERVER` should instead look at self-signedness and
+  // `NID_server_auth`.
   auto set_server_trust = [](X509_STORE_CTX *ctx) {
     X509_STORE_CTX_set_trust(ctx, X509_TRUST_SSL_SERVER);
   };
@@ -8068,8 +9720,8 @@ TEST(X509Test, Trust) {
              {intermediate.normal.get()}, {}, /*flags=*/0, set_server_trust));
 
   // Trust settings on a certificate are ignored if the leaf did not come from
-  // |X509_STORE|. This is important because trust settings may be serialized
-  // via |d2i_X509_AUX|. It is often not obvious which functions may trigger
+  // `X509_STORE`. This is important because trust settings may be serialized
+  // via `d2i_X509_AUX`. It is often not obvious which functions may trigger
   // this, so callers may inadvertently run with attacker-supplied trust
   // settings on untrusted certificates.
   EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
@@ -8083,10 +9735,29 @@ TEST(X509Test, Trust) {
              {intermediate.trusted_server.get(), root.trusted_server.get()}, {},
              /*flags=*/0, set_server_trust));
 
-  // Likewise, distrusts only take effect from |X509_STORE|.
+  // Likewise, distrusts only take effect from `X509_STORE`.
   EXPECT_EQ(X509_V_OK, Verify(leaf.distrusted_server.get(), {root.normal.get()},
                               {intermediate.normal.get()}, {},
                               /*flags=*/0, set_server_trust));
+
+  // If `intermediate` is treated as a trust anchor, path-building should stop
+  // at `intermediate` and not continue on to `root`.
+  VerifyResult result = VerifyAndReturnChain(
+      leaf.normal.get(),
+      {intermediate.trusted_any.get(), root.trusted_any.get()}, {}, {});
+  EXPECT_EQ(X509_V_OK, result.err);
+  EXPECT_EQ(sk_X509_num(result.chain.get()), 2u);
+  EXPECT_EQ(sk_X509_value(result.chain.get(), 0), leaf.normal.get());
+  EXPECT_EQ(sk_X509_value(result.chain.get(), 1),
+            intermediate.trusted_any.get());
+
+  result = VerifyAndReturnChain(leaf.normal.get(),
+                                {intermediate.normal.get(), root.normal.get()},
+                                {}, {}, X509_V_FLAG_PARTIAL_CHAIN);
+  EXPECT_EQ(X509_V_OK, result.err);
+  EXPECT_EQ(sk_X509_num(result.chain.get()), 2u);
+  EXPECT_EQ(sk_X509_value(result.chain.get(), 0), leaf.normal.get());
+  EXPECT_EQ(sk_X509_value(result.chain.get(), 1), intermediate.normal.get());
 }
 
 // Test some APIs that rust-openssl uses to look up purposes by name.
@@ -8098,38 +9769,85 @@ TEST(X509Test, PurposeByShortName) {
   EXPECT_EQ(X509_PURPOSE_get_id(purpose), X509_PURPOSE_SSL_SERVER);
 }
 
-TEST(X509Test, CriticalExtension) {
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+TEST_P(X509VerifyTest, CriticalExtension) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
-  bssl::UniquePtr<X509> root =
+  UniquePtr<X509> root =
       MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(root);
   ASSERT_TRUE(X509_sign(root.get(), key.get(), EVP_sha256()));
 
-  // Issue a certificate with a critical Netscape certificate type extension. We
-  // do not recognize this extension, so this certificate should be rejected.
-  bssl::UniquePtr<X509> leaf =
-      MakeTestCert("Root", "Leaf", key.get(), /*is_ca=*/false);
+  UniquePtr<X509> intermediate =
+      MakeTestCert("Root", "Intermediate", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(intermediate);
+  ASSERT_TRUE(X509_sign(intermediate.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509> leaf =
+      MakeTestCert("Intermediate", "Leaf", key.get(), /*is_ca=*/false);
   ASSERT_TRUE(leaf);
-  bssl::UniquePtr<ASN1_BIT_STRING> cert_type(ASN1_BIT_STRING_new());
-  ASSERT_TRUE(cert_type);
-  ASSERT_TRUE(ASN1_BIT_STRING_set_bit(cert_type.get(), /*n=*/0, /*value=*/1));
-  ASSERT_TRUE(X509_add1_ext_i2d(leaf.get(), NID_netscape_cert_type,
-                                cert_type.get(),
-                                /*crit=*/1, /*flags=*/0));
   ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
 
+  // Issue certificates with a critical Netscape certificate type extension. We
+  // do not recognize this extension, so these certificates should be rejected.
+  UniquePtr<ASN1_BIT_STRING> cert_type(ASN1_BIT_STRING_new());
+  ASSERT_TRUE(cert_type);
+  ASSERT_TRUE(ASN1_BIT_STRING_set_bit(cert_type.get(), /*n=*/0, /*value=*/1));
+
+  UniquePtr<X509> root_crit =
+      MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(root_crit);
+  ASSERT_TRUE(X509_add1_ext_i2d(root_crit.get(), NID_netscape_cert_type,
+                                cert_type.get(), /*crit=*/1, /*flags=*/0));
+  ASSERT_TRUE(X509_sign(root_crit.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509> intermediate_crit =
+      MakeTestCert("Root", "Intermediate", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(intermediate_crit);
+  ASSERT_TRUE(X509_add1_ext_i2d(intermediate_crit.get(), NID_netscape_cert_type,
+                                cert_type.get(), /*crit=*/1, /*flags=*/0));
+  ASSERT_TRUE(X509_sign(intermediate_crit.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509> leaf_crit =
+      MakeTestCert("Intermediate", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf_crit);
+  ASSERT_TRUE(X509_add1_ext_i2d(leaf_crit.get(), NID_netscape_cert_type,
+                                cert_type.get(),
+                                /*crit=*/1, /*flags=*/0));
+  ASSERT_TRUE(X509_sign(leaf_crit.get(), key.get(), EVP_sha256()));
+
   EXPECT_EQ(X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION,
-            Verify(leaf.get(), {root.get()}, {}, {}));
-  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {}, {},
-                              X509_V_FLAG_IGNORE_CRITICAL));
+            Verify(leaf_crit.get(), {root.get()}, {intermediate.get()}, {}));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf_crit.get(), {root.get()}, {intermediate.get()}, {},
+                   X509_V_FLAG_IGNORE_CRITICAL));
+
+  EXPECT_EQ(X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION,
+            Verify(leaf.get(), {root.get()}, {intermediate_crit.get()}, {}));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {root.get()}, {intermediate_crit.get()}, {},
+                   X509_V_FLAG_IGNORE_CRITICAL));
+
+  EXPECT_EQ(X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION,
+            Verify(leaf.get(), {root_crit.get()}, {intermediate.get()}, {}));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {root_crit.get()}, {intermediate.get()}, {},
+                   X509_V_FLAG_IGNORE_CRITICAL));
+
+  // If the intermediate is in the `X509_STORE` but is not a trust anchor, the
+  // check also applies. (By default, `X509_check_trust` expects a self-signed
+  // certificate as a trust anchor, so path-building will continue past
+  // `intermediate`.)
+  EXPECT_EQ(X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION,
+            Verify(leaf.get(), {root.get(), intermediate_crit.get()}, {}, {}));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get(), intermediate_crit.get()},
+                              {}, {}, X509_V_FLAG_IGNORE_CRITICAL));
 }
 
 enum NameHash { kOldHash, kNewHash };
 
 // TemporaryHashDir constructs a temporary directory in the format of
-// |X509_LOOKUP_hash_dir|.
+// `X509_LOOKUP_hash_dir`.
 class TemporaryHashDir {
  public:
   explicit TemporaryHashDir(int type) : type_(type) {}
@@ -8207,11 +9925,11 @@ class TemporaryHashDir {
       if (der_len < 0) {
         return {};
       }
-      bssl::UniquePtr<uint8_t> free_der(der);
+      UniquePtr<uint8_t> free_der(der);
       return std::vector<uint8_t>(der, der + der_len);
     }
 
-    bssl::UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
+    UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
     const uint8_t *pem;
     size_t pem_len;
     if (bio == nullptr ||  //
@@ -8229,11 +9947,11 @@ class TemporaryHashDir {
       if (der_len < 0) {
         return {};
       }
-      bssl::UniquePtr<uint8_t> free_der(der);
+      UniquePtr<uint8_t> free_der(der);
       return std::vector<uint8_t>(der, der + der_len);
     }
 
-    bssl::UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
+    UniquePtr<BIO> bio(BIO_new(BIO_s_mem()));
     const uint8_t *pem;
     size_t pem_len;
     if (bio == nullptr ||  //
@@ -8245,7 +9963,7 @@ class TemporaryHashDir {
   }
 
   int type_;
-  bssl::TemporaryDirectory dir_;
+  TemporaryDirectory dir_;
   std::map<uint32_t, int> next_cert_;
   std::map<uint32_t, int> next_crl_;
 };
@@ -8253,11 +9971,11 @@ class TemporaryHashDir {
 // TODO(davidben): Also test CRL handling. There are some interesting behaviors
 // in here.
 TEST(X509Test, DirHash) {
-  if (bssl::SkipTempFileTests()) {
+  if (SkipTempFileTests()) {
     GTEST_SKIP();
   }
 
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
   // Test both formats.
@@ -8271,8 +9989,7 @@ TEST(X509Test, DirHash) {
     ASSERT_TRUE(dir.Init());
 
     auto add_root = [&](std::string_view name, NameHash name_hash) -> bool {
-      bssl::UniquePtr<X509> ca =
-          MakeTestCert(name, name, key.get(), /*is_ca=*/true);
+      UniquePtr<X509> ca = MakeTestCert(name, name, key.get(), /*is_ca=*/true);
       if (ca == nullptr || !X509_sign(ca.get(), key.get(), EVP_sha256())) {
         return false;
       }
@@ -8281,9 +9998,9 @@ TEST(X509Test, DirHash) {
 
     auto issue_crl =
         [&](std::string_view name, int this_update_offset_day,
-            const std::vector<uint64_t> &serials) -> bssl::UniquePtr<X509_CRL> {
-      bssl::UniquePtr<X509_CRL> crl = MakeTestCRL(name, this_update_offset_day,
-                                                  /*next_update_offset_day=*/1);
+            const std::vector<uint64_t> &serials) -> UniquePtr<X509_CRL> {
+      UniquePtr<X509_CRL> crl = MakeTestCRL(name, this_update_offset_day,
+                                            /*next_update_offset_day=*/1);
       if (crl == nullptr) {
         return nullptr;
       }
@@ -8304,7 +10021,7 @@ TEST(X509Test, DirHash) {
     auto add_crl = [&](std::string_view name, NameHash name_hash,
                        int this_update_offset_day,
                        const std::vector<uint64_t> &serials) -> bool {
-      bssl::UniquePtr<X509_CRL> crl =
+      UniquePtr<X509_CRL> crl =
           issue_crl(name, this_update_offset_day, serials);
       return crl != nullptr && dir.AddCRL(crl.get(), name_hash);
     };
@@ -8321,7 +10038,7 @@ TEST(X509Test, DirHash) {
     std::string ca3_noncanonical = "   test   ca   3   ";
     ASSERT_TRUE(add_root(ca3_noncanonical, kNewHash));
 
-    // These two CAs collide under |X509_NAME_hash|.
+    // These two CAs collide under `X509_NAME_hash`.
     std::string collide_name1 = "Test CA 1191514847";
     std::string collide_name2 = "Test CA 1570301806";
     size_t num_cert_hashes = dir.num_cert_hashes();
@@ -8330,7 +10047,7 @@ TEST(X509Test, DirHash) {
     ASSERT_TRUE(add_root(collide_name2, kNewHash));
     EXPECT_EQ(dir.num_cert_hashes(), num_cert_hashes + 1);
 
-    // These two CAs collide under |X509_NAME_hash_old|.
+    // These two CAs collide under `X509_NAME_hash_old`.
     std::string old_collide_name1 = "Test CA 1069881739";
     std::string old_collide_name2 = "Test CA 940754110";
     num_cert_hashes = dir.num_cert_hashes();
@@ -8339,8 +10056,8 @@ TEST(X509Test, DirHash) {
     ASSERT_TRUE(add_root(old_collide_name2, kOldHash));
     EXPECT_EQ(dir.num_cert_hashes(), num_cert_hashes + 1);
 
-    // Make an |X509_STORE| that gets CAs from |dir|.
-    bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+    // Make an `X509_STORE` that gets CAs from `dir`.
+    UniquePtr<X509_STORE> store(X509_STORE_new());
     ASSERT_TRUE(store);
     X509_LOOKUP *lookup =
         X509_STORE_add_lookup(store.get(), X509_LOOKUP_hash_dir());
@@ -8349,17 +10066,16 @@ TEST(X509Test, DirHash) {
 
     auto test_issuer_flags = [&](const std::string &issuer, uint64_t serial,
                                  unsigned long flags) -> int {
-      bssl::UniquePtr<X509> cert =
+      UniquePtr<X509> cert =
           MakeTestCert(issuer, "Leaf", key.get(), /*is_ca=*/false);
-      bssl::UniquePtr<ASN1_INTEGER> serial_asn1(ASN1_INTEGER_new());
+      UniquePtr<ASN1_INTEGER> serial_asn1 = ASN1IntegerFromU64(serial);
       if (cert == nullptr || serial_asn1 == nullptr ||
-          !ASN1_INTEGER_set_uint64(serial_asn1.get(), serial) ||
           !X509_set_serialNumber(cert.get(), serial_asn1.get()) ||
           !X509_sign(cert.get(), key.get(), EVP_sha256())) {
         return X509_V_ERR_UNSPECIFIED;
       }
 
-      bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+      UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
       if (ctx == nullptr ||
           !X509_STORE_CTX_init(ctx.get(), store.get(), cert.get(),
                                /*chain=*/nullptr)) {
@@ -8408,7 +10124,7 @@ TEST(X509Test, DirHash) {
 
     // Although, internally, this hits the filesystem and finds that a file does
     // not exist, there should not be anything on the error queue about a
-    // missing file. |X509_verify_cert| generally does not use the error queue,
+    // missing file. `X509_verify_cert` generally does not use the error queue,
     // so it will be empty. See https://crbug.com/boringssl/708.
     EXPECT_EQ(ERR_get_error(), 0u);
 
@@ -8448,7 +10164,7 @@ TEST(X509Test, DirHash) {
     //
     // TODO(crbug.com/boringssl/690): This behavior is almost certainly not what
     // anyone wants. Rework this.
-    bssl::UniquePtr<X509_CRL> crl = issue_crl(
+    UniquePtr<X509_CRL> crl = issue_crl(
         collide_name1, /*this_update_offset_day=*/-8, /*serials=*/{1, 2});
     ASSERT_TRUE(crl);
     ASSERT_TRUE(dir.ReplaceLastCRL(crl.get(), kNewHash));
@@ -8500,11 +10216,11 @@ TEST(X509Test, DirHashSeparator) {
   const char kSeparator = ':';
 #endif
 
-  if (bssl::SkipTempFileTests()) {
+  if (SkipTempFileTests()) {
     GTEST_SKIP();
   }
 
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
   // Make two directories and place one CA in each.
@@ -8512,63 +10228,76 @@ TEST(X509Test, DirHashSeparator) {
   ASSERT_TRUE(dir1.Init());
   ASSERT_TRUE(dir2.Init());
 
-  bssl::UniquePtr<X509> ca1 =
+  UniquePtr<X509> ca1 =
       MakeTestCert("Test CA 1", "Test CA 1", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(ca1);
   ASSERT_TRUE(X509_sign(ca1.get(), key.get(), EVP_sha256()));
   ASSERT_TRUE(dir1.AddCert(ca1.get(), kNewHash));
 
-  bssl::UniquePtr<X509> ca2 =
+  UniquePtr<X509> ca2 =
       MakeTestCert("Test CA 2", "Test CA 2", key.get(), /*is_ca=*/true);
   ASSERT_TRUE(ca2);
   ASSERT_TRUE(X509_sign(ca2.get(), key.get(), EVP_sha256()));
   ASSERT_TRUE(dir1.AddCert(ca2.get(), kNewHash));
 
-  // Make an |X509_STORE| that gets CAs from |dir1| and |dir2|.
-  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
-  ASSERT_TRUE(store);
-  std::string paths = dir1.path() + kSeparator + dir2.path();
-  ASSERT_TRUE(
-      X509_STORE_load_locations(store.get(), /*file=*/nullptr, paths.c_str()));
+  for (bool duplicates : {false, true}) {
+    SCOPED_TRACE(duplicates);
 
-  // Both CAs should work.
-  {
-    bssl::UniquePtr<X509> cert =
-        MakeTestCert("Test CA 1", "Leaf", key.get(), /*is_ca=*/false);
-    ASSERT_TRUE(cert);
-    ASSERT_TRUE(X509_sign(cert.get(), key.get(), EVP_sha256()));
-    bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
-    ASSERT_TRUE(ctx);
-    ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), cert.get(),
-                                    /*chain=*/nullptr));
-    X509_STORE_CTX_set_time_posix(ctx.get(), /*flags=*/0, kReferenceTime);
-    EXPECT_TRUE(X509_verify_cert(ctx.get()))
-        << X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx.get()));
-  }
+    // Make an `X509_STORE` that gets CAs from `dir1` and `dir2`.
+    UniquePtr<X509_STORE> store(X509_STORE_new());
+    ASSERT_TRUE(store);
+    std::string paths = dir1.path() + kSeparator + dir2.path();
+    if (duplicates) {
+      // Within a path, duplicates are silently ignored.
+      paths += kSeparator + paths;
+    }
+    ASSERT_TRUE(X509_STORE_load_locations(store.get(), /*file=*/nullptr,
+                                          paths.c_str()));
+    if (duplicates) {
+      // Across calls, duplicates are silently ignored.
+      ASSERT_TRUE(X509_STORE_load_locations(store.get(), /*file=*/nullptr,
+                                            paths.c_str()));
+    }
 
-  {
-    bssl::UniquePtr<X509> cert =
-        MakeTestCert("Test CA 2", "Leaf", key.get(), /*is_ca=*/false);
-    ASSERT_TRUE(cert);
-    ASSERT_TRUE(X509_sign(cert.get(), key.get(), EVP_sha256()));
-    bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
-    ASSERT_TRUE(ctx);
-    ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), cert.get(),
-                                    /*chain=*/nullptr));
-    X509_STORE_CTX_set_time_posix(ctx.get(), /*flags=*/0, kReferenceTime);
-    EXPECT_TRUE(X509_verify_cert(ctx.get()))
-        << X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx.get()));
+    // Both CAs should work.
+    {
+      UniquePtr<X509> cert =
+          MakeTestCert("Test CA 1", "Leaf", key.get(), /*is_ca=*/false);
+      ASSERT_TRUE(cert);
+      ASSERT_TRUE(X509_sign(cert.get(), key.get(), EVP_sha256()));
+      UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+      ASSERT_TRUE(ctx);
+      ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), cert.get(),
+                                      /*chain=*/nullptr));
+      X509_STORE_CTX_set_time_posix(ctx.get(), /*flags=*/0, kReferenceTime);
+      EXPECT_TRUE(X509_verify_cert(ctx.get()))
+          << X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx.get()));
+    }
+
+    {
+      UniquePtr<X509> cert =
+          MakeTestCert("Test CA 2", "Leaf", key.get(), /*is_ca=*/false);
+      ASSERT_TRUE(cert);
+      ASSERT_TRUE(X509_sign(cert.get(), key.get(), EVP_sha256()));
+      UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+      ASSERT_TRUE(ctx);
+      ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), cert.get(),
+                                      /*chain=*/nullptr));
+      X509_STORE_CTX_set_time_posix(ctx.get(), /*flags=*/0, kReferenceTime);
+      EXPECT_TRUE(X509_verify_cert(ctx.get()))
+          << X509_verify_cert_error_string(X509_STORE_CTX_get_error(ctx.get()));
+    }
   }
 }
 
 #if defined(OPENSSL_THREADS)
 // Test that directory hash lookup is thread-safe.
 TEST(X509Test, DirHashThreads) {
-  if (bssl::SkipTempFileTests()) {
+  if (SkipTempFileTests()) {
     GTEST_SKIP();
   }
 
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key);
 
   // Generate some roots and fill a directory with OpenSSL's directory hash
@@ -8578,15 +10307,14 @@ TEST(X509Test, DirHashThreads) {
   ASSERT_TRUE(dir.Init());
 
   auto add_root = [&](const std::string &name, NameHash name_hash) -> bool {
-    bssl::UniquePtr<X509> ca =
-        MakeTestCert(name, name, key.get(), /*is_ca=*/true);
+    UniquePtr<X509> ca = MakeTestCert(name, name, key.get(), /*is_ca=*/true);
     return ca != nullptr &&  //
            X509_sign(ca.get(), key.get(), EVP_sha256()) &&
            dir.AddCert(ca.get(), name_hash);
   };
 
-  auto issue_cert = [&](const std::string &issuer) -> bssl::UniquePtr<X509> {
-    bssl::UniquePtr<X509> cert =
+  auto issue_cert = [&](const std::string &issuer) -> UniquePtr<X509> {
+    UniquePtr<X509> cert =
         MakeTestCert(issuer, "Leaf", key.get(), /*is_ca=*/false);
     if (cert == nullptr || !X509_sign(cert.get(), key.get(), EVP_sha256())) {
       return nullptr;
@@ -8596,14 +10324,14 @@ TEST(X509Test, DirHashThreads) {
 
   auto add_crl = [&](const std::string &name, int this_update_offset_day,
                      NameHash name_hash) -> bool {
-    bssl::UniquePtr<X509_CRL> crl =
+    UniquePtr<X509_CRL> crl =
         MakeTestCRL(name, this_update_offset_day, /*next_update_offset_day=*/1);
     return crl != nullptr &&
            X509_CRL_sign(crl.get(), key.get(), EVP_sha256()) &&
            dir.AddCRL(crl.get(), name_hash);
   };
 
-  // These two CAs collide under |X509_NAME_hash|.
+  // These two CAs collide under `X509_NAME_hash`.
   std::string ca1 = "Test CA 1191514847";
   std::string ca2 = "Test CA 1570301806";
   ASSERT_TRUE(add_root(ca1, kNewHash));
@@ -8615,12 +10343,12 @@ TEST(X509Test, DirHashThreads) {
   // Verify the hashes collided.
   ASSERT_EQ(dir.num_cert_hashes(), 1u);
   ASSERT_EQ(dir.num_crl_hashes(), 1u);
-  bssl::UniquePtr<X509> leaf1 = issue_cert(ca1);
+  UniquePtr<X509> leaf1 = issue_cert(ca1);
   ASSERT_TRUE(leaf1);
-  bssl::UniquePtr<X509> leaf2 = issue_cert(ca2);
+  UniquePtr<X509> leaf2 = issue_cert(ca2);
   ASSERT_TRUE(leaf2);
 
-  // These two CAs collide under |X509_NAME_hash_old|.
+  // These two CAs collide under `X509_NAME_hash_old`.
   std::string old_ca1 = "Test CA 1069881739";
   std::string old_ca2 = "Test CA 940754110";
   ASSERT_TRUE(add_root(old_ca1, kOldHash));
@@ -8632,19 +10360,19 @@ TEST(X509Test, DirHashThreads) {
   // Verify the hashes collided.
   ASSERT_EQ(dir.num_cert_hashes(), 2u);
   ASSERT_EQ(dir.num_crl_hashes(), 2u);
-  bssl::UniquePtr<X509> old_leaf1 = issue_cert(old_ca1);
+  UniquePtr<X509> old_leaf1 = issue_cert(old_ca1);
   ASSERT_TRUE(old_leaf1);
-  bssl::UniquePtr<X509> old_leaf2 = issue_cert(old_ca2);
+  UniquePtr<X509> old_leaf2 = issue_cert(old_ca2);
   ASSERT_TRUE(old_leaf2);
 
-  // Make an |X509_STORE| that gets CAs from |dir|.
-  bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+  // Make an `X509_STORE` that gets CAs from `dir`.
+  UniquePtr<X509_STORE> store(X509_STORE_new());
   ASSERT_TRUE(store);
   ASSERT_TRUE(X509_STORE_load_locations(store.get(), /*file=*/nullptr,
                                         dir.path().c_str()));
 
   auto verify = [&](X509 *cert, bool crl_check) {
-    bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+    UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
     ASSERT_TRUE(ctx);
     ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), cert,
                                     /*chain=*/nullptr));
@@ -8678,48 +10406,40 @@ TEST(X509Test, DirHashThreads) {
 TEST(X509Test, DuplicateName) {
   // Make two certificate chains and empty CRLs, with the same names but
   // different keys.
-  bssl::UniquePtr<EVP_PKEY> key1 = PrivateKeyFromPEM(kP256Key);
+  UniquePtr<EVP_PKEY> key1 = PrivateKeyFromPEM(kP256Key);
   ASSERT_TRUE(key1);
   uint8_t key_id1[] = {'K', 'e', 'y', '1'};
-  bssl::UniquePtr<X509> ca1 =
-      MakeTestCert("CA", "CA", key1.get(), /*is_ca=*/true);
+  UniquePtr<X509> ca1 = MakeTestCert("CA", "CA", key1.get(), /*is_ca=*/true);
   ASSERT_TRUE(ca1);
   ASSERT_TRUE(AddSubjectKeyIdentifier(ca1.get(), key_id1));
   ASSERT_TRUE(X509_sign(ca1.get(), key1.get(), EVP_sha256()));
-  bssl::UniquePtr<X509> leaf1 =
+  UniquePtr<X509> leaf1 =
       MakeTestCert("CA", "Leaf", key1.get(), /*is_ca=*/false);
   ASSERT_TRUE(leaf1);
   ASSERT_TRUE(AddAuthorityKeyIdentifier(leaf1.get(), key_id1));
   ASSERT_TRUE(X509_sign(leaf1.get(), key1.get(), EVP_sha256()));
-  bssl::UniquePtr<X509_CRL> crl1 = MakeTestCRL("CA", -1, 1);
+  UniquePtr<X509_CRL> crl1 = MakeTestCRL("CA", -1, 1);
   ASSERT_TRUE(crl1);
   ASSERT_TRUE(AddAuthorityKeyIdentifier(crl1.get(), key_id1));
-  ASSERT_TRUE(X509_CRL_sign(crl1.get(), key1.get(), EVP_sha256()));
-  // TODO(davidben): Some state in CRLs does not get correctly set up unless it
-  // is parsed from data. |X509_CRL_sign| should reset it internally.
-  crl1 = ReencodeCRL(crl1.get());
+  crl1 = SignAndReencodeCRL(crl1.get(), key1.get(), EVP_sha256());
   ASSERT_TRUE(crl1);
 
-  bssl::UniquePtr<EVP_PKEY> key2 = PrivateKeyFromPEM(kRSAKey);
+  UniquePtr<EVP_PKEY> key2 = PrivateKeyFromPEM(kRSAKey);
   ASSERT_TRUE(key2);
   uint8_t key_id2[] = {'K', 'e', 'y', '2'};
-  bssl::UniquePtr<X509> ca2 =
-      MakeTestCert("CA", "CA", key2.get(), /*is_ca=*/true);
+  UniquePtr<X509> ca2 = MakeTestCert("CA", "CA", key2.get(), /*is_ca=*/true);
   ASSERT_TRUE(ca2);
   ASSERT_TRUE(AddSubjectKeyIdentifier(ca2.get(), key_id2));
   ASSERT_TRUE(X509_sign(ca2.get(), key2.get(), EVP_sha256()));
-  bssl::UniquePtr<X509> leaf2 =
+  UniquePtr<X509> leaf2 =
       MakeTestCert("CA", "Leaf", key2.get(), /*is_ca=*/false);
   ASSERT_TRUE(leaf2);
   ASSERT_TRUE(AddAuthorityKeyIdentifier(leaf2.get(), key_id2));
   ASSERT_TRUE(X509_sign(leaf2.get(), key2.get(), EVP_sha256()));
-  bssl::UniquePtr<X509_CRL> crl2 = MakeTestCRL("CA", -2, 2);
+  UniquePtr<X509_CRL> crl2 = MakeTestCRL("CA", -2, 2);
   ASSERT_TRUE(crl2);
   ASSERT_TRUE(AddAuthorityKeyIdentifier(crl2.get(), key_id2));
-  ASSERT_TRUE(X509_CRL_sign(crl2.get(), key2.get(), EVP_sha256()));
-  // TODO(davidben): Some state in CRLs does not get correctly set up unless it
-  // is parsed from data. |X509_CRL_sign| should reset it internally.
-  crl2 = ReencodeCRL(crl2.get());
+  crl2 = SignAndReencodeCRL(crl2.get(), key2.get(), EVP_sha256());
   ASSERT_TRUE(crl2);
 
   for (bool key1_first : {false, true}) {
@@ -8732,7 +10452,7 @@ TEST(X509Test, DuplicateName) {
 
     for (bool use_dir : {false, true}) {
       SCOPED_TRACE(use_dir);
-      bssl::UniquePtr<X509_STORE> store(X509_STORE_new());
+      UniquePtr<X509_STORE> store(X509_STORE_new());
       ASSERT_TRUE(store);
       TemporaryHashDir dir(X509_FILETYPE_PEM);
       if (use_dir) {
@@ -8755,7 +10475,7 @@ TEST(X509Test, DuplicateName) {
       // Verify the two certificates. Whichever comes first, we should
       // successfully find their CA and CRL.
       {
-        bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+        UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
         ASSERT_TRUE(ctx);
         ASSERT_TRUE(
             X509_STORE_CTX_init(ctx.get(), store.get(), first_leaf, nullptr));
@@ -8766,7 +10486,7 @@ TEST(X509Test, DuplicateName) {
                    X509_STORE_CTX_get_error(ctx.get()));
       }
       {
-        bssl::UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+        UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
         ASSERT_TRUE(ctx);
         ASSERT_TRUE(
             X509_STORE_CTX_init(ctx.get(), store.get(), second_leaf, nullptr));
@@ -8778,6 +10498,571 @@ TEST(X509Test, DuplicateName) {
       }
     }
   }
+}
+
+const char kCRLURI1[] = "http://crl.example.com/shard1.crl";
+const char kCRLURI2[] = "http://crl.example.com/shard2.crl";
+const char kCRLURI3[] = "http://crl.example.com/shard3.crl";
+
+// Test that we check the scope of the CRL.
+TEST_P(X509VerifyTest, CRLScope) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(key);
+  UniquePtr<X509> ca = MakeTestCert("CA", "CA", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(X509_sign(ca.get(), key.get(), EVP_sha256()));
+
+  // CRLs must match the certificate's CRL-DP to be considered. Any name in
+  // common between the certificate's CRL-DP and CRL's IDP suffices.
+  UniquePtr<X509> leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  {
+    UniquePtr<DIST_POINT> dps[] = {
+        MakeDistributionPoint(MakeFullDistPointName({kCRLURI1, kCRLURI2}))};
+    ASSERT_TRUE(AddCRLDistributionPoints(leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509_CRL> crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(AddIssuingDistributionPoint(
+      crl.get(), MakeFullDistPointName({kCRLURI3, kCRLURI2})));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                              {crl.get()}, X509_V_FLAG_CRL_CHECK));
+
+  // Revocations in a matching CRL are honored.
+  crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(
+      AddRevokedSerialU64(crl.get(), kTestCertSerial, /*offset_day=*/-1));
+  ASSERT_TRUE(AddIssuingDistributionPoint(
+      crl.get(), MakeFullDistPointName({kCRLURI3, kCRLURI2})));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_ERR_CERT_REVOKED,
+            Verify(leaf.get(), {ca.get()}, /*intermediates=*/{}, {crl.get()},
+                   X509_V_FLAG_CRL_CHECK));
+
+  // A CRL for a different distribution point does not match. This prevents a
+  // different CRL shard from being substituted for the one that covers this
+  // certificate.
+  crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(
+      AddRevokedSerialU64(crl.get(), kTestCertSerial, /*offset_day=*/-1));
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl.get(),
+                                          MakeFullDistPointName({kCRLURI3})));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(leaf.get(), {ca.get()}, /*intermediates=*/{}, {crl.get()},
+                   X509_V_FLAG_CRL_CHECK));
+
+  // A certificate may have multiple DistributionPoints. A match across any of
+  // them suffices.
+  leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  {
+    UniquePtr<DIST_POINT> dps[] = {
+        MakeDistributionPoint(MakeFullDistPointName({kCRLURI1})),
+        MakeDistributionPoint(MakeFullDistPointName({kCRLURI2}))};
+    ASSERT_TRUE(AddCRLDistributionPoints(leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+  crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl.get(),
+                                          MakeFullDistPointName({kCRLURI2})));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                              {crl.get()}, X509_V_FLAG_CRL_CHECK));
+}
+
+// We do not support the nameRelativeToCRLIssuer form of DistributionPointName.
+TEST_P(X509VerifyTest, CRLScopeNameRelativeToCRLIssuer) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(key);
+  UniquePtr<X509> ca = MakeTestCert("CA", "CA", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(X509_sign(ca.get(), key.get(), EVP_sha256()));
+
+  // The distribution point is named CN="Shard 1", CN=CA, expressed relative to
+  // the CA, CN=CA.
+  static const char kRelativeName[] = "Shard 1";
+  UniquePtr<X509_NAME> absolute_name = MakeTestName("CA");
+  ASSERT_TRUE(absolute_name);
+  auto bytes = StringAsBytes(kRelativeName);
+  ASSERT_TRUE(X509_NAME_add_entry_by_txt(absolute_name.get(), "CN",
+                                         MBSTRING_UTF8, bytes.data(),
+                                         bytes.size(), /*loc=*/-1, /*set=*/0));
+
+  UniquePtr<X509> relative_leaf =
+      MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(relative_leaf);
+  {
+    UniquePtr<DIST_POINT> dps[] = {
+        MakeDistributionPoint(MakeRelativeDistPointName(kRelativeName))};
+    ASSERT_TRUE(AddCRLDistributionPoints(relative_leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(relative_leaf.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509> absolute_leaf =
+      MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(absolute_leaf);
+  {
+    UniquePtr<DIST_POINT> dps[] = {MakeDistributionPoint(
+        MakeFullDistPointNameDirectory(absolute_name.get()))};
+    ASSERT_TRUE(AddCRLDistributionPoints(absolute_leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(absolute_leaf.get(), key.get(), EVP_sha256()));
+
+  // Both sides use nameRelativeToCRLIssuer.
+  UniquePtr<X509_CRL> crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(AddIssuingDistributionPoint(
+      crl.get(), MakeRelativeDistPointName(kRelativeName)));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(relative_leaf.get(), {ca.get()}, /*intermediates=*/{},
+                   {crl.get()}, X509_V_FLAG_CRL_CHECK));
+
+  // The certificate uses nameRelativeToCRLIssuer and the CRL the equivalent
+  // fullName.
+  crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(AddIssuingDistributionPoint(
+      crl.get(), MakeFullDistPointNameDirectory(absolute_name.get())));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(relative_leaf.get(), {ca.get()}, /*intermediates=*/{},
+                   {crl.get()}, X509_V_FLAG_CRL_CHECK));
+
+  // The certificate uses the fullName and the CRL uses nameRelativeToCRLIssuer.
+  crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(AddIssuingDistributionPoint(
+      crl.get(), MakeRelativeDistPointName(kRelativeName)));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(absolute_leaf.get(), {ca.get()}, /*intermediates=*/{},
+                   {crl.get()}, X509_V_FLAG_CRL_CHECK));
+}
+
+// When several CRLs are available, the one that is in scope is used.
+TEST_P(X509VerifyTest, CRLScopeTwoCRLs) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(key);
+  UniquePtr<X509> ca = MakeTestCert("CA", "CA", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(X509_sign(ca.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509> leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  {
+    UniquePtr<DIST_POINT> dps[] = {
+        MakeDistributionPoint(MakeFullDistPointName({kCRLURI1}))};
+    ASSERT_TRUE(AddCRLDistributionPoints(leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509_CRL> crl_match = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl_match);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl_match.get(),
+                                          MakeFullDistPointName({kCRLURI1})));
+  crl_match = SignAndReencodeCRL(crl_match.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl_match);
+
+  UniquePtr<X509_CRL> crl_wrong1 = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl_wrong1);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl_wrong1.get(),
+                                          MakeFullDistPointName({kCRLURI2})));
+  crl_wrong1 = SignAndReencodeCRL(crl_wrong1.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl_wrong1);
+
+  UniquePtr<X509_CRL> crl_wrong2 = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl_wrong2);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl_wrong2.get(),
+                                          MakeFullDistPointName({kCRLURI3})));
+  crl_wrong2 = SignAndReencodeCRL(crl_wrong2.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl_wrong2);
+
+  // Given only out-of-scope CRLs, verification fails.
+  EXPECT_EQ(
+      X509_V_ERR_DIFFERENT_CRL_SCOPE,
+      Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+             {crl_wrong1.get(), crl_wrong2.get()}, X509_V_FLAG_CRL_CHECK));
+
+  // The verifier is satisfied by any one matching CRL.
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                   {crl_wrong1.get(), crl_wrong2.get(), crl_match.get()},
+                   X509_V_FLAG_CRL_CHECK));
+}
+
+// A CRL with no issuingDistributionPoint covers the entire CA, so it is in
+// scope for any certificate.
+TEST_P(X509VerifyTest, CRLScopeNoIDP) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(key);
+  UniquePtr<X509> ca = MakeTestCert("CA", "CA", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(X509_sign(ca.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509_CRL> crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+
+  // `crl` matches whether or not the certificate has a CRL-DP extension.
+  UniquePtr<X509> leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                              {crl.get()}, X509_V_FLAG_CRL_CHECK));
+
+  leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  {
+    UniquePtr<DIST_POINT> dps[] = {
+        MakeDistributionPoint(MakeFullDistPointName({kCRLURI1}))};
+    ASSERT_TRUE(AddCRLDistributionPoints(leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                              {crl.get()}, X509_V_FLAG_CRL_CHECK));
+}
+
+// A certificate with no CRL-DP is only covered by CRLs that span the entire CA.
+TEST_P(X509VerifyTest, CRLScopeNoCRLDistributionPoints) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(key);
+  UniquePtr<X509> ca = MakeTestCert("CA", "CA", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(X509_sign(ca.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509> leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+  // The CRL is scoped to a distribution point, so it does not cover a
+  // certificate that names none.
+  UniquePtr<X509_CRL> crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl.get(),
+                                          MakeFullDistPointName({kCRLURI1})));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(leaf.get(), {ca.get()}, /*intermediates=*/{}, {crl.get()},
+                   X509_V_FLAG_CRL_CHECK));
+}
+
+// We do not support CRLs partitioned by reason code.
+TEST_P(X509VerifyTest, CRLScopeReasons) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(key);
+  UniquePtr<X509> ca = MakeTestCert("CA", "CA", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(X509_sign(ca.get(), key.get(), EVP_sha256()));
+
+  // The certificate's only DistributionPoint is scoped by reason. (RFC 5280
+  // forbids this.)
+  UniquePtr<X509> leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  {
+    UniquePtr<DIST_POINT> dps[] = {MakeDistributionPoint(
+        MakeFullDistPointName({kCRLURI1}),
+        {ReasonFlag::kKeyCompromise, ReasonFlag::kCACompromise})};
+    ASSERT_TRUE(AddCRLDistributionPoints(leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+  // The CRL names the same distribution point, but the certificate's
+  // DistributionPoint is ignored, leaving nothing for the CRL to match.
+  UniquePtr<X509_CRL> crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl.get(),
+                                          MakeFullDistPointName({kCRLURI1})));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(leaf.get(), {ca.get()}, /*intermediates=*/{}, {crl.get()},
+                   X509_V_FLAG_CRL_CHECK));
+
+  // A CRL that spans the entire CA still matches via the default CRL-DP.
+  crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                              {crl.get()}, X509_V_FLAG_CRL_CHECK));
+
+  // RFC 5280 that some DistributionPoint covers all reasons. We use that one.
+  leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  {
+    UniquePtr<DIST_POINT> dps[] = {
+        MakeDistributionPoint(
+            MakeFullDistPointName({kCRLURI1}),
+            {ReasonFlag::kKeyCompromise, ReasonFlag::kCACompromise}),
+        MakeDistributionPoint(MakeFullDistPointName({kCRLURI2}))};
+    ASSERT_TRUE(AddCRLDistributionPoints(leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+  crl = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl.get(),
+                                          MakeFullDistPointName({kCRLURI2})));
+  crl = SignAndReencodeCRL(crl.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl);
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                              {crl.get()}, X509_V_FLAG_CRL_CHECK));
+}
+
+// Test that the onlyContainsUserCerts and onlyContainsCACerts flags are
+// checked.
+TEST_P(X509VerifyTest, CRLScopeOnlyUserOrCA) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(key);
+
+  // Make a three-certificate chain.
+  UniquePtr<X509> root =
+      MakeTestCert("Root", "Root", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(root);
+  ASSERT_TRUE(X509_sign(root.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509> ca = MakeTestCert("Root", "CA", key.get(), /*is_ca=*/true);
+  ASSERT_TRUE(ca);
+  ASSERT_TRUE(X509_sign(ca.get(), key.get(), EVP_sha256()));
+
+  UniquePtr<X509> leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_TRUE(leaf);
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+  // Make an onlyContainsCACerts CRL for the root, and an onlyContainsUserCerts
+  // for the intermediate.
+  UniquePtr<X509_CRL> crl_root = MakeTestCRL("Root", -1, 1);
+  ASSERT_TRUE(crl_root);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl_root.get(), /*distpoint=*/nullptr,
+                                          /*only_user=*/false,
+                                          /*only_ca=*/true));
+  crl_root = SignAndReencodeCRL(crl_root.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl_root);
+
+  UniquePtr<X509_CRL> crl_ca = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl_ca);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl_ca.get(), /*distpoint=*/nullptr,
+                                          /*only_user=*/true,
+                                          /*only_ca=*/false));
+  crl_ca = SignAndReencodeCRL(crl_ca.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl_ca);
+
+  // Make an onlyContainsUserCerts CRL for the root, and an onlyContainsCACerts
+  // for the intermediate. Neither of these apply to our chain.
+  UniquePtr<X509_CRL> crl_root_wrong = MakeTestCRL("Root", -1, 1);
+  ASSERT_TRUE(crl_root_wrong);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl_root_wrong.get(),
+                                          /*distpoint=*/nullptr,
+                                          /*only_user=*/true,
+                                          /*only_ca=*/false));
+  crl_root_wrong =
+      SignAndReencodeCRL(crl_root_wrong.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl_root_wrong);
+
+
+  UniquePtr<X509_CRL> crl_ca_wrong = MakeTestCRL("CA", -1, 1);
+  ASSERT_TRUE(crl_ca_wrong);
+  ASSERT_TRUE(AddIssuingDistributionPoint(crl_ca_wrong.get(),
+                                          /*distpoint=*/nullptr,
+                                          /*only_user=*/false,
+                                          /*only_ca=*/true));
+  crl_ca_wrong =
+      SignAndReencodeCRL(crl_ca_wrong.get(), key.get(), EVP_sha256());
+  ASSERT_TRUE(crl_ca_wrong);
+
+  // The correct CRLs are accepted.
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {crl_root.get(), crl_ca.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+
+  // The incorrect ones do not match.
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {crl_root_wrong.get(), crl_ca.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {crl_root.get(), crl_ca_wrong.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+}
+
+TEST_P(X509VerifyTest, CRLCheckAll) {
+  auto sign_cert = [](std::string_view issuer, const EVP_PKEY *issuer_key,
+                      std::string_view subject, const EVP_PKEY *subject_key,
+                      bool is_ca, uint64_t serial) -> UniquePtr<X509> {
+    UniquePtr<ASN1_INTEGER> serial_bn = ASN1IntegerFromU64(serial);
+    UniquePtr<X509> cert = MakeTestCert(issuer, subject, subject_key, is_ca);
+    if (cert == nullptr || serial_bn == nullptr ||
+        !X509_set_serialNumber(cert.get(), serial_bn.get()) ||
+        !X509_sign(cert.get(), issuer_key, EVP_sha256())) {
+      return nullptr;
+    }
+    return cert;
+  };
+
+  // Make a three-certificate chain.
+  UniquePtr<EVP_PKEY> root_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(root_key);
+  constexpr uint64_t kRootSerial = 1;
+  UniquePtr<X509> root = sign_cert("Root", root_key.get(), "Root",
+                                   root_key.get(), /*is_ca=*/true, kRootSerial);
+  ASSERT_TRUE(root);
+
+  UniquePtr<EVP_PKEY> ca_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(ca_key);
+  constexpr uint64_t kCASerial = 2;
+  UniquePtr<X509> ca = sign_cert("Root", root_key.get(), "CA", ca_key.get(),
+                                 /*is_ca=*/true, kCASerial);
+  ASSERT_TRUE(ca);
+
+  UniquePtr<EVP_PKEY> leaf_key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(leaf_key);
+  constexpr uint64_t kLeafSerial = 3;
+  UniquePtr<X509> leaf = sign_cert("CA", ca_key.get(), "Leaf", leaf_key.get(),
+                                   /*is_ca=*/false, kLeafSerial);
+  ASSERT_TRUE(leaf);
+
+  auto make_crl = [](std::string_view issuer, EVP_PKEY *issuer_key,
+                     std::vector<uint64_t> revoke) -> UniquePtr<X509_CRL> {
+    UniquePtr<X509_CRL> crl = MakeTestCRL(issuer, -1, 1);
+    if (!crl) {
+      return nullptr;
+    }
+    for (uint64_t serial : revoke) {
+      if (!AddRevokedSerialU64(crl.get(), serial, -1)) {
+        return nullptr;
+      }
+    }
+    return SignAndReencodeCRL(crl.get(), issuer_key, EVP_sha256());
+  };
+
+  UniquePtr<X509_CRL> root_crl_empty = make_crl("Root", root_key.get(), {});
+  ASSERT_TRUE(root_crl_empty);
+  UniquePtr<X509_CRL> root_crl_revoke_root =
+      make_crl("Root", root_key.get(), {kRootSerial});
+  ASSERT_TRUE(root_crl_revoke_root);
+  UniquePtr<X509_CRL> root_crl_revoke_ca =
+      make_crl("Root", root_key.get(), {kCASerial});
+  ASSERT_TRUE(root_crl_revoke_ca);
+  UniquePtr<X509_CRL> ca_crl_empty = make_crl("CA", ca_key.get(), {});
+  ASSERT_TRUE(ca_crl_empty);
+  UniquePtr<X509_CRL> ca_crl_revoke_leaf =
+      make_crl("CA", ca_key.get(), {kLeafSerial});
+  ASSERT_TRUE(ca_crl_revoke_leaf);
+
+  // By default, we neither require nor check CRLs.
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {ca.get()}, {}));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {root_crl_revoke_ca.get(), ca_crl_revoke_leaf.get()}));
+
+  // `X509_V_FLAG_CRL_CHECK` requires and checks a CRL on the leaf, but CRLs on
+  // other certificates go unnoticed.
+  EXPECT_EQ(
+      X509_V_ERR_UNABLE_TO_GET_CRL,
+      Verify(leaf.get(), {root.get()}, {ca.get()}, {}, X509_V_FLAG_CRL_CHECK));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {ca.get()},
+                              {ca_crl_empty.get()}, X509_V_FLAG_CRL_CHECK));
+  EXPECT_EQ(X509_V_ERR_CERT_REVOKED,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {ca_crl_revoke_leaf.get()}, X509_V_FLAG_CRL_CHECK));
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {root.get()}, {ca.get()},
+                              {root_crl_revoke_ca.get(), ca_crl_empty.get()},
+                              X509_V_FLAG_CRL_CHECK));
+
+  // X509_V_FLAG_CRL_CHECK_ALL` requires and CRLs for every certificate in the
+  // path.
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_CRL,
+            Verify(leaf.get(), {root.get()}, {ca.get()}, {},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_CRL,  // No CRL for root
+            Verify(leaf.get(), {root.get()}, {ca.get()}, {ca_crl_empty.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {ca_crl_empty.get(), root_crl_empty.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+  EXPECT_EQ(X509_V_ERR_CERT_REVOKED,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {ca_crl_revoke_leaf.get(), root_crl_empty.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+  EXPECT_EQ(X509_V_ERR_CERT_REVOKED,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {ca_crl_empty.get(), root_crl_revoke_ca.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+
+  // Revocation is not checked for the trust anchor, as this is not meaningful.
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {root.get()}, {ca.get()},
+                   {ca_crl_empty.get(), root_crl_revoke_root.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL));
+
+  // When the trust anchor is not represented as a self-signed certificate,
+  // `X509_V_FLAG_CRL_CHECK` still checks revocation of the leaf.
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_CRL,
+            Verify(leaf.get(), {ca.get()}, {}, {},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {ca.get()}, {}, {ca_crl_empty.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_ERR_CERT_REVOKED,
+            Verify(leaf.get(), {ca.get()}, {}, {ca_crl_revoke_leaf.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_PARTIAL_CHAIN));
+
+  // `X509_V_FLAG_CRL_CHECK_ALL` likewise does not check for the trust anchor.
+  // It would not be possible because the trust anchor has no issuer. (If we
+  // tried to use the certificate that represents the trust anchor, we don't
+  // have the signing key. See crbug.com/561609863.)
+  EXPECT_EQ(X509_V_ERR_UNABLE_TO_GET_CRL,
+            Verify(leaf.get(), {ca.get()}, {}, {},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL |
+                       X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {ca.get()}, {}, {ca_crl_empty.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL |
+                       X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {ca.get()}, {},
+                   {ca_crl_empty.get(), root_crl_revoke_ca.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL |
+                       X509_V_FLAG_PARTIAL_CHAIN));
+
+  // If the "path" is a single leaf certificate that was already trusted in the
+  // root store, the same applies. `X509_V_FLAG_CRL_CHECK` and
+  // `X509_V_FLAG_CRL_CHECK_ALL` have no revocation to check.
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {leaf.get()}, {}, {},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {leaf.get()}, {}, {ca_crl_empty.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {leaf.get()}, {}, {},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL |
+                       X509_V_FLAG_PARTIAL_CHAIN));
+  EXPECT_EQ(X509_V_OK,
+            Verify(leaf.get(), {leaf.get()}, {}, {ca_crl_empty.get()},
+                   X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL |
+                       X509_V_FLAG_PARTIAL_CHAIN));
 }
 
 TEST(X509Test, ParseIPAddress) {
@@ -8880,7 +11165,7 @@ TEST(X509Test, ParseIPAddress) {
   };
   for (const auto &t : kIPTests) {
     SCOPED_TRACE(t.inp);
-    bssl::UniquePtr<ASN1_OCTET_STRING> oct(a2i_IPADDRESS(t.inp));
+    UniquePtr<ASN1_OCTET_STRING> oct(a2i_IPADDRESS(t.inp));
     if (t.out.empty()) {
       EXPECT_FALSE(oct);
     } else {
@@ -8893,21 +11178,21 @@ TEST(X509Test, ParseIPAddress) {
 // Test that, after deleting the last extension, the extension list should be
 // null.
 TEST(X509Test, DeleteLastExtension) {
-  bssl::UniquePtr<X509_EXTENSION> ext1(X509_EXTENSION_new());
+  UniquePtr<X509_EXTENSION> ext1(X509_EXTENSION_new());
   ASSERT_TRUE(ext1);
   ASSERT_TRUE(X509_EXTENSION_set_object(
       ext1.get(), OBJ_nid2obj(NID_subject_key_identifier)));
 
-  bssl::UniquePtr<X509_EXTENSION> ext2(X509_EXTENSION_new());
+  UniquePtr<X509_EXTENSION> ext2(X509_EXTENSION_new());
   ASSERT_TRUE(ext2);
   ASSERT_TRUE(X509_EXTENSION_set_object(
       ext2.get(), OBJ_nid2obj(NID_authority_key_identifier)));
 
-  bssl::UniquePtr<X509> cert(X509_new());
+  UniquePtr<X509> cert(X509_new());
   ASSERT_TRUE(cert);
-  bssl::UniquePtr<X509_CRL> crl(X509_CRL_new());
+  UniquePtr<X509_CRL> crl(X509_CRL_new());
   ASSERT_TRUE(crl);
-  bssl::UniquePtr<X509_REVOKED> rev(X509_REVOKED_new());
+  UniquePtr<X509_REVOKED> rev(X509_REVOKED_new());
   ASSERT_TRUE(rev);
 
   // Initially, the extension list is null.
@@ -8961,13 +11246,13 @@ TEST(X509Test, DeleteLastExtension) {
 // not round-trip if we accept any BER inputs, or our in-memory representation
 // does not capture the full range of abstract TBSCertificate values.
 //
-// |X509| objects cache the encoded TBSCertificate, so all encoding variations
+// `X509` objects cache the encoded TBSCertificate, so all encoding variations
 // should be captured. This test tries to exercise the cache's effects on
 // signature verification. In reality, the cache is barely load-bearing. We now
-// reject most non-DER inputs, and |X509_NAME| also saves its encoding. Still,
+// reject most non-DER inputs, and `X509_NAME` also saves its encoding. Still,
 // the test ensures this remains the case.
 TEST(X509Test, VerifyUnusualTBSCert) {
-  bssl::UniquePtr<EVP_PKEY> key =
+  UniquePtr<EVP_PKEY> key =
       PrivateKeyFromPEM(GetTestData("crypto/x509/test/unusual_tbs_key.pem"));
   ASSERT_TRUE(key);
   // The TBSCertificates were made with https://github.com/google/der-ascii.
@@ -9000,126 +11285,135 @@ TEST(X509Test, VerifyUnusualTBSCert) {
   };
   for (const char *path : kPaths) {
     SCOPED_TRACE(path);
-    bssl::UniquePtr<X509> cert = CertFromPEM(GetTestData(path));
+    UniquePtr<X509> cert = CertFromPEM(GetTestData(path));
     ASSERT_TRUE(cert);
     EXPECT_TRUE(X509_verify(cert.get(), key.get()));
   }
 }
 
 TEST(X509Test, TrailingDataX509) {
-  bssl::UniquePtr<X509> cert(CertFromPEM(kLeafPEM));
+  UniquePtr<X509> cert(CertFromPEM(kLeafPEM));
   uint8_t *der = nullptr;
   int len = i2d_X509(cert.get(), &der);
   ASSERT_GT(len, 0);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
 
-  bool ok = TestDERTrailingData(
-      bssl::Span(der, len), [](bssl::Span<const uint8_t> in, size_t n) {
+  bool ok =
+      TestDERTrailingData(Span(der, len), [](Span<const uint8_t> in, size_t n) {
         SCOPED_TRACE(n);
         const uint8_t *p = in.data();
-        bssl::UniquePtr<X509> parsed(d2i_X509(nullptr, &p, in.size()));
+        UniquePtr<X509> parsed(d2i_X509(nullptr, &p, in.size()));
         EXPECT_FALSE(parsed);
+        EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, std::nullopt}}));
       });
   EXPECT_TRUE(ok);
 }
 
 TEST(X509Test, TrailingDataCRL) {
-  bssl::UniquePtr<X509_CRL> crl(CRLFromPEM(kRevokedCRL));
+  UniquePtr<X509_CRL> crl(CRLFromPEM(kRevokedCRL));
   uint8_t *der = nullptr;
   int len = i2d_X509_CRL(crl.get(), &der);
   ASSERT_GT(len, 0);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
 
-  bool ok = TestDERTrailingData(
-      bssl::Span(der, len), [](bssl::Span<const uint8_t> in, size_t n) {
+  bool ok =
+      TestDERTrailingData(Span(der, len), [](Span<const uint8_t> in, size_t n) {
         SCOPED_TRACE(n);
         const uint8_t *p = in.data();
-        bssl::UniquePtr<X509_CRL> parsed(d2i_X509_CRL(nullptr, &p, in.size()));
+        UniquePtr<X509_CRL> parsed(d2i_X509_CRL(nullptr, &p, in.size()));
         EXPECT_FALSE(parsed);
+        EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, std::nullopt}}));
       });
   EXPECT_TRUE(ok);
 }
 
 TEST(X509Test, TrailingDataCSR) {
-  bssl::UniquePtr<X509_REQ> csr(CSRFromPEM(kTestCSR));
+  UniquePtr<X509_REQ> csr(CSRFromPEM(kTestCSR));
   uint8_t *der = nullptr;
   int len = i2d_X509_REQ(csr.get(), &der);
   ASSERT_GT(len, 0);
-  bssl::UniquePtr<uint8_t> free_der(der);
+  UniquePtr<uint8_t> free_der(der);
 
-  bool ok = TestDERTrailingData(
-      bssl::Span(der, len), [](bssl::Span<const uint8_t> in, size_t n) {
+  bool ok =
+      TestDERTrailingData(Span(der, len), [](Span<const uint8_t> in, size_t n) {
         SCOPED_TRACE(n);
         const uint8_t *p = in.data();
-        bssl::UniquePtr<X509_REQ> parsed(d2i_X509_REQ(nullptr, &p, in.size()));
+        UniquePtr<X509_REQ> parsed(d2i_X509_REQ(nullptr, &p, in.size()));
         EXPECT_FALSE(parsed);
+        EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, std::nullopt}}));
       });
   EXPECT_TRUE(ok);
 }
 
-TEST(X509Test, NonDefaultKeyType) {
+TEST_P(X509VerifyTest, NonDefaultKeyType) {
   // Parse an RSA-PSS key. This key type is not enabled by default.
   std::string pkcs8_str =
       GetTestData("crypto/x509/test/rsa_pss_sha256_key.pk8");
-  auto pkcs8 = bssl::StringAsBytes(pkcs8_str);
+  auto pkcs8 = StringAsBytes(pkcs8_str);
   const EVP_PKEY_ALG *const alg = EVP_pkey_rsa_pss_sha256();
-  bssl::UniquePtr<EVP_PKEY> pkey(
+  UniquePtr<EVP_PKEY> pkey(
       EVP_PKEY_from_private_key_info(pkcs8.data(), pkcs8.size(), &alg, 1));
   ASSERT_TRUE(pkey);
   EXPECT_EQ(EVP_PKEY_id(pkey.get()), EVP_PKEY_RSA_PSS);
 
-  // It should be possible to use |pkey| to make a certificate.
-  bssl::UniquePtr<X509> cert =
+  // It should be possible to use `pkey` to make a certificate.
+  UniquePtr<X509> cert =
       MakeTestCert("Test Issuer", "Test Subject", pkey.get(), /*is_ca=*/false);
   ASSERT_TRUE(cert);
   ASSERT_TRUE(X509_sign(cert.get(), pkey.get(), EVP_sha256()));
 
-  // Verify the signature with |pkey|.
+  // Verify the signature with `pkey`.
   EXPECT_TRUE(X509_verify(cert.get(), pkey.get()));
 
 #if 1
   // TODO(crbug.com/42290364): This does not currently work, but it should.
   EXPECT_FALSE(X509_get0_pubkey(cert.get()));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509, X509_R_PUBLIC_KEY_DECODE_ERROR}}));
 #else
-  // The public key can be extracted from |cert|.
+  // The public key can be extracted from `cert`.
   const EVP_PKEY *cert_pkey = X509_get0_pubkey(cert.get());
   ASSERT_TRUE(cert_pkey);
-  EXPECT_EQ(EVP_PKEY_cmp(pkey.get(), cert_pkey), 1);
-  // |X509_check_private_key| should work.
+  EXPECT_EQ(EVP_PKEY_eq(pkey.get(), cert_pkey), 1);
+  // `X509_check_private_key` should work.
   EXPECT_EQ(X509_check_private_key(cert.get(), pkey.get()), 1);
 #endif
 
   // The resulting certificate can be serialized and re-parsed.
-  bssl::UniquePtr<X509> reparsed = ReencodeCertificate(cert.get());
+  UniquePtr<X509> reparsed = ReencodeCertificate(cert.get());
   ASSERT_TRUE(reparsed);
 
-  // RSA-PSS is off by default, so parsing certificates anew with |d2i_X509|
+  // RSA-PSS is off by default, so parsing certificates anew with `d2i_X509`
   // will not enable off-by-default algorithms.
   EXPECT_FALSE(X509_get0_pubkey(reparsed.get()));
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509, X509_R_PUBLIC_KEY_DECODE_ERROR}}));
   EXPECT_EQ(X509_check_private_key(reparsed.get(), pkey.get()), 0);
+  EXPECT_TRUE(
+      ErrorsAreAndClear({{ERR_LIB_X509, X509_R_PUBLIC_KEY_DECODE_ERROR}}));
 
   // Reparsing with RSA-PSS enabled does enable it.
-  bssl::UniquePtr<X509> cert_with_key =
-      ReencodeCertificateWithAlgorithms(cert.get(), bssl::Span(&alg, 1));
+  UniquePtr<X509> cert_with_key =
+      ReencodeCertificateWithAlgorithms(cert.get(), Span(&alg, 1));
   ASSERT_TRUE(cert_with_key);
-  // The public key can be extracted from |cert|.
+  // The public key can be extracted from `cert`.
   const EVP_PKEY *cert_pkey = X509_get0_pubkey(cert_with_key.get());
   ASSERT_TRUE(cert_pkey);
-  EXPECT_EQ(EVP_PKEY_cmp(pkey.get(), cert_pkey), 1);
-  // |X509_check_private_key| should work.
+  EXPECT_EQ(EVP_PKEY_eq(pkey.get(), cert_pkey), 1);
+  // `X509_check_private_key` should work.
   EXPECT_EQ(X509_check_private_key(cert_with_key.get(), pkey.get()), 1);
 
-  // Verifying a certificate chain using |EVP_PKEY_RSA_PSS| should work as long
+  // Verifying a certificate chain using `EVP_PKEY_RSA_PSS` should work as long
   // as all CA certificates have the key available. The end-entity key is not
   // checked.
-  bssl::UniquePtr<X509> root =
+  UniquePtr<X509> root =
       MakeTestCert("Test Issuer", "Test Issuer", pkey.get(), /*is_ca=*/true);
   ASSERT_TRUE(root);
   ASSERT_TRUE(X509_sign(root.get(), pkey.get(), EVP_sha256()));
   root = ReencodeCertificate(root.get());
   ASSERT_TRUE(root);
-  bssl::UniquePtr<X509> root_with_key =
-      ReencodeCertificateWithAlgorithms(root.get(), bssl::Span(&alg, 1));
+  UniquePtr<X509> root_with_key =
+      ReencodeCertificateWithAlgorithms(root.get(), Span(&alg, 1));
   ASSERT_TRUE(root_with_key);
   EXPECT_EQ(X509_V_ERR_UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY,
             Verify(cert.get(), /*roots=*/{root.get()},
@@ -9134,15 +11428,15 @@ TEST(X509Test, NonDefaultKeyType) {
                    /*intermediates=*/{}, /*crls=*/{}));
 }
 
-// Test that no-op self-assignments on |X509| fields work.
+// Test that no-op self-assignments on `X509` fields work.
 TEST(X509Test, SelfAssignFields) {
   // Test with an RSA key, so that the signature algorithm contains an explicit
-  // NULL parameter (i.e. a non-nullptr |ASN1_TYPE| containing an ASN.1 NULL
-  // value), rather than an omitted parameter (i.e. a nullptr |ASN1_TYPE|). This
-  // exercises |X509_set1_signature_algo| better.
-  bssl::UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kRSAKey);
+  // NULL parameter (i.e. a non-nullptr `ASN1_TYPE` containing an ASN.1 NULL
+  // value), rather than an omitted parameter (i.e. a nullptr `ASN1_TYPE`). This
+  // exercises `X509_set1_signature_algo` better.
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kRSAKey);
   ASSERT_TRUE(key);
-  bssl::UniquePtr<X509> cert =
+  UniquePtr<X509> cert =
       MakeTestCert("Issuer", "Subject", key.get(), /*is_ca=*/true);
   EXPECT_TRUE(X509_sign(cert.get(), key.get(), EVP_sha256()));
 
@@ -9195,4 +11489,1699 @@ TEST(X509Test, SelfAssignFields) {
   EXPECT_EQ(param_type, V_ASN1_NULL);
 }
 
+TEST(X509Test, X509StoreGet1IssuerMultipleMatches) {
+  // `kLeafPEM` is signed by `kIntermediatePEM`.
+  UniquePtr<X509> cert = CertFromPEM(kLeafPEM);
+  ASSERT_TRUE(cert);
+
+  // Get an intermediate certificate that will match `cert`.
+  UniquePtr<X509> issuer_ok = CertFromPEM(kIntermediatePEM);
+  ASSERT_TRUE(issuer_ok);
+
+  // Make certificates with the same issuer but the wrong SKID. They must be
+  // signed by *some* key, but it doesn't matter which.
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kRSAKey);
+  ASSERT_TRUE(key);
+  auto make_wrong_skid = [&](Span<const uint8_t> skid) -> UniquePtr<X509> {
+    UniquePtr<X509> ret(X509_dup(issuer_ok.get()));
+    if (ret == nullptr) {
+      return nullptr;
+    }
+    X509_EXTENSION_free(X509_delete_ext(
+        ret.get(),
+        X509_get_ext_by_NID(ret.get(), NID_subject_key_identifier, -1)));
+    if (!AddSubjectKeyIdentifier(ret.get(), skid) ||
+        !X509_sign(ret.get(), key.get(), EVP_sha256())) {
+      return nullptr;
+    }
+    return ret;
+  };
+
+  // Find an unrelated certificate that sorts _before_ the others.
+  // "O=BoringSSL TESTING, CN=Root CA" sorts before "O=BoringSSL TESTING,
+  // CN=Intermediate CA" because it is _shorter_. See `X509_NAME_cmp`.
+  UniquePtr<X509> unrelated_before = CertFromPEM(kRootCAPEM);
+  ASSERT_TRUE(unrelated_before);
+
+  // Create a store, adding `unrelated_before`, `issuer_ok`, and several
+  // certificates with the right name and wrong SKID.
+  UniquePtr<X509_STORE> store(X509_STORE_new());
+  ASSERT_TRUE(store);
+  ASSERT_TRUE(X509_STORE_add_cert(store.get(), unrelated_before.get()));
+  for (uint8_t i = 0; i < 64; i++) {
+    uint8_t skid[1] = {i};
+    UniquePtr<X509> issuer_wrong = make_wrong_skid(skid);
+    ASSERT_TRUE(issuer_wrong);
+    ASSERT_TRUE(X509_STORE_add_cert(store.get(), issuer_wrong.get()));
+  }
+  ASSERT_TRUE(X509_STORE_add_cert(store.get(), issuer_ok.get()));
+  for (uint8_t i = 64; i < 128; i++) {
+    uint8_t skid[1] = {i};
+    UniquePtr<X509> issuer_wrong = make_wrong_skid(skid);
+    ASSERT_TRUE(issuer_wrong);
+    ASSERT_TRUE(X509_STORE_add_cert(store.get(), issuer_wrong.get()));
+  }
+
+  // Verify a certificate using the store. It should find the correct issuer by
+  // matching SKID.
+  UniquePtr<X509_STORE_CTX> ctx(X509_STORE_CTX_new());
+  ASSERT_TRUE(ctx);
+  ASSERT_TRUE(X509_STORE_CTX_init(ctx.get(), store.get(), cert.get(), nullptr));
+  X509_STORE_CTX_set_time_posix(ctx.get(), /*flags=*/0, kReferenceTime);
+  EXPECT_EQ(X509_verify_cert(ctx.get()), 1)
+      << "Certificate verification failed: "
+      << X509_STORE_CTX_get_error(ctx.get());
+
+  // X509_STORE_CTX_get1_issuer, which takes the certificate and not just the
+  // issuer name, should also find the one with a matching SKID.
+  X509 *found_issuer = nullptr;
+  int get1_ret =
+      X509_STORE_CTX_get1_issuer(&found_issuer, ctx.get(), cert.get());
+  ASSERT_EQ(1, get1_ret);
+  ASSERT_TRUE(found_issuer);
+  EXPECT_EQ(0, X509_cmp(found_issuer, issuer_ok.get()));
+  X509_free(found_issuer);
+}
+
+TEST(X509Test, CheckPrivateKey) {
+  UniquePtr<EVP_PKEY> p256(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(p256);
+  UniquePtr<EVP_PKEY> p256_2(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(p256_2);
+  UniquePtr<EVP_PKEY> p384(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p384()));
+  ASSERT_TRUE(p384);
+  UniquePtr<EVP_PKEY> rsa(EVP_PKEY_generate_from_alg(EVP_pkey_rsa()));
+  ASSERT_TRUE(rsa);
+
+  UniquePtr<X509> cert = MakeTestCert("Issuer", "Subject", p256.get(), false);
+  ASSERT_TRUE(cert);
+  ASSERT_TRUE(X509_sign(cert.get(), p256.get(), EVP_sha256()));
+
+  EXPECT_EQ(X509_check_private_key(cert.get(), p256.get()), 1);
+  EXPECT_EQ(X509_check_private_key(cert.get(), p256_2.get()), 0);
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_KEY_VALUES_MISMATCH));
+  EXPECT_EQ(X509_check_private_key(cert.get(), p384.get()), 0);
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_KEY_VALUES_MISMATCH));
+  EXPECT_EQ(X509_check_private_key(cert.get(), rsa.get()), 0);
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_KEY_TYPE_MISMATCH));
+
+  UniquePtr<X509_REQ> csr = CSRFromPEM(kTestCSR);
+  ASSERT_TRUE(csr);
+  ASSERT_TRUE(X509_REQ_set_pubkey(csr.get(), p256.get()));
+  ASSERT_TRUE(X509_REQ_sign(csr.get(), p256.get(), EVP_sha256()));
+
+  EXPECT_EQ(X509_REQ_check_private_key(csr.get(), p256.get()), 1);
+  EXPECT_EQ(X509_REQ_check_private_key(csr.get(), p256_2.get()), 0);
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_KEY_VALUES_MISMATCH));
+  EXPECT_EQ(X509_REQ_check_private_key(csr.get(), p384.get()), 0);
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_KEY_VALUES_MISMATCH));
+  EXPECT_EQ(X509_REQ_check_private_key(csr.get(), rsa.get()), 0);
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_KEY_TYPE_MISMATCH));
+}
+
+TEST(X509Test, GetEmail) {
+  // A certificate with no emails.
+  UniquePtr<EVP_PKEY> p256(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(p256);
+  UniquePtr<X509> cert = MakeTestCert("Issuer", "Subject", p256.get(), false);
+  ASSERT_TRUE(cert);
+  ASSERT_TRUE(X509_sign(cert.get(), p256.get(), EVP_sha256()));
+  EXPECT_EQ(nullptr, X509_get1_email(cert.get()));
+
+  // A CSR with no emails.
+  UniquePtr<X509_REQ> req(X509_REQ_new());
+  ASSERT_TRUE(req);
+  ASSERT_TRUE(X509_REQ_set_pubkey(req.get(), p256.get()));
+  ASSERT_TRUE(X509_REQ_sign(req.get(), p256.get(), EVP_sha256()));
+  EXPECT_EQ(nullptr, X509_REQ_get1_email(req.get()));
+
+  // Prepare many emails.
+  constexpr size_t kCount = 5000;
+  UniquePtr<X509_NAME> subject(X509_NAME_new());
+  ASSERT_TRUE(subject);
+  UniquePtr<GENERAL_NAMES> sans(GENERAL_NAMES_new());
+  ASSERT_TRUE(sans);
+  std::vector<std::string> expected;
+  for (size_t i = 0; i < kCount; i++) {
+    bool duplicate = i % 3 == 0;
+    bool add_to_both = i % 5 == 0;
+    bool add_to_subject = add_to_both || i % 2 == 0;
+    bool add_to_sans = add_to_both || i % 2 == 1;
+
+    char email[256];
+    snprintf(email, sizeof(email), "test%zu@example.com", i);
+    std::string_view email_sv = email;
+    Span<const uint8_t> email_bytes = StringAsBytes(email);
+    if (i == 0) {
+      // Test with an embedded NUL. This string should be discarded.
+      email[4] = '\0';
+    } else {
+      expected.push_back(email);
+    }
+
+    for (int dup = 0; dup < (duplicate ? 1 : 2); dup++) {
+      if (add_to_subject) {
+        ASSERT_TRUE(X509_NAME_add_entry_by_NID(
+            subject.get(), NID_pkcs9_emailAddress, MBSTRING_UTF8,
+            email_bytes.data(), email_bytes.size(), /*loc=*/-1, /*set=*/-1));
+      }
+      if (add_to_sans) {
+        UniquePtr<GENERAL_NAME> san = MakeGeneralName(GEN_EMAIL, email_sv);
+        ASSERT_TRUE(san);
+        ASSERT_TRUE(PushToStack(sans.get(), std::move(san)));
+      }
+    }
+  }
+
+  // A certificate with many emails.
+  {
+    cert = MakeTestCert("Issuer", "Subject", p256.get(), false);
+    ASSERT_TRUE(cert);
+    ASSERT_TRUE(X509_set_subject_name(cert.get(), subject.get()));
+    ASSERT_TRUE(X509_add1_ext_i2d(cert.get(), NID_subject_alt_name, sans.get(),
+                                  /*crit=*/0, /*flags=*/0));
+    ASSERT_TRUE(X509_sign(cert.get(), p256.get(), EVP_sha256()));
+
+    UniquePtr<STACK_OF(OPENSSL_STRING)> emails(X509_get1_email(cert.get()));
+    ASSERT_TRUE(emails);
+    std::vector<std::string> actual;
+    for (const char *email : emails.get()) {
+      actual.push_back(email);
+    }
+
+    // The output order is undefined.
+    std::sort(expected.begin(), expected.end());
+    std::sort(actual.begin(), actual.end());
+    EXPECT_EQ(actual, expected);
+  }
+
+  // A CSR with many emails.
+  {
+    req.reset(X509_REQ_new());
+    ASSERT_TRUE(req);
+    ASSERT_TRUE(X509_REQ_set_subject_name(req.get(), subject.get()));
+    ASSERT_TRUE(X509_REQ_set_pubkey(req.get(), p256.get()));
+    STACK_OF(X509_EXTENSION) *exts_raw = nullptr;
+    ASSERT_TRUE(X509V3_add1_i2d(&exts_raw, NID_subject_alt_name, sans.get(),
+                                /*crit=*/0, X509V3_ADD_APPEND));
+    UniquePtr<STACK_OF(X509_EXTENSION)> exts(exts_raw);
+    ASSERT_TRUE(X509_REQ_add_extensions(req.get(), exts.get()));
+    ASSERT_TRUE(X509_REQ_sign(req.get(), p256.get(), EVP_sha256()));
+
+    UniquePtr<STACK_OF(OPENSSL_STRING)> emails(X509_REQ_get1_email(req.get()));
+    ASSERT_TRUE(emails);
+    std::vector<std::string> actual;
+    for (const char *email : emails.get()) {
+      actual.push_back(email);
+    }
+
+    // The output order is undefined.
+    std::sort(expected.begin(), expected.end());
+    std::sort(actual.begin(), actual.end());
+    EXPECT_EQ(actual, expected);
+  }
+
+  // An invalid SAN extension should cause X509_get1_email and
+  // X509_REQ_get1_email to fail.
+  {
+    cert = MakeTestCert("Issuer", "Subject", p256.get(), /*is_ca=*/false);
+    ASSERT_TRUE(cert);
+    ASSERT_TRUE(X509_set_subject_name(cert.get(), subject.get()));
+    UniquePtr<X509_EXTENSION> ext(X509_EXTENSION_new());
+    ASSERT_TRUE(ext);
+    // Set an invalid (empty) SAN.
+    ASSERT_TRUE(X509_EXTENSION_set_object(ext.get(),
+                                          OBJ_nid2obj(NID_subject_alt_name)));
+    ASSERT_TRUE(X509_add_ext(cert.get(), ext.get(), -1));
+    ASSERT_TRUE(X509_sign(cert.get(), p256.get(), EVP_sha256()));
+
+    EXPECT_EQ(nullptr, X509_get1_email(cert.get()));
+  }
+  {
+    req.reset(X509_REQ_new());
+    ASSERT_TRUE(req);
+    ASSERT_TRUE(X509_REQ_set_subject_name(req.get(), subject.get()));
+    ASSERT_TRUE(X509_REQ_set_pubkey(req.get(), p256.get()));
+    UniquePtr<X509_EXTENSION> ext(X509_EXTENSION_new());
+    ASSERT_TRUE(ext);
+    ASSERT_TRUE(X509_EXTENSION_set_object(ext.get(),
+                                          OBJ_nid2obj(NID_subject_alt_name)));
+    STACK_OF(X509_EXTENSION) *exts_raw = sk_X509_EXTENSION_new_null();
+    ASSERT_TRUE(exts_raw);
+    UniquePtr<STACK_OF(X509_EXTENSION)> exts(exts_raw);
+    ASSERT_TRUE(PushToStack(exts.get(), std::move(ext)));
+    ASSERT_TRUE(X509_REQ_add_extensions(req.get(), exts.get()));
+    ASSERT_TRUE(X509_REQ_sign(req.get(), p256.get(), EVP_sha256()));
+
+    EXPECT_EQ(nullptr, X509_REQ_get1_email(req.get()));
+  }
+}
+
+TEST(X509Test, GetOCSP) {
+  // A certificate with no OCSP URIs.
+  UniquePtr<EVP_PKEY> p256(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+  ASSERT_TRUE(p256);
+  UniquePtr<X509> cert = MakeTestCert("Issuer", "Subject", p256.get(), false);
+  ASSERT_TRUE(cert);
+  ASSERT_TRUE(X509_sign(cert.get(), p256.get(), EVP_sha256()));
+  EXPECT_EQ(nullptr, X509_get1_ocsp(cert.get()));
+
+  // Make a certificate with many OCSP URIs.
+  constexpr size_t kCount = 5000;
+  UniquePtr<AUTHORITY_INFO_ACCESS> aia(AUTHORITY_INFO_ACCESS_new());
+  ASSERT_TRUE(aia);
+  std::vector<std::string> expected;
+  for (size_t i = 0; i < kCount; i++) {
+    bool duplicate = i % 3 == 0;
+    bool is_ocsp = i % 5 != 0;
+    char uri[256];
+    snprintf(uri, sizeof(uri), "http://test%zu.example.com/", i);
+    std::string_view uri_sv = uri;
+    if (i == 0) {
+      // Test with an embedded NUL. This string should be discarded.
+      uri[11] = '\0';
+    } else if (is_ocsp) {
+      expected.push_back(uri);
+    }
+
+    for (int dup = 0; dup < (duplicate ? 1 : 2); dup++) {
+      UniquePtr<ACCESS_DESCRIPTION> ad(ACCESS_DESCRIPTION_new());
+      ASSERT_TRUE(ad);
+      ad->method = OBJ_nid2obj(is_ocsp ? NID_ad_OCSP : NID_ad_ca_issuers);
+      GENERAL_NAME_free(ad->location);
+      ad->location = MakeGeneralName(GEN_URI, uri_sv).release();
+      ASSERT_TRUE(ad->location);
+      ASSERT_TRUE(PushToStack(aia.get(), std::move(ad)));
+    }
+  }
+
+  cert = MakeTestCert("Issuer", "Subject", p256.get(), false);
+  ASSERT_TRUE(cert);
+  ASSERT_TRUE(X509_add1_ext_i2d(cert.get(), NID_info_access, aia.get(),
+                                /*crit=*/0, /*flags=*/0));
+  ASSERT_TRUE(X509_sign(cert.get(), p256.get(), EVP_sha256()));
+
+  UniquePtr<STACK_OF(OPENSSL_STRING)> ocsps(X509_get1_ocsp(cert.get()));
+  ASSERT_TRUE(ocsps);
+  std::vector<std::string> actual;
+  for (const char *ocsp : ocsps.get()) {
+    actual.push_back(ocsp);
+  }
+
+  // The output order is undefined.
+  std::sort(expected.begin(), expected.end());
+  std::sort(actual.begin(), actual.end());
+  EXPECT_EQ(actual, expected);
+}
+
+TEST_P(X509VerifyTest, PathLenConstraint) {
+  struct CertChainItem {
+    bool self_issued;
+    std::optional<int64_t> pathlen;
+  };
+
+  auto verify_chain =
+      [&](std::initializer_list<CertChainItem> items) -> std::optional<int> {
+    std::vector<bssl::UniquePtr<X509>> intermediates;
+
+    std::vector<UniquePtr<EVP_PKEY>> keys;
+    for (size_t k = 0; k < items.size(); ++k) {
+      UniquePtr<EVP_PKEY> key(EVP_PKEY_generate_from_alg(EVP_pkey_ec_p256()));
+      if (key == nullptr) {
+        return std::nullopt;
+      }
+      keys.push_back(std::move(key));
+    }
+
+    bssl::UniquePtr<X509> leaf = nullptr;
+
+    size_t name_idx = 0;
+    size_t key_idx = 0;
+    for (const auto &item : items) {
+      std::string subject_name = std::to_string(name_idx);
+      if (!item.self_issued) {
+        ++name_idx;
+      }
+      std::string issuer_name = std::to_string(name_idx);
+
+      size_t subject_key_idx = key_idx;
+      if (key_idx < items.size() - 1) {
+        ++key_idx;
+      }
+      size_t issuer_key_idx = key_idx;
+
+      EVP_PKEY *subject_key = keys[subject_key_idx].get();
+      EVP_PKEY *issuer_key = keys[issuer_key_idx].get();
+
+      bssl::UniquePtr<X509> cert(MakeTestCert(issuer_name, subject_name,
+                                              subject_key, /*is_ca=*/true,
+                                              item.pathlen));
+      uint8_t skid = static_cast<uint8_t>(subject_key_idx);
+      uint8_t akid = static_cast<uint8_t>(issuer_key_idx);
+      if (cert == nullptr || !AddSubjectKeyIdentifier(cert.get(), {&skid, 1}) ||
+          !AddAuthorityKeyIdentifier(cert.get(), {&akid, 1}) ||
+          !X509_sign(cert.get(), issuer_key, EVP_sha256())) {
+        return std::nullopt;
+      }
+      if (leaf == nullptr) {
+        // The first cert in the list is the leaf.
+        leaf = std::move(cert);
+      } else {
+        // All else gets into the chain for now.
+        intermediates.emplace_back(std::move(cert));
+      }
+    }
+
+    // The last cert shall be considered the root.
+    bssl::UniquePtr<X509> root = std::move(intermediates.back());
+    intermediates.pop_back();
+
+    std::vector<X509 *> intermediate_ptrs = {};
+    for (const auto &intermediate : intermediates) {
+      intermediate_ptrs.push_back(intermediate.get());
+    }
+    int ret =
+        Verify(leaf.get(), {root.get()}, intermediate_ptrs, {}, /*flags=*/0);
+
+    // Path length constraints should work the same if some or all of the
+    // intermediates are delivered via the store. (By default,
+    // `X509_check_trust` expects a self-signed certificate as a trust anchor,
+    // so path building will continue past all intermediates.)
+    for (size_t i = 0; i < intermediate_ptrs.size(); i++) {
+      SCOPED_TRACE(i);
+      std::vector<X509 *> untrusted(intermediate_ptrs.begin(),
+                                    intermediate_ptrs.begin() + i);
+      std::vector<X509 *> trusted(intermediate_ptrs.begin() + i,
+                                  intermediate_ptrs.end());
+      trusted.push_back(root.get());
+      EXPECT_EQ(ret, Verify(leaf.get(), trusted, untrusted, {}, /*flags=*/0));
+    }
+
+    return ret;
+  };
+
+  // An unconstrained chain.
+  EXPECT_EQ(X509_V_OK,
+            verify_chain({{/*self_issued=*/false, /*pathlen=*/std::nullopt},
+                          {/*self_issued=*/false, /*pathlen=*/std::nullopt},
+                          {/*self_issued=*/false, /*pathlen=*/std::nullopt},
+                          {/*self_issued=*/false, /*pathlen=*/std::nullopt},
+                          {/*self_issued=*/true, /*pathlen=*/std::nullopt}}));
+
+  // Chains with path length constraints in them.
+  EXPECT_EQ(X509_V_OK, verify_chain({{/*self_issued=*/false, /*pathlen=*/0},
+                                     {/*self_issued=*/false, /*pathlen=*/0},
+                                     {/*self_issued=*/false, /*pathlen=*/1},
+                                     {/*self_issued=*/false, /*pathlen=*/2},
+                                     {/*self_issued=*/true, /*pathlen=*/3}}));
+  EXPECT_EQ(X509_V_ERR_PATH_LENGTH_EXCEEDED,
+            verify_chain({{/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/2},
+                          {/*self_issued=*/true, /*pathlen=*/3}}));
+  EXPECT_EQ(X509_V_ERR_PATH_LENGTH_EXCEEDED,
+            verify_chain({{/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/1},
+                          {/*self_issued=*/false, /*pathlen=*/1},
+                          {/*self_issued=*/true, /*pathlen=*/3}}));
+  EXPECT_EQ(X509_V_ERR_PATH_LENGTH_EXCEEDED,
+            verify_chain({{/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/1},
+                          {/*self_issued=*/false, /*pathlen=*/2},
+                          {/*self_issued=*/true, /*pathlen=*/2}}));
+
+  // Self-issued certificates do not count towards the path length, but their
+  // constraints are still applied.
+  EXPECT_EQ(X509_V_OK, verify_chain({{/*self_issued=*/false, /*pathlen=*/0},
+                                     {/*self_issued=*/false, /*pathlen=*/0},
+                                     {/*self_issued=*/true, /*pathlen=*/1},
+                                     {/*self_issued=*/false, /*pathlen=*/1},
+                                     {/*self_issued=*/true, /*pathlen=*/2}}));
+  EXPECT_EQ(X509_V_ERR_PATH_LENGTH_EXCEEDED,
+            verify_chain({{/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/true, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/1},
+                          {/*self_issued=*/true, /*pathlen=*/2}}));
+  EXPECT_EQ(X509_V_ERR_PATH_LENGTH_EXCEEDED,
+            verify_chain({{/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/true, /*pathlen=*/1},
+                          {/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/true, /*pathlen=*/2}}));
+  EXPECT_EQ(X509_V_ERR_PATH_LENGTH_EXCEEDED,
+            verify_chain({{/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/false, /*pathlen=*/0},
+                          {/*self_issued=*/true, /*pathlen=*/1},
+                          {/*self_issued=*/false, /*pathlen=*/1},
+                          {/*self_issued=*/true, /*pathlen=*/1}}));
+}
+
+// Non-DER UTCTimes with timezone offsets are rejected in CRLs.
+TEST(X509Test, CRLWithTimezoneOffset) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_TRUE(key);
+
+  auto make_crl_with_time =
+      [&](std::string_view last_update) -> UniquePtr<X509_CRL> {
+    UniquePtr<X509_CRL> crl = MakeTestCRL("CA", -1, 1);
+    UniquePtr<ASN1_UTCTIME> t(ASN1_UTCTIME_new());
+    if (crl == nullptr || t == nullptr ||
+        !ASN1_STRING_set(t.get(), last_update.data(), last_update.size()) ||
+        !X509_CRL_set1_lastUpdate(crl.get(), t.get()) ||
+        !X509_CRL_sign(crl.get(), key.get(), EVP_sha256())) {
+      return nullptr;
+    }
+    return crl;
+  };
+
+  static constexpr std::string_view kValid = "160926000000Z";
+  UniquePtr<X509_CRL> crl = make_crl_with_time(kValid);
+  ASSERT_TRUE(crl);
+  UniquePtr<X509_CRL> parsed = ReencodeCRL(crl.get());
+  ASSERT_TRUE(parsed);
+  EXPECT_EQ(ASN1_STRING_type(X509_CRL_get0_lastUpdate(parsed.get())),
+            V_ASN1_UTCTIME);
+  EXPECT_EQ(ASN1StringAsView(X509_CRL_get0_lastUpdate(parsed.get())), kValid);
+
+  // UTCTime values with timezone offsets are invalid.
+  for (std::string_view tz_time : {"160926010000+0100", "160926010000-0400"}) {
+    SCOPED_TRACE(tz_time);
+    crl = make_crl_with_time(tz_time);
+    ASSERT_TRUE(crl);
+    EXPECT_FALSE(ReencodeCRL(crl.get()));
+    EXPECT_TRUE(ErrorsAreAndClear({{ERR_LIB_ASN1, ASN1_R_DECODE_ERROR}}));
+  }
+}
+
+TEST_P(X509VerifyTest, CRLScopeLargeDistributionPoints) {
+  UniquePtr<EVP_PKEY> key = PrivateKeyFromPEM(kP256Key);
+  ASSERT_THAT(key, testing::NotNull());
+  UniquePtr<X509> ca = MakeTestCert("CA", "CA", key.get(), /*is_ca=*/true);
+  ASSERT_THAT(ca, testing::NotNull());
+  ASSERT_TRUE(X509_sign(ca.get(), key.get(), EVP_sha256()));
+
+  constexpr int kNumURIs = 50000;
+  std::vector<std::string> cert_storage, crl_storage;
+  cert_storage.reserve(kNumURIs);
+  crl_storage.reserve(kNumURIs);
+  for (int i = 0; i < kNumURIs; ++i) {
+    cert_storage.push_back("http://crl.example.com/cert-only-" +
+                           std::to_string(i));
+    crl_storage.push_back("http://crl.example.com/crl-only-" +
+                          std::to_string(i));
+  }
+  std::vector<std::string_view> cert_uris(cert_storage.begin(),
+                                          cert_storage.end());
+  std::vector<std::string_view> crl_uris_mismatch(crl_storage.begin(),
+                                                  crl_storage.end());
+  std::vector<std::string_view> crl_uris_match = crl_uris_mismatch;
+  cert_uris.push_back("http://crl.example.com/match");
+  crl_uris_match.push_back("http://crl.example.com/match");
+
+  // Create the leaf certificate with 10 Distribution Point names.
+  UniquePtr<X509> leaf = MakeTestCert("CA", "Leaf", key.get(), /*is_ca=*/false);
+  ASSERT_THAT(leaf, testing::NotNull());
+  {
+    UniquePtr<DIST_POINT> dps[] = {
+        MakeDistributionPoint(MakeFullDistPointName(cert_uris))};
+    ASSERT_TRUE(AddCRLDistributionPoints(leaf.get(), dps));
+  }
+  ASSERT_TRUE(X509_sign(leaf.get(), key.get(), EVP_sha256()));
+
+  // Create a CRL that shares exactly one URI with the certificate.
+  UniquePtr<X509_CRL> crl_match = MakeTestCRL("CA", -1, 1);
+  ASSERT_THAT(crl_match, testing::NotNull());
+  ASSERT_TRUE(AddIssuingDistributionPoint(
+      crl_match.get(), MakeFullDistPointName(crl_uris_match)));
+  crl_match = SignAndReencodeCRL(crl_match.get(), key.get(), EVP_sha256());
+  ASSERT_THAT(crl_match, testing::NotNull());
+
+  // Create a CRL that shares zero URIs with the certificate.
+  UniquePtr<X509_CRL> crl_mismatch = MakeTestCRL("CA", -1, 1);
+  ASSERT_THAT(crl_mismatch, testing::NotNull());
+  ASSERT_TRUE(AddIssuingDistributionPoint(
+      crl_mismatch.get(), MakeFullDistPointName(crl_uris_mismatch)));
+  crl_mismatch =
+      SignAndReencodeCRL(crl_mismatch.get(), key.get(), EVP_sha256());
+  ASSERT_THAT(crl_mismatch, testing::NotNull());
+
+  // The matching CRL should safely pass verification via binary search.
+  EXPECT_EQ(X509_V_OK, Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                              {crl_match.get()}, X509_V_FLAG_CRL_CHECK));
+
+  // The mismatching CRL should correctly exhaust the binary search and fail.
+  EXPECT_EQ(X509_V_ERR_DIFFERENT_CRL_SCOPE,
+            Verify(leaf.get(), {ca.get()}, /*intermediates=*/{},
+                   {crl_mismatch.get()}, X509_V_FLAG_CRL_CHECK));
+}
+
+#if !defined(BORINGSSL_SHARED_LIBRARY)
+TEST(X509Test, MarshalTBSCertCached) {
+  UniquePtr<X509> cert = CertFromPEM(kLeafPEM);
+  ASSERT_TRUE(cert);
+
+  ScopedCBB cbb;
+  ASSERT_TRUE(CBB_init(cbb.get(), 64));
+  EXPECT_TRUE(x509_marshal_tbs_cert(cbb.get(), cert.get()));
+
+  CBS tbs;
+  Array<uint8_t> scratch;
+  EXPECT_TRUE(x509_get_or_marshal_tbs_cert(&tbs, &scratch, cert.get()));
+
+  // The non-copying and copying helper should return identical data.
+  EXPECT_EQ(Bytes(CBS_data(&tbs), CBS_len(&tbs)),
+            Bytes(CBB_data(cbb.get()), CBB_len(cbb.get())));
+
+  // Check that the non-copying helper returned data within the CRYPTO_BUFFER.
+  auto *impl = FromOpaque(cert.get());
+  ASSERT_TRUE(impl->buf);
+  const uint8_t *buf_data = CRYPTO_BUFFER_data(impl->buf.get());
+  size_t buf_len = CRYPTO_BUFFER_len(impl->buf.get());
+  EXPECT_GE(CBS_data(&tbs), buf_data);
+  EXPECT_LE(CBS_data(&tbs) + CBS_len(&tbs), buf_data + buf_len);
+}
+
+TEST(X509Test, MarshalTBSCertNoCache) {
+  // Create a programmatically constructed certificate (no cached TBSCert).
+  UniquePtr<EVP_PKEY> pkey(PrivateKeyFromPEM(kRSAKey));
+  ASSERT_TRUE(pkey);
+
+  UniquePtr<X509> cert(X509_new());
+  ASSERT_TRUE(cert);
+
+  EXPECT_TRUE(X509_set_version(cert.get(), X509_VERSION_3));
+  EXPECT_TRUE(ASN1_INTEGER_set_int64(X509_get_serialNumber(cert.get()), 1));
+  EXPECT_TRUE(X509_gmtime_adj(X509_getm_notBefore(cert.get()), 0));
+  EXPECT_TRUE(X509_gmtime_adj(X509_getm_notAfter(cert.get()), 60 * 60 * 24));
+  X509_NAME *subject = X509_get_subject_name(cert.get());
+  ASSERT_TRUE(X509_NAME_add_entry_by_txt(
+      subject, "CN", MBSTRING_ASC, reinterpret_cast<const uint8_t *>("Test"),
+      -1, -1, 0));
+  EXPECT_TRUE(X509_set_issuer_name(cert.get(), subject));
+  EXPECT_TRUE(X509_set_pubkey(cert.get(), pkey.get()));
+
+  UniquePtr<X509_ALGOR> algor(X509_ALGOR_new());
+  ASSERT_TRUE(algor);
+  ASSERT_TRUE(X509_ALGOR_set0(algor.get(),
+                              OBJ_nid2obj(NID_sha256WithRSAEncryption),
+                              V_ASN1_NULL, nullptr));
+  ASSERT_TRUE(X509_set1_signature_algo(cert.get(), algor.get()));
+
+  // There is no cached encoding to return.
+  ASSERT_FALSE(FromOpaque(cert.get())->buf);
+
+  ScopedCBB cbb;
+  ASSERT_TRUE(CBB_init(cbb.get(), 64));
+  EXPECT_TRUE(x509_marshal_tbs_cert(cbb.get(), cert.get()));
+
+  CBS tbs;
+  Array<uint8_t> scratch;
+  EXPECT_TRUE(x509_get_or_marshal_tbs_cert(&tbs, &scratch, cert.get()));
+
+  // Both helpers should return identical data.
+  EXPECT_EQ(Bytes(CBS_data(&tbs), CBS_len(&tbs)),
+            Bytes(CBB_data(cbb.get()), CBB_len(cbb.get())));
+}
+#endif  // !defined(BORINGSSL_SHARED_LIBRARY)
+
+// Tests for `x509_evaluate_mtc_subtree_inclusion_proof`, which is an
+// internal-only function.
+#if !defined(BORINGSSL_SHARED_LIBRARY)
+
+// Generates a Merkle Tree for testing.
+class X509MerkleTreeTest : public ::testing::Test {
+ public:
+  using Entry = std::vector<uint8_t>;
+  using Hash = std::vector<uint8_t>;
+  using Level = std::vector<Hash>;
+
+  static bool IsValidSubtree(uint64_t start, uint64_t end) {
+    // Empty subtrees are explicitly allowed.
+    if (start == end) {
+      return true;
+    }
+    return GetCoveringSubtree(start, end) ==
+           /* possibly invalid */ Subtree{start, end};
+  }
+
+  X509MerkleTreeTest() = default;
+  ~X509MerkleTreeTest() override = default;
+
+  void SetUp() override {
+    // Default tree size and hash can be overridden by tests.
+    ASSERT_NO_FATAL_FAILURE(InitTestMerkleTree(EVP_sha256(), 256));
+  }
+
+  // This function generates a full Merkle Tree for testing (i.e. having its
+  // total entry count, `limit`, equal to a power of 2). Partial Merkle Trees,
+  // where some levels on the rightmost edge of the tree are skipped, are
+  // simulated as subsets of a complete tree.
+  void InitTestMerkleTree(const EVP_MD *hash, uint64_t limit) {
+    ASSERT_TRUE(IsPow2(limit));
+    limit_ = limit;
+    if (hash == hash_ && limit <= entries_.size()) {
+      return;
+    }
+
+    // Generate test entries compatible with the "accumulated" tests described
+    // in appendix C of draft-ietf-plants-merkle-tree-certs.
+    entries_.reserve(limit);
+    for (uint64_t index = entries_.size(); index < limit; ++index) {
+      Entry entry;
+      uint64_t num = index;
+      do {
+        entry.push_back(num & 0xff);
+        num >>= 8;
+      } while (num > 0);
+      entries_.push_back(std::move(entry));
+    }
+
+    hash_ = hash;
+    levels_.clear();
+
+    // Construct the Merkle tree hashes.
+    size_t level_size = entries_.size();
+    Level level0;
+    level0.reserve(level_size);
+    for (const Entry &entry : entries_) {
+      level0.push_back(HashLeaf(entry));
+    }
+    levels_.push_back(std::move(level0));
+    level_size /= 2;
+
+    for (; level_size > 0; level_size /= 2) {
+      Level level;
+      level.reserve(level_size);
+
+      const Level &prev_level = levels_.back();
+      for (size_t i = 0; i < level_size; ++i) {
+        level.push_back(HashNodes(prev_level[2 * i], prev_level[2 * i + 1]));
+      }
+      levels_.push_back(std::move(level));
+    }
+  }
+
+  const Hash &GetEntryHash(uint64_t index) const {
+    return GetHashAtLevel(index, 0);
+  }
+
+  // Returns a bogus hash value that is the right length for the hash algorithm
+  // consisting of the given byte.
+  Hash GetBogusHash(uint8_t byte = 0xff) const {
+    return Hash(EVP_MD_size(hash_), byte);
+  }
+
+  Hash GetSubtreeHash(uint64_t subtree_start, uint64_t subtree_end) const {
+    Subtree subtree{subtree_start, subtree_end};
+    return GetSubtreeHash(subtree);
+  }
+
+  // Returns a subtree inclusion proof for entry `index` within the subtree
+  // [`subtree_start`, `subtree_end`). The inclusion proof consists of the
+  // entry's "neighbor" at each level of the tree. The entry hash, together with
+  // the hashes of each element of the inclusion proof, must allow
+  // reconstruction of the subtree hash.
+  std::vector<Hash> GenerateSubtreeInclusionProof(uint64_t index,
+                                                  uint64_t subtree_start,
+                                                  uint64_t subtree_end) const {
+    Subtree subtree{subtree_start, subtree_end};
+    EXPECT_LE(subtree.start, index);
+    EXPECT_LE(index, subtree.end - 1);
+    std::vector<Hash> proof;
+    // `covered` tracks the subrange of `subtree` for which the in-progress
+    // inclusion proof includes sufficient information to reconstruct the hash.
+    Subtree covered{index, index + 1};
+
+    // Walk up the tree (from leaves to root), determine whether the entry
+    // is contained in the left or right child at that level, and collect the
+    // other one as the "neighbor".
+    uint64_t level_num = 0;
+    while (covered != subtree) {
+      bool is_right_child_of_parent = (covered.start >> level_num) % 2;
+      if (is_right_child_of_parent) {
+        // A left child that has a sibling to its right must be complete, so
+        // this left neighbor must be a complete subtree.
+        Subtree neighbor_left{
+            /*start=*/covered.start ^ (uint64_t{1} << level_num),
+            /*end=*/covered.start};
+        proof.emplace_back(GetSubtreeHash(neighbor_left));
+        covered.start = neighbor_left.start;
+      } else {
+        // A neighbor on the right may be a partial subtree on the right edge of
+        // `subtree` if not all of its would-be entries are present.
+        Subtree neighbor_right{/*start=*/covered.end,
+                               /*end=*/covered.end + covered.size()};
+        if (neighbor_right.end > subtree.end) {
+          neighbor_right.end = subtree.end;
+        }
+        // Omit the right neighbor if it's entirely empty.
+        if (neighbor_right.size() > 0) {
+          proof.emplace_back(GetSubtreeHash(neighbor_right));
+        }
+        covered.end = neighbor_right.end;
+      }
+      ++level_num;
+    }
+    return proof;
+  }
+
+  // Returns a subtree inclusion proof as a concatenated series of subtree
+  // hashes.
+  std::vector<uint8_t> GetSerializedSubtreeInclusionProof(
+      uint64_t index, uint64_t subtree_start, uint64_t subtree_end) const {
+    auto inclusion_proof =
+        GenerateSubtreeInclusionProof(index, subtree_start, subtree_end);
+    return ConcatenateHashes(inclusion_proof);
+  }
+
+  std::vector<uint8_t> ConcatenateHashes(
+      const std::vector<Hash> &hashes) const {
+    std::vector<uint8_t> ret;
+    ret.reserve(EVP_MD_size(hash_) * hashes.size());
+    for (const Hash &hash : hashes) {
+      ret.insert(ret.end(), hash.begin(), hash.end());
+    }
+    return ret;
+  }
+
+  void ExhaustivelyEvaluateInclusionProofs() const {
+    for (uint64_t end = 0; end < limit_; ++end) {
+      for (uint64_t start = 0; start < end + 1; ++start) {
+        if (!IsValidSubtree(start, end)) {
+          continue;
+        }
+        auto subtree_hash = GetSubtreeHash(start, end);
+        for (uint64_t index = start; index < end; ++index) {
+          SCOPED_TRACE("subtree: [" + std::to_string(start) + ", " +
+                       std::to_string(end) +
+                       "), index: " + std::to_string(index));
+          std::vector<uint8_t> proof =
+              GetSerializedSubtreeInclusionProof(index, start, end);
+
+          std::vector<uint8_t> evaluated_subtree_hash;
+          evaluated_subtree_hash.resize(EVP_MD_size(hash_));
+          bool success = x509_evaluate_mtc_subtree_inclusion_proof(
+              Span(evaluated_subtree_hash), hash(), proof, index,
+              GetEntryHash(index), start, end);
+          EXPECT_TRUE(success);
+          EXPECT_EQ(Bytes(evaluated_subtree_hash), Bytes(subtree_hash));
+        }
+      }
+    }
+  }
+
+  uint64_t max_end_index() const {
+    return static_cast<uint64_t>(entries_.size());
+  }
+
+  const EVP_MD *hash() const { return hash_; }
+
+ private:
+  // This struct allows arbitrary `start` and `end` values that may not form a
+  // valid subtree; caller should ensure they are valid by construction if using
+  // as a subtree in further computations.
+  struct Subtree {
+    uint64_t start = 0u;
+    uint64_t end = 0u;
+
+    size_t size() const { return end - start; }
+
+    bool operator==(const Subtree &other) const {
+      return (start == other.start) && (end == other.end);
+    }
+    bool operator!=(const Subtree &other) const { return !(*this == other); }
+  };
+
+  static bool IsPow2(uint64_t n) { return CRYPTO_has_single_bit(n); }
+
+  // Returns a number containing the longest shared prefix in the binary
+  // representations of `a` and `b`, with all other less-significant bits
+  // zeroed.
+  static uint64_t LongestSharedBitPrefix(uint64_t a, uint64_t b) {
+    uint64_t suffix_bits = CRYPTO_bit_width(a ^ b);
+    if (suffix_bits == 64) {
+      return 0;
+    }
+    uint64_t mask = ~uint64_t{0} << suffix_bits;
+    return a & mask;
+  }
+
+  // Returns the nearest (aligned) subtree that completely contains the interval
+  // [start, end). In other words, this finds the lowest common ancestor of
+  // `start` and `end - 1` in the original tree. The returned subtree may
+  // include additional elements before `start`.
+  static Subtree GetCoveringSubtree(uint64_t start, uint64_t end) {
+    return Subtree{LongestSharedBitPrefix(start, end - 1), end};
+  }
+
+  // Computes the hash for `subtree`, which may be a partial subtree with some
+  // levels skipped on the right edge.
+  Hash GetSubtreeHash(Subtree subtree) const {
+    if (subtree.size() == 0) {
+      return HashData({});
+    }
+    uint64_t level_num = 0;
+    uint64_t start = subtree.start;
+    uint64_t last = subtree.end - 1;
+    // Start at the largest complete subtree on the right edge.
+    while (start < last && (last & 1) == 1) {
+      ++level_num;
+      start >>= 1;
+      last >>= 1;
+    }
+    // As we iterate upwards along the right edge until we cover the whole
+    // desired subtree, `hash` is the subtree hash for [last << level_num, end).
+    Hash hash = levels_[level_num][last];
+    while (start < last) {
+      // Don't modify the hash if this level is skipped.
+      if (last & 1) {
+        hash = HashNodes(levels_[level_num][last - 1], hash);
+      }
+      ++level_num;
+      start >>= 1;
+      last >>= 1;
+    }
+    return hash;
+  }
+
+  Hash HashData(std::initializer_list<Span<const uint8_t>> data) const {
+    Hash ret;
+    ret.resize(EVP_MD_size(hash_));
+    ScopedEVP_MD_CTX ctx;
+    EVP_DigestInit_ex(ctx.get(), hash_, nullptr);
+    for (const Span<const uint8_t> &piece : data) {
+      EVP_DigestUpdate(ctx.get(), piece.data(), piece.size());
+    }
+    EVP_DigestFinal_ex(ctx.get(), ret.data(), nullptr);
+    return ret;
+  }
+
+  Hash HashLeaf(Span<const uint8_t> leaf_data) const {
+    return HashData({std::vector<uint8_t>({0x00}), leaf_data});
+  }
+
+  Hash HashNodes(Span<const uint8_t> left_data,
+                 Span<const uint8_t> right_data) const {
+    return HashData({std::vector<uint8_t>({0x01}), left_data, right_data});
+  }
+
+  // Returns the hash containing the entry at `index` at the given level in the
+  // full Merkle tree.
+  const Hash &GetHashAtLevel(uint64_t index, uint64_t level_num) const {
+    const Level &level = levels_[level_num];
+    return level[index >> level_num];
+  }
+
+  const EVP_MD *hash_ = nullptr;
+  size_t limit_ = 0u;
+  // Entries (leaf nodes) for the test tree.
+  std::vector<Entry> entries_;
+  // Each element of `levels_` contains the Merkle tree hashes for nodes at a
+  // given level in the tree, counting from the bottom. `levels_[0]` contains
+  // all the leaf node hashes, `levels_[1]` contains half as many hashes each
+  // covering 2 leaf nodes, etc. In general, `levels_[i]` contains hashes each
+  // covering 2^i entries. Each `levels_[i][j]` contains the hash value
+  // MTH(D[ (2^i) * j : (2^i) * (j+1) ]), representing a subtree
+  // [ (2^i) * j : (2^i) * (j+1) ) of size 2^i.
+  std::vector<Level> levels_;
+};
+
+// This executes the "accumulated" Subtree Hashes test from appendix C.1 of
+// draft-ietf-plants-merkle-tree-certs. (This is more a test of the
+// X509MerkleTreeTest harness, to ensure that it is able to correctly test
+// the production code.)
+TEST_F(X509MerkleTreeTest, AccumulatedSubtreeHashes) {
+  ASSERT_NO_FATAL_FAILURE(InitTestMerkleTree(EVP_sha256(), 256));
+
+  ScopedEVP_MD_CTX ctx;
+  EVP_DigestInit_ex(ctx.get(), hash(), nullptr);
+
+  for (uint64_t end = 0; end < 131; ++end) {
+    for (uint64_t start = 0; start < end + 1; ++start) {
+      if (!IsValidSubtree(start, end)) {
+        continue;
+      }
+      std::stringstream ss;
+      ss << "[" << std::to_string(start) << ", " << std::to_string(end) << ") "
+         << EncodeHex(GetSubtreeHash(start, end)) << "\n";
+      std::string str = ss.str();
+      EVP_DigestUpdate(ctx.get(), str.data(), str.size());
+    }
+  }
+  std::vector<uint8_t> final(EVP_MAX_MD_SIZE);
+  unsigned final_size;
+  EVP_DigestFinal_ex(ctx.get(), final.data(), &final_size);
+  final.resize(final_size);
+
+  const uint8_t kExpected[] = {
+      0xb8, 0x28, 0x06, 0xad, 0x42, 0x65, 0xbb, 0x15, 0x1c, 0x11, 0x19,
+      0xc0, 0xf4, 0xdb, 0x43, 0x7b, 0xb4, 0xd1, 0xa1, 0xf8, 0x87, 0xb3,
+      0xa7, 0xfb, 0xa1, 0xcd, 0x4e, 0xbf, 0x55, 0x2e, 0x3e, 0x81,
+  };
+  EXPECT_EQ(Bytes(final), Bytes(kExpected));
+}
+
+// This executes the "accumulated" Subtree Inclusion Proofs test from appendix
+// C.2 of draft-ietf-plants-merkle-tree-certs. (This is more a test of the
+// X509MerkleTreeTest harness, to ensure that it is able to correctly test
+// the production code.)
+TEST_F(X509MerkleTreeTest, AccumulatedSubtreeInclusionProofs) {
+  ASSERT_NO_FATAL_FAILURE(InitTestMerkleTree(EVP_sha256(), 256));
+
+  ScopedEVP_MD_CTX ctx;
+  EVP_DigestInit_ex(ctx.get(), hash(), nullptr);
+
+  for (uint64_t end = 0; end < 131; ++end) {
+    for (uint64_t start = 0; start < end + 1; ++start) {
+      if (!IsValidSubtree(start, end)) {
+        continue;
+      }
+      for (uint64_t index = start; index < end; ++index) {
+        std::stringstream ss;
+        ss << std::to_string(index) << " [" << std::to_string(start) << ", "
+           << std::to_string(end) << ")";
+        for (const Hash &hash :
+             GenerateSubtreeInclusionProof(index, start, end)) {
+          ss << " " << EncodeHex(hash);
+        }
+        ss << "\n";
+        std::string str = ss.str();
+        EVP_DigestUpdate(ctx.get(), str.data(), str.size());
+      }
+    }
+  }
+  std::vector<uint8_t> final(EVP_MAX_MD_SIZE);
+  unsigned final_size;
+  EVP_DigestFinal_ex(ctx.get(), final.data(), &final_size);
+  final.resize(final_size);
+
+  const uint8_t kExpected[] = {
+      0xac, 0x2a, 0x8f, 0x98, 0x9e, 0x44, 0xd9, 0x9e, 0x39, 0x9d, 0xb4,
+      0x48, 0x05, 0x0f, 0xf5, 0xf1, 0x97, 0x57, 0xdf, 0x53, 0xcf, 0xb7,
+      0x16, 0xaa, 0x81, 0x01, 0x5d, 0x39, 0x55, 0xd8, 0x16, 0x3f,
+  };
+  EXPECT_EQ(Bytes(final), Bytes(kExpected));
+}
+
+TEST_F(X509MerkleTreeTest, EvaluateInclusionProof) {
+  ASSERT_NO_FATAL_FAILURE(InitTestMerkleTree(EVP_sha256(), 256));
+  ExhaustivelyEvaluateInclusionProofs();
+}
+
+TEST_F(X509MerkleTreeTest, EvaluateInclusionProofInvalidParams) {
+  const struct {
+    uint64_t index;
+    uint64_t start;
+    uint64_t end;
+  } kInvalidCases[] = {
+      // Start is greater than end.
+      {1, 1, 0},
+      // Subtree is misaligned.
+      {1, 1, 5},
+      // Subtree is misaligned. This tests the uint64_t overflow condition for
+      // valid subtrees that differ in the most significant bit.
+      // TODO(crbug.com/503746594): There should also be a test for the valid
+      // case (start = 0), but that would currently require initializing an
+      // overly large test Merkle Tree, so it is omitted.
+      {1, 1, ~uint64_t{0}},
+      // Index is not in range.
+      {0, 1, 2},
+      // Index is past-the-end.
+      {1, 1, 1},
+  };
+
+  Hash bogus = GetBogusHash();
+
+  std::vector<uint8_t> evaluated_subtree_hash;
+  evaluated_subtree_hash.resize(EVP_MD_size(hash()));
+  for (const auto &t : kInvalidCases) {
+    // Try every length of fake inclusion proof to make sure the call fails
+    // due to invalid params, rather than inclusion proof of the wrong length.
+    Hash fake_inclusion_proof;
+    for (size_t n = 0; n <= 64; ++n) {
+      EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+          Span(evaluated_subtree_hash), hash(), Span(fake_inclusion_proof),
+          t.index, GetEntryHash(t.index), t.start, t.end));
+      fake_inclusion_proof.insert(fake_inclusion_proof.end(), bogus.begin(),
+                                  bogus.end());
+    }
+  }
+}
+
+TEST_F(X509MerkleTreeTest, EvaluateInclusionProofBadOutputSize) {
+  uint64_t index = 1;
+  uint64_t start = 0;
+  uint64_t end = 3;
+
+  std::vector<uint8_t> evaluated_subtree_hash;
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash(),
+      GetSerializedSubtreeInclusionProof(index, start, end), index,
+      GetEntryHash(index), start, end));
+
+  evaluated_subtree_hash.resize(EVP_MD_size(hash()) - 1);
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash(),
+      GetSerializedSubtreeInclusionProof(index, start, end), index,
+      GetEntryHash(index), start, end));
+
+  evaluated_subtree_hash.resize(EVP_MD_size(hash()) + 1);
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash(),
+      GetSerializedSubtreeInclusionProof(index, start, end), index,
+      GetEntryHash(index), start, end));
+}
+
+TEST_F(X509MerkleTreeTest, EvaluateInclusionProofBadEntryHashSize) {
+  uint64_t index = 1;
+  uint64_t start = 0;
+  uint64_t end = 3;
+
+  std::vector<uint8_t> evaluated_subtree_hash;
+  evaluated_subtree_hash.resize(EVP_MD_size(hash()));
+
+  Hash input = GetEntryHash(index);
+  input.push_back(0x12);
+
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash(),
+      GetSerializedSubtreeInclusionProof(index, start, end), index, input,
+      start, end));
+
+  input.pop_back();
+  input.pop_back();
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash(),
+      GetSerializedSubtreeInclusionProof(index, start, end), index, input,
+      start, end));
+}
+
+TEST_F(X509MerkleTreeTest, EvaluateInclusionProofWrong) {
+  // For entry 10 in a subtree [8, 13), the correct inclusion proof contains
+  // MTH({d[11]}), MTH(D[8:10]), and MTH({d[12]}).
+  const uint64_t index = 10;
+  const uint64_t subtree_start = 8;
+  const uint64_t subtree_end = 13;
+  const struct {
+    std::vector<uint8_t> proof;
+    Hash entry_hash;
+    // Whether the inclusion proof evaluation procedure should succeed.
+    bool should_succeed = false;
+    // Whether the result of inclusion proof evaluation should match the correct
+    // subtree hash.
+    bool should_match = false;
+  } kTestCases[] = {
+      {
+          // Correct proof.
+          ConcatenateHashes({GetSubtreeHash(11, 12), GetSubtreeHash(8, 10),
+                             GetSubtreeHash(12, 13)}),
+          GetEntryHash(index),
+          /*should_succeed=*/true,
+          /*should_match=*/true,
+      },
+      {
+          // Inclusion proof incorrectly includes the entry hash itself.
+          ConcatenateHashes({GetEntryHash(10), GetSubtreeHash(11, 12),
+                             GetSubtreeHash(8, 10), GetSubtreeHash(12, 13)}),
+          GetEntryHash(index),
+      },
+      {
+          // Inclusion proof incorrectly omits the final subtree hash covering
+          // the right edge.
+          ConcatenateHashes({GetSubtreeHash(11, 12), GetSubtreeHash(8, 10)}),
+          GetEntryHash(index),
+      },
+      {
+          // Inclusion proof incorrectly omits the level-0 hash.
+          ConcatenateHashes({GetSubtreeHash(8, 10), GetSubtreeHash(12, 13)}),
+          GetEntryHash(index),
+      },
+      {
+          // Inclusion proof incorrectly includes the level-1 hash for the entry
+          // instead of the neighboring level-0 hash.
+          ConcatenateHashes({GetSubtreeHash(10, 12), GetSubtreeHash(8, 10),
+                             GetSubtreeHash(12, 13)}),
+          GetEntryHash(index),
+          /*should_succeed=*/true,
+          /*should_match=*/false,
+      },
+      {
+          // Individual hash in the inclusion proof are corrupted.
+          ConcatenateHashes({GetBogusHash(0x01), GetSubtreeHash(8, 10),
+                             GetSubtreeHash(12, 13)}),
+          GetEntryHash(index),
+          /*should_succeed=*/true,
+          /*should_match=*/false,
+      },
+      {
+          // Individual hash in the inclusion proof are corrupted.
+          ConcatenateHashes(
+              {GetBogusHash(0x01), GetSubtreeHash(8, 10), GetBogusHash(0x02)}),
+          GetEntryHash(index),
+          /*should_succeed=*/true,
+          /*should_match=*/false,
+      },
+      {
+          // Incorrect entry hash.
+          ConcatenateHashes({GetSubtreeHash(11, 12), GetSubtreeHash(8, 10),
+                             GetSubtreeHash(12, 13)}),
+          GetBogusHash(),
+          /*should_succeed=*/true,
+          /*should_match=*/false,
+      },
+      {
+          // Inclusion proof includes an extra hash.
+          ConcatenateHashes({GetSubtreeHash(11, 12), GetSubtreeHash(8, 10),
+                             GetSubtreeHash(12, 13), GetSubtreeHash(12, 13)}),
+          GetEntryHash(index),
+      },
+      {
+          // Inclusion proof contains trailing data.
+          ConcatenateHashes({GetSubtreeHash(11, 12),
+                             GetSubtreeHash(8, 10),
+                             GetSubtreeHash(12, 13),
+                             {0x01, 0x02}}),
+          GetEntryHash(index),
+      },
+      {
+          // Inclusion proof is truncated.
+          [](std::vector<uint8_t> v) -> std::vector<uint8_t> {
+            v.pop_back();
+            return v;
+          }(ConcatenateHashes({GetSubtreeHash(11, 12), GetSubtreeHash(8, 10),
+                                     GetSubtreeHash(12, 13)})),
+          GetEntryHash(index),
+      },
+  };
+  for (size_t i = 0; i < std::size(kTestCases); ++i) {
+    SCOPED_TRACE(i);
+    const auto &t = kTestCases[i];
+    std::vector<uint8_t> evaluated_subtree_hash;
+    evaluated_subtree_hash.resize(EVP_MD_size(hash()));
+    bool success = x509_evaluate_mtc_subtree_inclusion_proof(
+        Span(evaluated_subtree_hash), hash(), t.proof, index, t.entry_hash,
+        subtree_start, subtree_end);
+    EXPECT_EQ(success, t.should_succeed);
+    if (success) {
+      if (t.should_match) {
+        EXPECT_EQ(Bytes(evaluated_subtree_hash),
+                  Bytes(GetSubtreeHash(subtree_start, subtree_end)));
+      } else {
+        EXPECT_NE(Bytes(evaluated_subtree_hash),
+                  Bytes(GetSubtreeHash(subtree_start, subtree_end)));
+      }
+    }
+  }
+}
+
+TEST_F(X509MerkleTreeTest, EvaluateInclusionProofLarge) {
+  ASSERT_NO_FATAL_FAILURE(InitTestMerkleTree(EVP_sha256(), uint64_t{1 << 16}));
+  const uint64_t subtree_start = 0;
+  const uint64_t subtree_end = max_end_index();
+  auto subtree_hash = GetSubtreeHash(subtree_start, subtree_end);
+  const uint64_t nums[] = {0, 1, max_end_index() / 2};
+  for (uint64_t num : nums) {
+    for (uint64_t index : {num, max_end_index() - 1 - num}) {
+      SCOPED_TRACE(index);
+      std::vector<uint8_t> proof =
+          GetSerializedSubtreeInclusionProof(index, subtree_start, subtree_end);
+
+      std::vector<uint8_t> evaluated_subtree_hash;
+      evaluated_subtree_hash.resize(EVP_MD_size(hash()));
+      bool success = x509_evaluate_mtc_subtree_inclusion_proof(
+          Span(evaluated_subtree_hash), hash(), proof, index,
+          GetEntryHash(index), subtree_start, subtree_end);
+      ASSERT_TRUE(success);
+      EXPECT_EQ(Bytes(evaluated_subtree_hash), Bytes(subtree_hash));
+    }
+  }
+}
+
+TEST_F(X509MerkleTreeTest, EvaluateInclusionProofDifferentHash) {
+  InitTestMerkleTree(EVP_sha384(), 256);
+  ExhaustivelyEvaluateInclusionProofs();
+}
+
+void InclusionProofFileTest(FileTest *t) {
+  uint64_t index, start, end;
+  ASSERT_TRUE(t->GetUint64(&index, "Index"));
+  ASSERT_TRUE(t->GetUint64(&start, "Start"));
+  ASSERT_TRUE(t->GetUint64(&end, "End"));
+  std::vector<uint8_t> entry_hash, subtree_hash, proof;
+  ASSERT_TRUE(t->GetBase64(&entry_hash, "EntryHash"));
+  ASSERT_TRUE(t->GetBase64(&subtree_hash, "SubtreeHash"));
+  ASSERT_TRUE(t->GetBase64(&proof, "Proof"));
+
+  const EVP_MD *hash = EVP_sha256();
+  std::vector<uint8_t> evaluated_subtree_hash;
+  evaluated_subtree_hash.resize(EVP_MD_size(hash));
+  bool success = x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash, proof, index, entry_hash, start, end);
+  EXPECT_TRUE(success);
+  EXPECT_EQ(Bytes(evaluated_subtree_hash), Bytes(subtree_hash));
+
+  // Truncated inclusion proofs don't work.
+  const size_t original_proof_size = proof.size();
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash,
+      Span(proof).subspan(original_proof_size - 1), index, entry_hash, start,
+      end));
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash,
+      Span(proof).subspan(original_proof_size - EVP_MD_size(hash)), index,
+      entry_hash, start, end));
+
+  // Extended inclusion proofs don't work.
+  proof.resize(original_proof_size + EVP_MD_size(hash));
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash,
+      Span(proof).subspan(original_proof_size + 1), index, entry_hash, start,
+      end));
+  EXPECT_FALSE(x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash, proof, index, entry_hash, start,
+      end));
+
+  // Bitflipped inclusion proof should produce a wrong subtree hash.
+  proof.resize(original_proof_size);
+  proof[0] ^= 1;
+  success = x509_evaluate_mtc_subtree_inclusion_proof(
+      Span(evaluated_subtree_hash), hash, proof, index, entry_hash, start, end);
+  EXPECT_TRUE(success);
+  EXPECT_NE(Bytes(evaluated_subtree_hash), Bytes(subtree_hash));
+}
+
+TEST(X509MerkleTreeFileTest, LargeInclusionProofs) {
+  FileTestGTest(
+      "crypto/x509/test/mtc/large_merkle_tree_inclusion_proof_tests.txt",
+      InclusionProofFileTest);
+}
+
+#endif  // !defined (BORINGSSL_SHARED_LIBRARY)
+
+// Tests for verifying Merkle Tree Certificates.
+// See crypto/x509/test/mtc/README.txt for explanation of test data.
+class X509VerifyMTCTest : public X509VerifyTest {
+ public:
+  X509VerifyMTCTest() = default;
+
+  void SetUp() override {
+    mtc_ca_cert_ = CertFromPEM(GetTestData("crypto/x509/test/mtc/ca_cert.pem"));
+    ASSERT_TRUE(mtc_ca_cert_);
+
+    mtc_10_subtree_8_11_ =
+        CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_10_0.pem"));
+    ASSERT_TRUE(mtc_10_subtree_8_11_);
+    mtc_10_subtree_8_16_ =
+        CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_10_1.pem"));
+    ASSERT_TRUE(mtc_10_subtree_8_16_);
+
+    mtc_32_subtree_32_34_ =
+        CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_32_0.pem"));
+    ASSERT_TRUE(mtc_32_subtree_32_34_);
+
+    mtc_33_subtree_32_34_ =
+        CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_0.pem"));
+    ASSERT_TRUE(mtc_33_subtree_32_34_);
+    mtc_33_subtree_32_64_ =
+        CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_1.pem"));
+    ASSERT_TRUE(mtc_33_subtree_32_64_);
+
+    mtc_2034_subtree_1024_2036_ =
+        CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_2034_0.pem"));
+    ASSERT_TRUE(mtc_2034_subtree_1024_2036_);
+
+    mtc_2035_subtree_1024_2036_ =
+        CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_2035_0.pem"));
+    ASSERT_TRUE(mtc_2035_subtree_1024_2036_);
+  }
+
+  std::vector<X509 *> GetValidTestMTCs() const {
+    return {
+        mtc_10_subtree_8_11_.get(),        mtc_10_subtree_8_16_.get(),
+        mtc_32_subtree_32_34_.get(),       mtc_33_subtree_32_34_.get(),
+        mtc_33_subtree_32_64_.get(),       mtc_2034_subtree_1024_2036_.get(),
+        mtc_2035_subtree_1024_2036_.get(),
+    };
+  }
+
+  int VerifyMTC(X509 *mtc,
+                unsigned long flags = X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07,
+                X509 *mtc_ca = nullptr) {
+    if (!mtc_ca) {
+      mtc_ca = mtc_ca_cert_.get();
+    }
+    return Verify(
+        mtc, /*roots=*/{mtc_ca}, /*intermediates=*/{},
+        /*crls=*/{},
+        /*flags=*/flags,
+        /*configure_callback=*/
+        [mtc_ca](X509_STORE_CTX *ctx) {
+          ASSERT_TRUE(X509_STORE_CTX_set_trust(ctx, X509_TRUST_SSL_SERVER));
+          ASSERT_TRUE(
+              X509_add1_trust_object(mtc_ca, OBJ_nid2obj(NID_server_auth)));
+        },
+        /*time_posix=*/kVerifyMtcReferenceTime);
+  }
+
+ protected:
+  UniquePtr<X509> mtc_ca_cert_;
+  UniquePtr<X509> mtc_10_subtree_8_11_;
+  UniquePtr<X509> mtc_10_subtree_8_16_;
+  UniquePtr<X509> mtc_32_subtree_32_34_;
+  UniquePtr<X509> mtc_33_subtree_32_34_;
+  UniquePtr<X509> mtc_33_subtree_32_64_;
+  UniquePtr<X509> mtc_2034_subtree_1024_2036_;
+  UniquePtr<X509> mtc_2035_subtree_1024_2036_;
+};
+
+INSTANTIATE_TEST_SUITE_P(/* no prefix */, X509VerifyMTCTest, testing::Bool());
+
+TEST_P(X509VerifyMTCTest, VerifyMTC) {
+  for (X509 *mtc : GetValidTestMTCs()) {
+    EXPECT_EQ(X509_V_OK,
+              VerifyMTC(mtc, /*flags=*/X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07));
+
+    // The flag is required to enable MTC verification.
+    EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE, VerifyMTC(mtc, /*flags=*/0));
+    EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_ASN1,
+                            ASN1_R_UNKNOWN_SIGNATURE_ALGORITHM));
+    ERR_clear_error();
+
+    // X509_verify does not work directly on MTCs.
+    EXPECT_EQ(X509_verify(mtc, X509_get0_pubkey(mtc_ca_cert_.get())), 0);
+    EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_ASN1,
+                            ASN1_R_UNKNOWN_SIGNATURE_ALGORITHM));
+    ERR_clear_error();
+  }
+}
+
+TEST_P(X509VerifyMTCTest, InvalidBitFlipProof) {
+  // This cert has an inclusion proof with a bitflip that still has the right
+  // form to be processed, but fails the signature check because the
+  // CosignedMessage will be incorrect.
+  UniquePtr<X509> mtc_33_bitflip_proof =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_2.pem"));
+  ASSERT_TRUE(mtc_33_bitflip_proof);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_bitflip_proof.get()));
+}
+
+TEST_P(X509VerifyMTCTest, InvalidUnusedBit) {
+  // This cert erroneously encodes the last bit in the signatureValue as unused,
+  // making it a non-whole number of bytes.
+  UniquePtr<X509> mtc_33_unused_bit =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_3.pem"));
+  ASSERT_TRUE(mtc_33_unused_bit);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_unused_bit.get()));
+  EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_X509,
+                          X509_R_INVALID_BIT_STRING_BITS_LEFT));
+}
+
+TEST_P(X509VerifyMTCTest, InvalidCosignaturesArray) {
+  UniquePtr<X509> mtc_33_no_ca_cosignature =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_4.pem"));
+  ASSERT_TRUE(mtc_33_no_ca_cosignature);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_no_ca_cosignature.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_PROOF));
+  ERR_clear_error();
+
+  UniquePtr<X509> mtc_33_cosignatures_misordered =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_5.pem"));
+  ASSERT_TRUE(mtc_33_cosignatures_misordered);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_cosignatures_misordered.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_PROOF));
+  ERR_clear_error();
+
+  UniquePtr<X509> mtc_33_duplicate_ca_cosignatures =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_6.pem"));
+  ASSERT_TRUE(mtc_33_duplicate_ca_cosignatures);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_duplicate_ca_cosignatures.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_PROOF));
+  ERR_clear_error();
+
+  UniquePtr<X509> mtc_33_duplicate_non_ca_cosignatures =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_7.pem"));
+  ASSERT_TRUE(mtc_33_duplicate_non_ca_cosignatures);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_duplicate_non_ca_cosignatures.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_PROOF));
+  ERR_clear_error();
+}
+
+TEST_P(X509VerifyMTCTest, EmptyUnrecognizedCosignature) {
+  // This cert has, in addition to the CA cosignature, an empty cosignature from
+  // an unrecognized cosigner. The empty signature is syntactically valid, and
+  // unrecognized cosigners are ignored.
+  UniquePtr<X509> mtc_33_empty_unrecognized_cosignature =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_11.pem"));
+  ASSERT_TRUE(mtc_33_empty_unrecognized_cosignature);
+  EXPECT_EQ(X509_V_OK, VerifyMTC(mtc_33_empty_unrecognized_cosignature.get()));
+}
+
+TEST_P(X509VerifyMTCTest, UnrecognizedEntryExtensions) {
+  UniquePtr<X509> mtc_34_unrecognized_extensions =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_34_0.pem"));
+  ASSERT_TRUE(mtc_34_unrecognized_extensions);
+  EXPECT_EQ(X509_V_OK, VerifyMTC(mtc_34_unrecognized_extensions.get()));
+}
+
+TEST_P(X509VerifyMTCTest, InvalidEntryExtensions) {
+  UniquePtr<X509> mtc_35_truncated_extensions =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_35_0.pem"));
+  ASSERT_TRUE(mtc_35_truncated_extensions);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_35_truncated_extensions.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_PROOF));
+  ERR_clear_error();
+
+  UniquePtr<X509> mtc_36_duplicate_extensions =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_36_0.pem"));
+  ASSERT_TRUE(mtc_36_duplicate_extensions);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_36_duplicate_extensions.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_PROOF));
+  ERR_clear_error();
+
+  UniquePtr<X509> mtc_37_misordered_extensions =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_37_0.pem"));
+  ASSERT_TRUE(mtc_37_misordered_extensions);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_37_misordered_extensions.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_PROOF));
+}
+
+TEST_P(X509VerifyMTCTest, InvalidSerial) {
+  // This cert with index 2 is below the minSerial for the CA, which is:
+  // {"Log": 1, "Index": 8}.
+  UniquePtr<X509> mtc_2 =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_2_0.pem"));
+  ASSERT_TRUE(mtc_2);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE, VerifyMTC(mtc_2.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_PARAMETER));
+  ERR_clear_error();
+
+  // This cert with index 5036 is above the maxSerial for the CA, which is:
+  // {"Log": 1, "Index": 4096}.
+  UniquePtr<X509> mtc_5036 =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_5036_0.pem"));
+  ASSERT_TRUE(mtc_5036);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE, VerifyMTC(mtc_5036.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_PARAMETER));
+  ERR_clear_error();
+}
+
+TEST_P(X509VerifyMTCTest, MismatchedSignatureAlgorithm) {
+  // This cert erroneously has an outer sigalg for ML-DSA-44.
+  UniquePtr<X509> mtc_33_wrong_sigalg =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_8.pem"));
+  ASSERT_TRUE(mtc_33_wrong_sigalg);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_wrong_sigalg.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_UNSUPPORTED_ALGORITHM));
+  ERR_clear_error();
+
+  // This cert erroneously has an inner sigalg for ML-DSA-44.
+  UniquePtr<X509> mtc_33_wrong_tbs_sigalg =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_9.pem"));
+  ASSERT_TRUE(mtc_33_wrong_tbs_sigalg);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_wrong_tbs_sigalg.get()));
+  EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_X509,
+                          X509_R_SIGNATURE_ALGORITHM_MISMATCH));
+  ERR_clear_error();
+}
+
+TEST_P(X509VerifyMTCTest, ExperimentSignatureAlgorithm) {
+  // This cert has the experimental sigalg with OID 1.3.6.1.4.1.44363.47.0,
+  // which does not apply to draft-07.
+  UniquePtr<X509> mtc_33_experimental_sigalg =
+      CertFromPEM(GetTestData("crypto/x509/test/mtc/cert_33_10.pem"));
+  ASSERT_TRUE(mtc_33_experimental_sigalg);
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_33_experimental_sigalg.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_UNSUPPORTED_ALGORITHM));
+}
+
+// If the CA lacks the MTCCertificationAuthority extension, it is treated as a
+// standard CA and fails because standard verification does not support MTCs.
+TEST_P(X509VerifyMTCTest, InvalidMTCCANoExtension) {
+  UniquePtr<X509> bad_ca(X509_dup(mtc_ca_cert_.get()));
+  ASSERT_TRUE(bad_ca);
+  int ext_index = X509_get_ext_by_NID(
+      bad_ca.get(), NID_pe_mtcCertificationAuthority_SHA256, -1);
+  ASSERT_GE(ext_index, 0);
+  UniquePtr<X509_EXTENSION> ext(X509_delete_ext(bad_ca.get(), ext_index));
+  ASSERT_TRUE(ext);
+
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_10_subtree_8_11_.get(),
+                      /*flags=*/X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07,
+                      /*mtc_ca=*/bad_ca.get()));
+  EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_ASN1,
+                          ASN1_R_UNKNOWN_SIGNATURE_ALGORITHM));
+}
+
+// If the CA cert was encoded according to an older draft version, it is not
+// recognized as an MTC CA.
+TEST_P(X509VerifyMTCTest, InvalidMTCCADeprecatedDraftVersion) {
+  UniquePtr<X509> bad_ca = CertFromPEM(
+      GetTestData("crypto/x509/test/mtc/old_draft_version/ca_cert.pem"));
+  ASSERT_TRUE(bad_ca);
+
+  UniquePtr<X509> mtc = CertFromPEM(
+      GetTestData("crypto/x509/test/mtc/old_draft_version/cert_1_0.pem"));
+  ASSERT_TRUE(mtc);
+
+  EXPECT_EQ(X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION,
+            VerifyMTC(mtc.get(),
+                      /*flags=*/X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07,
+                      /*mtc_ca=*/bad_ca.get()));
+}
+
+// If the CA cert has the older draft version's OID, it is not recognized as an
+// MTC CA.
+TEST_P(X509VerifyMTCTest, InvalidMTCCAWrongExtensionOID) {
+  UniquePtr<X509> bad_ca = CertFromPEM(
+      GetTestData("crypto/x509/test/mtc/ca_ext_oid_wrong/ca_cert.pem"));
+  ASSERT_TRUE(bad_ca);
+
+  UniquePtr<X509> mtc = CertFromPEM(
+      GetTestData("crypto/x509/test/mtc/ca_ext_oid_wrong/cert_1_0.pem"));
+  ASSERT_TRUE(mtc);
+
+  EXPECT_EQ(X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION,
+            VerifyMTC(mtc.get(),
+                      /*flags=*/X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07,
+                      /*mtc_ca=*/bad_ca.get()));
+}
+
+// If the CA's MTCCertificationAuthority extension is not marked critical,
+// it is not recognized as an MTC CA (per draft-ietf-plants-merkle-tree-certs
+// section 5.5). MTC verification is attempted and fails.
+TEST_P(X509VerifyMTCTest, InvalidMTCCAExtensionNotCritical) {
+  UniquePtr<X509> bad_ca_non_critical(X509_dup(mtc_ca_cert_.get()));
+  ASSERT_TRUE(bad_ca_non_critical);
+  int ext_index = X509_get_ext_by_NID(
+      bad_ca_non_critical.get(), NID_pe_mtcCertificationAuthority_SHA256, -1);
+  ASSERT_GE(ext_index, 0);
+  X509_EXTENSION *ext = X509_get_ext(bad_ca_non_critical.get(), ext_index);
+  ASSERT_TRUE(ext);
+  ASSERT_TRUE(X509_EXTENSION_set_critical(ext, /*crit=*/0));
+
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc_10_subtree_8_11_.get(),
+                      /*flags=*/X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07,
+                      /*mtc_ca=*/bad_ca_non_critical.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_CA));
+}
+
+// If the CA has the MTCCertificationAuthority extension but an invalid
+// subject name (e.g. missing trust anchor ID), MTC CA initialization fails.
+TEST_P(X509VerifyMTCTest, InvalidMTCCABadSubject) {
+  UniquePtr<X509> bad_ca_no_trust_anchor(X509_dup(mtc_ca_cert_.get()));
+  ASSERT_TRUE(bad_ca_no_trust_anchor);
+
+  X509_NAME *subject = X509_get_subject_name(bad_ca_no_trust_anchor.get());
+  int name_index =
+      X509_NAME_get_index_by_NID(subject, NID_rdna_trustAnchorID, -1);
+  ASSERT_GE(name_index, 0);
+  UniquePtr<X509_NAME_ENTRY> entry(X509_NAME_delete_entry(subject, name_index));
+  ASSERT_TRUE(entry);
+  ASSERT_TRUE(X509_NAME_add_entry_by_txt(
+      subject, "CN", MBSTRING_ASC, reinterpret_cast<const uint8_t *>("Bad CA"),
+      -1, -1, 0));
+
+  // Make the leaf cert match.
+  UniquePtr<X509> mtc(X509_dup(mtc_10_subtree_8_11_.get()));
+  ASSERT_TRUE(mtc);
+  ASSERT_TRUE(X509_set_issuer_name(mtc.get(), subject));
+
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc.get(),
+                      /*flags=*/X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07,
+                      /*mtc_ca=*/bad_ca_no_trust_anchor.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_CA));
+}
+
+TEST_P(X509VerifyMTCTest, InvalidMTCCAExtensionTrailingData) {
+  UniquePtr<X509> bad_ca = CertFromPEM(
+      GetTestData("crypto/x509/test/mtc/ca_ext_trailing_data/ca_cert.pem"));
+  ASSERT_TRUE(bad_ca);
+
+  UniquePtr<X509> mtc = CertFromPEM(
+      GetTestData("crypto/x509/test/mtc/ca_ext_trailing_data/cert_1_0.pem"));
+  ASSERT_TRUE(mtc);
+
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc.get(),
+                      /*flags=*/X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07,
+                      /*mtc_ca=*/bad_ca.get()));
+  EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_ASN1, ASN1_R_DECODE_ERROR));
+}
+
+TEST_P(X509VerifyMTCTest, InvalidMTCCATrustAnchorIDTooLong) {
+  UniquePtr<X509> bad_ca = CertFromPEM(
+      GetTestData("crypto/x509/test/mtc/ca_id_too_long/ca_cert.pem"));
+  ASSERT_TRUE(bad_ca);
+
+  UniquePtr<X509> mtc = CertFromPEM(
+      GetTestData("crypto/x509/test/mtc/ca_id_too_long/cert_1_0.pem"));
+  ASSERT_TRUE(mtc);
+
+  EXPECT_EQ(X509_V_ERR_CERT_SIGNATURE_FAILURE,
+            VerifyMTC(mtc.get(),
+                      /*flags=*/X509_V_FLAG_USE_MTC_DRAFT_PLANTS_07,
+                      /*mtc_ca=*/bad_ca.get()));
+  EXPECT_TRUE(
+      ErrorEquals(ERR_get_error(), ERR_LIB_X509, X509_R_INVALID_MTC_CA));
+}
+
 }  // namespace
+BSSL_NAMESPACE_END

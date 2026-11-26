@@ -62,11 +62,11 @@
 #include <openssl/base.h>
 
 #include "cert_error_id.h"
+#include "cert_error_params.h"
 #include "parsed_certificate.h"
 
 BSSL_NAMESPACE_BEGIN
 
-class CertErrorParams;
 class CertPathErrors;
 
 // CertError represents either an error or a warning.
@@ -75,13 +75,6 @@ struct OPENSSL_EXPORT CertError {
     SEVERITY_HIGH,
     SEVERITY_WARNING,
   };
-
-  CertError();
-  CertError(Severity severity, CertErrorId id,
-            std::unique_ptr<CertErrorParams> params);
-  CertError(CertError &&other);
-  CertError &operator=(CertError &&);
-  ~CertError();
 
   // Pretty-prints the error and its parameters.
   std::string ToDebugString() const;
@@ -95,12 +88,11 @@ struct OPENSSL_EXPORT CertError {
 // add and inspect errors.
 class OPENSSL_EXPORT CertErrors {
  public:
-  CertErrors();
-  CertErrors(CertErrors &&other);
-  CertErrors &operator=(CertErrors &&);
-  ~CertErrors();
+  CertErrors() = default;
+  CertErrors(CertErrors &&other) = default;
+  CertErrors &operator=(CertErrors &&) = default;
 
-  // Adds an error/warning. |params| may be null.
+  // Adds an error/warning. `params` may be null.
   void Add(CertError::Severity severity, CertErrorId id,
            std::unique_ptr<CertErrorParams> params);
 
@@ -115,12 +107,12 @@ class OPENSSL_EXPORT CertErrors {
   // Dumps a textual representation of the errors for debugging purposes.
   std::string ToDebugString() const;
 
-  // Returns true if the error |id| was added to this CertErrors at
-  // severity |severity|
+  // Returns true if the error `id` was added to this CertErrors at
+  // severity `severity`
   bool ContainsErrorWithSeverity(CertErrorId id,
                                  CertError::Severity severity) const;
 
-  // Returns true if the error |id| was added to this CertErrors at
+  // Returns true if the error `id` was added to this CertErrors at
   // high severity.
   bool ContainsError(CertErrorId id) const;
 
@@ -137,19 +129,14 @@ class OPENSSL_EXPORT CertErrors {
 // of the certificate relative to its chain.
 class OPENSSL_EXPORT CertPathErrors {
  public:
-  CertPathErrors();
-  CertPathErrors(CertPathErrors &&other);
-  CertPathErrors &operator=(CertPathErrors &&);
-  ~CertPathErrors();
-
-  // Gets a bucket to put errors in for |cert_index|. This will lookup and
+  // Gets a bucket to put errors in for `cert_index`. This will lookup and
   // return the existing error bucket if one exists, or create a new one for the
-  // specified index. It is expected that |cert_index| is the corresponding
+  // specified index. It is expected that `cert_index` is the corresponding
   // index in a certificate chain (with 0 being the target).
   CertErrors *GetErrorsForCert(size_t cert_index);
 
   // Const version of the above, with the difference that if there is no
-  // existing bucket for |cert_index| returns nullptr rather than lazyily
+  // existing bucket for `cert_index` returns nullptr rather than lazyily
   // creating one.
   const CertErrors *GetErrorsForCert(size_t cert_index) const;
 
@@ -166,7 +153,7 @@ class OPENSSL_EXPORT CertPathErrors {
   bool ContainsAnyErrorWithSeverity(CertError::Severity severity) const;
 
   // If the path contains only one unique high severity error, return the
-  // error id and sets |out_depth| to the depth at which the error was
+  // error id and sets `out_depth` to the depth at which the error was
   // first seen. A depth of -1 means the error is not associated with
   // a single certificate of the path.
   std::optional<CertErrorId> FindSingleHighSeverityError(

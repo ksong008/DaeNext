@@ -34,19 +34,19 @@ class Input;
 // diagnosing the error.
 class OPENSSL_EXPORT CertErrorParams {
  public:
-  CertErrorParams();
+  CertErrorParams() = default;
 
   CertErrorParams(const CertErrorParams &) = delete;
   CertErrorParams &operator=(const CertErrorParams &) = delete;
 
-  virtual ~CertErrorParams();
+  virtual ~CertErrorParams() = default;
 
   // Creates a representation of this parameter as a string, which may be
   // used for pretty printing the error.
   virtual std::string ToDebugString() const = 0;
 };
 
-// Creates a parameter object that holds a copy of |der|, and names it |name|
+// Creates a parameter object that holds a copy of `der`, and names it `name`
 // in debug string outputs.
 OPENSSL_EXPORT std::unique_ptr<CertErrorParams> CreateCertErrorParams1Der(
     const char *name, der::Input der);
@@ -55,7 +55,7 @@ OPENSSL_EXPORT std::unique_ptr<CertErrorParams> CreateCertErrorParams1Der(
 OPENSSL_EXPORT std::unique_ptr<CertErrorParams> CreateCertErrorParams2Der(
     const char *name1, der::Input der1, const char *name2, der::Input der2);
 
-// Creates a parameter object that holds a single size_t value. |name| is used
+// Creates a parameter object that holds a single size_t value. `name` is used
 // when pretty-printing the parameters.
 OPENSSL_EXPORT std::unique_ptr<CertErrorParams> CreateCertErrorParams1SizeT(
     const char *name, size_t value);

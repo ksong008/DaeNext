@@ -14,9 +14,11 @@
 
 #include <openssl/rand.h>
 
+// IWYU pragma: begin_keep
 #include "../bcm_support.h"
 #include "../internal.h"
 #include "internal.h"
+// IWYU pragma: end_keep
 
 #if defined(OPENSSL_RAND_WINDOWS)
 
@@ -24,6 +26,8 @@
 #include <stdlib.h>
 
 #include <windows.h>
+
+using namespace bssl;
 
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_APP) && \
     !WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
@@ -34,9 +38,9 @@ OPENSSL_MSVC_PRAGMA(comment(lib, "bcrypt.lib"))
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_APP) && \
     !WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
 
-void CRYPTO_init_sysrand(void) {}
+void bssl::CRYPTO_init_sysrand() {}
 
-void CRYPTO_sysrand(uint8_t *out, size_t requested) {
+void bssl::CRYPTO_sysrand(uint8_t *out, size_t requested) {
   while (requested > 0) {
     ULONG output_bytes_this_pass = ULONG_MAX;
     if (requested < output_bytes_this_pass) {
@@ -54,11 +58,13 @@ void CRYPTO_sysrand(uint8_t *out, size_t requested) {
 
 #else
 
-// See: https://learn.microsoft.com/en-us/windows/win32/seccng/processprng
-typedef BOOL (WINAPI *ProcessPrngFunction)(PBYTE pbData, SIZE_T cbData);
-static ProcessPrngFunction g_processprng_fn = nullptr;
+namespace {
 
-static void init_processprng(void) {
+// See: https://learn.microsoft.com/en-us/windows/win32/seccng/processprng
+typedef BOOL(WINAPI *ProcessPrngFunction)(PBYTE pbData, SIZE_T cbData);
+ProcessPrngFunction g_processprng_fn = nullptr;
+
+void init_processprng() {
   HMODULE hmod = LoadLibraryW(L"bcryptprimitives");
   if (hmod == nullptr) {
     abort();
@@ -69,12 +75,14 @@ static void init_processprng(void) {
   }
 }
 
-void CRYPTO_init_sysrand(void) {
+}  // namespace
+
+void bssl::CRYPTO_init_sysrand() {
   static CRYPTO_once_t once = CRYPTO_ONCE_INIT;
   CRYPTO_once(&once, init_processprng);
 }
 
-void CRYPTO_sysrand(uint8_t *out, size_t requested) {
+void bssl::CRYPTO_sysrand(uint8_t *out, size_t requested) {
   CRYPTO_init_sysrand();
   // On non-UWP configurations, use ProcessPrng instead of BCryptGenRandom
   // to avoid accessing resources that may be unavailable inside the
@@ -85,9 +93,5 @@ void CRYPTO_sysrand(uint8_t *out, size_t requested) {
 }
 
 #endif  // WINAPI_PARTITION_APP && !WINAPI_PARTITION_DESKTOP
-
-void CRYPTO_sysrand_for_seed(uint8_t *out, size_t requested) {
-  CRYPTO_sysrand(out, requested);
-}
 
 #endif  // OPENSSL_RAND_WINDOWS

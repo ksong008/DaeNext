@@ -34,15 +34,15 @@ import (
 	"boringssl.googlesource.com/boringssl.git/util/fipstools/fipscommon"
 )
 
-func do(outPath, oInput string, arInput string) error {
+func do(outPath, oInput, arInput, hashInput string, ignoreMissing bool) error {
 	var objectBytes []byte
 	var isStatic bool
 	var perm os.FileMode
 
-	if len(arInput) > 0 {
+	if arInput != "" {
 		isStatic = true
 
-		if len(oInput) > 0 {
+		if oInput != "" {
 			return fmt.Errorf("-in-archive and -in-object are mutually exclusive")
 		}
 
@@ -70,7 +70,7 @@ func do(outPath, oInput string, arInput string) error {
 		for _, contents := range ar {
 			objectBytes = contents
 		}
-	} else if len(oInput) > 0 {
+	} else if oInput != "" {
 		fi, err := os.Stat(oInput)
 		if err != nil {
 			return err
@@ -85,8 +85,22 @@ func do(outPath, oInput string, arInput string) error {
 		return fmt.Errorf("exactly one of -in-archive or -in-object is required")
 	}
 
-	object, err := elf.NewFile(bytes.NewReader(objectBytes))
+	// Hash a different object if specified.
+	var err error
+	hashBytes := objectBytes
+	if hashInput != "" {
+		hashBytes, err = os.ReadFile(hashInput)
+		if err != nil {
+			return err
+		}
+		isStatic = strings.HasSuffix(hashInput, ".o")
+	}
+
+	object, err := elf.NewFile(bytes.NewReader(hashBytes))
 	if err != nil {
+		if ignoreMissing {
+			return os.WriteFile(outPath, objectBytes, perm&0777)
+		}
 		return errors.New("failed to parse object: " + err.Error())
 	}
 
@@ -106,6 +120,9 @@ func do(outPath, oInput string, arInput string) error {
 	}
 
 	if textSection == nil {
+		if ignoreMissing {
+			return os.WriteFile(outPath, objectBytes, perm&0777)
+		}
 		return errors.New("failed to find .text section in object")
 	}
 
@@ -113,8 +130,16 @@ func do(outPath, oInput string, arInput string) error {
 
 	var textStart, textEnd, rodataStart, rodataEnd *uint64
 
+	// Look for symbols in either .symtab or .dynsym. Some build configurations
+	// strip way .symtab.
 	symbols, err := object.Symbols()
+	if err == elf.ErrNoSymbols {
+		symbols, err = object.DynamicSymbols()
+	}
 	if err != nil {
+		if ignoreMissing {
+			return os.WriteFile(outPath, objectBytes, perm&0777)
+		}
 		return errors.New("failed to parse symbols: " + err.Error())
 	}
 
@@ -168,11 +193,10 @@ func do(outPath, oInput string, arInput string) error {
 	}
 
 	if textStart == nil || textEnd == nil {
+		if ignoreMissing {
+			return os.WriteFile(outPath, objectBytes, perm&0777)
+		}
 		return errors.New("could not find .text module boundaries in object")
-	}
-
-	if (rodataStart == nil) != (rodataSection == nil) {
-		return errors.New("rodata start marker inconsistent with rodata section presence")
 	}
 
 	if (rodataStart != nil) != (rodataEnd != nil) {
@@ -183,7 +207,10 @@ func do(outPath, oInput string, arInput string) error {
 		return fmt.Errorf("invalid module .text boundaries: start: %x, end: %x, max: %x", *textStart, *textEnd, max)
 	}
 
-	if rodataSection != nil {
+	if rodataStart != nil {
+		if rodataSection == nil {
+			return errors.New("rodata start marker inconsistent with rodata section presence")
+		}
 		if max := rodataSection.Size; *rodataStart > max || *rodataStart > *rodataEnd || *rodataEnd > max {
 			return fmt.Errorf("invalid module .rodata boundaries: start: %x, end: %x, max: %x", *rodataStart, *rodataEnd, max)
 		}
@@ -202,7 +229,7 @@ func do(outPath, oInput string, arInput string) error {
 
 	// Maybe extract the module's read-only data too
 	var moduleROData []byte
-	if rodataSection != nil {
+	if rodataStart != nil {
 		rodata := rodataSection.Open()
 		if _, err := rodata.Seek(int64(*rodataStart), 0); err != nil {
 			return errors.New("failed to seek to module start in .rodata: " + err.Error())
@@ -235,10 +262,13 @@ func do(outPath, oInput string, arInput string) error {
 
 	offset := bytes.Index(objectBytes, fipscommon.UninitHashValue[:])
 	if offset < 0 {
+		if ignoreMissing {
+			return os.WriteFile(outPath, objectBytes, perm&0777)
+		}
 		return errors.New("did not find uninitialised hash value in object file")
 	}
 
-	if bytes.Index(objectBytes[offset+1:], fipscommon.UninitHashValue[:]) >= 0 {
+	if bytes.Contains(objectBytes[offset+1:], fipscommon.UninitHashValue[:]) {
 		return errors.New("found two occurrences of uninitialised hash value in object file")
 	}
 
@@ -253,11 +283,14 @@ func do(outPath, oInput string, arInput string) error {
 func main() {
 	arInput := flag.String("in-archive", "", "Path to a .a file")
 	oInput := flag.String("in-object", "", "Path to a .o file")
+	hashInput := flag.String("in-hash", "", "Path to an input object file to hash instead")
 	outPath := flag.String("o", "", "Path to output object")
+	var ignoreMissing bool
+	flag.BoolVar(&ignoreMissing, "ignore-missing-symbols", false, "If true, treat non-ELF inputs, missing BCM symbols, or missing uninitialized hash values as a no-op.")
 
 	flag.Parse()
 
-	if err := do(*outPath, *oInput, *arInput); err != nil {
+	if err := do(*outPath, *oInput, *arInput, *hashInput, ignoreMissing); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
 	}

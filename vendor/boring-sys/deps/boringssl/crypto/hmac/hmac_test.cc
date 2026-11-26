@@ -26,7 +26,10 @@
 #include "../test/wycheproof_util.h"
 
 
-static const EVP_MD *GetDigest(const std::string &name) {
+BSSL_NAMESPACE_BEGIN
+namespace {
+
+const EVP_MD *GetDigest(const std::string &name) {
   if (name == "MD5") {
     return EVP_md5();
   } else if (name == "SHA1") {
@@ -87,7 +90,7 @@ TEST(HMACTest, TestVectors) {
   });
 }
 
-static void RunWycheproofTest(const char *path, const EVP_MD *md) {
+void RunWycheproofTest(const char *path, const EVP_MD *md) {
   SCOPED_TRACE(path);
   FileTestGTest(path, [&](FileTest *t) {
     t->IgnoreInstruction("keySize");
@@ -109,7 +112,7 @@ static void RunWycheproofTest(const char *path, const EVP_MD *md) {
     unsigned out_len;
     ASSERT_TRUE(HMAC(md, key.data(), key.size(), msg.data(), msg.size(), out,
                      &out_len));
-    // Wycheproof tests truncate the tags down to |tagSize|.
+    // Wycheproof tests truncate the tags down to `tagSize`.
     ASSERT_LE(tag.size(), out_len);
     EXPECT_EQ(Bytes(out, tag.size()), Bytes(tag));
   });
@@ -139,3 +142,6 @@ TEST(HMACTest, WycheproofSHA512) {
   RunWycheproofTest("third_party/wycheproof_testvectors/hmac_sha512_test.txt",
                     EVP_sha512());
 }
+
+}  // namespace
+BSSL_NAMESPACE_END

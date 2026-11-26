@@ -22,6 +22,8 @@
 #include "internal.h"
 
 
+using namespace bssl;
+
 ASN1_SEQUENCE(OTHERNAME) = {
     ASN1_SIMPLE(OTHERNAME, type_id, ASN1_OBJECT),
     // Maybe have a true ANY DEFINED BY later
@@ -38,6 +40,8 @@ ASN1_SEQUENCE(EDIPARTYNAME) = {
 
 IMPLEMENT_ASN1_ALLOC_FUNCTIONS(EDIPARTYNAME)
 
+BSSL_NAMESPACE_BEGIN
+
 ASN1_CHOICE(GENERAL_NAME) = {
     ASN1_IMP(GENERAL_NAME, d.otherName, OTHERNAME, GEN_OTHERNAME),
     ASN1_IMP(GENERAL_NAME, d.rfc822Name, ASN1_IA5STRING, GEN_EMAIL),
@@ -53,27 +57,36 @@ ASN1_CHOICE(GENERAL_NAME) = {
     ASN1_IMP(GENERAL_NAME, d.registeredID, ASN1_OBJECT, GEN_RID),
 } ASN1_CHOICE_END(GENERAL_NAME)
 
+BSSL_NAMESPACE_END
+
 IMPLEMENT_ASN1_FUNCTIONS_const(GENERAL_NAME)
+
+BSSL_NAMESPACE_BEGIN
 
 ASN1_ITEM_TEMPLATE(GENERAL_NAMES) = ASN1_EX_TEMPLATE_TYPE(ASN1_TFLG_SEQUENCE_OF,
                                                           0, GeneralNames,
                                                           GENERAL_NAME)
 ASN1_ITEM_TEMPLATE_END(GENERAL_NAMES)
 
+BSSL_NAMESPACE_END
+
 IMPLEMENT_ASN1_FUNCTIONS_const(GENERAL_NAMES)
 
 IMPLEMENT_ASN1_DUP_FUNCTION_const(GENERAL_NAME)
 
-static int edipartyname_cmp(const EDIPARTYNAME *a, const EDIPARTYNAME *b) {
-  // nameAssigner is optional and may be NULL.
-  if (a->nameAssigner == nullptr) {
-    if (b->nameAssigner != nullptr) {
-      return -1;
+namespace {
+
+int edipartyname_cmp(const EDIPARTYNAME *a, const EDIPARTYNAME *b) {
+  // nameAssigner is optional and may be NULL. An absent nameAssigner sorts
+  // before a present one.
+  if (a->nameAssigner == nullptr || b->nameAssigner == nullptr) {
+    if (a->nameAssigner != b->nameAssigner) {
+      return a->nameAssigner == nullptr ? -1 : 1;
     }
   } else {
-    if (b->nameAssigner == nullptr ||
-        ASN1_STRING_cmp(a->nameAssigner, b->nameAssigner) != 0) {
-      return -1;
+    int ret = ASN1_STRING_cmp(a->nameAssigner, b->nameAssigner);
+    if (ret != 0) {
+      return ret;
     }
   }
 
@@ -81,26 +94,21 @@ static int edipartyname_cmp(const EDIPARTYNAME *a, const EDIPARTYNAME *b) {
   return ASN1_STRING_cmp(a->partyName, b->partyName);
 }
 
-// Returns 0 if they are equal, != 0 otherwise.
-static int othername_cmp(const OTHERNAME *a, const OTHERNAME *b) {
-  int result = -1;
-
-  if (!a || !b) {
-    return -1;
-  }
+// a and b are guaranteed to be non-NULL.
+int othername_cmp(const OTHERNAME *a, const OTHERNAME *b) {
   // Check their type first.
-  if ((result = OBJ_cmp(a->type_id, b->type_id)) != 0) {
-    return result;
+  int ret = OBJ_cmp(a->type_id, b->type_id);
+  if (ret != 0) {
+    return ret;
   }
-  // Check the value.
-  result = ASN1_TYPE_cmp(a->value, b->value);
-  return result;
+  return ASN1_TYPE_cmp(a->value, b->value);
 }
 
-// Returns 0 if they are equal, != 0 otherwise.
-int GENERAL_NAME_cmp(const GENERAL_NAME *a, const GENERAL_NAME *b) {
-  if (!a || !b || a->type != b->type) {
-    return -1;
+}  // namespace
+
+int bssl::GENERAL_NAME_cmp(const GENERAL_NAME *a, const GENERAL_NAME *b) {
+  if (a->type != b->type) {
+    return a->type < b->type ? -1 : 1;
   }
 
   switch (a->type) {
@@ -128,7 +136,8 @@ int GENERAL_NAME_cmp(const GENERAL_NAME *a, const GENERAL_NAME *b) {
       return OBJ_cmp(a->d.rid, b->d.rid);
   }
 
-  return -1;
+  // Unreachable: `type` is always one of the CHOICE arms above.
+  abort();
 }
 
 void GENERAL_NAME_set0_value(GENERAL_NAME *a, int type, void *value) {
