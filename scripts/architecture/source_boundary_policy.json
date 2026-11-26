@@ -46,7 +46,7 @@
       "tests": 172
     },
     "dae-outbound-quic": {
-      "production": 5898,
+      "production": 5939,
       "tests": 740
     },
     "dae-outbound-stream": {
@@ -55,11 +55,11 @@
     },
     "dae-resident-dataplane": {
       "production": 33363,
-      "tests": 36671
+      "tests": 36696
     },
     "dae-resident-transport": {
-      "production": 37249,
-      "tests": 8874
+      "production": 37288,
+      "tests": 9837
     },
     "dae-resident-tcp": {
       "production": 14295,

@@ -1,6 +1,46 @@
 use super::*;
 use foreign_types::ForeignTypeRef;
 
+const CHROME_132_FINGERPRINT: &str = "chrome_132";
+const CHROME_152_FINGERPRINT: &str = "chrome_152";
+const FIREFOX_150_FINGERPRINT: &str = "firefox_150";
+const FIREFOX_150_TLS12_CIPHERS: &str = concat!(
+    "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:",
+    "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:",
+    "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:",
+    "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:",
+    "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:",
+    "TLS_RSA_WITH_AES_128_GCM_SHA256:TLS_RSA_WITH_AES_256_GCM_SHA384:",
+    "TLS_RSA_WITH_AES_128_CBC_SHA:TLS_RSA_WITH_AES_256_CBC_SHA",
+);
+const FIREFOX_150_SIGNATURES: &str = concat!(
+    "ecdsa_secp256r1_sha256:ecdsa_secp384r1_sha384:ecdsa_secp521r1_sha512:",
+    "rsa_pss_rsae_sha256:rsa_pss_rsae_sha384:rsa_pss_rsae_sha512:",
+    "rsa_pkcs1_sha256:rsa_pkcs1_sha384:rsa_pkcs1_sha512:ecdsa_sha1:rsa_pkcs1_sha1",
+);
+
+// Chrome 132 TLS options from wreq-util v0.2.1. Keep BoringSSL's native
+// extension permutation, resumption and TLS 1.3 cipher selection.
+const CHROME_132_TLS12_CIPHERS: &str = concat!(
+    "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:",
+    "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:",
+    "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:",
+    "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:",
+    "TLS_RSA_WITH_AES_128_GCM_SHA256:TLS_RSA_WITH_AES_256_GCM_SHA384:",
+    "TLS_RSA_WITH_AES_128_CBC_SHA:TLS_RSA_WITH_AES_256_CBC_SHA",
+);
+const CHROME_132_SIGNATURES: &str = concat!(
+    "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:",
+    "ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:",
+    "rsa_pss_rsae_sha512:rsa_pkcs1_sha512",
+);
+const CHROME_152_SIGNATURES: &str = concat!(
+    "mldsa44:mldsa65:mldsa87:",
+    "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:",
+    "ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:",
+    "rsa_pss_rsae_sha512:rsa_pkcs1_sha512",
+);
+
 unsafe extern "C" {
     fn DAE_SSL_set1_utls_template(
         ssl: *mut boring_sys::SSL,
@@ -42,6 +82,39 @@ pub(super) fn configure_utls_template_boring_context(
     builder: &mut boring::ssl::SslConnectorBuilder,
     fingerprint: &ResidentUtlsFingerprintPlan,
 ) -> Result<(), String> {
+    let browser_options = match fingerprint.name.as_str() {
+        CHROME_132_FINGERPRINT | CHROME_152_FINGERPRINT => Some((
+            "X25519MLKEM768:X25519:P-256:P-384",
+            CHROME_132_TLS12_CIPHERS,
+            if fingerprint.name == CHROME_152_FINGERPRINT {
+                CHROME_152_SIGNATURES
+            } else {
+                CHROME_132_SIGNATURES
+            },
+        )),
+        FIREFOX_150_FINGERPRINT => Some((
+            "X25519MLKEM768:X25519:P-256:P-384:P-521",
+            FIREFOX_150_TLS12_CIPHERS,
+            FIREFOX_150_SIGNATURES,
+        )),
+        _ => None,
+    };
+    if let Some((groups, ciphers, signatures)) = browser_options {
+        builder
+            .set_curves_list(groups)
+            .and_then(|()| builder.set_strict_cipher_list(ciphers))
+            .and_then(|()| builder.set_sigalgs_list(signatures))
+            .map_err(|err| format!("configure BoringSSL profile {}: {err}", fingerprint.name))?;
+        builder.enable_ocsp_stapling();
+        builder.enable_signed_cert_timestamps();
+        if fingerprint.name == CHROME_152_FINGERPRINT {
+            unsafe {
+                boring_sys::SSL_CTX_set_grease_sigalgs_enabled(builder.as_ptr(), 1);
+                boring_sys::DAE_SSL_CTX_enable_zero_server_padding(builder.as_ptr());
+            }
+        }
+        return configure_brotli_certificate_compression(builder);
+    }
     let Some(template) = utls_template_for_plan(fingerprint) else {
         return Ok(());
     };
@@ -52,11 +125,17 @@ pub(super) fn configure_utls_template_boring_context(
         builder.enable_signed_cert_timestamps();
     }
     if template.capabilities.cert_compression_brotli {
-        builder
-            .add_certificate_compression_algorithm(ResidentBrotliCertCompressor)
-            .map_err(|err| format!("enable VLESS BoringSSL brotli cert compression: {err}"))?;
+        configure_brotli_certificate_compression(builder)?;
     }
     Ok(())
+}
+
+fn configure_brotli_certificate_compression(
+    builder: &mut boring::ssl::SslConnectorBuilder,
+) -> Result<(), String> {
+    builder
+        .add_certificate_compression_algorithm(ResidentBrotliCertCompressor)
+        .map_err(|err| format!("enable BoringSSL brotli cert compression: {err}"))
 }
 
 pub(super) fn configure_utls_template_boring_ssl(
@@ -69,6 +148,7 @@ pub(super) fn configure_utls_template_boring_ssl(
     configure_utls_template_boring_ssl_for_fingerprint(
         ssl,
         fingerprint,
+        &proxy.alpn,
         proxy.reality.is_some()
             || proxy.execution_plan().protocol == ResidentProtocolShape::VlessVision,
         "VLESS",
@@ -85,6 +165,7 @@ pub(super) fn configure_utls_template_boring_ssl_for_xhttp_endpoint(
     configure_utls_template_boring_ssl_for_fingerprint(
         ssl,
         fingerprint,
+        &endpoint.alpn,
         endpoint.reality.is_some(),
         "xHTTP",
     )
@@ -93,9 +174,38 @@ pub(super) fn configure_utls_template_boring_ssl_for_xhttp_endpoint(
 fn configure_utls_template_boring_ssl_for_fingerprint(
     ssl: &mut SslRef,
     fingerprint: &ResidentUtlsFingerprintPlan,
+    alpn: &[String],
     tls13_only: bool,
     label: &str,
 ) -> Result<(), String> {
+    if matches!(
+        fingerprint.name.as_str(),
+        CHROME_132_FINGERPRINT | CHROME_152_FINGERPRINT
+    ) {
+        ssl.set_enable_ech_grease(true);
+        if alpn.iter().any(|protocol| protocol == "h2") {
+            configure_alps_h2(ssl, true)?;
+        }
+        return Ok(());
+    }
+    if fingerprint.name == FIREFOX_150_FINGERPRINT {
+        ssl.set_enable_ech_grease(true);
+        let groups = [
+            boring_sys::SSL_GROUP_X25519_MLKEM768 as u16,
+            boring_sys::SSL_GROUP_X25519 as u16,
+            boring_sys::SSL_GROUP_SECP256R1 as u16,
+        ];
+        // The group list is installed on the connector before configuring the shares.
+        if unsafe {
+            boring_sys::SSL_set1_client_key_shares(ssl.as_ptr(), groups.as_ptr(), groups.len())
+        } != 1
+        {
+            return Err(format!(
+                "configure {label} BoringSSL Firefox 150 key shares"
+            ));
+        }
+        return Ok(());
+    }
     let Some(template) = utls_template_for_plan(fingerprint) else {
         return Ok(());
     };
@@ -145,7 +255,7 @@ fn configure_utls_template_boring_ssl_for_fingerprint(
     }
 
     if template.capabilities.alps_old_h2 {
-        configure_old_alps_h2(ssl)?;
+        configure_alps_h2(ssl, false)?;
     }
 
     Ok(())
@@ -161,16 +271,16 @@ fn utls_template_for_plan(
         })
 }
 
-fn configure_old_alps_h2(ssl: &mut SslRef) -> Result<(), String> {
+fn configure_alps_h2(ssl: &mut SslRef, new_codepoint: bool) -> Result<(), String> {
     const H2: &[u8] = b"h2";
     unsafe {
-        SSL_set_alps_use_new_codepoint(ssl.as_ptr(), 0);
+        SSL_set_alps_use_new_codepoint(ssl.as_ptr(), i32::from(new_codepoint));
         let ok =
             SSL_add_application_settings(ssl.as_ptr(), H2.as_ptr(), H2.len(), std::ptr::null(), 0);
         if ok == 1 {
             Ok(())
         } else {
-            Err("configure VLESS BoringSSL old ALPS h2 settings".to_owned())
+            Err("configure BoringSSL ALPS h2 settings".to_owned())
         }
     }
 }
@@ -287,4 +397,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod capture_tests;
+pub(super) mod capture_tests;

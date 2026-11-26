@@ -1,60 +1,27 @@
-use std::sync::Arc;
+use dae_outbound_quic::boring_quic::{BoringQuicClientHelloProfile, BoringQuicClientPolicy};
 
-use super::h3_transport::xhttp_h3_transport_config;
 use super::*;
 
-#[cfg(test)]
-pub fn build_chrome_boring_xhttp_h3_client_config(
+pub(super) fn xhttp_h3_boring_policy(
     endpoint: &ResidentXhttpEndpointPlan,
-    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
-) -> Result<quinn::ClientConfig, String> {
-    let policy = chrome_boring_xhttp_h3_policy(endpoint)?;
-    dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache(
-        &policy,
-        Arc::new(xhttp_h3_transport_config(endpoint)?),
-        session_cache,
-    )
-    .map_err(|err| format!("build xHTTP H3 Chrome BoringSSL QUIC config: {err}"))
-}
-
-pub fn build_chrome_boring_xhttp_h3_client_config_with_system_ca(
-    endpoint: &ResidentXhttpEndpointPlan,
-    system_ca: Option<Arc<dae_outbound_quic::system_ca::SystemCaSnapshot>>,
-    session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
-) -> Result<quinn::ClientConfig, String> {
-    let policy = chrome_boring_xhttp_h3_policy(endpoint)?;
-    dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
-        &policy,
-        Arc::new(xhttp_h3_transport_config(endpoint)?),
-        session_cache,
-        system_ca,
-    )
-    .map_err(|err| format!("build xHTTP H3 Chrome BoringSSL QUIC config: {err}"))
-}
-
-#[cfg(test)]
-fn build_chrome_boring_xhttp_h3_crypto(
-    endpoint: &ResidentXhttpEndpointPlan,
-    _system_ca: Option<&dae_outbound_quic::system_ca::SystemCaSnapshot>,
-) -> Result<quinn_boring::ClientConfig, String> {
-    let policy = chrome_boring_xhttp_h3_policy(endpoint)?;
-    dae_outbound_quic::boring_quic::build_boring_quic_client_crypto(&policy)
-        .map_err(|err| format!("build xHTTP H3 Chrome BoringSSL QUIC crypto: {err}"))
-}
-
-fn chrome_boring_xhttp_h3_policy(
-    endpoint: &ResidentXhttpEndpointPlan,
-) -> Result<dae_outbound_quic::boring_quic::BoringQuicClientPolicy, String> {
-    dae_outbound_quic::boring_quic::BoringQuicClientPolicy::new([b"h3".as_slice()])
+    tls_provider: ResidentXhttpQuicTlsProvider,
+) -> Result<BoringQuicClientPolicy, String> {
+    let profile = match tls_provider {
+        ResidentXhttpQuicTlsProvider::Boring => BoringQuicClientHelloProfile::Generic,
+        ResidentXhttpQuicTlsProvider::ChromeBoring => BoringQuicClientHelloProfile::Chrome,
+        ResidentXhttpQuicTlsProvider::ChromeBoringHybrid => {
+            BoringQuicClientHelloProfile::ChromeHybrid
+        }
+        ResidentXhttpQuicTlsProvider::Chrome152 => BoringQuicClientHelloProfile::Chrome152,
+    };
+    BoringQuicClientPolicy::new([b"h3".as_slice()])
         .map(|policy| {
             policy
                 .allow_insecure(endpoint.allow_insecure)
                 .zero_rtt(false)
-                .client_hello_profile(
-                    dae_outbound_quic::boring_quic::BoringQuicClientHelloProfile::Chrome,
-                )
+                .client_hello_profile(profile)
         })
-        .map_err(|err| format!("build xHTTP H3 Chrome BoringSSL QUIC policy: {err}"))
+        .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC policy: {err}"))
 }
 
 #[cfg(test)]

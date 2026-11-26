@@ -49,6 +49,72 @@ fn binding(
 }
 
 #[tokio::test]
+async fn grpc_h2_emits_profile_receive_windows_and_pseudo_header_order() {
+    use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let owner = owner();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let binding = binding(&owner, listener.local_addr().unwrap());
+    let identity = self_signed_tls_identity(&["localhost"]).unwrap();
+    let acceptor = tls13_acceptor(&identity, &[b"h2".to_vec()]).unwrap();
+    register_h2_carrier_generation(&owner).unwrap();
+
+    time::timeout(Duration::from_secs(5), async {
+        let (_, (send, response, lease)) = tokio::join!(
+            async {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut tls = tokio_boring::accept(&acceptor, socket).await.unwrap();
+                let mut preface = [0; 24];
+                tls.read_exact(&mut preface).await.unwrap();
+                assert_eq!(&preface, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+                let mut settings = [0; 15];
+                tls.read_exact(&mut settings).await.unwrap();
+                assert_eq!(settings[..11], [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 4]);
+                assert_eq!(
+                    settings[11..],
+                    owner.resources.stream_receive_window_bytes().to_be_bytes()
+                );
+                let mut connection = [0; 13];
+                tls.read_exact(&mut connection).await.unwrap();
+                assert_eq!(connection[..9], [0, 0, 4, 8, 0, 0, 0, 0, 0]);
+                assert_eq!(
+                    connection[9..],
+                    (owner.resources.connection_receive_window_bytes() - 65_535).to_be_bytes()
+                );
+                tls.write_all(&[0, 0, 0, 4, 0, 0, 0, 0, 0]).await.unwrap();
+                loop {
+                    let mut header = [0; 9];
+                    tls.read_exact(&mut header).await.unwrap();
+                    let length = u32::from_be_bytes([0, header[0], header[1], header[2]]) as usize;
+                    let mut payload = vec![0; length];
+                    tls.read_exact(&mut payload).await.unwrap();
+                    if header[3] == 1 {
+                        assert_eq!(header[4] & 0x2c, 4, "complete unpadded HEADERS");
+                        // HPACK static-table references for POST, https, and :authority.
+                        assert_eq!(payload[..3], [0x83, 0x87, 0x41]);
+                        let authority_len = usize::from(payload[3] & 0x7f);
+                        assert!(authority_len < 127);
+                        assert_eq!(payload[4 + authority_len], 0x04, ":path follows :authority");
+                        break;
+                    }
+                }
+            },
+            async {
+                crate::grpc_common::open_grpc_h2_stream(&binding, &[])
+                    .await
+                    .unwrap()
+            },
+        );
+        drop((send, response, lease));
+    })
+    .await
+    .unwrap();
+    unregister_h2_carrier_generation(&owner);
+    cleanup_h2_carrier_owner(&owner).await;
+}
+
+#[tokio::test]
 async fn registry_pin_serializes_prune_with_acquisition_and_handoff() {
     let owner = owner();
     let first_key = key(&owner, 1);

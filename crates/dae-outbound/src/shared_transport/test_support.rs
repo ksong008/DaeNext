@@ -164,6 +164,19 @@ pub fn signed_tls_certificate_chain(
     server_name: &str,
     validity: TestCertificateValidity,
 ) -> Result<TestTlsCertificateChain, OutboundError> {
+    let leaf_key = PKey::from_rsa(
+        Rsa::generate(2048)
+            .map_err(|error| test_tls_error(format!("generate leaf RSA key: {error}")))?,
+    )
+    .map_err(|error| test_tls_error(format!("create leaf private key: {error}")))?;
+    signed_tls_certificate_chain_with_leaf_key(server_name, validity, leaf_key)
+}
+
+pub fn signed_tls_certificate_chain_with_leaf_key(
+    server_name: &str,
+    validity: TestCertificateValidity,
+    leaf_key: PKey<Private>,
+) -> Result<TestTlsCertificateChain, OutboundError> {
     if server_name.is_empty() {
         return Err(test_tls_error("test TLS chain requires a server name"));
     }
@@ -213,11 +226,6 @@ pub fn signed_tls_certificate_chain(
         .map_err(|error| test_tls_error(format!("sign root certificate: {error}")))?;
     let root_certificate = root.build();
 
-    let leaf_key = PKey::from_rsa(
-        Rsa::generate(2048)
-            .map_err(|error| test_tls_error(format!("generate leaf RSA key: {error}")))?,
-    )
-    .map_err(|error| test_tls_error(format!("create leaf private key: {error}")))?;
     let leaf_name = certificate_name(server_name)?;
     let mut leaf = X509::builder()
         .map_err(|error| test_tls_error(format!("create leaf certificate builder: {error}")))?;

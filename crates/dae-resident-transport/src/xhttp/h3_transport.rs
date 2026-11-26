@@ -1,4 +1,4 @@
-use super::h3_boring_tls::build_chrome_boring_xhttp_h3_client_config_with_system_ca;
+use super::h3_boring_tls::xhttp_h3_boring_policy;
 use super::request::{xhttp_h3_packet_up_request, xhttp_h3_request, xhttp_session_path_suffix};
 use super::xmux::{
     XhttpXmuxClientLease, XhttpXmuxKey, XhttpXmuxRequestHandle, note_xhttp_xmux_request,
@@ -215,7 +215,11 @@ async fn open_xhttp_h3_connection(
     let remaining = deadline
         .remaining_at(Instant::now())
         .ok_or_else(|| "create xHTTP H3 client deadline elapsed".to_owned())?;
-    let (mut driver, client) = match time::timeout(remaining, h3::client::new(h3_connection)).await
+    let (mut driver, client) = match time::timeout(
+        remaining,
+        xhttp_h3_client_builder(tls_provider).build(h3_connection),
+    )
+    .await
     {
         Err(_) => {
             quic_endpoint.mark_failed();
@@ -255,6 +259,16 @@ async fn open_xhttp_h3_connection(
         client,
         driver_task: Some(driver_task),
     })
+}
+
+pub(super) fn xhttp_h3_client_builder(
+    tls_provider: ResidentXhttpQuicTlsProvider,
+) -> h3::client::Builder {
+    let mut builder = h3::client::builder();
+    if tls_provider == ResidentXhttpQuicTlsProvider::Chrome152 {
+        builder.max_field_section_size(256 * 1024);
+    }
+    builder
 }
 
 fn xhttp_h3_transport_identity(
@@ -694,7 +708,7 @@ mod owner_live_tests;
 mod packet_up_tests;
 
 #[cfg(test)]
-fn build_xhttp_h3_client_config(
+pub(super) fn build_xhttp_h3_client_config(
     endpoint: &ResidentXhttpEndpointPlan,
     tls_provider: ResidentXhttpQuicTlsProvider,
     session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
@@ -721,28 +735,22 @@ fn build_xhttp_h3_client_config_with_system_ca(
             tls_provider.as_str()
         ));
     }
-    if tls_provider == ResidentXhttpQuicTlsProvider::ChromeBoring {
-        return build_chrome_boring_xhttp_h3_client_config_with_system_ca(
-            endpoint,
-            system_ca,
-            session_cache,
-        );
-    }
-    let policy = dae_outbound_quic::boring_quic::BoringQuicClientPolicy::new([b"h3".as_slice()])
-        .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC policy: {err}"))?
-        .allow_insecure(endpoint.allow_insecure)
-        .zero_rtt(false);
+    let policy = xhttp_h3_boring_policy(endpoint, tls_provider)?;
     dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
         &policy,
-        Arc::new(xhttp_h3_transport_config(endpoint)?),
+        Arc::new(xhttp_h3_transport_config_for_provider(
+            endpoint,
+            tls_provider,
+        )?),
         session_cache,
         system_ca,
     )
     .map_err(|err| format!("build xHTTP H3 BoringSSL QUIC config: {err}"))
 }
 
-pub fn xhttp_h3_transport_config(
+pub(super) fn xhttp_h3_transport_config_for_provider(
     endpoint: &ResidentXhttpEndpointPlan,
+    tls_provider: ResidentXhttpQuicTlsProvider,
 ) -> Result<quinn::TransportConfig, String> {
     let mut transport = quinn::TransportConfig::default();
     transport.keep_alive_interval(xhttp_keep_alive_interval(
@@ -756,5 +764,11 @@ pub fn xhttp_h3_transport_config(
     ));
     transport.datagram_receive_buffer_size(None);
     transport.datagram_send_buffer_size(0);
+    if tls_provider == ResidentXhttpQuicTlsProvider::Chrome152 {
+        transport.receive_window((15 * 1024 * 1024_u32).into());
+        transport.stream_receive_window((6 * 1024 * 1024_u32).into());
+        transport.max_concurrent_uni_streams(103_u32.into());
+        transport.datagram_receive_buffer_size(Some(64 * 1024));
+    }
     Ok(transport)
 }

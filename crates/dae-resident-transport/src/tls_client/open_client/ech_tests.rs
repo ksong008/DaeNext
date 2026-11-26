@@ -111,6 +111,52 @@ async fn boring_ech_loopback_accepts_official_config() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chrome_132_accepts_real_ech_configuration() {
+    verify_chrome_profile_accepts_ech("chrome_132").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chrome_152_accepts_real_ech_configuration() {
+    verify_chrome_profile_accepts_ech("chrome_152").await;
+}
+
+async fn verify_chrome_profile_accepts_ech(name: &str) {
+    let identity = test_identity();
+    let fingerprint = dae_outbound::shared_transport::resolve_utls_client_hello_id(name).unwrap();
+    let mut proxy =
+        crate::tls_client::utls_template_boring::capture_tests::test_tls_proxy(&fingerprint);
+    proxy.server_name = INNER_NAME.to_owned();
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder
+        .cert_store_mut()
+        .add_cert(identity.certificate.clone())
+        .unwrap();
+    configure_boring_certificate_verification(&mut builder, false);
+    let fp = proxy.utls_fingerprint.as_ref().unwrap();
+    configure_boring_fingerprint(&mut builder, fp).unwrap();
+    configure_utls_template_boring_context(&mut builder, fp).unwrap();
+    builder.set_alpn_protos(b"\x02h2\x08http/1.1").unwrap();
+    let entry = ResidentBoringTlsContextEntry::build(builder, "chrome ECH test").unwrap();
+    let (address, server) = spawn_ech_server(ech_acceptor(&identity, ECH_CONFIG, ECH_KEY), 1).await;
+    let tcp = TcpStream::connect(address).await.unwrap();
+    let mut config = entry.configure().unwrap();
+    configure_utls_template_boring_ssl(&mut config, &proxy).unwrap();
+    let config_list = STANDARD.decode(ECH_CONFIG_LIST).unwrap();
+    config.set_ech_config_list(&config_list).unwrap();
+    let tls = entry
+        .connect(
+            config,
+            ResidentBoringTlsSessionKey::with_ech_config_list(INNER_NAME, &config_list),
+            INNER_NAME,
+            tcp,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("ECH handshake: {error}"));
+    assert!(tls.ssl().ech_accepted());
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn boring_ech_loopback_uses_one_authenticated_retry() {
     let identity = test_identity();
     let connector = ech_connector(&identity.certificate);

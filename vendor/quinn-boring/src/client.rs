@@ -27,6 +27,7 @@ use tracing::{trace, warn};
 type CustomVerifyCallback =
     dyn Fn(&mut boring::ssl::SslRef) -> std::result::Result<(), SslVerifyError> + Send + Sync;
 type VerifyCallback = dyn Fn(bool, &mut X509StoreContextRef) -> bool + Send + Sync;
+type ConfigureSsl = dyn Fn(&mut boring::ssl::SslRef) -> Result<()> + Send + Sync;
 
 /// Configuration for a client-side QUIC. Wraps around a BoringSSL [SslContext].
 pub struct Config {
@@ -36,6 +37,7 @@ pub struct Config {
     key_log: Option<Arc<dyn KeyLog>>,
     custom_verify_callback: Option<Arc<CustomVerifyCallback>>,
     verify_callback: Option<Arc<VerifyCallback>>,
+    configure_ssl: Option<Arc<ConfigureSsl>>,
 }
 
 impl Config {
@@ -75,6 +77,7 @@ impl Config {
             key_log: None,
             custom_verify_callback: None,
             verify_callback: None,
+            configure_ssl: None,
         })
     }
 
@@ -165,6 +168,14 @@ impl Config {
         self.verify_callback = Some(Arc::new(callback));
         self.ctx.verify_peer(!mode.is_empty());
     }
+
+    /// Applies connection-specific TLS settings before starting a handshake.
+    pub fn set_ssl_configuration<F>(&mut self, configure: F)
+    where
+        F: Fn(&mut boring::ssl::SslRef) -> Result<()> + Send + Sync + 'static,
+    {
+        self.configure_ssl = Some(Arc::new(configure));
+    }
 }
 
 impl crypto::ClientConfig for Config {
@@ -222,6 +233,10 @@ impl Session {
 
         // Configure the SSL to be a client.
         ssl.set_connect_state();
+
+        if let Some(configure) = &cfg.configure_ssl {
+            configure(&mut ssl)?;
+        }
 
         // Configure verification for the server hostname.
         ssl.set_verify_hostname(server_name)

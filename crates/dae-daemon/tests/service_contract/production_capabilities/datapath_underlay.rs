@@ -145,7 +145,7 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
     );
     assert_eq!(
         report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["supported_fingerprints"],
-        45
+        48
     );
     assert_eq!(
         report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["exact_fixtures"],
@@ -153,7 +153,7 @@ pub(crate) fn assert_datapath_and_outbound_underlay_contract(report: &Value) {
     );
     assert_eq!(
         report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["family_approximations"],
-        25
+        28
     );
     assert_eq!(
         report["outbound_fingerprint_underlay_typed_report"]["template_coverage"]["randomized"],

@@ -216,7 +216,7 @@ fn xhttp_h3_does_not_attach_global_tcp_tls_fragmentation() {
 }
 
 #[test]
-fn xhttp_h3_rejects_non_chrome_auto_fingerprint_before_execution() {
+fn xhttp_h3_rejects_unsupported_fingerprint_before_execution() {
     let source = vless_xhttp_parser_fixture_url("packet-up", XHTTP_H3_ALPN, "");
     let mut link = VLESSLink::parse(&source).unwrap();
     link.fingerprint = XHTTP_H3_FINGERPRINT.to_owned();
@@ -230,7 +230,7 @@ fn xhttp_h3_rejects_non_chrome_auto_fingerprint_before_execution() {
     .unwrap_err();
 
     assert!(
-        error.contains("supports only chrome/chrome_auto fingerprint"),
+        error.contains("supports only chrome/chrome_auto/chrome_132/chrome_152 fingerprints"),
         "{error}"
     );
 }

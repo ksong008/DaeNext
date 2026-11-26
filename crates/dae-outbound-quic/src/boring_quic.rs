@@ -5,7 +5,6 @@
 //! mutate provider contexts themselves, which prevents DNS, HY2, TUIC,
 //! Juicity, and xHTTP from drifting into subtly different TLS policies.
 
-use std::ffi::CString;
 use std::io::Read;
 use std::os::raw::c_int;
 use std::sync::Arc;
@@ -35,6 +34,8 @@ pub enum BoringQuicClientHelloProfile {
     #[default]
     Generic,
     Chrome,
+    ChromeHybrid,
+    Chrome152,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -281,6 +282,9 @@ fn build_boring_quic_client_crypto_with_session_cache(
         OutboundError::BadSharedTransport(format!("set BoringSSL QUIC ALPN: {err}"))
     })?;
     configure_client_hello_profile(crypto.ctx_mut(), policy.client_hello)?;
+    if policy.client_hello == BoringQuicClientHelloProfile::Chrome152 {
+        configure_chrome_152(&mut crypto)?;
+    }
     crypto.ctx_mut().enable_early_data(policy.zero_rtt);
     if let Some(session_cache) = session_cache {
         crypto.set_session_cache(session_cache);
@@ -314,6 +318,8 @@ fn session_cache_namespace(
     digest.update([match policy.client_hello {
         BoringQuicClientHelloProfile::Generic => 0,
         BoringQuicClientHelloProfile::Chrome => 1,
+        BoringQuicClientHelloProfile::ChromeHybrid => 2,
+        BoringQuicClientHelloProfile::Chrome152 => 3,
     }]);
     digest.update([u8::from(policy.zero_rtt)]);
     for protocol in &policy.alpn {
@@ -359,15 +365,23 @@ fn configure_client_hello_profile(
     context: &mut boring_v4_compat::ssl::SslContext,
     profile: BoringQuicClientHelloProfile,
 ) -> Result<(), OutboundError> {
-    if profile == BoringQuicClientHelloProfile::Generic {
-        return Ok(());
-    }
-    let curves = CString::new("X25519:P-256:P-384").expect("static curve list has no NUL");
+    let curves = match profile {
+        BoringQuicClientHelloProfile::Generic => return Ok(()),
+        BoringQuicClientHelloProfile::Chrome => c"X25519:P-256:P-384",
+        BoringQuicClientHelloProfile::ChromeHybrid | BoringQuicClientHelloProfile::Chrome152 => {
+            c"X25519MLKEM768:X25519:P-256:P-384"
+        }
+    };
     let configured = unsafe {
-        boring_sys::SSL_CTX_set_grease_enabled(context.as_ptr(), 1);
+        boring_sys::SSL_CTX_set_grease_enabled(
+            context.as_ptr(),
+            i32::from(profile != BoringQuicClientHelloProfile::Chrome152),
+        );
         boring_sys::SSL_CTX_set_permute_extensions(context.as_ptr(), 1);
-        boring_sys::SSL_CTX_enable_ocsp_stapling(context.as_ptr());
-        boring_sys::SSL_CTX_enable_signed_cert_timestamps(context.as_ptr());
+        if profile != BoringQuicClientHelloProfile::Chrome152 {
+            boring_sys::SSL_CTX_enable_ocsp_stapling(context.as_ptr());
+            boring_sys::SSL_CTX_enable_signed_cert_timestamps(context.as_ptr());
+        }
         boring_sys::SSL_CTX_set1_curves_list(context.as_ptr(), curves.as_ptr())
     };
     if configured != 1 {
@@ -390,6 +404,44 @@ fn configure_client_hello_profile(
             boring_v4_compat::error::ErrorStack::get()
         )));
     }
+    Ok(())
+}
+
+fn configure_chrome_152(crypto: &mut quinn_boring::ClientConfig) -> Result<(), OutboundError> {
+    use foreign_types::ForeignTypeRef;
+
+    let ctx = crypto.ctx_mut().as_ptr();
+    let sigalgs = [
+        0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601, 0x0201,
+    ];
+    let configured = unsafe {
+        boring_sys::DAE_SSL_CTX_enable_zero_server_padding(ctx);
+        boring_sys::SSL_CTX_set_verify_algorithm_prefs(ctx, sigalgs.as_ptr(), sigalgs.len()) == 1
+    };
+    if !configured {
+        return Err(OutboundError::BadSharedTransport(format!(
+            "configure BoringSSL Chrome 152 QUIC TLS: {}",
+            boring_v4_compat::error::ErrorStack::get()
+        )));
+    }
+    crypto.set_ssl_configuration(|ssl| {
+        let h3 = b"h3";
+        unsafe {
+            boring_sys::SSL_set_enable_ech_grease(ssl.as_ptr(), 1);
+            boring_sys::SSL_set_alps_use_new_codepoint(ssl.as_ptr(), 1);
+            if boring_sys::SSL_add_application_settings(
+                ssl.as_ptr(),
+                h3.as_ptr(),
+                h3.len(),
+                std::ptr::null(),
+                0,
+            ) != 1
+            {
+                return Err(boring_v4_compat::error::ErrorStack::get().into());
+            }
+        }
+        Ok(())
+    });
     Ok(())
 }
 
@@ -517,9 +569,16 @@ mod tests {
         let chrome = base
             .clone()
             .client_hello_profile(BoringQuicClientHelloProfile::Chrome);
+        let hybrid = base
+            .clone()
+            .client_hello_profile(BoringQuicClientHelloProfile::ChromeHybrid);
 
         let base_key = session_cache_namespace(&base, None);
-        for other in [insecure, other_alpn, early, chrome] {
+        assert_ne!(
+            session_cache_namespace(&chrome, None),
+            session_cache_namespace(&hybrid, None),
+        );
+        for other in [insecure, other_alpn, early, chrome, hybrid] {
             assert_ne!(base_key, session_cache_namespace(&other, None));
         }
     }

@@ -21,6 +21,8 @@ pub struct ResidentUtlsFingerprintPlan {
 pub enum ResidentXhttpQuicTlsProvider {
     Boring,
     ChromeBoring,
+    ChromeBoringHybrid,
+    Chrome152,
 }
 
 impl ResidentXhttpQuicTlsProvider {
@@ -29,14 +31,17 @@ impl ResidentXhttpQuicTlsProvider {
             return Ok(Self::Boring);
         };
         if fingerprint.family == dae_outbound_stream::shared_transport::UTLS_FAMILY_CHROME
-            && fingerprint.canonical == "chrome_auto"
-            && matches!(fingerprint.name.as_str(), "chrome" | "chrome_auto")
             && !fingerprint.randomized
         {
-            return Ok(Self::ChromeBoring);
+            match (fingerprint.canonical.as_str(), fingerprint.name.as_str()) {
+                ("chrome_auto", "chrome" | "chrome_auto") => return Ok(Self::ChromeBoring),
+                ("chrome_132", "chrome_132") => return Ok(Self::ChromeBoringHybrid),
+                ("chrome_152", "chrome_152") => return Ok(Self::Chrome152),
+                _ => {}
+            }
         }
         Err(format!(
-            "xHTTP HTTP/3 QUIC TLS supports only chrome/chrome_auto fingerprint; requested {}",
+            "xHTTP HTTP/3 QUIC TLS supports only chrome/chrome_auto/chrome_132/chrome_152 fingerprints; requested {}",
             fingerprint.name
         ))
     }
@@ -45,6 +50,8 @@ impl ResidentXhttpQuicTlsProvider {
         match self {
             Self::Boring => "quinn-boringssl",
             Self::ChromeBoring => "quinn-boringssl-chrome",
+            Self::ChromeBoringHybrid => "quinn-boringssl-chrome-hybrid",
+            Self::Chrome152 => "quinn-boringssl-chrome-152",
         }
     }
 }

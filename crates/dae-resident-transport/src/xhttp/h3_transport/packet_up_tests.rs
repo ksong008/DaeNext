@@ -325,6 +325,7 @@ fn h3_ech_fails_closed_for_every_quic_tls_provider() {
     for provider in [
         ResidentXhttpQuicTlsProvider::Boring,
         ResidentXhttpQuicTlsProvider::ChromeBoring,
+        ResidentXhttpQuicTlsProvider::ChromeBoringHybrid,
     ] {
         let error = match build_xhttp_h3_client_config(&endpoint, provider, None) {
             Ok(_) => panic!("{} silently accepted ECH", provider.as_str()),

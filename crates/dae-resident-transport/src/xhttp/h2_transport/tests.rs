@@ -178,6 +178,82 @@ fn packet_up_endpoint() -> ResidentXhttpEndpointPlan {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn xhttp_h2_emits_profile_receive_windows_and_pseudo_header_order() {
+    use dae_outbound::shared_transport::test_support::{self_signed_tls_identity, tls13_acceptor};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let identity = self_signed_tls_identity(&["xhttp.test"]).unwrap();
+    let acceptor = tls13_acceptor(&identity, &[b"h2".to_vec()]).unwrap();
+    let mut endpoint = packet_up_endpoint();
+    endpoint.server_host = addr.ip().to_string();
+    endpoint.server_port = addr.port();
+    endpoint.allow_insecure = true;
+    let resources = H2CarrierOwnerResourceProfile::selected();
+
+    time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            async {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut tls = tokio_boring::accept(&acceptor, socket).await.unwrap();
+                let mut preface = [0; 24];
+                tls.read_exact(&mut preface).await.unwrap();
+                assert_eq!(&preface, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+                let mut settings = [0; 15];
+                tls.read_exact(&mut settings).await.unwrap();
+                assert_eq!(settings[..11], [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 4]);
+                assert_eq!(
+                    settings[11..],
+                    resources.stream_receive_window_bytes().to_be_bytes()
+                );
+                let mut connection = [0; 13];
+                tls.read_exact(&mut connection).await.unwrap();
+                assert_eq!(connection[..9], [0, 0, 4, 8, 0, 0, 0, 0, 0]);
+                assert_eq!(
+                    connection[9..],
+                    (resources.connection_receive_window_bytes() - 65_535).to_be_bytes()
+                );
+                tls.write_all(&[0, 0, 0, 4, 0, 0, 0, 0, 0]).await.unwrap();
+                loop {
+                    let mut header = [0; 9];
+                    tls.read_exact(&mut header).await.unwrap();
+                    let length = u32::from_be_bytes([0, header[0], header[1], header[2]]) as usize;
+                    let mut payload = vec![0; length];
+                    tls.read_exact(&mut payload).await.unwrap();
+                    if header[3] == 1 {
+                        assert_eq!(header[4] & 0x2c, 4, "complete unpadded HEADERS");
+                        // HPACK static-table references for GET, https, and :authority.
+                        assert_eq!(payload[..3], [0x82, 0x87, 0x41]);
+                        let authority_len = usize::from(payload[3] & 0x7f);
+                        assert!(
+                            authority_len < 127,
+                            "fixture authority fits one length byte"
+                        );
+                        assert_eq!(payload[4 + authority_len], 0x04, ":path follows :authority");
+                        break;
+                    }
+                }
+            },
+            async {
+                let client = open_async_xhttp_endpoint_tls_client(&endpoint, 0, false)
+                    .await
+                    .unwrap();
+                let (sender, driver) = open_xhttp_h2_sender(client, None).await.unwrap();
+                let mut sender = sender.ready().await.unwrap();
+                let _response =
+                    open_xhttp_h2_download_stream(&mut sender, &endpoint, "capture", None)
+                        .await
+                        .unwrap();
+                let _ = driver.await;
+            },
+        )
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn download_headers_waiting_for_upload_do_not_block_h2_packet_up() {
     for ua in [None, Some("firefox"), Some("Custom-UA/1")] {

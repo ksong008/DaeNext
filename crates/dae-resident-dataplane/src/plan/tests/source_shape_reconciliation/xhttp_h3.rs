@@ -68,52 +68,81 @@ fn builder_xhttp_h3_materializes_quic_tls_and_normalizes_global_fragment() {
 }
 
 #[test]
-fn builder_xhttp_h3_admits_only_chrome_auto_fingerprint_provider() {
+fn builder_xhttp_h3_admits_chrome_profiles() {
     let source = vless_xhttp_parser_fixture_url("packet-up", XHTTP_H3_ALPN, "");
-    for fingerprint in ["chrome", "chrome_auto"] {
+    for (fingerprint, provider, name) in [
+        (
+            "chrome",
+            ResidentXhttpQuicTlsProvider::ChromeBoring,
+            "quinn-boringssl-chrome",
+        ),
+        (
+            "chrome_auto",
+            ResidentXhttpQuicTlsProvider::ChromeBoring,
+            "quinn-boringssl-chrome",
+        ),
+        (
+            "chrome_132",
+            ResidentXhttpQuicTlsProvider::ChromeBoringHybrid,
+            "quinn-boringssl-chrome-hybrid",
+        ),
+        (
+            "chrome_152",
+            ResidentXhttpQuicTlsProvider::Chrome152,
+            "quinn-boringssl-chrome-152",
+        ),
+    ] {
         let mut link = VLESSLink::parse(&source).unwrap();
         link.fingerprint = fingerprint.to_owned();
         let proxy = build(&link.export_url()).unwrap();
         assert_eq!(
             ResidentXhttpQuicTlsProvider::for_endpoint(proxy.utls_fingerprint.as_ref()).unwrap(),
-            ResidentXhttpQuicTlsProvider::ChromeBoring
+            provider
         );
         let graph = proxy.executable_graph_value();
         assert_eq!(
             graph["runtimeComponents"]["underlayFactory"]["provider"],
-            "quinn-boringssl-chrome"
+            name
         );
         let primary = &graph["runtimeComponents"]["streamWrapperFactory"]["xhttpExtendedSettings"]
             ["primaryTransport"];
         assert_eq!(primary["endpointRole"], "primary");
-        assert_eq!(primary["declaredTlsProvider"], "quinn-boringssl-chrome");
-        assert_eq!(primary["factoryTlsProvider"], "quinn-boringssl-chrome");
+        assert_eq!(primary["declaredTlsProvider"], name);
+        assert_eq!(primary["factoryTlsProvider"], name);
     }
 }
 
 #[test]
 fn builder_xhttp_h3_download_uses_its_own_fingerprint_provider() {
-    let extra = r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["h3"],"allowInsecure":true,"fingerprint":"chrome"},"xhttpSettings":{"host":"download.host.invalid","path":"/down","mode":"packet-up"}}}"#;
+    let extra = r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["h3"],"allowInsecure":true,"fingerprint":"chrome_132"},"xhttpSettings":{"host":"download.host.invalid","path":"/down","mode":"packet-up"}}}"#;
     let proxy = build(&vless_xhttp_parser_fixture_url("packet-up", "h2", extra)).unwrap();
     let download = proxy.xhttp_download.as_ref().unwrap();
     assert_eq!(
         download.utls_fingerprint.as_ref().unwrap().canonical,
-        "chrome_auto"
+        "chrome_132"
     );
 
     let evidence = &proxy.executable_graph_value()["runtimeComponents"]["streamWrapperFactory"]["xhttpExtendedSettings"]
         ["download"];
     assert_eq!(evidence["endpointRole"], "download");
     assert_eq!(evidence["httpVersion"], "h3");
-    assert_eq!(evidence["declaredTlsProvider"], "quinn-boringssl-chrome");
-    assert_eq!(evidence["factoryTlsProvider"], "quinn-boringssl-chrome");
+    assert_eq!(
+        evidence["declaredTlsProvider"],
+        "quinn-boringssl-chrome-hybrid"
+    );
+    assert_eq!(
+        evidence["factoryTlsProvider"],
+        "quinn-boringssl-chrome-hybrid"
+    );
 }
 
 #[test]
 fn builder_xhttp_h3_download_rejects_unsupported_fingerprint() {
     let extra = r#"{"downloadSettings":{"address":"download.transport.invalid","port":18444,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"download.sni.invalid","alpn":["h3"],"allowInsecure":true,"fingerprint":"chrome_102"},"xhttpSettings":{"host":"download.host.invalid","path":"/down","mode":"packet-up"}}}"#;
     let error = build(&vless_xhttp_parser_fixture_url("packet-up", "h2", extra)).unwrap_err();
-    assert!(error.contains("download xHTTP HTTP/3 QUIC TLS supports only chrome/chrome_auto"));
+    assert!(error.contains(
+        "download xHTTP HTTP/3 QUIC TLS supports only chrome/chrome_auto/chrome_132/chrome_152"
+    ));
 }
 
 #[test]
@@ -124,7 +153,7 @@ fn builder_xhttp_h3_rejects_other_fingerprints() {
 
     let error = build(&link.export_url()).unwrap_err();
     assert!(
-        error.contains("supports only chrome/chrome_auto fingerprint"),
+        error.contains("supports only chrome/chrome_auto/chrome_132/chrome_152 fingerprints"),
         "{error}"
     );
 }
