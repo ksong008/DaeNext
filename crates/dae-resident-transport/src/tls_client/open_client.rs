@@ -8,7 +8,12 @@ pub async fn open_async_resident_tls_client_with_binding(
     if binding.plan().ech.is_some() {
         return open_async_boring_ech_resident_tls_client_with_binding(binding, mptcp, tcp).await;
     }
-    open_async_resident_tls_client_over_stream(binding.plan(), tcp).await
+    let retry_dial = binding
+        .plan()
+        .chain_parent
+        .is_none()
+        .then_some((binding.effective_socket_mark(), mptcp));
+    open_async_resident_tls_client_over_stream(binding.plan(), tcp, retry_dial).await
 }
 
 pub async fn open_async_vless_tls_client_with_flow_at_candidates(
@@ -30,18 +35,19 @@ pub async fn open_async_vless_tls_client_with_flow_at_candidates(
         )
         .await;
     }
-    open_async_resident_tls_client_over_stream(proxy, tcp).await
+    open_async_resident_tls_client_over_stream(proxy, tcp, Some((mark, mptcp))).await
 }
 
 async fn open_async_resident_tls_client_over_stream(
     proxy: &ResidentProxyPlan,
     tcp: TokioTcpStream,
+    retry_dial: Option<(u32, bool)>,
 ) -> Result<AsyncResidentTlsClient, String> {
     let selection = ResidentTlsFactorySelection::from_proxy(proxy)?;
     let policy = &selection.policy;
     match selection.provider {
         ResidentTlsProvider::FingerprintAwareBoring => {
-            open_async_boring_resident_tls_client(proxy, policy, tcp).await
+            open_async_boring_resident_tls_client(proxy, policy, tcp, retry_dial).await
         }
         ResidentTlsProvider::RealityFingerprintBoring => {
             open_async_reality_boring_resident_tls_client(proxy, policy, tcp).await
@@ -70,7 +76,7 @@ pub async fn open_async_xhttp_endpoint_tls_client(
     if endpoint.ech.is_some() {
         return open_async_boring_ech_xhttp_client(endpoint, mark, mptcp, tcp).await;
     }
-    open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp).await
+    open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp, (mark, mptcp)).await
 }
 
 pub async fn open_async_xhttp_endpoint_tls_client_at_candidates(
@@ -87,12 +93,13 @@ pub async fn open_async_xhttp_endpoint_tls_client_at_candidates(
         )
         .await;
     }
-    open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp).await
+    open_async_xhttp_endpoint_tls_client_over_stream(endpoint, tcp, (mark, mptcp)).await
 }
 
 async fn open_async_xhttp_endpoint_tls_client_over_stream(
     endpoint: &ResidentXhttpEndpointPlan,
     tcp: TokioTcpStream,
+    retry_dial: (u32, bool),
 ) -> Result<AsyncResidentTlsClient, String> {
     let selection = ResidentTlsFactorySelection::from_xhttp_endpoint(endpoint)?;
     match selection.provider {
@@ -102,6 +109,7 @@ async fn open_async_xhttp_endpoint_tls_client_over_stream(
                 endpoint,
                 &selection.policy,
                 tcp,
+                retry_dial,
             )
             .await
         }
@@ -112,6 +120,7 @@ async fn open_async_boring_xhttp_endpoint_tls_client_over_stream(
     endpoint: &ResidentXhttpEndpointPlan,
     policy: &ResidentTlsPolicy,
     tcp: TokioTcpStream,
+    retry_dial: (u32, bool),
 ) -> Result<AsyncResidentTlsClient, String> {
     let connector = boring_xhttp_endpoint_connector(endpoint)?;
     let mut config = connector
@@ -119,6 +128,13 @@ async fn open_async_boring_xhttp_endpoint_tls_client_over_stream(
         .map_err(|err| format!("configure xHTTP BoringSSL client: {err}"))?;
     configure_utls_template_boring_ssl_for_xhttp_endpoint(&mut config, endpoint)?;
     let reality = policy.verification.reality_material().is_some();
+    let retry_peer = if reality || connector.trust_anchor_ids.is_empty() {
+        None
+    } else {
+        tcp.peer_addr()
+            .ok()
+            .map(|peer| (peer, retry_dial.0, retry_dial.1))
+    };
     if reality {
         config.set_verify_hostname(false);
         let mldsa65_verify = endpoint
@@ -131,14 +147,17 @@ async fn open_async_boring_xhttp_endpoint_tls_client_over_stream(
         configure_reality_boring_ssl(&mut config, &policy.verification)?;
     }
     let tcp = AsyncResidentTcpStream::new_boring(tcp, endpoint.tls_fragment.clone());
-    let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
-    let tls = time::timeout(
-        RESIDENT_CONNECT_TIMEOUT,
-        connector.connect(config, session_key, &policy.server_name, tcp),
+    let tls = connect_boring_with_anchor_retry(
+        &connector,
+        config,
+        &policy.server_name,
+        tcp,
+        retry_peer,
+        "xHTTP",
+        |config| configure_utls_template_boring_ssl_for_xhttp_endpoint(config, endpoint),
+        |tcp| AsyncResidentTcpStream::new_boring(tcp, endpoint.tls_fragment.clone()),
     )
-    .await
-    .map_err(|_| "xHTTP tokio-boring handshake timeout".to_owned())?
-    .map_err(|err| format!("connect xHTTP tokio-boring client: {err}"))?;
+    .await?;
     Ok(AsyncVlessTlsClient {
         engine: if reality {
             AsyncVlessTlsEngine::RealityBoring { tls }
@@ -309,28 +328,99 @@ fn adopt_direct_tcp_connection(
     TokioTcpStream::from_std(connected.stream).map_err(|err| format!("{adopt_context}: {err}"))
 }
 
-pub(crate) async fn open_async_boring_resident_tls_client(
+async fn open_async_boring_resident_tls_client(
     proxy: &ResidentProxyPlan,
     policy: &ResidentTlsPolicy,
     tcp: TokioTcpStream,
+    retry_dial: Option<(u32, bool)>,
 ) -> Result<AsyncVlessTlsClient, String> {
     let connector = boring_vless_connector(proxy, policy)?;
     let mut config = connector
         .configure()
         .map_err(|err| format!("configure VLESS BoringSSL client: {err}"))?;
     configure_utls_template_boring_ssl(&mut config, proxy)?;
+    let retry_peer = retry_dial
+        .filter(|_| !connector.trust_anchor_ids.is_empty())
+        .and_then(|(mark, mptcp)| tcp.peer_addr().ok().map(|peer| (peer, mark, mptcp)));
     let tcp = async_boring_resident_tcp_stream_for_proxy(proxy, tcp);
-    let session_key = ResidentBoringTlsSessionKey::new(&policy.server_name);
-    let tls = time::timeout(
-        RESIDENT_CONNECT_TIMEOUT,
-        connector.connect(config, session_key, &policy.server_name, tcp),
+    let tls = connect_boring_with_anchor_retry(
+        &connector,
+        config,
+        &policy.server_name,
+        tcp,
+        retry_peer,
+        proxy.protocol,
+        |config| configure_utls_template_boring_ssl(config, proxy),
+        |tcp| async_boring_resident_tcp_stream_for_proxy(proxy, tcp),
     )
-    .await
-    .map_err(|_| "VLESS tokio-boring handshake timeout".to_owned())?
-    .map_err(|err| format!("connect VLESS tokio-boring client: {err}"))?;
+    .await?;
     Ok(AsyncVlessTlsClient {
         engine: AsyncVlessTlsEngine::Boring { tls },
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn connect_boring_with_anchor_retry(
+    connector: &ResidentBoringTlsContextEntry,
+    mut config: ConnectConfiguration,
+    server_name: &str,
+    tcp: AsyncResidentTcpStream,
+    retry_peer: Option<(SocketAddr, u32, bool)>,
+    label: &str,
+    configure_retry: impl FnOnce(&mut SslRef) -> Result<(), String>,
+    wrap_tcp: impl FnOnce(TokioTcpStream) -> AsyncResidentTcpStream,
+) -> Result<tokio_boring::SslStream<AsyncResidentTcpStream>, String> {
+    use foreign_types::ForeignTypeRef;
+
+    let retry =
+        retry_peer.and_then(|_| dae_tls::TrustAnchorRetry::new(connector.trust_anchor_ids.clone()));
+    if let Some(retry) = retry.clone() {
+        config.set_verify_callback(SslVerifyMode::PEER, move |valid, context| {
+            retry.record_verification(valid, context)
+        });
+    }
+    time::timeout(RESIDENT_CONNECT_TIMEOUT, async {
+        let session_key = ResidentBoringTlsSessionKey::new(server_name);
+        let failure = match connector
+            .connect(config, session_key, server_name, tcp)
+            .await
+        {
+            Ok(tls) => return Ok(tls),
+            Err(err) => err,
+        };
+        let Some(((peer, mark, mptcp), retry_id)) =
+            retry_peer.zip(retry.and_then(|retry| retry.take_selected()))
+        else {
+            return Err(format!("connect {label} tokio-boring client: {failure}"));
+        };
+        drop(failure);
+        let mut config = connector
+            .configure()
+            .map_err(|err| format!("configure {label} trust anchor retry: {err}"))?;
+        configure_retry(&mut config)?;
+        if unsafe {
+            boring_sys::SSL_set1_requested_trust_anchors(
+                config.as_ptr(),
+                retry_id.as_ptr(),
+                retry_id.len(),
+            )
+        } != 1
+        {
+            return Err(format!(
+                "set {label} retry trust anchor: {}",
+                boring::error::ErrorStack::get()
+            ));
+        }
+        let connected = open_direct_tcp_connection_async(peer.to_string(), mark, mptcp).await?;
+        let tcp = TokioTcpStream::from_std(connected.stream)
+            .map_err(|err| format!("adopt {label} trust anchor retry socket: {err}"))?;
+        // A new verified handshake must exercise the alternate certificate chain.
+        tokio_boring::connect(config, server_name, wrap_tcp(tcp))
+            .await
+            .map_err(|err| format!("connect {label} after one trust anchor retry: {err}"))
+    })
+    .await
+    .map_err(|_| format!("{label} tokio-boring handshake timeout"))?
 }
 
 #[derive(Debug)]
@@ -590,3 +680,6 @@ fn validated_ech_retry_config(bytes: Vec<u8>) -> Result<EchConfigList, String> {
 #[cfg(test)]
 #[path = "open_client/ech_tests.rs"]
 mod ech_tests;
+
+#[cfg(test)]
+mod trust_anchor_tests;

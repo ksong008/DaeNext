@@ -148,9 +148,27 @@ async fn chrome_132_clienthello_matches_wreq_tls_parameters() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn chrome_152_advertises_new_extensions() {
+async fn chrome_152_advertises_new_extensions_and_only_trusted_anchor_ids() {
     let fingerprint = resolve_utls_client_hello_id(CHROME_152_FINGERPRINT).unwrap();
-    let record = capture_client_hello_record(test_tls_proxy(&fingerprint))
+    let mut proxy = test_tls_proxy(&fingerprint);
+    let ca_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/utls_clienthello/isrg-root-x2.pem");
+    let ca = SystemCaSnapshot::load_from_path(ca_path).unwrap();
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    ca.install_boring_builder(&mut builder);
+    configure_boring_fingerprint(&mut builder, proxy.utls_fingerprint.as_ref().unwrap()).unwrap();
+    configure_utls_template_boring_context(
+        &mut builder,
+        proxy.utls_fingerprint.as_ref().unwrap(),
+        Some(&ca),
+    )
+    .unwrap();
+    let policy = ResidentTlsPolicy::from_proxy(&proxy);
+    builder
+        .set_alpn_protos(&boring_alpn_wire(&proxy, &policy).unwrap())
+        .unwrap();
+    let connector = Arc::new(ResidentBoringTlsContextEntry::build(builder, "Chrome 152").unwrap());
+    let record = capture_client_hello_with_connector(proxy.clone(), Some(connector))
         .await
         .unwrap();
     let captured = parse_utls_client_hello_record(&record).unwrap();
@@ -166,13 +184,22 @@ async fn chrome_152_advertises_new_extensions() {
         [0x0a0a, 0x11ec, 0x001d]
     );
     assert_eq!(extension_body(&record, 0x12e0), [0, 0]);
+    assert_eq!(
+        extension_body(&record, 0xca34),
+        [0, 6, 5, 0x82, 0xdf, 0x13, 0x02, 0x06] // ISRG Root X2
+    );
     assert_eq!(extension_body(&record, 0x44cd), [0, 3, 2, b'h', b'2']);
     assert_eq!(extension_body(&record, 0x001b), [2, 0, 2]);
     assert_eq!(extension_body(&record, 0xfe0d)[0], 0);
 
+    proxy.allow_insecure = true;
+    proxy.materialize_execution();
+    let insecure = capture_boring_client_hello(proxy).await.unwrap();
+    assert!(!normalized_u16_values(&insecure.extension_types).contains(&0xca34));
     let reality = capture_boring_client_hello(test_reality_proxy(&fingerprint))
         .await
         .unwrap();
+    assert!(!normalized_u16_values(&reality.extension_types).contains(&0xca34));
     assert!(normalized_optional_u16_values(&reality.signature_schemes).contains(&0x0807));
 }
 
@@ -415,7 +442,7 @@ fn browser_test_connector(
     }
     configure_boring_certificate_verification(&mut builder, false);
     configure_boring_fingerprint(&mut builder, fp).unwrap();
-    configure_utls_template_boring_context(&mut builder, fp).unwrap();
+    configure_utls_template_boring_context(&mut builder, fp, None).unwrap();
     let policy = ResidentTlsPolicy::from_proxy(proxy);
     builder
         .set_alpn_protos(&boring_alpn_wire(proxy, &policy).unwrap())
@@ -572,7 +599,13 @@ fn extension_body(record: &[u8], extension: u16) -> &[u8] {
 }
 
 async fn capture_client_hello_record(proxy: ResidentProxyPlan) -> Result<Vec<u8>, String> {
-    let mut proxy = proxy;
+    capture_client_hello_with_connector(proxy, None).await
+}
+
+async fn capture_client_hello_with_connector(
+    mut proxy: ResidentProxyPlan,
+    connector: Option<Arc<ResidentBoringTlsContextEntry>>,
+) -> Result<Vec<u8>, String> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|err| format!("bind local TLS capture listener: {err}"))?;
@@ -610,7 +643,10 @@ async fn capture_client_hello_record(proxy: ResidentProxyPlan) -> Result<Vec<u8>
         let tcp = TcpStream::connect(addr)
             .await
             .map_err(|err| format!("connect local TLS capture listener: {err}"))?;
-        let connector = boring_vless_connector(&client_proxy, &policy)?;
+        let connector = match connector {
+            Some(connector) => connector,
+            None => boring_vless_connector(&client_proxy, &policy)?,
+        };
         let mut config = connector
             .configure()
             .map_err(|err| format!("configure BoringSSL client: {err}"))?;

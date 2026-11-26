@@ -13,6 +13,11 @@ use boring::x509::X509;
 use boring::x509::store::{X509Store, X509StoreBuilder};
 use foreign_types::ForeignType;
 
+mod chrome_trust_anchors;
+mod trust_metadata;
+
+use chrome_trust_anchors::CHROME_152_TRUST_ANCHORS;
+
 pub const SYSTEM_CA_BUNDLE_PATHS: &[&str] = &[
     "/etc/ssl/certs/ca-certificates.crt",
     "/etc/pki/tls/certs/ca-bundle.crt",
@@ -30,11 +35,13 @@ pub struct SystemCaIdentity {
     pub path: PathBuf,
     pub sha256: String,
     pub certificate_count: usize,
+    pub trust_metadata_sha256: Option<String>,
 }
 
 pub struct SystemCaSnapshot {
     identity: SystemCaIdentity,
     boring_store: X509Store,
+    trust_metadata: trust_metadata::TrustMetadata,
 }
 
 impl SystemCaSnapshot {
@@ -44,6 +51,43 @@ impl SystemCaSnapshot {
 
     pub fn boring_store(&self) -> X509Store {
         self.boring_store.clone()
+    }
+
+    /// Chrome 152 X.509 trust anchor IDs present in this CA bundle, in TLS wire format.
+    pub fn chrome_152_trust_anchor_ids(&self) -> &[u8] {
+        &self.trust_metadata.individual_x509_ids
+    }
+
+    pub fn has_mtc_trust(&self) -> bool {
+        !self.trust_metadata.mtc.is_empty()
+    }
+
+    pub fn install_chrome_152_trust_in_builder(
+        &self,
+        builder: &mut SslContextBuilder,
+    ) -> Result<(), ErrorStack> {
+        unsafe { self.install_chrome_152_trust(builder.as_ptr()) }
+    }
+
+    /// Install the trust extensions on a BoringSSL client context.
+    ///
+    /// # Safety
+    /// The caller must provide a live context from this BoringSSL build and
+    /// hold exclusive access before constructing any connections from it.
+    pub unsafe fn install_chrome_152_trust(
+        &self,
+        ctx: *mut boring_sys::SSL_CTX,
+    ) -> Result<(), ErrorStack> {
+        let ids = &self.trust_metadata.requested_x509_ids;
+        let mtc = &self.trust_metadata.mtc;
+        let ok = unsafe {
+            (ids.is_empty()
+                || boring_sys::SSL_CTX_set1_requested_trust_anchors(ctx, ids.as_ptr(), ids.len())
+                    == 1)
+                && (mtc.is_empty()
+                    || boring_sys::DAE_SSL_CTX_set1_mtc_trust(ctx, mtc.as_ptr(), mtc.len()) == 1)
+        };
+        if ok { Ok(()) } else { Err(ErrorStack::get()) }
     }
 
     pub fn install_boring_builder(&self, builder: &mut SslContextBuilder) {
@@ -64,7 +108,10 @@ impl SystemCaSnapshot {
     }
 
     fn load_from_environment() -> Result<Self, SystemCaError> {
-        Self::load_from_path(Self::environment_bundle_path()?)
+        Self::load_from_path_with_optional_trust_metadata(
+            Self::environment_bundle_path()?,
+            trust_metadata_path(),
+        )
     }
 
     fn environment_bundle_path() -> Result<PathBuf, SystemCaError> {
@@ -77,15 +124,35 @@ impl SystemCaSnapshot {
     }
 
     pub fn load_from_path(path: PathBuf) -> Result<Self, SystemCaError> {
+        Self::load_from_path_with_optional_trust_metadata(path, None)
+    }
+
+    pub fn load_from_path_with_trust_metadata(
+        path: PathBuf,
+        metadata: PathBuf,
+    ) -> Result<Self, SystemCaError> {
+        Self::load_from_path_with_optional_trust_metadata(path, Some(metadata))
+    }
+
+    fn load_from_path_with_optional_trust_metadata(
+        path: PathBuf,
+        metadata: Option<PathBuf>,
+    ) -> Result<Self, SystemCaError> {
         let bytes = fs::read(&path).map_err(|error| SystemCaError::Read {
             path: path.clone(),
             message: error.to_string(),
         })?;
         let sha256 = encode_hex(&sha256(&bytes));
-        Self::parse_bundle(path, &bytes, sha256)
+        let metadata = read_trust_metadata(metadata)?;
+        Self::parse_bundle(path, &bytes, sha256, metadata.as_ref())
     }
 
-    fn parse_bundle(path: PathBuf, bytes: &[u8], sha256: String) -> Result<Self, SystemCaError> {
+    fn parse_bundle(
+        path: PathBuf,
+        bytes: &[u8],
+        bundle_sha256: String,
+        metadata: Option<&TrustMetadataSource>,
+    ) -> Result<Self, SystemCaError> {
         if bytes.is_empty() {
             return Err(SystemCaError::Empty { path });
         }
@@ -103,12 +170,14 @@ impl SystemCaSnapshot {
                 message: error.to_string(),
             })?;
         let mut unique_der = HashSet::new();
+        let mut trusted_digests = HashSet::new();
 
         for certificate in certificates {
             let der = certificate.to_der().map_err(|error| SystemCaError::Parse {
                 path: path.clone(),
                 message: error.to_string(),
             })?;
+            let digest = sha256(&der);
             if !unique_der.insert(der) {
                 continue;
             }
@@ -117,6 +186,7 @@ impl SystemCaSnapshot {
                 .map_err(|error| SystemCaError::BoringStore {
                     message: error.to_string(),
                 })?;
+            trusted_digests.insert(digest);
         }
 
         let certificate_count = unique_der.len();
@@ -124,15 +194,58 @@ impl SystemCaSnapshot {
             return Err(SystemCaError::NoUsableCertificates { path });
         }
 
+        let trust_metadata = trust_metadata::TrustMetadata::from_bundle(
+            metadata.map(|source| source.bytes.as_slice()),
+            &trusted_digests,
+        )
+        .map_err(|message| SystemCaError::TrustMetadata {
+            path: metadata
+                .map(|source| source.path.clone())
+                .unwrap_or_else(|| path.clone()),
+            message,
+        })?;
         Ok(Self {
             identity: SystemCaIdentity {
                 path,
-                sha256,
+                sha256: bundle_sha256,
                 certificate_count,
+                trust_metadata_sha256: metadata.map(|source| source.sha256.clone()),
             },
             boring_store: boring_builder.build(),
+            trust_metadata,
         })
     }
+}
+
+struct TrustMetadataSource {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    sha256: String,
+}
+
+fn trust_metadata_path() -> Option<PathBuf> {
+    env::var_os("DAE_TLS_TRUST_METADATA_FILE")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn read_trust_metadata(
+    path: Option<PathBuf>,
+) -> Result<Option<TrustMetadataSource>, SystemCaError> {
+    path.map(|path| {
+        let bytes =
+            trust_metadata::read(&path).map_err(|message| SystemCaError::TrustMetadata {
+                path: path.clone(),
+                message,
+            })?;
+        let sha256 = encode_hex(&sha256(&bytes));
+        Ok(TrustMetadataSource {
+            path,
+            bytes,
+            sha256,
+        })
+    })
+    .transpose()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,6 +257,7 @@ pub enum SystemCaError {
     Parse { path: PathBuf, message: String },
     NoUsableCertificates { path: PathBuf },
     BoringStore { message: String },
+    TrustMetadata { path: PathBuf, message: String },
     CachePoisoned,
 }
 
@@ -185,6 +299,13 @@ impl fmt::Display for SystemCaError {
             Self::BoringStore { message } => {
                 write!(formatter, "build BoringSSL system CA store: {message}")
             }
+            Self::TrustMetadata { path, message } => {
+                write!(
+                    formatter,
+                    "load TLS trust metadata {}: {message}",
+                    path.display()
+                )
+            }
             Self::CachePoisoned => formatter.write_str("system CA snapshot cache lock poisoned"),
         }
     }
@@ -216,32 +337,43 @@ fn cached_system_ca_snapshot(
 /// retain their trust; a failed reload leaves no stale success for new callers.
 pub fn refresh_system_ca_snapshot() -> Result<Arc<SystemCaSnapshot>, SystemCaError> {
     let cache = SYSTEM_CA_SNAPSHOT.get_or_init(|| Mutex::new(None));
+    refresh_system_ca_snapshot_from(
+        cache,
+        SystemCaSnapshot::environment_bundle_path,
+        trust_metadata_path(),
+    )
+}
+
+fn refresh_system_ca_snapshot_from(
+    cache: &Mutex<CachedSystemCaSnapshot>,
+    bundle_path: impl FnOnce() -> Result<PathBuf, SystemCaError>,
+    metadata_path: Option<PathBuf>,
+) -> Result<Arc<SystemCaSnapshot>, SystemCaError> {
     let mut cache = lock_system_ca_cache(cache);
     let previous = cache.take();
-    let path = SystemCaSnapshot::environment_bundle_path()?;
+    let path = bundle_path()?;
     let bytes = fs::read(&path).map_err(|error| SystemCaError::Read {
         path: path.clone(),
         message: error.to_string(),
     })?;
     let sha256 = encode_hex(&sha256(&bytes));
+    let metadata = read_trust_metadata(metadata_path)?;
     let snapshot = match previous {
-        Some(snapshot) if snapshot.identity.path == path && snapshot.identity.sha256 == sha256 => {
+        Some(snapshot)
+            if snapshot.identity.path == path
+                && snapshot.identity.sha256 == sha256
+                && snapshot.identity.trust_metadata_sha256.as_ref()
+                    == metadata.as_ref().map(|source| &source.sha256) =>
+        {
             snapshot
         }
-        _ => Arc::new(SystemCaSnapshot::parse_bundle(path, &bytes, sha256)?),
+        _ => Arc::new(SystemCaSnapshot::parse_bundle(
+            path,
+            &bytes,
+            sha256,
+            metadata.as_ref(),
+        )?),
     };
-    *cache = Some(Arc::clone(&snapshot));
-    Ok(snapshot)
-}
-
-#[cfg(test)]
-fn refresh_cached_system_ca_snapshot(
-    cache: &Mutex<CachedSystemCaSnapshot>,
-    load: impl FnOnce() -> Result<SystemCaSnapshot, SystemCaError>,
-) -> Result<Arc<SystemCaSnapshot>, SystemCaError> {
-    let mut cache = lock_system_ca_cache(cache);
-    *cache = None;
-    let snapshot = Arc::new(load()?);
     *cache = Some(Arc::clone(&snapshot));
     Ok(snapshot)
 }
@@ -640,18 +772,11 @@ mod tests {
             cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
                 .unwrap();
         fs::write(&path, ca_pem()).unwrap();
-        let new = refresh_cached_system_ca_snapshot(&cache, || {
-            SystemCaSnapshot::load_from_path(path.clone())
-        })
-        .unwrap();
+        let refresh = || refresh_system_ca_snapshot_from(&cache, || Ok(path.clone()), None);
+        let new = refresh().unwrap();
         assert_ne!(old.identity(), new.identity());
         fs::remove_file(&path).unwrap();
-        assert!(
-            refresh_cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(
-                path.clone()
-            ))
-            .is_err()
-        );
+        assert!(refresh().is_err());
         assert!(
             cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
                 .is_err()
@@ -662,6 +787,43 @@ mod tests {
             cached_system_ca_snapshot(&cache, || SystemCaSnapshot::load_from_path(path.clone()))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn refresh_tracks_trust_metadata_and_reuses_identical_snapshot() {
+        let directory = TestDirectory::new("metadata-refresh");
+        let path = directory.path("roots.pem");
+        let metadata = directory.path("trust.json");
+        fs::write(&path, ca_pem()).unwrap();
+        fs::write(&metadata, b"{}").unwrap();
+        let cache = Mutex::new(None);
+        let refresh =
+            || refresh_system_ca_snapshot_from(&cache, || Ok(path.clone()), Some(metadata.clone()));
+        let first = refresh().unwrap();
+        assert!(Arc::ptr_eq(&first, &refresh().unwrap()));
+        assert!(!first.has_mtc_trust());
+
+        fs::write(
+            &metadata,
+            include_bytes!("../../../testdata/tls_trust/mtc.json"),
+        )
+        .unwrap();
+        let changed = refresh().unwrap();
+        assert_eq!(changed.identity().sha256, first.identity().sha256);
+        assert_ne!(
+            changed.identity().trust_metadata_sha256,
+            first.identity().trust_metadata_sha256
+        );
+        assert!(changed.has_mtc_trust());
+        assert!(Arc::ptr_eq(&changed, &refresh().unwrap()));
+
+        fs::write(&metadata, b"truncated").unwrap();
+        assert!(matches!(
+            refresh(),
+            Err(SystemCaError::TrustMetadata { .. })
+        ));
+        assert!(cache.lock().unwrap().is_none());
+        assert!(changed.has_mtc_trust());
     }
 
     #[test]

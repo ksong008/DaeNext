@@ -81,6 +81,7 @@ unsafe extern "C" {
 pub(super) fn configure_utls_template_boring_context(
     builder: &mut boring::ssl::SslConnectorBuilder,
     fingerprint: &ResidentUtlsFingerprintPlan,
+    system_ca: Option<&SystemCaSnapshot>,
 ) -> Result<(), String> {
     let browser_options = match fingerprint.name.as_str() {
         CHROME_132_FINGERPRINT | CHROME_152_FINGERPRINT => Some((
@@ -108,9 +109,16 @@ pub(super) fn configure_utls_template_boring_context(
         builder.enable_ocsp_stapling();
         builder.enable_signed_cert_timestamps();
         if fingerprint.name == CHROME_152_FINGERPRINT {
+            // The connector and its session cache are keyed by the CA snapshot identity.
             unsafe {
                 boring_sys::SSL_CTX_set_grease_sigalgs_enabled(builder.as_ptr(), 1);
                 boring_sys::DAE_SSL_CTX_enable_zero_server_padding(builder.as_ptr());
+            }
+            if let Some(ca) = system_ca {
+                ca.install_chrome_152_trust_in_builder(builder)
+                    .map_err(|err| {
+                        format!("configure BoringSSL Chrome 152 trust anchors: {err}")
+                    })?;
             }
         }
         return configure_brotli_certificate_compression(builder);
@@ -128,6 +136,18 @@ pub(super) fn configure_utls_template_boring_context(
         configure_brotli_certificate_compression(builder)?;
     }
     Ok(())
+}
+
+pub(super) fn chrome_152_trust_anchors<'a>(
+    fingerprint: Option<&ResidentUtlsFingerprintPlan>,
+    system_ca: Option<&'a SystemCaSnapshot>,
+) -> &'a [u8] {
+    match (fingerprint, system_ca) {
+        (Some(fingerprint), Some(ca)) if fingerprint.name == CHROME_152_FINGERPRINT => {
+            ca.chrome_152_trust_anchor_ids()
+        }
+        _ => &[],
+    }
 }
 
 fn configure_brotli_certificate_compression(

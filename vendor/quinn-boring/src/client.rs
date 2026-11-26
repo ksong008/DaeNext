@@ -1,6 +1,6 @@
 use crate::alpn::AlpnProtocols;
 use crate::bffi_ext::QuicSslContext;
-use crate::error::{map_result, Result};
+use crate::error::{br, map_result, Result};
 use crate::session_state::{SessionState, QUIC_METHOD};
 use crate::version::QuicVersion;
 use crate::{Entry, KeyLog, NoKeyLog, NoSessionCache, QuicSsl, QuicSslSession, SessionCache};
@@ -30,6 +30,7 @@ type VerifyCallback = dyn Fn(bool, &mut X509StoreContextRef) -> bool + Send + Sy
 type ConfigureSsl = dyn Fn(&mut boring::ssl::SslRef) -> Result<()> + Send + Sync;
 
 /// Configuration for a client-side QUIC. Wraps around a BoringSSL [SslContext].
+#[derive(Clone)]
 pub struct Config {
     ctx: SslContext,
     session_cache: Arc<dyn SessionCache>,
@@ -38,6 +39,7 @@ pub struct Config {
     custom_verify_callback: Option<Arc<CustomVerifyCallback>>,
     verify_callback: Option<Arc<VerifyCallback>>,
     configure_ssl: Option<Arc<ConfigureSsl>>,
+    requested_trust_anchors: Option<Arc<[u8]>>,
 }
 
 impl Config {
@@ -78,6 +80,7 @@ impl Config {
             custom_verify_callback: None,
             verify_callback: None,
             configure_ssl: None,
+            requested_trust_anchors: None,
         })
     }
 
@@ -176,6 +179,12 @@ impl Config {
     {
         self.configure_ssl = Some(Arc::new(configure));
     }
+
+    /// Overrides the requested trust anchors for a full retry handshake.
+    pub fn set_trust_anchor_retry(&mut self, ids: Arc<[u8]>) {
+        self.requested_trust_anchors = Some(ids);
+        self.session_cache = Arc::new(NoSessionCache);
+    }
 }
 
 impl crypto::ClientConfig for Config {
@@ -236,6 +245,12 @@ impl Session {
 
         if let Some(configure) = &cfg.configure_ssl {
             configure(&mut ssl)?;
+        }
+        if let Some(ids) = &cfg.requested_trust_anchors {
+            br(unsafe {
+                bffi::SSL_set1_requested_trust_anchors(ssl.as_ptr(), ids.as_ptr(), ids.len())
+            })?;
+            unsafe { bffi::SSL_set_early_data_enabled(ssl.as_ptr(), 0) };
         }
 
         // Configure verification for the server hostname.

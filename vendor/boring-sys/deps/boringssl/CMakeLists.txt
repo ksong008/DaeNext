@@ -658,6 +658,8 @@ endif()
 add_library(pki ${PKI_SOURCES})
 target_link_libraries(pki crypto)
 target_compile_options(pki PRIVATE ${PKI_CXX_FLAGS})
+# Include the MTC verifier in the existing libssl archive used by DaeNext.
+target_sources(ssl PRIVATE ssl/dae_mtc.cc ${PKI_SOURCES})
 
 if(BUILD_TESTING)
   add_library(test_support_lib STATIC

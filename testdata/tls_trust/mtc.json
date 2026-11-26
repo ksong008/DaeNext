@@ -1,0 +1,20 @@
+{
+  "mtc": {
+    "valid_from_unix": 1577836800,
+    "expires_unix": 1924992000,
+    "logs": [
+      {
+        "log_id": "32473.1",
+        "advertised_ids": ["32473.1.13"],
+        "subtrees": [
+          {
+            "start": 8,
+            "end": 13,
+            "sha256": "8b607ce8f751dab6af80ec9f1a8dcb2c6d5b1d24cd10cd4c5c5325c95c0669a3"
+          }
+        ],
+        "revoked_serials": []
+      }
+    ]
+  }
+}

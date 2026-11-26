@@ -9,6 +9,7 @@ use dae_runtime_control::OwnerGeneration;
 use sha2::{Digest, Sha256};
 
 use crate::RESIDENT_RUNTIME_RESOURCE_DRAIN_GRACE;
+use dae_outbound_quic::boring_quic::BoringQuicTrustAnchorConfig;
 use dae_resident_model::ResidentXhttpQuicTlsProvider;
 
 pub struct XhttpH3Connection {
@@ -170,7 +171,7 @@ async fn open_xhttp_h3_connection(
         dae_runtime_control::AbsoluteDeadline::from_now(Instant::now(), RESIDENT_CONNECT_TIMEOUT);
     let tls_provider = xhttp_h3_tls_provider(endpoint, role)?;
     let system_ca = xhttp_h3_system_ca_snapshot(endpoint)?;
-    let client_config = build_xhttp_h3_client_config_with_system_ca(
+    let (client_config, anchor_configs) = build_xhttp_h3_client_config_with_system_ca(
         endpoint,
         tls_provider,
         system_ca.clone(),
@@ -192,12 +193,9 @@ async fn open_xhttp_h3_connection(
         role,
         &[&transport_identity],
     );
-    let (_, quic_endpoint, connection) = connect_quic_endpoint_candidates_async(
-        candidates,
-        &endpoint.server_name,
-        deadline,
-        "connect xHTTP H3 QUIC endpoint",
-        |remote, deadline, cancellation| {
+    let mut observed_selection = Vec::new();
+    let open_endpoint =
+        |remote, deadline, cancellation: &dae_runtime_control::OwnerCancellationSignal, config| {
             let mut quic_endpoint = open_marked_quic_endpoint_for_remote(
                 mark,
                 remote,
@@ -205,11 +203,52 @@ async fn open_xhttp_h3_connection(
                 deadline,
                 cancellation,
             )?;
-            quic_endpoint.set_default_client_config(client_config.clone());
+            quic_endpoint.set_default_client_config(config);
             Ok(quic_endpoint)
+        };
+    let first = connect_quic_endpoint_candidates_async(
+        candidates,
+        &endpoint.server_name,
+        deadline,
+        "connect xHTTP H3 QUIC endpoint",
+        |remote, deadline, cancellation| {
+            let config = match &anchor_configs {
+                Some(configs) => {
+                    let (config, observed) = configs.observe_selection_failure();
+                    observed_selection.push((remote, observed));
+                    config
+                }
+                None => client_config.clone(),
+            };
+            open_endpoint(remote, deadline, cancellation, config)
         },
     )
-    .await?;
+    .await;
+    let (_, quic_endpoint, connection) = match first {
+        Ok(connection) => connection,
+        Err(first_failure) => {
+            let selected = observed_selection
+                .into_iter()
+                .find_map(|(remote, observed)| observed.take_selected().map(|id| (remote, id)));
+            let Some((configs, (remote, id))) = anchor_configs.zip(selected) else {
+                return Err(first_failure);
+            };
+            if deadline.remaining_at(Instant::now()).is_none() {
+                return Err(first_failure);
+            }
+            let retry = configs.retry(id);
+            connect_quic_endpoint_candidates_async(
+                &[remote],
+                &endpoint.server_name,
+                deadline,
+                "connect xHTTP H3 after one trust anchor retry",
+                |remote, deadline, cancellation| {
+                    open_endpoint(remote, deadline, cancellation, retry.clone())
+                },
+            )
+            .await?
+        }
+    };
     let cancellation_guard = quic_endpoint.cancellation_guard();
     let h3_connection = h3_quinn::Connection::new(connection.clone());
     let remaining = deadline
@@ -320,6 +359,9 @@ fn xhttp_h3_session_namespace(
     if let Some(system_ca) = system_ca {
         update_xhttp_h3_identity_part(&mut digest, system_ca.path.to_string_lossy().as_bytes());
         update_xhttp_h3_identity_part(&mut digest, system_ca.sha256.as_bytes());
+        if let Some(metadata) = &system_ca.trust_metadata_sha256 {
+            update_xhttp_h3_identity_part(&mut digest, metadata.as_bytes());
+        }
         update_xhttp_h3_identity_part(
             &mut digest,
             &(system_ca.certificate_count as u64).to_be_bytes(),
@@ -715,6 +757,7 @@ pub(super) fn build_xhttp_h3_client_config(
 ) -> Result<quinn::ClientConfig, String> {
     let system_ca = xhttp_h3_system_ca_snapshot(endpoint)?;
     build_xhttp_h3_client_config_with_system_ca(endpoint, tls_provider, system_ca, session_cache)
+        .map(|(config, _)| config)
 }
 
 fn build_xhttp_h3_client_config_with_system_ca(
@@ -722,7 +765,7 @@ fn build_xhttp_h3_client_config_with_system_ca(
     tls_provider: ResidentXhttpQuicTlsProvider,
     system_ca: Option<Arc<dae_outbound_quic::system_ca::SystemCaSnapshot>>,
     session_cache: Option<dae_outbound_quic::boring_quic::BoringQuicSessionCache>,
-) -> Result<quinn::ClientConfig, String> {
+) -> Result<(quinn::ClientConfig, Option<BoringQuicTrustAnchorConfig>), String> {
     if endpoint.ech.is_some() {
         return Err(format!(
             "xHTTP H3 ECH is unavailable with {}: the QUIC TLS provider does not expose per-connection ECH acceptance and authenticated retry configs",
@@ -736,7 +779,7 @@ fn build_xhttp_h3_client_config_with_system_ca(
         ));
     }
     let policy = xhttp_h3_boring_policy(endpoint, tls_provider)?;
-    dae_outbound_quic::boring_quic::build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot(
+    BoringQuicTrustAnchorConfig::build(
         &policy,
         Arc::new(xhttp_h3_transport_config_for_provider(
             endpoint,

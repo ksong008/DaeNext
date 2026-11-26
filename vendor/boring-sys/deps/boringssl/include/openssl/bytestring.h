@@ -389,6 +389,14 @@ OPENSSL_EXPORT int CBS_is_valid_asn1_oid(const CBS *cbs);
 // OID components are too large.
 OPENSSL_EXPORT char *CBS_asn1_oid_to_text(const CBS *cbs);
 
+// CBS_get_asn1_oid_component reads a minimally encoded base-128 component.
+// It returns one on success and zero on overflow or invalid encoding.
+OPENSSL_EXPORT int CBS_get_asn1_oid_component(CBS *cbs, uint64_t *out);
+
+// CBS_asn1_relative_oid_to_text converts DER RELATIVE-OID contents to dotted
+// decimal text. The caller must release the result with OPENSSL_free.
+OPENSSL_EXPORT char *CBS_asn1_relative_oid_to_text(const CBS *cbs);
+
 
 // CBS_parse_generalized_time returns one if |cbs| is a valid DER-encoded, ASN.1
 // GeneralizedTime body within the limitations imposed by RFC 5280, or zero

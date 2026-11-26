@@ -393,6 +393,7 @@ mod tests {
         first.system_ca = Some(SystemCaIdentity {
             path: "/etc/ssl/certs/ca-certificates.crt".into(),
             sha256: "first".to_owned(),
+            trust_metadata_sha256: None,
             certificate_count: 1,
         });
         let mut second = first.clone();
@@ -454,6 +455,7 @@ mod tests {
         active_old_ca.system_ca = Some(SystemCaIdentity {
             path: "/etc/ssl/certs/ca-certificates.crt".into(),
             sha256: "old".to_owned(),
+            trust_metadata_sha256: None,
             certificate_count: 1,
         });
         let mut inactive = cache_key("inactive");
@@ -480,6 +482,7 @@ mod tests {
         old_ca.system_ca = Some(SystemCaIdentity {
             path: "/etc/ssl/certs/ca-certificates.crt".into(),
             sha256: "old".to_owned(),
+            trust_metadata_sha256: None,
             certificate_count: 1,
         });
         let mut current_ca = old_ca.clone();

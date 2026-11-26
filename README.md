@@ -84,6 +84,9 @@ Current limits:
 - Fingerprint-aware TLS is supported through the resident underlay, but this
   project does not claim complete Go-uTLS wire parity for every fingerprint
   mode.
+- Explicit `chrome_152` profiles support locally configured trust anchor
+  groups and Merkle Tree Certificate checkpoints. See the
+  [trust metadata configuration](docs/tls-trust-metadata.md).
 - Unsupported packet chains fail closed instead of silently falling back to a
   direct connection or a different transport.
 

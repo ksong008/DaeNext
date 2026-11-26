@@ -18,6 +18,8 @@ use crate::system_ca::{SystemCaIdentity, SystemCaSnapshot, system_ca_snapshot};
 use dae_outbound_core::OutboundError;
 
 mod config_cache;
+#[cfg(test)]
+mod trust_anchor_tests;
 
 pub const BORING_QUIC_PROVIDER_EVIDENCE: &str = "quinn-boringssl";
 pub const BORING_QUIC_GENERATION_SESSION_CACHE_ENTRIES: usize = 256;
@@ -160,6 +162,64 @@ pub fn build_boring_quic_client_config_with_session_cache_and_system_ca_snapshot
     system_ca: Option<Arc<SystemCaSnapshot>>,
 ) -> Result<quinn::ClientConfig, OutboundError> {
     config_cache::client_config(policy, transport, session_cache, system_ca)
+        .map(|(config, _)| config)
+}
+
+pub struct BoringQuicTrustAnchorConfig {
+    crypto: Arc<quinn_boring::ClientConfig>,
+    transport: Arc<quinn::TransportConfig>,
+    trusted_ids: Arc<[u8]>,
+}
+
+impl BoringQuicTrustAnchorConfig {
+    pub fn build(
+        policy: &BoringQuicClientPolicy,
+        transport: Arc<quinn::TransportConfig>,
+        session_cache: Option<BoringQuicSessionCache>,
+        system_ca: Option<Arc<SystemCaSnapshot>>,
+    ) -> Result<(quinn::ClientConfig, Option<Self>), OutboundError> {
+        let (config, crypto) = config_cache::client_config(
+            policy,
+            transport.clone(),
+            session_cache,
+            system_ca.clone(),
+        )?;
+        let ids = system_ca
+            .as_deref()
+            .map_or(&[][..], SystemCaSnapshot::chrome_152_trust_anchor_ids);
+        let retry = (policy.client_hello == BoringQuicClientHelloProfile::Chrome152
+            && policy.verification == BoringQuicVerificationPolicy::SystemRoots
+            && !ids.is_empty())
+        .then(|| Self {
+            crypto,
+            transport,
+            trusted_ids: Arc::from(ids),
+        });
+        Ok((config, retry))
+    }
+
+    pub fn observe_selection_failure(&self) -> (quinn::ClientConfig, dae_tls::TrustAnchorRetry) {
+        let retry = dae_tls::TrustAnchorRetry::new(self.trusted_ids.clone())
+            .expect("admitted trust anchors");
+        let recorder = retry.clone();
+        let mut crypto = (*self.crypto).clone();
+        crypto.set_verify_callback(SslVerifyMode::PEER, move |valid, context| {
+            recorder.record_verification(valid, context)
+        });
+        (self.client_config(crypto), retry)
+    }
+
+    pub fn retry(&self, id: Vec<u8>) -> quinn::ClientConfig {
+        let mut crypto = (*self.crypto).clone();
+        crypto.set_trust_anchor_retry(id.into());
+        self.client_config(crypto)
+    }
+
+    fn client_config(&self, crypto: quinn_boring::ClientConfig) -> quinn::ClientConfig {
+        let mut config = quinn::ClientConfig::new(Arc::new(crypto));
+        config.transport_config(self.transport.clone());
+        config
+    }
 }
 
 #[doc(hidden)]
@@ -282,11 +342,20 @@ fn build_boring_quic_client_crypto_with_session_cache(
         OutboundError::BadSharedTransport(format!("set BoringSSL QUIC ALPN: {err}"))
     })?;
     configure_client_hello_profile(crypto.ctx_mut(), policy.client_hello)?;
+    let mut mtc_trust = false;
     if policy.client_hello == BoringQuicClientHelloProfile::Chrome152 {
-        configure_chrome_152(&mut crypto)?;
+        let ca = if policy.verification == BoringQuicVerificationPolicy::SystemRoots {
+            system_ca.as_deref()
+        } else {
+            None
+        };
+        configure_chrome_152(&mut crypto, ca)?;
+        mtc_trust = ca.is_some_and(SystemCaSnapshot::has_mtc_trust);
     }
-    crypto.ctx_mut().enable_early_data(policy.zero_rtt);
-    if let Some(session_cache) = session_cache {
+    crypto
+        .ctx_mut()
+        .enable_early_data(policy.zero_rtt && !mtc_trust);
+    if let Some(session_cache) = session_cache.filter(|_| !mtc_trust) {
         crypto.set_session_cache(session_cache);
     } else {
         crypto.set_session_cache(Arc::new(quinn_boring::NoSessionCache));
@@ -348,6 +417,9 @@ fn session_cache_namespace(
             system_ca.path.to_string_lossy().as_bytes(),
         );
         update_session_cache_namespace_part(&mut digest, system_ca.sha256.as_bytes());
+        if let Some(metadata) = &system_ca.trust_metadata_sha256 {
+            update_session_cache_namespace_part(&mut digest, metadata.as_bytes());
+        }
         update_session_cache_namespace_part(
             &mut digest,
             &(system_ca.certificate_count as u64).to_be_bytes(),
@@ -407,7 +479,10 @@ fn configure_client_hello_profile(
     Ok(())
 }
 
-fn configure_chrome_152(crypto: &mut quinn_boring::ClientConfig) -> Result<(), OutboundError> {
+fn configure_chrome_152(
+    crypto: &mut quinn_boring::ClientConfig,
+    system_ca: Option<&SystemCaSnapshot>,
+) -> Result<(), OutboundError> {
     use foreign_types::ForeignTypeRef;
 
     let ctx = crypto.ctx_mut().as_ptr();
@@ -423,6 +498,13 @@ fn configure_chrome_152(crypto: &mut quinn_boring::ClientConfig) -> Result<(), O
             "configure BoringSSL Chrome 152 QUIC TLS: {}",
             boring_v4_compat::error::ErrorStack::get()
         )));
+    }
+    if let Some(ca) = system_ca {
+        unsafe { ca.install_chrome_152_trust(ctx) }.map_err(|err| {
+            OutboundError::BadSharedTransport(format!(
+                "configure BoringSSL Chrome 152 trust anchors: {err}"
+            ))
+        })?;
     }
     crypto.set_ssl_configuration(|ssl| {
         let h3 = b"h3";
@@ -688,11 +770,13 @@ mod tests {
         let first = SystemCaIdentity {
             path: "/etc/ssl/first.pem".into(),
             sha256: "11".repeat(32),
+            trust_metadata_sha256: None,
             certificate_count: 1,
         };
         let second = SystemCaIdentity {
             path: "/etc/ssl/second.pem".into(),
             sha256: "22".repeat(32),
+            trust_metadata_sha256: None,
             certificate_count: 2,
         };
 

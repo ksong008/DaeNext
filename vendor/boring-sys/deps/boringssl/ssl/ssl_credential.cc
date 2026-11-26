@@ -16,6 +16,9 @@
 
 #include <assert.h>
 
+#include <algorithm>
+
+#include <openssl/bytestring.h>
 #include <openssl/span.h>
 
 #include "../crypto/internal.h"
@@ -82,7 +85,7 @@ bool ssl_credential_matches_requested_issuers(SSL_HANDSHAKE *hs,
   }
   // If the credential has a trust anchor ID and it matches one sent by the
   // peer, it is good.
-  if (!cred->trust_anchor_id.empty() && hs->peer_requested_trust_anchors) {
+  if (hs->peer_requested_trust_anchors) {
     CBS cbs = CBS(*hs->peer_requested_trust_anchors), candidate;
     while (CBS_len(&cbs) > 0) {
       if (!CBS_get_u8_length_prefixed(&cbs, &candidate) ||
@@ -90,7 +93,11 @@ bool ssl_credential_matches_requested_issuers(SSL_HANDSHAKE *hs,
         OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
         return false;
       }
-      if (candidate == Span(cred->trust_anchor_id)) {
+      if (candidate == Span(cred->trust_anchor_id) ||
+          std::any_of(cred->trust_anchor_groups.begin(),
+                      cred->trust_anchor_groups.end(), [&](const auto &group) {
+                        return group.Contains(candidate);
+                      })) {
         hs->matched_peer_trust_anchor = true;
         return true;
       }
@@ -628,6 +635,38 @@ int SSL_CREDENTIAL_set1_trust_anchor_id(SSL_CREDENTIAL *cred, const uint8_t *id,
   }
 
   return 1;
+}
+
+bool ssl_credential_st::TrustAnchorGroupRange::Contains(
+    Span<const uint8_t> id) const {
+  if (id.size() <= base.size() || id.first(base.size()) != base) {
+    return false;
+  }
+  CBS rest = id.subspan(base.size());
+  uint64_t version;
+  return CBS_get_asn1_oid_component(&rest, &version) && CBS_len(&rest) == 0 &&
+         min <= version && version <= max;
+}
+
+int SSL_CREDENTIAL_add1_trust_anchor_group_inclusion(SSL_CREDENTIAL *cred,
+                                                     const uint8_t *base,
+                                                     size_t base_len,
+                                                     uint64_t min,
+                                                     uint64_t max) {
+  CBS oid(Span(base, base_len));
+  UniquePtr<char> oid_text(CBS_asn1_relative_oid_to_text(&oid));
+  if (!cred->UsesX509() || base_len == 0 || base_len >= 255 || min > max ||
+      !oid_text) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_TRUST_ANCHOR_LIST);
+    return 0;
+  }
+  ssl_credential_st::TrustAnchorGroupRange group;
+  if (!group.base.CopyFrom(Span(base, base_len))) {
+    return 0;
+  }
+  group.min = min;
+  group.max = max;
+  return cred->trust_anchor_groups.Push(std::move(group));
 }
 
 int SSL_CREDENTIAL_set1_certificate_properties(

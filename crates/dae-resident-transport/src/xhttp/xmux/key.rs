@@ -53,6 +53,7 @@ struct XhttpSystemCaIdentity {
     path: String,
     sha256: String,
     certificate_count: usize,
+    trust_metadata_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -376,6 +377,7 @@ fn xhttp_system_ca_identity(
         path: identity.path.to_string_lossy().into_owned(),
         sha256: identity.sha256.clone(),
         certificate_count: identity.certificate_count,
+        trust_metadata_sha256: identity.trust_metadata_sha256.clone(),
     }))
 }
 
@@ -402,6 +404,9 @@ fn xhttp_session_namespace(
     if let Some(system_ca) = system_ca {
         update_identity_part(&mut digest, system_ca.path.as_bytes());
         update_identity_part(&mut digest, system_ca.sha256.as_bytes());
+        if let Some(metadata) = &system_ca.trust_metadata_sha256 {
+            update_identity_part(&mut digest, metadata.as_bytes());
+        }
         update_identity_part(
             &mut digest,
             &(system_ca.certificate_count as u64).to_be_bytes(),

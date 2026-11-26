@@ -221,11 +221,13 @@ fn system_ca_snapshot_partitions_security_and_session_identity() {
     let first_ca = XhttpSystemCaIdentity {
         path: "/etc/ssl/first.pem".to_owned(),
         sha256: "11".repeat(32),
+        trust_metadata_sha256: None,
         certificate_count: 10,
     };
     let second_ca = XhttpSystemCaIdentity {
         path: "/etc/ssl/second.pem".to_owned(),
         sha256: "22".repeat(32),
+        trust_metadata_sha256: None,
         certificate_count: 11,
     };
     let first_security = security_identity(&endpoint, None, None, Some(first_ca.clone()));

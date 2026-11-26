@@ -52,6 +52,8 @@ impl ResidentBoringTlsSessionStats {
 pub(super) struct ResidentBoringTlsContextEntry {
     connector: SslConnector,
     sessions: Arc<Mutex<ResidentBoringTlsSessionCache>>,
+    pub(super) trust_anchor_ids: Arc<[u8]>,
+    mtc_trust: bool,
 }
 
 impl fmt::Debug for ResidentBoringTlsContextEntry {
@@ -69,6 +71,7 @@ impl ResidentBoringTlsContextEntry {
         context: &'static str,
     ) -> Result<Self, String> {
         configure_boring_tls_profile(&mut builder);
+        let mtc_trust = unsafe { boring_sys::DAE_SSL_CTX_has_mtc_trust(builder.as_ptr()) != 0 };
         let session_key_index = resident_boring_tls_session_key_index()
             .map_err(|err| format!("allocate {context} BoringSSL session key index: {err}"))?;
         let sessions = Arc::new(Mutex::new(ResidentBoringTlsSessionCache::default()));
@@ -87,6 +90,8 @@ impl ResidentBoringTlsContextEntry {
         Ok(Self {
             connector: builder.build(),
             sessions,
+            trust_anchor_ids: Arc::default(),
+            mtc_trust,
         })
     }
 
@@ -104,6 +109,12 @@ impl ResidentBoringTlsContextEntry {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
+        // Active sessions must never authenticate using stale MTC checkpoints.
+        if self.mtc_trust {
+            return tokio_boring::connect(config, server_name, stream)
+                .await
+                .map_err(ResidentBoringTlsConnectError::Handshake);
+        }
         let attempt = self
             .prepare_session(&mut config, session_key)
             .map_err(ResidentBoringTlsConnectError::Session)?;

@@ -1,5 +1,6 @@
 mod client;
 mod system_ca;
+mod trust_anchor_retry;
 
 pub use client::{
     BoringTlsVerification, TlsClientError, TlsClientErrorKind, build_boring_tls_context,
@@ -10,3 +11,4 @@ pub use system_ca::{
     SYSTEM_CA_BUNDLE_PATHS, SystemCaError, SystemCaIdentity, SystemCaSnapshot,
     invalidate_system_ca_snapshot, refresh_system_ca_snapshot, system_ca_snapshot,
 };
+pub use trust_anchor_retry::TrustAnchorRetry;

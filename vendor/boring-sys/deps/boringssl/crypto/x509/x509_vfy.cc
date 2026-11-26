@@ -658,6 +658,34 @@ static int check_id(X509_STORE_CTX *ctx) {
   return 1;
 }
 
+int x509_finish_mtc_verification(X509_STORE_CTX *ctx, int verified) {
+  ctx->current_cert = ctx->cert;
+  ctx->error_depth = 0;
+  if (verified) {
+    if (ctx->param->poison ||
+        (sk_OPENSSL_STRING_num(ctx->param->hosts) == 0 && !ctx->param->ip)) {
+      ctx->error = X509_V_ERR_INVALID_CALL;
+      verified = 0;
+    } else {
+      const auto callback = ctx->verify_cb;
+      ctx->verify_cb = null_callback;
+      ctx->error = X509_V_OK;
+      verified = check_id(ctx);
+      ctx->verify_cb = callback;
+    }
+  }
+  // Allow an application callback to impose additional constraints. A proof
+  // or identity failure is fatal even if the callback attempts to override it.
+  const int error = ctx->error;
+  const int accepted = call_verify_cb(verified, ctx);
+  if (!verified) {
+    ctx->error = error;
+  } else if (!accepted && ctx->error == X509_V_OK) {
+    ctx->error = X509_V_ERR_APPLICATION_VERIFICATION;
+  }
+  return verified && accepted;
+}
+
 static int check_trust(X509_STORE_CTX *ctx) {
   X509 *x = nullptr;
   // Check all trusted certificates in chain

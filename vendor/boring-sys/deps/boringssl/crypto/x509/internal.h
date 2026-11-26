@@ -427,6 +427,9 @@ int X509_policy_check(const STACK_OF(X509) *certs,
 int x509_check_issued_with_callback(X509_STORE_CTX *ctx, const X509 *x,
                                     const X509 *issuer);
 
+// Checks a configured DNS name or IP for an independently verified leaf.
+int x509_finish_mtc_verification(X509_STORE_CTX *ctx, int verified);
+
 // x509v3_bytes_to_hex encodes |len| bytes from |in| to hex and returns a
 // newly-allocated NUL-terminated string containing the result, or NULL on
 // allocation error.

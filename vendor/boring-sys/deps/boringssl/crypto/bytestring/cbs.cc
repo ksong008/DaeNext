@@ -754,6 +754,32 @@ err:
   return nullptr;
 }
 
+int CBS_get_asn1_oid_component(CBS *cbs, uint64_t *out) {
+  return parse_base128_integer(cbs, out);
+}
+
+char *CBS_asn1_relative_oid_to_text(const CBS *cbs) {
+  CBS copy = *cbs;
+  bssl::ScopedCBB cbb;
+  uint64_t value;
+  if (!CBB_init(cbb.get(), 32) || !parse_base128_integer(&copy, &value) ||
+      !add_decimal(cbb.get(), value)) {
+    return nullptr;
+  }
+  while (CBS_len(&copy) != 0) {
+    if (!parse_base128_integer(&copy, &value) || !CBB_add_u8(cbb.get(), '.') ||
+        !add_decimal(cbb.get(), value)) {
+      return nullptr;
+    }
+  }
+  uint8_t *text;
+  size_t len;
+  if (!CBB_add_u8(cbb.get(), '\0') || !CBB_finish(cbb.get(), &text, &len)) {
+    return nullptr;
+  }
+  return reinterpret_cast<char *>(text);
+}
+
 static int cbs_get_two_digits(CBS *cbs, int *out) {
   uint8_t first_digit, second_digit;
   if (!CBS_get_u8(cbs, &first_digit)) {

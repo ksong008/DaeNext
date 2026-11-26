@@ -7,6 +7,7 @@ struct Entry {
     ca: Option<SystemCaIdentity>,
     sessions: Option<Weak<dyn quinn_boring::SessionCache>>,
     config: quinn::ClientConfig,
+    crypto: Arc<quinn_boring::ClientConfig>,
 }
 #[cfg(test)]
 thread_local! { static BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
@@ -17,7 +18,7 @@ pub(super) fn client_config(
     transport: Arc<quinn::TransportConfig>,
     sessions: Option<BoringQuicSessionCache>,
     ca: Option<Arc<SystemCaSnapshot>>,
-) -> Result<quinn::ClientConfig, OutboundError> {
+) -> Result<(quinn::ClientConfig, Arc<quinn_boring::ClientConfig>), OutboundError> {
     let ca = if verification_requires_system_roots(&policy.verification) {
         Some(match ca {
             Some(ca) => ca,
@@ -55,20 +56,24 @@ pub(super) fn client_config(
             let mut config = entry.config.clone();
             // Congestion factories and transport limits belong to this caller.
             config.transport_config(transport);
-            return Ok(config);
+            return Ok((config, Arc::clone(&entry.crypto)));
         }
     }
     #[cfg(test)]
     BUILDS.with(|count| count.set(count.get() + 1));
-    let crypto =
-        build_boring_quic_client_crypto_with_session_cache(policy, sessions.clone(), ca.clone())?;
-    let mut config = quinn::ClientConfig::new(Arc::new(crypto));
+    let crypto = Arc::new(build_boring_quic_client_crypto_with_session_cache(
+        policy,
+        sessions.clone(),
+        ca.clone(),
+    )?);
+    let mut config = quinn::ClientConfig::new(crypto.clone());
     config.transport_config(transport);
     let entry = Entry {
         policy: policy.clone(),
         ca: ca_identity.cloned(),
         sessions: sessions.as_ref().map(Arc::downgrade),
         config: config.clone(),
+        crypto: Arc::clone(&crypto),
     };
     let retired = {
         let mut cache = configs.lock().unwrap_or_else(|error| error.into_inner());
@@ -82,7 +87,7 @@ pub(super) fn client_config(
         cache.insert(hash, entry)
     };
     drop(retired);
-    Ok(config)
+    Ok((config, crypto))
 }
 
 #[cfg(test)]

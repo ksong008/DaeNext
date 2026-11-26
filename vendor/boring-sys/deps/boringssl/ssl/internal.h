@@ -60,6 +60,11 @@ BSSL_NAMESPACE_BEGIN
 
 struct SSL_CONFIG;
 struct SSL_HANDSHAKE;
+struct DAEMTCTrust;
+bool ssl_dae_append_mtc_anchor_ids(SSL *ssl);
+std::optional<int> ssl_dae_verify_mtc(const SSL_CTX *ctx,
+                                      CRYPTO_BUFFER *certificate,
+                                      X509_STORE_CTX *verify_context);
 struct SSL_PROTOCOL_METHOD;
 struct SSL_X509_METHOD;
 
@@ -1534,6 +1539,14 @@ struct ssl_credential_st : public bssl::RefCounted<ssl_credential_st> {
   // trust_anchor_id, if non-empty, is the trust anchor ID for the root of the
   // chain in |chain|.
   bssl::Array<uint8_t> trust_anchor_id;
+
+  struct TrustAnchorGroupRange {
+    bssl::Array<uint8_t> base;
+    uint64_t min = 0;
+    uint64_t max = 0;
+    bool Contains(bssl::Span<const uint8_t> id) const;
+  };
+  bssl::Vector<TrustAnchorGroupRange> trust_anchor_groups;
 
   CRYPTO_EX_DATA ex_data;
 
@@ -3324,6 +3337,7 @@ struct SSL_CONFIG {
 
   // Trust anchor IDs to be requested in the trust_anchors extension.
   std::optional<Array<uint8_t>> requested_trust_anchors;
+  bool dae_mtc_suppressed = false;
 
   // Our list of supported groups. If this list is modified, for a client,
   // |client_key_share_selections| must be reset if the key shares are no longer
@@ -4086,6 +4100,8 @@ struct ssl_ctx_st : public bssl::RefCounted<ssl_ctx_st> {
   bool resumption_across_names_enabled : 1;
   bool grease_sigalgs_enabled : 1;
   bool zero_server_padding_enabled : 1;
+
+  std::shared_ptr<const bssl::DAEMTCTrust> dae_mtc_trust;
 
  private:
   friend RefCounted;

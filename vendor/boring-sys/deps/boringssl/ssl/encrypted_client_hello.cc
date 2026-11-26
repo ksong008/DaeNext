@@ -934,7 +934,21 @@ int SSL_set1_ech_config_list(SSL *ssl, const uint8_t *ech_config_list,
     OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_ECH_CONFIG_LIST);
     return 0;
   }
-  return ssl->config->client_ech_config_list.CopyFrom(span);
+  if (!ssl->config->client_ech_config_list.CopyFrom(span)) {
+    return 0;
+  }
+  // The local MTC store is used for ordinary TLS. An ECH rejection must be
+  // authenticated using the existing X.509 policy for the public name.
+  if (ssl->ctx->dae_mtc_trust && !ssl->config->dae_mtc_suppressed) {
+    ssl->config->requested_trust_anchors.reset();
+    if (ssl->ctx->requested_trust_anchors &&
+        !ssl->config->requested_trust_anchors.emplace().CopyFrom(
+            *ssl->ctx->requested_trust_anchors)) {
+      return 0;
+    }
+    ssl->config->dae_mtc_suppressed = true;
+  }
+  return 1;
 }
 
 void SSL_get0_ech_name_override(const SSL *ssl, const char **out_name,

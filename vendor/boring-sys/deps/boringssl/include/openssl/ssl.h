@@ -3211,6 +3211,12 @@ OPENSSL_EXPORT int SSL_CREDENTIAL_set1_trust_anchor_id(SSL_CREDENTIAL *cred,
                                                        const uint8_t *id,
                                                        size_t id_len);
 
+// Matches a versioned trust anchor group from |base.min| to |base.max|,
+// inclusive. The base is a relative OID in wire format.
+OPENSSL_EXPORT int SSL_CREDENTIAL_add1_trust_anchor_group_inclusion(
+    SSL_CREDENTIAL *cred, const uint8_t *base, size_t base_len, uint64_t min,
+    uint64_t max);
+
 // SSL_CTX_set1_requested_trust_anchors configures |ctx| to request a
 // certificate issued by one of the trust anchors in |ids|. It returns one on
 // success and zero on error. |ids| must be a list of trust anchor IDs in
@@ -5288,6 +5294,12 @@ OPENSSL_EXPORT void SSL_CTX_set_grease_sigalgs_enabled(SSL_CTX *ctx, int enabled
 
 // DAE_SSL_CTX_enable_zero_server_padding requests zero bytes of server padding.
 OPENSSL_EXPORT void DAE_SSL_CTX_enable_zero_server_padding(SSL_CTX *ctx);
+
+// Installs locally trusted MTC log checkpoints and revocation lists. The
+// serialized store is documented in ssl/dae_mtc.cc and is copied by this call.
+OPENSSL_EXPORT int DAE_SSL_CTX_set1_mtc_trust(SSL_CTX *ctx, const uint8_t *data,
+                                            size_t len);
+OPENSSL_EXPORT int DAE_SSL_CTX_has_mtc_trust(const SSL_CTX *ctx);
 
 // SSL_CTX_set_permute_extensions configures whether sockets on |ctx| should
 // permute extensions. For now, this is only implemented for the ClientHello.

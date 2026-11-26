@@ -73,16 +73,17 @@ fn boring_connector_cached(
     }
     if let Some(fingerprint) = fingerprint {
         configure_boring_fingerprint(&mut builder, fingerprint)?;
-        configure_utls_template_boring_context(&mut builder, fingerprint)?;
+        configure_utls_template_boring_context(&mut builder, fingerprint, system_ca)?;
     }
     if !alpn.is_empty() {
         builder
             .set_alpn_protos(alpn)
             .map_err(|err| format!("set {context} BoringSSL ALPN: {err}"))?;
     }
-    let connector = Arc::new(ResidentBoringTlsContextEntry::build(builder, context)?);
+    let mut connector = ResidentBoringTlsContextEntry::build(builder, context)?;
+    connector.trust_anchor_ids = Arc::from(chrome_152_trust_anchors(fingerprint, system_ca));
     let mut cache = lock_tls_config_cache(cache);
-    Ok(cache.insert_or_get(key, connector))
+    Ok(cache.insert_or_get(key, Arc::new(connector)))
 }
 
 pub(super) fn boring_xhttp_endpoint_connector(
@@ -115,7 +116,7 @@ pub(super) fn boring_xhttp_endpoint_connector(
     }
     let mut builder = SslConnector::builder(SslMethod::tls())
         .map_err(|err| format!("create xHTTP BoringSSL connector: {err}"))?;
-    if let Some(system_ca) = system_ca {
+    if let Some(system_ca) = system_ca.as_deref() {
         system_ca.install_boring_builder(&mut builder);
     }
     configure_boring_certificate_verification(&mut builder, endpoint.allow_insecure);
@@ -129,7 +130,7 @@ pub(super) fn boring_xhttp_endpoint_connector(
     }
     if let Some(fingerprint) = &endpoint.utls_fingerprint {
         configure_boring_fingerprint(&mut builder, fingerprint)?;
-        configure_utls_template_boring_context(&mut builder, fingerprint)?;
+        configure_utls_template_boring_context(&mut builder, fingerprint, system_ca.as_deref())?;
     }
     let alpn = encode_boring_alpn_wire(&endpoint.alpn, "xHTTP")?;
     if !alpn.is_empty() {
@@ -137,9 +138,13 @@ pub(super) fn boring_xhttp_endpoint_connector(
             .set_alpn_protos(&alpn)
             .map_err(|err| format!("set xHTTP BoringSSL ALPN: {err}"))?;
     }
-    let connector = Arc::new(ResidentBoringTlsContextEntry::build(builder, "xHTTP")?);
+    let mut connector = ResidentBoringTlsContextEntry::build(builder, "xHTTP")?;
+    connector.trust_anchor_ids = Arc::from(chrome_152_trust_anchors(
+        endpoint.utls_fingerprint.as_ref(),
+        system_ca.as_deref(),
+    ));
     let mut cache = lock_tls_config_cache(cache);
-    Ok(cache.insert_or_get(key, connector))
+    Ok(cache.insert_or_get(key, Arc::new(connector)))
 }
 
 pub(super) fn configure_boring_certificate_verification(

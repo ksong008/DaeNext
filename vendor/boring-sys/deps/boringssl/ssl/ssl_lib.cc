@@ -547,6 +547,9 @@ SSL *SSL_new(SSL_CTX *ctx) {
       return nullptr;
     }
   }
+  if (ctx->dae_mtc_trust && !ssl_dae_append_mtc_anchor_ids(ssl.get())) {
+    return nullptr;
+  }
 
   if (ctx->psk_identity_hint) {
     ssl->config->psk_identity_hint.reset(
@@ -3852,6 +3855,7 @@ int SSL_set1_requested_trust_anchors(SSL *ssl, const uint8_t *ids,
     return 0;
   }
   ssl->config->requested_trust_anchors = std::move(copy);
+  ssl->config->dae_mtc_suppressed = true;
   return 1;
 }
 

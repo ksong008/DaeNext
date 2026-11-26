@@ -27,6 +27,7 @@
 
 #include "../crypto/internal.h"
 #include "../crypto/bytestring/internal.h"
+#include "../crypto/x509/internal.h"
 #include "internal.h"
 
 
@@ -245,9 +246,19 @@ static bool ssl_crypto_x509_session_verify_cert_chain(SSL_SESSION *session,
   }
 
   int verify_ret;
+  std::optional<int> mtc_result;
+  if (!ssl->server && ssl_ctx->app_verify_callback == nullptr &&
+      ssl_ctx->dae_mtc_trust && !hs->config->dae_mtc_suppressed &&
+      ssl_protocol_version(ssl) == TLS1_3_VERSION &&
+      hs->config->verify_mode != SSL_VERIFY_NONE && name_len == 0) {
+    mtc_result = ssl_dae_verify_mtc(
+        ssl_ctx, sk_CRYPTO_BUFFER_value(session->certs.get(), 0), ctx.get());
+  }
   if (ssl_ctx->app_verify_callback != nullptr) {
     verify_ret =
         ssl_ctx->app_verify_callback(ctx.get(), ssl_ctx->app_verify_arg);
+  } else if (mtc_result) {
+    verify_ret = x509_finish_mtc_verification(ctx.get(), *mtc_result);
   } else {
     verify_ret = X509_verify_cert(ctx.get());
   }

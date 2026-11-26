@@ -1304,6 +1304,8 @@ dependencies = [
  "boring 5.1.0",
  "boring-sys 5.1.0",
  "foreign-types",
+ "serde",
+ "serde_json",
  "sha2",
  "tokio",
  "tokio-boring",

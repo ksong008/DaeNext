@@ -29,11 +29,19 @@ BSSL_NAMESPACE_BEGIN
 // half-open interval [start, end) of tree indexes. A Subtree with start == end
 // represents a range of zero elements.
 struct Subtree {
-  uint64_t start;
-  uint64_t end;
+  uint64_t start = 0;
+  uint64_t end = 0;
 
   constexpr bool operator==(const Subtree &other) const {
     return start == other.start && end == other.end;
+  }
+
+  constexpr bool operator!=(const Subtree &other) const {
+    return !(*this == other);
+  }
+
+  constexpr bool operator<(const Subtree &other) const {
+    return std::tie(start, end) < std::tie(other.start, other.end);
   }
 
   // Returns the number of elements in the Subtree.
@@ -143,6 +151,11 @@ using TreeHashConstSpan = Span<const uint8_t, SHA256_DIGEST_LENGTH>;
 OPENSSL_EXPORT std::optional<TreeHash> EvaluateMerkleSubtreeConsistencyProof(
     uint64_t n, const Subtree &subtree, Span<const uint8_t> proof,
     TreeHashConstSpan node_hash);
+
+// Evaluates the inclusion proof for an entry in a specified subtree.
+OPENSSL_EXPORT std::optional<TreeHash> EvaluateMerkleSubtreeInclusionProof(
+    Span<const uint8_t> inclusion_proof, uint64_t index,
+    TreeHashConstSpan entry_hash, const Subtree &subtree);
 
 // Helper function to compute the hash value of an interior node in a Merkle
 // tree, i.e. HASH(0x01 || left || right). 32 bytes of output are written to

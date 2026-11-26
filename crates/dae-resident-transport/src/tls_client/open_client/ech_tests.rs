@@ -134,7 +134,7 @@ async fn verify_chrome_profile_accepts_ech(name: &str) {
     configure_boring_certificate_verification(&mut builder, false);
     let fp = proxy.utls_fingerprint.as_ref().unwrap();
     configure_boring_fingerprint(&mut builder, fp).unwrap();
-    configure_utls_template_boring_context(&mut builder, fp).unwrap();
+    configure_utls_template_boring_context(&mut builder, fp, None).unwrap();
     builder.set_alpn_protos(b"\x02h2\x08http/1.1").unwrap();
     let entry = ResidentBoringTlsContextEntry::build(builder, "chrome ECH test").unwrap();
     let (address, server) = spawn_ech_server(ech_acceptor(&identity, ECH_CONFIG, ECH_KEY), 1).await;
